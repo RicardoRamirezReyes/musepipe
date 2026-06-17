@@ -1,0 +1,32 @@
+# Generated run products and large intermediate data
+runs/
+
+# Notebook and Python caches
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+
+# Local OS/editor noise
+.DS_Store
+
+# Test/type-check/build caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# LaTeX auxiliary outputs; keep source/PDF decisions explicit
+reports/*.aux
+reports/*.log
+reports/*.out
+reports/*.toc
+reports/*.synctex.gz
