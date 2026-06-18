@@ -8,6 +8,10 @@ __pycache__/
 
 # Local OS/editor noise
 .DS_Store
+.claude/settings.local.json
+
+# Local active run selection; use MUSE_RUN_ID to override per command
+active_run.txt
 
 # Test/type-check/build caches
 .pytest_cache/

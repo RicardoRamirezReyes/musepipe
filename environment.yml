@@ -1,0 +1,17 @@
+name: MUSE
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10.13
+  - pip
+  - pip:
+      - numpy==1.26.4
+      - scipy==1.15.3
+      - astropy==6.1.7
+      - matplotlib==3.10.0
+      - scikit-learn==1.7.1
+      - tqdm==4.67.1
+      - jupyterlab==4.4.4
+      - ipykernel==6.29.5
+      - maoppy==1.7.1

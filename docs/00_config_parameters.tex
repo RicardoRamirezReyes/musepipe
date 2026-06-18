@@ -1,0 +1,697 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{listings}
+
+\geometry{margin=2.2cm}
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{0pt}
+\setlist[itemize]{leftmargin=1.4em}
+\setlist[enumerate]{leftmargin=1.6em}
+
+\definecolor{codegray}{RGB}{245,245,245}
+\definecolor{linkblue}{RGB}{20,70,140}
+\definecolor{softgray}{RGB}{80,80,80}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=linkblue,
+  urlcolor=linkblue,
+  citecolor=linkblue,
+  pdftitle={Guia de parametros de 00 config},
+  pdfauthor={MUSE pipeline notes}
+}
+
+\lstdefinestyle{pipeline}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codegray},
+  frame=single,
+  framerule=0.2pt,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true
+}
+
+\newcommand{\cfg}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\nb}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\angstrom}{\AA}
+\newcommand{\stage}[1]{\textsc{Stage~#1}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{\textbf{Guia de parametros de \texttt{00\_config}}\\
+\large Pipeline MUSE para LkCa 15}
+\author{}
+\date{Actualizado: 2026-06-14}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Proposito Del Documento}
+
+Este documento explica los parametros definidos por \nb{00_config.ipynb} y
+guardados en \nb{runs/LkCa_15/config/config.json}. Esta configuracion es la
+fuente unica de verdad del pipeline: define rutas, lista de cubos, decisiones de
+procesamiento, geometria de stripes, diagnosticos de anillos, overlays del disco
+y opciones de visualizacion.
+
+La version documentada corresponde al run activo \cfg{LkCa_15}. El archivo de
+configuracion contiene actualmente 131 claves dentro de \cfg{CFG}.
+
+\begin{quote}
+\textbf{Nota.} Este documento es una instantanea estatica. Cuando sea necesario
+mostrar valores vivos del run, los notebooks deben leer \nb{config.json} y
+generar Markdown con \nb{display(Markdown(...))}. Si \nb{config.json} no esta
+disponible, la documentacion debe seguir funcionando como guia descriptiva.
+\end{quote}
+
+\subsection{Idea Central}
+
+Los notebooks posteriores no deberian repetir parametros manualmente. En cambio,
+deben leer \nb{config.json}. Asi se evita que una etapa use, por ejemplo, un
+numero de cubos, un radio de anillo o una orientacion de stripes distinto al de
+otra etapa.
+
+\section{Flujo De \texttt{00\_config}}
+
+\begin{enumerate}
+  \item Define identidad del run: \cfg{RUN_ID}, \cfg{TARGET_NAME}, carpetas de
+  salida y lista de cubos.
+  \item Construye el diccionario \cfg{CFG} con los parametros cientificos base.
+  \item Lee metadatos de rotacion del header primario FITS.
+  \item Calcula la geometria de stripes por cubo.
+  \item Agrega parametros derivados de paralelizacion y de \stage{01}.
+  \item Valida consistencia de valores y longitudes.
+  \item Verifica que los FITS existen.
+  \item Guarda \cfg{CFG} y metadata en \nb{runs/<RUN_ID>/config/config.json}.
+\end{enumerate}
+
+\section{Variables Del Notebook Que No Son Claves De \texttt{CFG}}
+
+Estas variables controlan como se construye \cfg{CFG} o donde se guarda. No todas
+quedan como claves directas en el JSON final.
+
+\begin{longtable}{L{0.26\linewidth} L{0.24\linewidth} L{0.42\linewidth}}
+\caption{Variables principales del notebook \texttt{00\_config}.}\\
+\toprule
+\textbf{Variable} & \textbf{Valor actual} & \textbf{Funcion y cuando cambiarla} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Variable} & \textbf{Valor actual} & \textbf{Funcion y cuando cambiarla} \\
+\midrule
+\endhead
+\cfg{RUN_ID} & \cfg{LkCa_15} & Identificador del experimento. Define la carpeta \nb{runs/LkCa_15}. Cambiar al iniciar otro objeto o una version independiente del procesamiento. \\
+\cfg{PROJECT_ROOT} & \cfg{Path(".").resolve()} & Raiz del proyecto. Mantener si el notebook se ejecuta desde la carpeta del proyecto. \\
+\cfg{DATA_DIR} & \nb{/Users/ricardoramirez/Downloads/LkCa15_raw_cubes} & Carpeta con los FITS crudos. Cambiar si se mueven los datos o se procesa otro dataset. \\
+\cfg{RUNS_DIR} & \nb{PROJECT_ROOT/runs} & Carpeta general de salidas. Casi nunca se cambia. \\
+\cfg{WORKDIR} & \nb{RUNS_DIR/RUN_ID} & Carpeta del run activo. Se actualiza al cambiar \cfg{RUN_ID}. \\
+\cfg{CONFIG_DIR} & \nb{WORKDIR/config} & Carpeta donde se escribe \nb{config.json}. \\
+\cfg{STAGE_DIR} & \nb{WORKDIR/stages} & Carpeta de productos intermedios: FITS, NPY y mapas. \\
+\cfg{PLOT_DIR} & \nb{WORKDIR/plots} & Carpeta de figuras de diagnostico. \\
+\cfg{TABLE_DIR} & \nb{WORKDIR/tables} & Carpeta de CSVs y tablas de diagnostico. \\
+\cfg{LOG_DIR} & \nb{WORKDIR/logs} & Carpeta prevista para logs. \\
+\cfg{CUBE_FILES} & 32 FITS & Lista explicita de cubos MUSE. El orden importa porque los notebooks reportan indices de cubo. \\
+\cfg{TARGET_NAME} & \cfg{LkCa_15} & Nombre fisico del objeto. Se copia a headers, QC y reportes. \\
+\cfg{DATA_EXT} & \cfg{1} & Extension FITS con el cubo de ciencia. En estos datos, el header primario esta en extension 0 y el cubo en extension 1. \\
+\cfg{STAGE01_PROFILE} & \cfg{maoppy_refined} & Perfil que define centrado, alineamiento espacial y grilla espectral para \stage{01}. \\
+\bottomrule
+\end{longtable}
+
+\section{Identidad Del Dataset}
+
+\begin{longtable}{L{0.30\linewidth} L{0.20\linewidth} L{0.42\linewidth}}
+\caption{Claves basicas del dataset.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{target_name} & \cfg{LkCa_15} & Nombre del objeto observado. \\
+\cfg{run_id} & \cfg{LkCa_15} & Identificador de la ejecucion. Define la carpeta del run. \\
+\cfg{data_ext} & \cfg{1} & Extension FITS que contiene el cubo de ciencia. \\
+\cfg{cube_files} & 32 rutas & Lista de cubos crudos. Cambiar al seleccionar otro conjunto de exposiciones. \\
+\cfg{crop_npix} & \cfg{50} & Tamano del recorte espacial: \(50\times50\) pixeles alrededor de la estrella. Si cambia, hay que recalcular productos desde \stage{01}. \\
+\bottomrule
+\end{longtable}
+
+\section{Consistencia Del Crop Y Productos Guardados}
+
+Cambiar \cfg{crop_npix} no modifica automaticamente los FITS, NPY o QC ya
+escritos en \nb{runs/<RUN_ID>/stages}. Por ejemplo, si \nb{config.json} dice
+\cfg{crop_npix=50} pero \nb{stage03_fakecont_cube_stack.fits} fue creado con
+\(40\times40\), el pipeline estaria mezclando coordenadas y centros
+incompatibles.
+
+Para evitarlo, varios notebooks importan \nb{muse_crop_checks.py} y comparan la
+forma espacial de los productos cargados contra \cfg{CFG["crop_npix"]}. Si
+detectan una diferencia, imprimen una advertencia:
+
+\begin{lstlisting}[style=pipeline]
+WARNING: Stage03 cube stack spatial shape is (40, 40), but current
+CFG['crop_npix'] expects (50, 50). This product may come from an older crop.
+\end{lstlisting}
+
+En etapas donde una coordenada vieja seria peligrosa, el chequeo es estricto y
+detiene la celda. Esto ocurre, por ejemplo, si \nb{04c_fakecont} intenta usar
+centros Moffat medidos con otro crop, si \nb{06_inject_halpha_signal} lee una
+posicion desde un \nb{stage04_qc} antiguo, o si \nb{05_fluxes_and_linewidths}
+usa imagenes \stage{04} incompatibles.
+
+\section{Rangos Espectrales Y Lineas}
+
+\begin{longtable}{L{0.30\linewidth} L{0.20\linewidth} L{0.42\linewidth}}
+\caption{Parametros espectrales y lineas de interes.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{drop_wave_min_A} & \cfg{5780.0} & Inicio del rango contaminado por Na-LGS que se excluye. Unidad: \angstrom. \\
+\cfg{drop_wave_max_A} & \cfg{6050.0} & Fin del rango contaminado por Na-LGS. Unidad: \angstrom. \\
+\cfg{halpha_A} & \cfg{6562.8} & Longitud de onda de referencia de H\(\alpha\). \\
+\cfg{ha_channels_A} & \cfg{[6560.96, 6562.21, 6563.46]} & Canales nominales usados para construir imagen H\(\alpha\) en \stage{04}. \\
+\cfg{hb_channels_A} & \cfg{[4860.96]} & Canal nominal usado para H\(\beta\). \\
+\cfg{line_exclude_halfwidth_A} & \cfg{2.0} & Semiancho alrededor de lineas fuertes que se excluye durante xcorr. \\
+\bottomrule
+\end{longtable}
+
+\section{Cross-Correlation Y Correccion Por Stripes}
+
+La etapa de xcorr corrige desplazamientos espectrales pequenos. En este pipeline
+se divide cada cubo en franjas espaciales. Para cada franja se estima un
+desplazamiento espectral \(dz\), y luego se aplica la correccion.
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de xcorr.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{xcorr_nstripes} & \cfg{6} & Numero de franjas por cubo. \\
+\cfg{xcorr_wmin_A} & \cfg{4650.0} & Longitud de onda minima usada para xcorr. \\
+\cfg{xcorr_wmax_A} & \cfg{9300.0} & Longitud de onda maxima usada para xcorr. \\
+\cfg{xcorr_max_lag_ch} & \cfg{6} & Maximo desplazamiento permitido, en canales espectrales. \\
+\cfg{xcorr_exclude_strong_line} & \cfg{True} & Excluye lineas fuertes, como H\(\alpha\), del calculo de xcorr. \\
+\cfg{xcorr_exclude_nalgs} & \cfg{True} & Excluye la region Na-LGS durante xcorr. \\
+\cfg{nalgs_wmin_A} & \cfg{5780.0} & Inicio de la region Na-LGS para xcorr. \\
+\cfg{nalgs_wmax_A} & \cfg{6050.0} & Fin de la region Na-LGS para xcorr. \\
+\cfg{xcorr_shift_estimator} & \cfg{spaxel_map_region_median} & Metodo para resumir shifts por region. Alternativa: \cfg{stripe_median_spectrum}. \\
+\cfg{xcorr_save_spaxel_shiftmaps} & \cfg{True} & Guarda mapas de shifts por spaxel cuando estan disponibles. \\
+\cfg{xcorr_n_jobs} & \cfg{8} & Numero de workers para xcorr. Ajustar segun CPU y RAM. \\
+\cfg{xcorr_diag_n_jobs} & \cfg{8} & Workers para diagnosticos de xcorr. \\
+\bottomrule
+\end{longtable}
+
+\section{Rotacion DROT Y Geometria De Stripes}
+
+El angulo \cfg{HIERARCH ESO INS DROT POSANG} esta en el header primario
+\((\mathrm{ext}=0)\), aunque los datos estan en la extension 1. El pipeline lee
+este valor y aplica el offset observado de \(90^\circ\):
+
+\begin{equation}
+\theta_{\mathrm{stripe}} =
+\left(\mathrm{DROT\ POSANG} + 90^\circ\right) \bmod 180^\circ.
+\end{equation}
+
+Asi, si el header indica \(0^\circ\), se aplican stripes horizontales
+\((90^\circ)\).
+
+El angulo aplicado se reduce modulo \(180^\circ\) porque define solamente el eje
+de split/proyeccion. Los templates manuales y los grupos de referencia se
+mantienen separados por \(\mathrm{DROT\ POSANG}\) completo modulo
+\(360^\circ\). Esto evita mezclar casos como \(0^\circ\) y \(180^\circ\), que
+pueden tener el mismo split aplicado pero patrones de stripes distintos.
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de rotacion y geometria de stripes.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{drot_posang_header_ext} & \cfg{0} & Extension FITS donde se busca DROT POSANG. \\
+\cfg{drot_posang_header_keys} & 2 aliases & Keywords aceptadas para leer DROT POSANG. \\
+\cfg{drot_posang_deg} & 32 valores & Rotacion leida para cada cubo. Actual: grupos en \(0,45,90,\ldots,315^\circ\). \\
+\cfg{drot_posang_header_keys_found} & 32 entradas & Keyword realmente encontrada en cada cubo. Sirve como diagnostico. \\
+\cfg{xcorr_use_drot_posang_for_stripes} & \cfg{True} & Usa DROT POSANG para definir la geometria de stripes por cubo. \\
+\cfg{xcorr_stripe_angle_offset_deg} & \cfg{90.0} & Offset aplicado al DROT POSANG. \\
+\cfg{xcorr_stripe_angle_deg} & 32 valores & Angulo final de split/proyeccion usado por cubo. \\
+\cfg{xcorr_stripe_angle_convention} & \cfg{split_axis} & Convencion: el angulo representa el eje de split/proyeccion. \\
+\cfg{xcorr_stripe_orientation} & 32 etiquetas & Etiquetas derivadas: \cfg{vertical}, \cfg{horizontal} o \cfg{angled}. \\
+\cfg{xcorr_stripe_geometry_grouping} & \cfg{drot_posang_360} & Las plantillas se eligen por DROT completo, no solo por el split modulo \(180^\circ\). \\
+\cfg{xcorr_stripe_group_key} & 32 valores & Llave usada por Stage02 para seleccionar referencias y correr correcciones por grupo, por ejemplo \cfg{drot_180_split_90}. \\
+\cfg{xcorr_stripe_base_ranges_by_drot_posang} & 8 plantillas & Rangos editables por rotacion instrumental \(0,45,\ldots,315^\circ\). \\
+\cfg{xcorr_stripe_base_ranges_by_cube} & 32 listas & Plantillas base expandidas a cada cubo segun su DROT. \\
+\cfg{xcorr_stripe_ranges_per_cube} & 32 listas & Rangos finales usados por Stage02. En stripes oblicuos, el ultimo rango puede extenderse para cubrir el span proyectado completo. \\
+\cfg{xcorr_rotation_k90} & \cfg{None} & Clave antigua para rotaciones multiplos de 90 grados. Deprecada. \\
+\bottomrule
+\end{longtable}
+
+Plantillas base actuales para \cfg{crop_npix=50}:
+
+\begin{lstlisting}[style=pipeline]
+0 deg:   [[0, 14], [14, 18], [18, 30], [30, 31], [31, 40], [40, 50]]
+45 deg:  [[0, 14], [14, 15], [15, 27], [27, 28], [28, 40], [40, 50]]
+90 deg:  [[0, 11], [11, 20], [20, 26], [26, 33], [33, 43], [43, 50]]
+135 deg: [[0, 14], [14, 15], [15, 27], [27, 28], [28, 40], [40, 50]]
+180 deg: [[0, 8],  [8, 19],  [19, 26], [26, 33], [33, 34], [34, 50]]
+225 deg: [[0, 14], [14, 15], [15, 27], [27, 28], [28, 40], [40, 50]]
+270 deg: [[0, 11], [11, 19], [19, 26], [26, 32], [32, 43], [43, 50]]
+315 deg: [[0, 14], [14, 15], [15, 27], [27, 28], [28, 40], [40, 50]]
+\end{lstlisting}
+
+Estas plantillas fueron desplazadas desde las pruebas con crop \(40\times40\).
+Deben revisarse visualmente con \nb{02c_define_xcorr_stripe_ranges_template.ipynb}
+cuando cambie el crop, el centrado de \stage{01} o la estructura de stripes.
+
+\section{Fake Continuum}
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros del fake continuum.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{kernel_230_is_sigma} & \cfg{True} & Interpreta \cfg{kernel_230_value} como sigma o escala de suavizado bajo la convencion actual. \\
+\cfg{kernel_230_value} & \cfg{230} & Escala espectral del fake continuum, en canales. \\
+\cfg{stage03_n_jobs} & \cfg{8} & Workers para \stage{03}. \\
+\bottomrule
+\end{longtable}
+
+\section{Imagenes, Anillos Airy Y Geometria De Referencia}
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de imagen y geometria de diagnostico.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{pixel_scale_mas} & \cfg{25.0} & Escala espacial MUSE NFM: \(25\) mas/pix \(=0.025\) arcsec/pix. \\
+\cfg{fig_convolve_sigma_px} & \cfg{2.0} & Sigma del suavizado gaussiano visual, en pixeles. \\
+\cfg{apply_central_mask} & \cfg{True} & Enmascara visualmente la zona central de la estrella en algunos plots. \\
+\cfg{central_mask_radius_px} & \cfg{3} & Radio del mask central, en pixeles. \\
+\cfg{airy_ring_reference_radii_px} & \cfg{[9.0, 15.0]} & Radios del annulus de referencia para diagnosticos de anillos/residuos, en pixeles. \\
+\cfg{reference_geometry_center_source} & \cfg{stage04c_fakecont_qc} & Fuente del centro estelar usado por overlays. Opciones: \cfg{crop_center}, \cfg{stage04c_qc}, \cfg{stage04c_fakecont_qc}. \\
+\cfg{reference_geometry_center_yx} & \cfg{None} & Override manual del centro \([y,x]\). \cfg{None} usa la fuente anterior. \\
+\cfg{reference_geometry_east_is_left} & \cfg{True} & Declara que este WCS tiene este hacia la izquierda. Afecta la conversion de PA a angulo de Matplotlib. \\
+\cfg{reference_ring_color} & \cfg{black} & Color de los anillos de referencia. \\
+\bottomrule
+\end{longtable}
+
+\section{Ejes Espaciales En Plots}
+
+Estos parametros solo afectan las etiquetas y ticks de las figuras. Los datos,
+aperturas, anillos y elipses permanecen definidos internamente en pixeles.
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de visualizacion de ejes espaciales.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{plot_spatial_axis_units} & \cfg{arcsec} & Unidad mostrada en ejes espaciales. Opciones: \cfg{pix}, \cfg{arcsec}, \cfg{deg}. \\
+\cfg{plot_spatial_axis_center_source} & \cfg{reference_geometry} & Centro cero de los ejes. Usa el mismo centro de overlays o el centro del crop. \\
+\cfg{plot_spatial_axis_arcsec_decimals} & \cfg{2} & Decimales para ticks en arcsec. \\
+\cfg{plot_spatial_axis_arcsec_tick_step} & \cfg{0.25} & Separacion fija entre ticks en arcsec. Con \cfg{0.25}, el centro queda marcado como \cfg{0.00} y los ticks son redondos. \\
+\cfg{plot_spatial_axis_deg_decimals} & \cfg{5} & Decimales para ticks en grados. \\
+\cfg{plot_spatial_axis_show_zero_lines} & \cfg{True} & Dibuja lineas punteadas finas en \cfg{x=0} e \cfg{y=0}. \\
+\bottomrule
+\end{longtable}
+
+Conversion activa:
+
+\begin{align}
+25\ \mathrm{mas/pix}
+&= 0.025\ \mathrm{arcsec/pix},\\
+0.025\ \mathrm{arcsec/pix}
+&= 6.944444\times 10^{-6}\ \mathrm{deg/pix},\\
+10\ \mathrm{pix}
+&= 0.25\ \mathrm{arcsec}.
+\end{align}
+
+\section{Referencias De Disco: B43 Y B69}
+
+Las referencias de disco se dibujan como elipses proyectadas. No alteran la
+reduccion ni la seleccion de cubos; son overlays de interpretacion.
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros globales de referencias de disco.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{disk_reference_enabled} & \cfg{True} & Activa o desactiva globalmente todas las elipses de disco. \\
+\cfg{disk_reference_color} & \cfg{black} & Color por defecto para elipses si una entrada no define color propio. \\
+\cfg{disk_reference_source} & Gardner et al. 2025 & Fuente bibliografica de los parametros de B43/B69. \\
+\cfg{disk_reference_ellipses} & B43 y B69 & Lista de elipses opcionales. Cada entrada puede apagarse con \cfg{enabled=False}. \\
+\cfg{disk_reference_label} & B43 & Clave antigua para una sola referencia. Mantenida por compatibilidad. \\
+\cfg{disk_reference_semimajor_mas} & \cfg{267.6} & Semieje mayor B43 en mas, clave antigua. \\
+\cfg{disk_reference_inclination_deg} & \cfg{49.1} & Inclinacion B43, clave antigua. \\
+\cfg{disk_reference_pa_deg} & \cfg{63.0} & PA B43, clave antigua. \\
+\bottomrule
+\end{longtable}
+
+\begin{longtable}{L{0.30\linewidth} L{0.13\linewidth} L{0.16\linewidth} L{0.16\linewidth} L{0.12\linewidth}}
+\caption{Elipses activas del disco LkCa 15.}\\
+\toprule
+\textbf{Label} & \textbf{Enabled} & \textbf{Semieje mayor} & \textbf{Inclinacion} & \textbf{PA} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Label} & \textbf{Enabled} & \textbf{Semieje mayor} & \textbf{Inclinacion} & \textbf{PA} \\
+\midrule
+\endhead
+B43 dust ring & \cfg{True} & \(267.6\) mas & \(49.1^\circ\) & \(63.0^\circ\) \\
+B69 dust ring & \cfg{True} & \(434.2\) mas & \(50.5^\circ\) & \(61.7^\circ\) \\
+\bottomrule
+\end{longtable}
+
+La conversion usada por \stage{04} es:
+
+\begin{align}
+a_{\mathrm{px}} &= \frac{a_{\mathrm{mas}}}{\mathrm{pixel\_scale}_{\mathrm{mas/pix}}},\\
+b_{\mathrm{px}} &= a_{\mathrm{px}}\cos(i),\\
+\phi_{\mathrm{matplotlib}} &= 90^\circ + \mathrm{PA},
+\end{align}
+
+donde la ultima ecuacion usa \cfg{reference_geometry_east_is_left=True}.
+
+Con \(\mathrm{pixel\_scale}=25\) mas/pix:
+
+\begin{lstlisting}[style=pipeline]
+B43: a=10.704 px, b=7.008 px, angle=153.0 deg
+B69: a=17.368 px, b=11.047 px, angle=151.7 deg
+\end{lstlisting}
+
+\section{Aperturas Y Seleccion De Cubos}
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de aperturas y seleccion en \stage{04}.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{box_aperture_size_px} & \cfg{3} & Tamano por defecto de aperturas cuadradas, usualmente \(3\times3\). \\
+\cfg{stage04_n_best_cubes} & \cfg{30} & Numero de cubos seleccionados como mejores en \stage{04}. \\
+\cfg{stage04_n_reject_cubes} & \cfg{2} & Fallback: numero de cubos rechazados si \cfg{stage04_n_best_cubes=None}. \\
+\bottomrule
+\end{longtable}
+
+\section{\stage{01}: Centrado, Alineamiento Y Grilla Espectral}
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de \stage{01}.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{stage01_profile} & \cfg{maoppy_refined} & Perfil activo. Define centrado, shift espacial y grilla espectral. \\
+\cfg{stage01_initial_crop_npix} & \cfg{160} & Recorte preliminar \(160\times160\) usado para calcular la imagen white-light y el centro estelar antes del crop final. \cfg{None}/\cfg{0} usa campo completo. \\
+\cfg{stage01_initial_crop_edge_guard_pix} & \cfg{12} & Margen de seguridad: si el centro estimado cae cerca del borde del recorte preliminar, \stage{01} recalcula ese cubo con campo completo. \\
+\cfg{centering_method} & \cfg{maoppy} & Metodo de centrado estelar. \\
+\cfg{spatial_shift_mode} & \cfg{subpixel} & Modo de aplicar shifts espaciales. \\
+\cfg{spectral_grid_mode} & \cfg{common_grid} & Grilla espectral comun para todos los cubos. \\
+\cfg{maoppy_stamp_half_size} & \cfg{10} & Semitamano del stamp para ajuste MAOPPY. \\
+\cfg{maoppy_max_nfev} & \cfg{120} & Maximo de evaluaciones del ajuste MAOPPY. \\
+\bottomrule
+\end{longtable}
+
+\section{\stage{06}: Inyeccion Y Recuperacion PCA De H\(\alpha\)}
+
+\stage{06} inyecta una senal H\(\alpha\) artificial en los cubos
+fake-continuum y la recupera despues de repetir la PCA. Esto mide throughput,
+sensibilidad y consistencia de la deteccion cerca de la estrella.
+
+\begin{longtable}{L{0.36\linewidth} L{0.18\linewidth} L{0.38\linewidth}}
+\caption{Parametros de \stage{06}.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{stage06_pca_nominal_snr} & \cfg{3.0} & S/N nominal de la inyeccion guardada como producto principal. \\
+\cfg{stage06_pca_injection_snr_reference} & \cfg{pca_aperture_3x3} & Define que escala se interpreta como \(1\sigma\) para convertir S/N de entrada a flujo inyectado. \\
+\cfg{stage06_reference_object_yx} & \cfg{None} & Coordenada manual \([y,x]\) del objeto de referencia. \cfg{None} usa \stage{04} QC. \\
+\cfg{stage06_reference_object_qc_key} & \cfg{c} & Llave dentro de \cfg{stage04_qc["detected_peaks"]} usada si no hay coordenada manual. \\
+\cfg{stage06_pca_recovery_mode} & \cfg{realistic} & \cfg{realistic} mide flujo/ruido con controles al mismo radio; \cfg{deterministic} mide transferencia pura de senal. \\
+\cfg{stage06_3x3_image_scale_mode} & \cfg{sigma} & Modo de escala para los primeros plots 3x3: \cfg{sigma}, \cfg{percentile} o \cfg{manual}. \\
+\cfg{stage06_3x3_image_scale_sigma} & \cfg{3.0} & Limite visual en multiplos de sigma cuando el modo es \cfg{sigma}. \\
+\cfg{stage06_3x3_image_scale_percent} & \cfg{99.0} & Percentil usado cuando el modo es \cfg{percentile}. \\
+\cfg{stage06_3x3_image_manual_limits} & \cfg{\{with_noise: None, delta: [-1, 1]\}} & Limites manuales para comparar plots con escala fija. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Stage 06 Local-Surface Para Objetos Lejanos}
+
+La implementacion local hereda por defecto la geometria y el modelo de
+\stage{04b}. Sus productos usan el prefijo
+\cfg{stage06_local_surface_} y no reemplazan los resultados PCA.
+
+\begin{longtable}{L{0.38\linewidth} L{0.18\linewidth} L{0.36\linewidth}}
+\caption{Parametros opcionales de Stage 06 local-surface.}\\
+\toprule
+\textbf{Clave} & \textbf{Default} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Default} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{stage06_local_injection_yx} & \cfg{None} & Posicion manual \([y,x]\); \cfg{None} usa la geometria de referencia. \\
+\cfg{stage06_local_reference_object_yx} & \stage{04b} target & Objeto cuya separacion se replica. \\
+\cfg{stage06_local_star_yx} & centro/config & Centro respecto del cual se conserva el radio. \\
+\cfg{stage06_local_match_reference_separation} & \cfg{true} & Coloca la inyeccion al mismo radio que el objeto real. \\
+\cfg{stage06_local_injection_pa_offset_deg} & \cfg{180} & Offset angular respecto del objeto de referencia. \\
+\cfg{stage06_local_injection_snr_grid} & \cfg{[0,0.1,0.5,1,2,3,5]} & Grilla de S/N inyectado. \\
+\cfg{stage06_local_nominal_snr} & \cfg{3} & Punto guardado en el FITS diagnostico. \\
+\cfg{stage06_local_injection_snr_reference} & \cfg{local_surface_matched_filter} & Escala de ruido usada para convertir S/N a flujo. \\
+\cfg{stage06_local_recovery_mode} & \cfg{realistic} & \cfg{realistic} usa controles; \cfg{deterministic} usa transferencia pura. \\
+\cfg{stage06_local_n_control_angles} & \cfg{12} & Numero de angulos candidatos para controles. \\
+\cfg{stage06_local_control_exclude_pa_deg} & \cfg{30} & Exclusion angular alrededor de inyeccion y objeto real. \\
+\cfg{stage06_local_diagnostic_halfwidth_A} & \cfg{75} & Semiancho minimo de la ventana H\(\alpha\). \\
+\cfg{stage06_local_save_diagnostic_fits} & \cfg{true} & Guarda baseline, inyeccion nominal y delta compactos. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Stage 07: Espectros De Lineas De Acrecion}
+
+Las coordenadas y el modelo local se heredan de \stage{04b} cuando no se
+especifican. Todas las claves siguientes son opcionales.
+
+\begin{longtable}{L{0.38\linewidth} L{0.18\linewidth} L{0.36\linewidth}}
+\caption{Parametros opcionales de Stage 07.}\\
+\toprule
+\textbf{Clave} & \textbf{Default} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Default} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{stage07_integrated_box_size} & \cfg{3} & Lado impar de la caja integrada. \\
+\cfg{stage07_star_spectrum_yx} & centro/config & Posicion \([y,x]\) del espectro estelar. \\
+\cfg{stage07_use_local_control_apertures} & \cfg{true} & Activa controles a la misma separacion estrella--objeto. \\
+\cfg{stage07_control_apertures} & \cfg{8} & Numero de angulos candidatos para controles. \\
+\cfg{stage07_control_exclude_angle_deg} & \cfg{25} & Exclusion angular alrededor del objeto real. \\
+\cfg{stage07_full_continuum_filter_A} & \cfg{80} & Ancho del filtro de mediana del espectro completo. \\
+\cfg{stage07_line_window_half_width_A} & \cfg{18} & Semiancho mostrado por linea. \\
+\cfg{stage07_line_integration_half_width_A} & \cfg{2.5} & Semiancho integrado para flujo y pico. \\
+\cfg{stage07_line_continuum_inner_A} & \cfg{6} & Borde interior de las bandas de continuo. \\
+\cfg{stage07_line_continuum_outer_A} & \cfg{16} & Borde exterior de las bandas de continuo. \\
+\cfg{stage07_exclude_bad_line_candidates} & \cfg{true} & Excluye candidatas dentro de rangos malos de \stage{04b}. \\
+\cfg{stage07_accretion_lines} & 24 lineas & Reemplazo opcional del catalogo canonico. \\
+\bottomrule
+\end{longtable}
+
+\section{Paralelizacion}
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Parametros de paralelizacion.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{xcorr_n_jobs} & \cfg{8} & Workers para xcorr. \\
+\cfg{stage03_n_jobs} & \cfg{8} & Workers para fake continuum. \\
+\cfg{xcorr_diag_n_jobs} & \cfg{8} & Workers para diagnosticos xcorr. \\
+\cfg{stage04b_n_jobs} & \cfg{4} & Workers para \stage{04b}; reducido para controlar memoria. \\
+\bottomrule
+\end{longtable}
+
+\section{Opciones De Debug Y Escritura}
+
+\begin{longtable}{L{0.34\linewidth} L{0.18\linewidth} L{0.40\linewidth}}
+\caption{Opciones de debug y escritura.}\\
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Clave} & \textbf{Valor actual} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{display_cube_for_plots} & \cfg{-1} & Cubo mostrado en algunos diagnosticos. El significado exacto depende del notebook. \\
+\cfg{save_intermediate_plots} & \cfg{True} & Guarda figuras intermedias. \\
+\cfg{overwrite_existing_stage_files} & \cfg{True} & Permite sobrescribir productos previos. \\
+\bottomrule
+\end{longtable}
+
+\section{Metadata Guardada Junto A \texttt{CFG}}
+
+El JSON final guarda dos bloques:
+
+\begin{lstlisting}[style=pipeline]
+{
+  "meta": {...},
+  "config": {...}
+}
+\end{lstlisting}
+
+El bloque \cfg{meta} incluye:
+
+\begin{longtable}{L{0.28\linewidth} L{0.62\linewidth}}
+\caption{Metadata del archivo \texttt{config.json}.}\\
+\toprule
+\textbf{Campo} & \textbf{Explicacion} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Campo} & \textbf{Explicacion} \\
+\midrule
+\endhead
+\cfg{created_utc} & Momento UTC en que se guardo la configuracion. \\
+\cfg{python_version} & Version de Python usada para ejecutar \nb{00_config}. \\
+\cfg{platform} & Sistema operativo/plataforma. \\
+\cfg{project_root} & Ruta absoluta del proyecto. \\
+\cfg{data_dir} & Ruta absoluta de los cubos crudos. \\
+\cfg{workdir} & Ruta absoluta del run activo. \\
+\bottomrule
+\end{longtable}
+
+\section{Validaciones Implementadas}
+
+\nb{00_config} falla temprano si detecta inconsistencias. Las validaciones mas
+importantes son:
+
+\begin{itemize}
+  \item \cfg{cube_files} no puede estar vacio.
+  \item \cfg{crop_npix} debe ser positivo.
+  \item \cfg{drop_wave_min_A < drop_wave_max_A}.
+  \item \cfg{kernel_230_value} debe ser positivo.
+  \item \cfg{stage04_n_best_cubes} debe ser positivo si no es \cfg{None}.
+  \item \cfg{stage04_n_reject_cubes} debe ser mayor o igual a cero.
+  \item \cfg{airy_ring_reference_radii_px} debe tener dos radios positivos y ordenados.
+  \item \cfg{plot_spatial_axis_units} debe ser \cfg{pix}, \cfg{arcsec} o \cfg{deg}.
+  \item \cfg{plot_spatial_axis_arcsec_tick_step} debe ser \cfg{None} o positivo.
+  \item Cada entrada en \cfg{disk_reference_ellipses} debe tener semieje mayor positivo, inclinacion \(0 \leq i < 90^\circ\) y PA finito.
+  \item Los parametros por cubo deben tener longitud 1 o longitud igual al numero de cubos.
+  \item Los notebooks posteriores comparan \cfg{CFG["crop_npix"]} contra las formas guardadas en FITS/QC y advierten si un producto parece venir de un crop antiguo.
+\end{itemize}
+
+\section{Checklist Para Cambios Comunes}
+
+\subsection{Cambiar De Objeto}
+
+\begin{enumerate}
+  \item Cambiar \cfg{RUN_ID}.
+  \item Cambiar \cfg{DATA_DIR}.
+  \item Cambiar \cfg{CUBE_FILES}.
+  \item Cambiar \cfg{TARGET_NAME}.
+  \item Revisar o apagar \cfg{disk_reference_enabled}.
+\end{enumerate}
+
+\subsection{Cambiar El Recorte}
+
+\begin{enumerate}
+  \item Editar \cfg{crop_npix}.
+  \item Revisar \cfg{xcorr_stripe_base_ranges_by_drot_posang}; los rangos actuales estan definidos para \cfg{crop_npix=50}.
+  \item Rerunear desde \nb{01_load_align_crop.ipynb}; productos \stage{01}/\stage{02}/\stage{03}/\stage{04} y QC anteriores no son compatibles con el nuevo crop.
+  \item Rerunear \nb{04c_airy_ring_moffat_diagnostics.ipynb} y luego \nb{04c_fakecont_airy_ring_moffat_diagnostics.ipynb} si se usan centros Moffat fijos.
+  \item Revisar coordenadas manuales y aperturas en notebooks posteriores.
+  \item Revisar \cfg{reference_geometry_center_source}.
+\end{enumerate}
+
+\subsection{Cambiar Diagnosticos De Anillos}
+
+\begin{enumerate}
+  \item Editar \cfg{airy_ring_reference_radii_px}.
+  \item Mantener esos radios en pixeles.
+  \item Rerunear notebooks de diagnostico que dependen de esos radios.
+\end{enumerate}
+
+\subsection{Cambiar Ejes De Plots}
+
+\begin{enumerate}
+  \item Usar \cfg{plot_spatial_axis_units="arcsec"} para interpretacion astronomica.
+  \item Usar \cfg{"pix"} para debugging de aperturas.
+  \item Usar \cfg{"deg"} solo si se necesita comparar en grados.
+\end{enumerate}
+
+\subsection{Cambiar Seleccion De Cubos En \stage{04}}
+
+\begin{enumerate}
+  \item Editar \cfg{stage04_n_best_cubes}.
+  \item Si se deja \cfg{None}, se usa \(N-\)\cfg{stage04_n_reject_cubes}.
+  \item Verificar que los plots reporten \cfg{ncomp} y el conjunto seleccionado.
+\end{enumerate}
+
+\end{document}
