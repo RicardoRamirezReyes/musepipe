@@ -1,16 +1,16 @@
 # Plan de mejora y sugerencias — Pipeline 15_MUSE
 
-Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación de `Untitled`/`-Copy1`, cadena `Far_*` para objetos lejanos, nuevo `06_inject_halpha_signal` con inyección-recuperación por PCA). Revisado: 2026-06-14, tras el cambio de `crop_npix` a 50 y la incorporación de chequeos de consistencia de crop. Revisado: 2026-06-17, tras las Fases 0-9 del refactor de objetos lejanos. Auditado: 2026-06-18 contra el árbol de trabajo y los QC reales disponibles.
+Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación de `Untitled`/`-Copy1`, cadena `Far_*` para objetos lejanos, nuevo `06_inject_halpha_signal` con inyección-recuperación por PCA). Revisado: 2026-06-14, tras el cambio de `crop_npix` a 50 y la incorporación de chequeos de consistencia de crop. Revisado: 2026-06-17, tras las Fases 0-9 del refactor de objetos lejanos. Auditado: 2026-06-18 contra el árbol de trabajo y los QC reales disponibles. Actualizado: 2026-06-21 con el cierre multi-línea/multi-posición de C2.
 
 > Estado auditado 2026-06-18: el diagnóstico original se conserva como registro
 > del punto de partida. La cadena lejana canónica `04b -> 06 local -> 07 -> 07b
 > -> 08` fue validada sobre la copia aislada `ROXs12b_refactor_validation`; 04b
 > coincide exactamente con el baseline y 07b/08 concuerdan hasta precisión
-> numérica. La suite contiene 45 pruebas. También existen ejecuciones reales de
-> 01b, 03b, 09, 10 y 11 sobre `LkCa_15`. Siguen pendientes el experimento de
-> inyección extremo a extremo de C1, C4, C6, C7, la regresión real automatizada,
-> dependencias fijadas, logging/trazabilidad y la migración de los notebooks
-> restantes. El checkpoint de O1 registra el estado validado y añade un
+> numérica. La suite contiene 49 pruebas. También existen ejecuciones reales de
+> 01b, 03b, 09, 10 y 11 sobre `LkCa_15`. C1 fue cerrado después sobre la copia
+> aislada `ROXs12b_HaInject_SNR5_C1_validation`. Siguen pendientes C4, C6, C7,
+> la regresión real automatizada, logging/trazabilidad y la migración de los
+> notebooks restantes. El checkpoint de O1 registra el estado validado y añade un
 > `environment.yml` reproducible; el filtrado automático de outputs queda como
 > mejora opcional.
 
@@ -18,8 +18,8 @@ Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación d
 
 | Ítem | Estado | Evidencia o pendiente principal |
 |---|---|---|
-| C1 | Parcial | Refactor real validado en `ROXs12b`; falta propagar una inyección consistente por 04b/07b/08 y verificar su recuperación final |
-| C2 | Parcial | Grillas PCA y local-surface implementadas; la local se ejecutó en `ROXs12b`, pero faltan múltiples longitudes de onda, posiciones y curva de completitud |
+| C1 | Completo y ejecutado | Inyección nominal matched-filter de 5 sigma propagada por 04b/07b/08; `box3_sum` recupera S/N medio 8.80 frente a 8.97 esperado |
+| C2 | Completo y ejecutado | Local-surface y PCA evaluados en 3 líneas × 3 posiciones × 9 niveles de S/N; existen throughput, completitud, QC y figura consolidados |
 | C3 | Completo y ejecutado | Stage 11 ejecutado en `LkCa_15`; ruido empírico/propagado = 3.63 |
 | C4 | Pendiente | No existe aún cálculo de falsos positivos/look-elsewhere |
 | C5 | Parcial | Stage 10 produce límites físicos para una posición/PA; falta cobertura espacial/espectral y cierre de caveats publicables |
@@ -31,7 +31,7 @@ Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación d
 | O4 | Parcial | Hay variantes low-memory e `IncrementalPCA`, pero no están consolidadas como ruta canónica |
 | O5 | Pendiente | Los 04c y los dos 00_config siguen como copias separadas |
 | O6 | Pendiente | No hay logging formal ni hashes/versiones de entradas en todos los QC |
-| O7 | Parcial | 45 pruebas y validación manual real; falta regresión automatizada con producto real pequeño |
+| O7 | Parcial | 49 pruebas y validación manual real; falta regresión automatizada con producto real pequeño |
 
 ## 1. Diagnóstico general
 
@@ -62,7 +62,7 @@ Problemas principales encontrados:
 
 Ordenado por prioridad; cada ítem es independiente.
 
-### C1. Validar la receta con la inyección — *parcial*
+### C1. Validar la receta con la inyección — *completo y ejecutado* ✔
 Para la cadena lejana: correr las implementaciones canónicas
 `stage04b→stage07b→stage08` sobre un run de inyección consistente y verificar
 que `box3_sum` recupera la señal con el SNR esperado. Los notebooks `Far_*` son
@@ -71,25 +71,60 @@ desajuste histórico entre nombre de carpeta y `cfg.run_id`, que debe corregirse
 antes de usar la validación estricta. Para la cadena cercana, el nuevo `06` ya
 cierra el lazo inyección→PCA→recuperación dentro del mismo notebook.
 
-**Auditoría 2026-06-18**: la equivalencia y los contratos de la cadena lejana
-sí quedaron aprobados con datos reales en `ROXs12b_refactor_validation`, y la
-inyección local de Stage 06 fue recuperada de forma monótona. Eso no completa
-el criterio original: Stage 07b/08 se validaron sobre el residual base, no sobre
-un producto inyectado propagado por toda la cadena. El run histórico con nombre
-inconsistente tampoco fue normalizado.
+**Cierre 2026-06-18**: se normalizó el identificador únicamente en la copia
+aislada `ROXs12b_HaInject_SNR5_C1_validation` y se ejecutó la cadena
+`04b -> 07b -> 08`; el run histórico original no fue modificado. La diferencia
+contra `ROXs12b` está confinada a 918 voxeles, nueve canales
+`6558.28-6568.28 A` y una caja espacial `13x13` centrada en `(108,61)`. Su flujo
+integrado es `1088.285`, consistente con la verdad original: S/N matched-filter
+nominal `5`, y S/N esperado `8.97` para la apertura 3x3.
 
-### C2. Grilla de inyección-recuperación, no un solo punto — *parcialmente hecho* ✔
-El nuevo `06_inject_halpha_signal` ya implementa para la cadena cercana/PCA: grilla de SNR {0, 1, 2, 3, 5, 7, 10}, flujo calibrado vía filtro adaptado, recuperación por apertura y matched filter, truth JSON y QC. Queda pendiente:
+Stage 04b preservó la coordenada `(108,61)` y los 3465 canales buenos. En
+Stage 07b, `box3_sum` recuperó `line_mean_snr=8.803` (diferencia `-1.9%` frente
+al valor esperado), `line_peak_snr=17.718` y `z_flux=8.536`; el objeto quedó por
+encima de los siete controles. Las cifras `5`, `8.97` y `17.718` no son
+intercambiables: corresponden respectivamente a matched filter integrado,
+apertura 3x3 integrada y pico espectral dividido por la dispersión del continuo.
+Stage 08 ubicó el máximo de Halpha en `6563.283 A` con `SNR-like=7.288`; el
+baseline evaluado en la misma posición da `0.840`. Espectros, distribución de
+controles y mapa residual fueron inspeccionados visualmente y son coherentes con
+la inyección.
 
-1. **Implementado y ejecutado (2026-06-17)**: la cadena lejana ya tiene grilla
-   de S/N, matched filter, apertura 3x3, controles al mismo radio y modos
-   realista/determinista a traves de la sustraccion local. La implementacion
-   vive en `musepipe/stages/stage06_local_surface_injection.py`. En
-   `ROXs12b_refactor_validation`, la transferencia delta fue `0.9982315`; una
-   entrada de `3 sigma` se recuperó en `2.013 sigma` por el baseline local.
-2. Varias longitudes de onda de inyección (no solo Hα) para medir la dependencia espectral del throughput.
-3. 2–3 posiciones/PA al mismo radio para medir varianza espacial del throughput.
-4. Producto final: curva de completitud + factor de throughput por cadena. Ese factor corrige cualquier flujo o límite superior que publiques.
+### C2. Grilla de inyección-recuperación, no un solo punto — *completo y ejecutado* ✔
+
+Ambas cadenas tienen ahora la misma superficie experimental: Hbeta `4861.33 A`,
+Halpha `6562.80 A` y O I `8446.36 A`; tres posiciones al mismo radio; y S/N de
+entrada `{0, 0.1, 0.5, 1, 2, 3, 5, 7, 10}`. La completitud usa un umbral de
+recuperación de `5 sigma` y representa la fracción de los nueve casos
+línea/posición detectados, no una probabilidad Monte Carlo.
+
+**Cadena local-surface (2026-06-18)**: la implementación vive en
+`musepipe/stages/stage06_local_surface_sweep.py` y fue ejecutada sobre
+`ROXs12b_refactor_validation`. La transferencia delta matched-filter
+`p16/mediana/p84` fue `0.998225/0.998230/0.998232`. La completitud alcanzó 50%
+en S/N de entrada `5.25` (matched) y `4.25` (apertura), y 90% en `7.30` y
+`8.65`, respectivamente.
+
+**Cadena PCA (2026-06-21)**: `06c_pca_c2_multiline_40.ipynb` repitió
+IncrementalPCA después de cada inyección sobre una vista central `40x40` de
+`LkCa_15`, en PA `45/135/225 deg`. Los nueve casos y 81 puntos fueron
+consolidados por `musepipe/stages/stage06_pca_c2_summary.py`. La transferencia
+delta matched-filter `p16/mediana/p84` es
+`0.987974/0.988067/0.988209`; por tanto PCA conserva aproximadamente 98.8% del
+template. La apertura 3x3 conserva `0.522/0.593/0.630`, porque captura solo una
+parte del template espacial/espectral y no por una pérdida adicional de PCA.
+
+Con S/N de entrada 10, la completitud global es `7/9 = 77.8%` por matched
+filter y `6/9 = 66.7%` por apertura. La interpolación monotónica sitúa el 50%
+en `8.93` y `9.10`; el 90% no se alcanza dentro de la grilla. Halpha es el caso
+limitante por residuales basales negativos en dos PA, pese a mantener el mismo
+throughput delta. Productos finales:
+
+- `runs/LkCa_15/tables/stage06_pca_c2_40/stage06_pca_c2_40_grid.csv`
+- `runs/LkCa_15/tables/stage06_pca_c2_40/stage06_pca_c2_40_case_summary.csv`
+- `runs/LkCa_15/tables/stage06_pca_c2_40/stage06_pca_c2_40_completeness.csv`
+- `runs/LkCa_15/stages/stage06_pca_c2_40_summary_qc.json`
+- `runs/LkCa_15/plots/stage06_pca_c2_40/stage06_pca_c2_40_summary.png`
 
 ### C3. Usar la extensión STAT de MUSE — *implementado* ✔ (2026-06-11)
 Implementado en `11_stat_variance_propagation.ipynb`. Lee la extensión STAT de los cubos crudos (autodetección por EXTNAME, override `stage11_stat_ext`) y replica sobre la varianza la cadena geométrica registrada en los QC: crop (exacto) → shift espacial subpixel (**exacto** vía kernel de respuesta a impulso al cuadrado — el spline cúbico de stage01 no es bilineal; validado por Monte Carlo con ratio MC/propagada = 0.998–1.001) → regrid espectral lineal (exacto, pesos²) → shifts de stripes de stage02 (κ exacto por kernel 1D, validado a 3 decimales vs MC; promedio por cubo) → keep_mask de stage03. PCA/sustracción local tratadas como operadores deterministas (estándar).
@@ -105,7 +140,7 @@ sistemáticos residuales dominan sobre el piso STAT propagado.
 Con ~3700 canales, picos de `snr_like` ~3–4 son esperables por azar. Cuantificarlo: con los espectros de control de Stage 8 (ya guardados en el `.npz`), medir la distribución de máximos por espectro de control y derivar el umbral de `peakSNR` que corresponde a una tasa de falsos positivos dada. Eso convierte el "peakSNR ~4 pero no outlier" de 07b en un enunciado estadístico.
 
 ### C5. Límite superior de acreción — *parcial, implementado para una posición*
-Aunque Hα no sea robusta, el producto científico natural es un límite superior de F(Hα) → L(Hα) → Ṁ (escalas tipo Alcalá et al.). Requiere C2 (throughput) + calibración de flujo (pasar de unidades nativas a erg/s/cm²/Å usando la estrella central o la respuesta del cubo). Stage 10 ya hace esa conversión para `LkCa_15`, pero el resultado sólo vale en la separación/PA de la inyección y aún no constituye un mapa de límites.
+Aunque Hα no sea robusta, el producto científico natural es un límite superior de F(Hα) → L(Hα) → Ṁ (escalas tipo Alcalá et al.). C2 ya aporta throughput y variación espacial/espectral; falta integrar esos productos con la calibración de flujo. Stage 10 hace la conversión para `LkCa_15`, pero todavía consume el caso histórico de una sola separación/PA y no constituye un mapa de límites.
 
 ### C6. Stage 8: cuantificar el costo del modo rápido — *pendiente*
 El caveat documentado (Stage 8 no repite el sigma-clipping de 04b) es verificable: para ~50 canales aleatorios, comparar el ajuste rápido vs. el robusto y guardar la diferencia en el QC. Si es despreciable, el caveat desaparece; si no, sabes en qué canales desconfiar.
@@ -187,7 +222,7 @@ reales, pero siguen como rutas paralelas y no cierran la consolidación propuest
 - Añadir a cada QC JSON: hash git del código, versiones de paquetes y hash/fecha de los archivos de entrada. Con eso cada resultado es trazable a código + datos exactos.
 
 ### O7. Tests mínimos (1 día, después de O2) — *implementado para el alcance migrado* ✔
-La suite contiene 45 pruebas para estadística, espectro, aperturas, ajuste local,
+La suite contiene 49 pruebas para estadística, espectro, aperturas, ajuste local,
 Stage 04b, Stage 06 local-surface, Stage 07, Stage 07b y Stage 08. Incluye cubos
 sintéticos, ranking Halpha, inyección-recuperación, canales enmascarados y
 contratos de FITS/CSV/QC. `ROXs12b_short` y `ROXs12b` tienen regresiones reales
@@ -228,7 +263,7 @@ La grilla de Stage06 incluye SNR=0 pero `good_flux` la excluye (flux > 0). Esa f
 Calculas `slope_sigma` pero el límite se reporta sin error: `flux_limit = k/slope` debería llevar `σ_limit ≈ k·slope_sigma/slope²`. Sin eso, "límite proyectado = X" aparenta una precisión que no tiene.
 
 **S5. Acotar el alcance: una posición, una línea.**
-El límite hereda las limitaciones de Stage06: una sola posición de inyección y solo Hα. El límite de flujo depende fuertemente de la separación a la estrella. Dejar explícito en QC y figura que el resultado vale "en el radio/PA de inyección", y conectarlo con C2.3 (multi-posición) cuando exista.
+El límite vigente de Stage 10 todavía consume el producto histórico de Stage06 para una sola posición y Hα. C2 ya cuantifica tres PA y tres longitudes de onda, pero esos factores aún deben incorporarse al QC/figura de Stage 10 y, después, extenderse a un mapa radial.
 
 **S6. Mediana de throughput sobre toda la grilla mezcla regímenes.**
 A flujos bajos el throughput medido es ruido/ruido (mal definido); a flujos altos sufre la autosustracción de S2. Mejor: η de los puntos intermedios (S/N recuperado entre ~3 y ~7), o directamente la curva η(flujo).
@@ -322,8 +357,7 @@ Parámetros `stage01b_*` opcionales con default. Funciones `apply_spatial_alignm
 
 | Semana | Acción | Por qué primero |
 |---|---|---|
-| 1 | Completar C1 con una inyección extremo a extremo | Separa equivalencia del refactor de recuperación científica de señal |
-| 2 | C4 + regresión real pequeña automatizada | Convierte picos locales en umbrales estadísticos y protege cambios futuros |
-| 3 | C2 multi-posición/multi-longitud + mapa de límites C5 | Extiende el resultado de una posición/PA a un producto científico defendible |
-| 4 | Consolidar O4 | Convierte las variantes low-memory en una ruta operativa reproducible |
-| 5+ | C6–C7, O5–O6 y migración restante | Cierra ciencia espectral, duplicados y trazabilidad completa |
+| 1 | C4 + regresión real pequeña automatizada | Convierte picos locales en umbrales estadísticos y protege cambios futuros |
+| 2 | Integrar los productos C2 en el mapa de límites C5 | Lleva el throughput y la varianza espacial ya medidos al producto científico publicable |
+| 3 | Consolidar O4 | Convierte las variantes low-memory en una ruta operativa reproducible |
+| 4+ | C6–C7, O5–O6 y migración restante | Cierra ciencia espectral, duplicados y trazabilidad completa |

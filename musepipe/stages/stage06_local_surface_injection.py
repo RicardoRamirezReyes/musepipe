@@ -25,13 +25,18 @@ from .stage07b_halpha_robustness import resolve_object_yx, resolve_star_yx
 
 
 STAGE06_LOCAL_DEFAULTS = {
+    "line_label": "Halpha",
     "line_center_A": 6562.8,
+    "line_channels_A": None,
     "halpha_channels_A": [6560.96, 6562.21, 6563.46],
+    "continuum_windows_A": None,
     "cont_ha_min_A": 6570.0,
     "cont_ha_max_A": 6700.0,
     "muse_mode": "NFM",
     "pixel_scale_arcsec": 0.025,
     "spatial_psf_fwhm_arcsec": 0.070,
+    "line_fwhm_A": None,
+    "spectral_resolution": None,
     "muse_R_at_halpha": 2484.0,
     "template_radius_nsigma": 5.0,
     "match_reference_separation": True,
@@ -212,6 +217,57 @@ def make_signal_template(
     )
     template = spectral_profile[:, None, None] * spatial_psf[None, :, :]
     return zsl, ysl, xsl, template.astype(np.float32), spectral_profile, spatial_psf
+
+
+def resolve_line_fwhm_A(config):
+    """Resolve an explicit line FWHM or derive it from resolving power."""
+
+    explicit = config.get("line_fwhm_A")
+    if explicit is not None:
+        fwhm_A = float(explicit)
+    else:
+        resolving_power = config.get("spectral_resolution")
+        if resolving_power is None:
+            resolving_power = config["muse_R_at_halpha"]
+        resolving_power = float(resolving_power)
+        if not np.isfinite(resolving_power) or resolving_power <= 0:
+            raise ValueError("Spectral resolving power must be positive.")
+        fwhm_A = float(config["line_center_A"]) / resolving_power
+    if not np.isfinite(fwhm_A) or fwhm_A <= 0:
+        raise ValueError("Line FWHM must be positive.")
+    return fwhm_A
+
+
+def resolve_continuum_windows(config):
+    """Return validated continuum windows, preserving the historical Halpha default."""
+
+    raw_windows = config.get("continuum_windows_A")
+    if raw_windows is None:
+        raw_windows = [(config["cont_ha_min_A"], config["cont_ha_max_A"])]
+    windows = []
+    for value in raw_windows:
+        if len(value) != 2:
+            raise ValueError(f"Continuum window must contain two bounds: {value!r}.")
+        lo, hi = map(float, value)
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+            raise ValueError(f"Invalid continuum window: {value!r}.")
+        windows.append((lo, hi))
+    if not windows:
+        raise ValueError("At least one continuum window is required.")
+    return windows
+
+
+def continuum_mask_from_config(wavelengths, config):
+    """Build the continuum mask, excluding configured bad wavelength ranges."""
+
+    waves = np.asarray(wavelengths, dtype=np.float64)
+    windows = resolve_continuum_windows(config)
+    mask = np.zeros(waves.shape, dtype=bool)
+    for lo, hi in windows:
+        mask |= (waves >= lo) & (waves <= hi)
+    for lo, hi in config.get("bad_wavelength_ranges_A", []):
+        mask &= ~((waves >= float(lo)) & (waves <= float(hi)))
+    return mask, windows
 
 
 def local_surface_control_positions(
@@ -423,7 +479,7 @@ def compute_stage06_local_products(
     selected_indices=None,
     selection_source="explicit",
 ):
-    """Compute a local-surface Halpha injection-recovery grid."""
+    """Compute a local-surface unresolved-line injection-recovery grid."""
 
     config = {**STAGE06_LOCAL_DEFAULTS, **dict(config)}
     cubes = np.asarray(cubes_norm, dtype=np.float32)
@@ -448,7 +504,7 @@ def compute_stage06_local_products(
     dlam_A = float(np.nanmedian(np.diff(waves)))
     if not np.isfinite(dlam_A) or dlam_A <= 0:
         raise ValueError("Wavelength axis must be finite and increasing.")
-    line_fwhm_A = float(config["line_center_A"]) / float(config["muse_R_at_halpha"])
+    line_fwhm_A = resolve_line_fwhm_A(config)
     geometry = resolve_injection_geometry(config, ny, nx)
     inj_y, inj_x = geometry["injection_yx"]
 
@@ -466,13 +522,14 @@ def compute_stage06_local_products(
         nsigma=float(config["template_radius_nsigma"]),
     )
 
+    continuum_windows = resolve_continuum_windows(config)
     diag_min_A = min(
         float(config["line_center_A"]) - float(config["diagnostic_halfwidth_A"]),
-        float(config["cont_ha_min_A"]),
+        *(lo for lo, _ in continuum_windows),
     )
     diag_max_A = max(
         float(config["line_center_A"]) + float(config["diagnostic_halfwidth_A"]),
-        float(config["cont_ha_max_A"]),
+        *(hi for _, hi in continuum_windows),
     )
     diag_indices = np.where((waves >= diag_min_A) & (waves <= diag_max_A))[0]
     if diag_indices.size == 0:
@@ -483,10 +540,11 @@ def compute_stage06_local_products(
     diag_waves = waves[diag_start:diag_stop]
     cubes_diag = cubes[:, diag_start:diag_stop]
     zsl_diag = slice(zsl_full.start - diag_start, zsl_full.stop - diag_start)
-    line_indices = nearest_channel_indices(diag_waves, config["halpha_channels_A"])
-    continuum_mask = (diag_waves >= float(config["cont_ha_min_A"])) & (
-        diag_waves <= float(config["cont_ha_max_A"])
-    )
+    line_channel_targets = config.get("line_channels_A")
+    if line_channel_targets is None:
+        line_channel_targets = config["halpha_channels_A"]
+    line_indices = np.unique(nearest_channel_indices(diag_waves, line_channel_targets))
+    continuum_mask, continuum_windows = continuum_mask_from_config(diag_waves, config)
     if not np.any(continuum_mask):
         raise RuntimeError("No continuum channels in the Stage 06 diagnostic window.")
 
@@ -711,6 +769,7 @@ def compute_stage06_local_products(
         "diag_stop": diag_stop,
         "line_indices": np.asarray(line_indices, dtype=int),
         "continuum_mask": np.asarray(continuum_mask, dtype=bool),
+        "continuum_windows_A": continuum_windows,
         "zsl_full": zsl_full,
         "zsl_diag": zsl_diag,
         "ysl": ysl,
@@ -935,8 +994,9 @@ def save_stage06_local_plot(path, products, config, *, show_plots=False):
         axis.set_xlabel("x [px]")
         axis.set_ylabel("y [px]")
 
+    line_label = str(config.get("line_label", "Halpha"))
     fig.suptitle(
-        f"{config['run_id']} - Halpha injection through local-surface subtraction",
+        f"{config['run_id']} - {line_label} injection through local-surface subtraction",
         fontsize=13,
     )
     fig.savefig(path, dpi=180, bbox_inches="tight")
@@ -988,7 +1048,7 @@ def write_stage06_local_products(products, config, paths, *, save_plots=True, sh
     qc = {
         "run_id": config["run_id"],
         "target_name": config.get("target_name"),
-        "stage": "stage06_local_surface_halpha_injection",
+        "stage": "stage06_local_surface_line_injection",
         "input_mode": config["input_mode"],
         "input_cube_fits": str(config["input_cube_fits"]),
         "input_shape": [int(value) for value in config["input_shape"]],
@@ -1009,8 +1069,11 @@ def write_stage06_local_products(products, config, paths, *, save_plots=True, sh
         "local_fit_sigma_clip": float(config["local_fit_sigma_clip"]),
         "local_fit_max_iter": int(config["local_fit_max_iter"]),
         "line_center_A": float(config["line_center_A"]),
+        "line_label": str(config.get("line_label", "Halpha")),
         "line_fwhm_A": float(products["line_fwhm_A"]),
+        "line_channel_indices_diag": [int(value) for value in products["line_indices"]],
         "halpha_channel_indices_diag": [int(value) for value in products["line_indices"]],
+        "continuum_windows_A": [list(map(float, value)) for value in products["continuum_windows_A"]],
         "diagnostic_wavelength_range_A": [
             float(products["diag_wavelengths"][0]),
             float(products["diag_wavelengths"][-1]),
@@ -1035,7 +1098,7 @@ def write_stage06_local_products(products, config, paths, *, save_plots=True, sh
     truth = {
         "run_id": config["run_id"],
         "target_name": config.get("target_name"),
-        "line": "Halpha",
+        "line": str(config.get("line_label", "Halpha")),
         "recovery_method": "local_surface_subtraction",
         "recovery_mode": products["recovery_mode"],
         "injection_yx": list(map(int, geometry["injection_yx"])),
@@ -1151,7 +1214,10 @@ __all__ = [
     "local_surface_control_positions",
     "make_signal_template",
     "matched_filter_flux",
+    "continuum_mask_from_config",
+    "resolve_continuum_windows",
     "resolve_injection_geometry",
+    "resolve_line_fwhm_A",
     "run_stage06_local",
     "save_stage06_local_plot",
     "separation_pa_from_center",

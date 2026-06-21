@@ -7,6 +7,7 @@ from astropy.io import fits
 
 from musepipe.stages.stage06_local_surface_injection import (
     compute_stage06_local_products,
+    continuum_mask_from_config,
     inject_physical_template,
     local_surface_control_positions,
     make_signal_template,
@@ -14,6 +15,13 @@ from musepipe.stages.stage06_local_surface_injection import (
     stage06_local_config_from_run,
     stage06_local_paths,
     write_stage06_local_products,
+)
+from musepipe.stages.stage06_local_surface_sweep import (
+    compute_stage06_local_sweep_products,
+    input_snr_at_completeness,
+    nearest_line_channel_targets,
+    stage06_local_sweep_paths,
+    write_stage06_local_sweep_products,
 )
 
 
@@ -124,6 +132,20 @@ class Stage06LocalSurfaceInjectionTests(unittest.TestCase):
         self.assertNotIn((22, 12), controls)
         self.assertNotIn((22, 32), controls)
 
+    def test_generic_line_channels_and_continuum_windows(self):
+        _, wavelengths, _ = synthetic_inputs()
+        targets = nearest_line_channel_targets(wavelengths, 6620.0, n_channels=3)
+        self.assertEqual(len(targets), 3)
+        self.assertEqual(len(set(targets)), 3)
+
+        config = synthetic_config()
+        config["continuum_windows_A"] = [[6595.0, 6605.0], [6635.0, 6645.0]]
+        config["bad_wavelength_ranges_A"] = [[6600.0, 6602.0]]
+        mask, windows = continuum_mask_from_config(wavelengths, config)
+        self.assertEqual(windows, [(6595.0, 6605.0), (6635.0, 6645.0)])
+        self.assertTrue(np.any(mask))
+        self.assertFalse(np.any(mask & (wavelengths >= 6600.0) & (wavelengths <= 6602.0)))
+
     def test_recovery_grid_is_finite_monotonic_and_transfers_signal(self):
         cubes, wavelengths, medpix = synthetic_inputs()
         products = compute_stage06_local_products(
@@ -179,6 +201,75 @@ class Stage06LocalSurfaceInjectionTests(unittest.TestCase):
                     [hdu.name for hdu in hdul],
                     ["PRIMARY", "BASE_TARGET_DIAG", "INJECTED_TARGET_DIAG", "DELTA_TARGET_DIAG", "WAVELENGTH"],
                 )
+
+    def test_c2_sweep_builds_completeness_and_consolidated_products(self):
+        cubes, wavelengths, medpix = synthetic_inputs()
+        config = synthetic_config()
+        config.update(
+            {
+                "recovery_mode": "deterministic",
+                "injection_snr_grid": [0.0, 3.0, 6.0],
+                "sweep_lines": [
+                    {
+                        "label": "line_a",
+                        "center_A": 6562.8,
+                        "continuum_windows_A": [[6540.0, 6552.0], [6574.0, 6586.0]],
+                    },
+                    {
+                        "label": "line_b",
+                        "center_A": 6620.0,
+                        "continuum_windows_A": [[6595.0, 6607.0], [6633.0, 6645.0]],
+                    },
+                ],
+                "sweep_pa_offsets_deg": [90.0, 180.0],
+                "sweep_n_line_channels": 3,
+                "sweep_continuum_inner_A": 10.0,
+                "sweep_continuum_outer_A": 30.0,
+                "sweep_detection_threshold_snr": 3.0,
+            }
+        )
+        products = compute_stage06_local_sweep_products(
+            cubes,
+            wavelengths,
+            medpix,
+            config,
+            selected_indices=[0, 1],
+            selection_source="synthetic",
+        )
+        self.assertEqual(len(products["case_rows"]), 4)
+        self.assertEqual(len(products["grid_rows"]), 12)
+        self.assertEqual(len(products["completeness_rows"]), 3)
+        self.assertGreaterEqual(
+            products["completeness_rows"][-1]["matched_completeness"],
+            products["completeness_rows"][0]["matched_completeness"],
+        )
+        self.assertTrue(
+            all(np.isfinite(row["delta_matched_transfer_median"]) for row in products["case_rows"])
+        )
+        self.assertTrue(
+            np.isfinite(
+                input_snr_at_completeness(
+                    products["completeness_rows"],
+                    "matched_completeness",
+                    0.5,
+                )
+            )
+        )
+
+        config["input_cube_fits"] = "synthetic_stage02.fits"
+        config["input_shape"] = list(cubes.shape)
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = stage06_local_sweep_paths("synthetic", tmp)
+            written = write_stage06_local_sweep_products(
+                products,
+                config,
+                paths,
+                save_plots=False,
+            )
+            self.assertTrue(written["grid_csv"].exists())
+            self.assertTrue(written["case_summary_csv"].exists())
+            self.assertTrue(written["completeness_csv"].exists())
+            self.assertTrue(written["qc_json"].exists())
 
     def test_active_run_config_uses_stage04b_geometry(self):
         config = stage06_local_config_from_run("ROXs12b_short")

@@ -13,6 +13,7 @@ Las etapas para objetos lejanos ya migradas son:
 |---|---|---|
 | 04b, sustraccion local | `musepipe/stages/stage04b_local_surface.py` | `Far_04b_local_surface_subtraction.ipynb` |
 | 06, inyeccion local | `musepipe/stages/stage06_local_surface_injection.py` | `Far_06_inject_halpha_signal.ipynb` |
+| 06 C2, resumen PCA | `musepipe/stages/stage06_pca_c2_summary.py` | `06c_pca_c2_multiline_40.ipynb` |
 | 07, lineas de acrecion | `musepipe/stages/stage07_accretion_lines.py` | `Far_07_accretion_line_spectra.ipynb` |
 | 07b, robustez de Halpha | `musepipe/stages/stage07b_halpha_robustness.py` | `Far_07b_halpha_robustness_checks.ipynb` |
 | 08, espectro completo | `stage08_full_spectrum_for_modeling.py` | `Far_08_full_spectrum_for_modeling.ipynb` |
@@ -79,6 +80,14 @@ MUSE_RUN_ID=ROXs12b python -c "from musepipe.stages import run_stage07b; run_sta
 MUSE_RUN_ID=ROXs12b python stage08_full_spectrum_for_modeling.py
 ```
 
+Los nueve casos PCA de C2 se ejecutan desde
+`06c_pca_c2_multiline_40.ipynb`. Una vez completos, su consolidación no repite
+PCA ni abre el cubo grande:
+
+```bash
+MPLBACKEND=Agg python -c "from musepipe.stages import run_stage06_pca_c2_summary; run_stage06_pca_c2_summary('LkCa_15')"
+```
+
 Antes de ejecutarlas sobre un run cientifico, confirma el run y revisa los
 productos existentes. Los notebooks `Far_04b`, `Far_07`, `Far_07b` y `Far_08` ofrecen la
 misma ruta con figuras de inspeccion.
@@ -115,7 +124,7 @@ Para actualizar un entorno `MUSE` existente con la misma especificación:
 conda env update --name MUSE --file environment.yml --prune
 ```
 
-Las versiones están fijadas al entorno usado para la validación de 45 pruebas.
+Las versiones están fijadas al entorno usado para la validación de 49 pruebas.
 `maoppy` se instala desde PyPI y es necesario para el perfil
 `stage01_profile=maoppy_refined`; sin él, Stage 01 usa su fallback de centrado
 por pico.
@@ -129,8 +138,8 @@ python -m unittest discover -s tests
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
 ```
 
-La suite actual contiene 45 pruebas. El entorno Python aun no esta fijado en
-un `requirements.txt` o `environment.yml`; esa tarea permanece pendiente.
+La suite actual contiene 49 pruebas y el entorno reproducible esta fijado en
+`environment.yml`.
 
 ## Documentacion
 
