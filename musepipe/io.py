@@ -20,7 +20,9 @@ def write_json(path, payload) -> None:
         json.dump(payload, f, indent=2)
 
 
-def write_csv(path, rows, fieldnames) -> None:
+def write_csv(path, rows, fieldnames=None) -> None:
+    if fieldnames is None:
+        fieldnames = list(rows[0].keys()) if rows else []
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
