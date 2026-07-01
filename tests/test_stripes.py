@@ -18,6 +18,7 @@ from musepipe.stripes import (
     _build_stripe_geometry,
     _build_stripe_ranges,
     _build_stripe_ranges_flexible,
+    _normalize_for_xcorr,
     _normalize_stripe_angle_deg,
     _normalize_stripe_orientation,
     _optional_float,
@@ -28,7 +29,22 @@ from musepipe.stripes import (
     _validate_manual_stripe_ranges,
     _xcorr_shift_pixels,
     safe_float,
+    xcorr_shift_map,
 )
+
+
+def _scalar_shift_map(cube_use, ref_spec, max_lag):
+    """Reference per-spaxel loop that xcorr_shift_map must reproduce exactly."""
+    nz, ny, nx = cube_use.shape
+    if ref_spec is None:
+        ref_spec = np.nanmedian(cube_use.reshape(nz, -1), axis=1)
+    ref_norm = _normalize_for_xcorr(ref_spec)
+    out = np.full((ny, nx), np.nan, dtype=np.float32)
+    for y in range(ny):
+        for x in range(nx):
+            spec = _normalize_for_xcorr(cube_use[:, y, x])
+            out[y, x] = _xcorr_shift_pixels(ref_norm, spec, max_lag=max_lag)
+    return out
 
 
 class ScalarHelpers(unittest.TestCase):
@@ -162,6 +178,45 @@ class SpectralShifts(unittest.TestCase):
     def test_xcorr_returns_nan_on_flat_input(self):
         flat = np.ones(100)
         self.assertTrue(np.isnan(_xcorr_shift_pixels(flat, flat)))
+
+
+class VectorizedShiftMap(unittest.TestCase):
+    def _make_cube(self, rng, nz, ny, nx, nan_frac):
+        base = np.convolve(rng.normal(size=nz), np.ones(5) / 5, mode="same")
+        cube = np.empty((nz, ny, nx), dtype=np.float32)
+        for y in range(ny):
+            for x in range(nx):
+                col = np.roll(base, int(rng.integers(-6, 7))) + 0.1 * rng.normal(size=nz)
+                if rng.random() < nan_frac:
+                    col[rng.integers(0, nz, size=int(rng.integers(1, 8)))] = np.nan
+                if rng.random() < 0.04:
+                    col[:] = np.nan
+                cube[:, y, x] = col
+        return cube
+
+    def test_matches_scalar_loop_self_and_master_ref(self):
+        rng = np.random.default_rng(0)
+        max_abs = 0.0
+        nan_mismatch = 0
+        for _ in range(6):
+            nz = int(rng.integers(40, 80))
+            ny, nx = int(rng.integers(6, 12)), int(rng.integers(6, 12))
+            cube = self._make_cube(rng, nz, ny, nx, nan_frac=0.3)
+            for ref in (None, np.nanmedian(cube[:, :3, :3].reshape(nz, -1), axis=1)):
+                a = _scalar_shift_map(cube, ref, 6)
+                b = xcorr_shift_map(cube, ref, 6)
+                mask = ~(np.isnan(a) & np.isnan(b))
+                nan_mismatch += int(np.sum(np.isnan(a) != np.isnan(b)))
+                if mask.any():
+                    max_abs = max(max_abs, float(np.max(np.abs(a[mask] - b[mask]))))
+        self.assertEqual(nan_mismatch, 0)
+        self.assertEqual(max_abs, 0.0)
+
+    def test_all_nan_reference_returns_all_nan(self):
+        cube = np.full((30, 4, 4), np.nan, dtype=np.float32)
+        out = xcorr_shift_map(cube)
+        self.assertTrue(np.all(np.isnan(out)))
+        self.assertEqual(out.shape, (4, 4))
 
 
 if __name__ == "__main__":

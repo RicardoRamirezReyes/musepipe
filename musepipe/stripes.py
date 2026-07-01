@@ -46,6 +46,8 @@ __all__ = [
     "_xcorr_shift_pixels",
     "_shift_spectral_nan_safe",
     "_shift_spectral_integer",
+    "_normalize_columns_for_xcorr",
+    "xcorr_shift_map",
 ]
 
 
@@ -511,3 +513,113 @@ def _shift_spectral_integer(block: np.ndarray, dz: float):
         out[:k, ...] = block[-k:, ...]
 
     return out
+
+
+def _normalize_columns_for_xcorr(flat):
+    """Vectorized, column-wise equivalent of ``_normalize_for_xcorr``.
+
+    ``flat`` has shape ``(nz, P)``. Returns ``(T, col_ok)`` where ``T`` is the
+    normalized array (NaN wherever the input was non-finite, and entire columns
+    set to NaN where ``_normalize_for_xcorr`` would have returned ``None``), and
+    ``col_ok`` is a boolean mask of columns that normalized successfully.
+    Each column reproduces ``_normalize_for_xcorr`` bit-for-bit.
+    """
+    s = np.asarray(flat, dtype=np.float64)
+    good = np.isfinite(s)
+    cnt = good.sum(axis=0)
+    masked = np.where(good, s, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        med = np.nanmedian(masked, axis=0)
+        std = np.nanstd(masked, axis=0)
+        with np.errstate(all="ignore"):
+            out = (s - med) / std
+    out[~good] = np.nan
+    col_ok = (cnt >= 3) & np.isfinite(std) & (std > 0)
+    out[:, ~col_ok] = np.nan
+    return out, col_ok
+
+
+def xcorr_shift_map(cube_use, ref_spec=None, max_lag=6):
+    """Per-spaxel spectral cross-correlation shift map (channels), vectorized.
+
+    ``cube_use`` is ``(nz, ny, nx)`` already restricted to the xcorr channel
+    window. ``ref_spec`` is an optional raw 1D reference (``nz``); if ``None``
+    the robust median over all spaxels is used. Returns an ``(ny, nx)`` float32
+    map of subpixel shifts.
+
+    This reproduces the scalar loop
+    ``_xcorr_shift_pixels(_normalize_for_xcorr(ref), _normalize_for_xcorr(spec))``
+    exactly. Spaxels whose finite channels cover the reference support are solved
+    with a fully vectorized correlation; any spaxel with extra masked channels
+    (or that fails normalization) falls back to the scalar ``_xcorr_shift_pixels``
+    so the result is identical to the per-spaxel implementation.
+    """
+    cube_use = np.asarray(cube_use)
+    nz, ny, nx = cube_use.shape
+    if ref_spec is None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            ref_spec = np.nanmedian(cube_use.reshape(nz, -1), axis=1)
+
+    R = _normalize_for_xcorr(ref_spec)
+    P = ny * nx
+    out = np.full(P, np.nan, dtype=np.float64)
+    if R is None:
+        return out.reshape(ny, nx).astype(np.float32)
+
+    flat = cube_use.reshape(nz, P)
+    T, col_ok = _normalize_columns_for_xcorr(flat)
+    ref_good = np.isfinite(R)
+    L = int(ref_good.sum())
+
+    fast = col_ok & np.isfinite(T[ref_good, :]).all(axis=0)
+
+    if L >= 10 and fast.any():
+        fidx = np.where(fast)[0]
+        Rc = R[ref_good]
+        Tc = T[np.ix_(ref_good, fidx)]
+        lags = np.arange(-int(max_lag), int(max_lag) + 1, dtype=int)
+        nl = lags.size
+        Nf = fidx.size
+        corr = np.full((nl, Nf), np.nan)
+        for li, lag in enumerate(lags):
+            if lag < 0:
+                a = Rc[-lag:]
+                B = Tc[:L + lag, :]
+            elif lag > 0:
+                a = Rc[:-lag]
+                B = Tc[lag:, :]
+            else:
+                a = Rc
+                B = Tc
+            if a.shape[0] < 5:
+                continue
+            corr[li, :] = (a[:, None] * B).sum(axis=0)
+
+        anyf = np.isfinite(corr).any(axis=0)
+        i0 = np.zeros(Nf, dtype=int)
+        if anyf.any():
+            filled = np.where(np.isfinite(corr[:, anyf]), corr[:, anyf], -np.inf)
+            i0[anyf] = np.argmax(filled, axis=0)
+        lag0 = lags[i0].astype(np.float64)
+
+        cols = np.arange(Nf)
+        ii = np.clip(i0, 1, nl - 2)
+        y1 = corr[ii - 1, cols]
+        y2 = corr[ii, cols]
+        y3 = corr[ii + 1, cols]
+        denom = y1 - 2.0 * y2 + y3
+        interior = anyf & (i0 > 0) & (i0 < nl - 1)
+        cond = interior & np.isfinite(denom) & (np.abs(denom) > 1e-12)
+        with np.errstate(all="ignore"):
+            delta = 0.5 * (y1 - y3) / denom
+        apply_delta = cond & (np.abs(delta) <= 1.0)
+        lag0[apply_delta] = lag0[apply_delta] + delta[apply_delta]
+        lag0[~anyf] = np.nan
+        out[fidx] = lag0
+
+    for p in np.where(~fast)[0]:
+        out[p] = _xcorr_shift_pixels(R, T[:, p], max_lag=max_lag)
+
+    return out.reshape(ny, nx).astype(np.float32)
