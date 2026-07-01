@@ -69,9 +69,34 @@ def make_wavelength_mask(
     return mask
 
 
+def spectrum_to_snr(spec_1d, noise):
+    """Divide a spectrum by a scalar noise level.
+
+    Returns an all-NaN array (shaped like the input) when ``noise`` is not
+    finite or not positive; otherwise ``spec_1d / noise``.
+    """
+
+    spec_1d = np.asarray(spec_1d, dtype=np.float64)
+    if not np.isfinite(noise) or noise <= 0:
+        return np.full_like(spec_1d, np.nan, dtype=np.float64)
+    return spec_1d / float(noise)
+
+
+def integrated_line_flux(spec_1d, line_idxs, dlam_A):
+    """Integrated line flux over the given channel indices.
+
+    ``nansum(spec_1d[line_idxs]) * dlam_A``; ``line_idxs`` is cast to int.
+    """
+
+    idx = np.asarray(line_idxs, dtype=int)
+    return float(np.nansum(np.asarray(spec_1d)[idx]) * dlam_A)
+
+
 __all__ = [
     "continuum_running_median",
+    "integrated_line_flux",
     "make_wavelength_mask",
     "nearest_channel_index",
     "nearest_channel_indices",
+    "spectrum_to_snr",
 ]
