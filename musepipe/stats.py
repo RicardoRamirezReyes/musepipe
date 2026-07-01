@@ -73,6 +73,29 @@ def empirical_z(value, reference_values) -> float:
     return float((float(value) - np.nanmedian(refs)) / sigma)
 
 
+def continuum_noise_from_spectrum(spec_1d, cont_mask, method="robust"):
+    """Continuum noise estimate from the masked channels of a 1D spectrum.
+
+    ``method="robust"`` (default): MAD-based robust sigma (:func:`robust_sigma`),
+    which downweights outliers such as residual line or cosmic-ray spikes.
+    ``method="std"``: plain standard deviation over the finite continuum values,
+    returning NaN when fewer than 5 finite channels remain.
+
+    The default is the robust MAD estimator; pass ``method="std"`` explicitly to
+    recover a simple standard deviation.
+    """
+
+    vals = np.asarray(spec_1d, dtype=np.float64)[np.asarray(cont_mask, dtype=bool)]
+    if method == "robust":
+        return robust_sigma(vals)
+    if method == "std":
+        vals = vals[np.isfinite(vals)]
+        if vals.size < 5:
+            return np.nan
+        return float(np.nanstd(vals))
+    raise ValueError(f"Unknown method: {method!r} (expected 'robust' or 'std').")
+
+
 def robust_limits(values, p_lo=2.0, p_hi=98.0, *, symmetric=False):
     """Return percentile display limits over finite values."""
 
@@ -86,6 +109,7 @@ def robust_limits(values, p_lo=2.0, p_hi=98.0, *, symmetric=False):
 
 
 __all__ = [
+    "continuum_noise_from_spectrum",
     "empirical_z",
     "finite_percentile",
     "finite_values",
