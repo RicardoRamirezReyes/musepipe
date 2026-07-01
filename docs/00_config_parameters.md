@@ -328,6 +328,26 @@ Stage 04b cuando no se especifican.
 | `stage07_exclude_bad_line_candidates` | `true` | Excluye lineas centrales dentro de rangos espectrales malos de 04b. |
 | `stage07_accretion_lines` | lista canonica de 24 lineas | Reemplazo opcional del catalogo de lineas. |
 
+### Stage 08c: falsos positivos y efecto look-elsewhere
+
+Stage 08c consume el NPZ y QC de Stage 8, extrae controles adicionales al
+mismo radio y calibra máximos positivos de `snr_like`. No reemplaza ningún
+producto Stage 8.
+
+| Clave `CFG` | Default | Explicacion |
+|---|---:|---|
+| `stage08c_n_control_positions` | `36` | Numero de angulos candidatos; tras excluir el entorno del objeto produce 31 controles en ROXs12b. |
+| `stage08c_object_exclude_angle_deg` | `25` | Exclusion angular alrededor del objeto real. |
+| `stage08c_control_reference_exclude_angle_deg` | `15` | Al construir cada nulo leave-neighborhood-out, excluye controles vecinos. |
+| `stage08c_control_margin_px` | `4` | Margen minimo respecto del borde espacial. |
+| `stage08c_fap_levels` | `[0.10,0.05,0.01]` | Tasas globales solicitadas; las que quedan bajo la resolucion empirica se reportan como no resolubles. |
+| `stage08c_top_n_peaks` | `10` | Numero de maximos del objeto guardados en la tabla de candidatos. |
+| `stage08c_peak_min_separation_A` | `5` | Separacion espectral minima entre maximos rankeados. |
+| `stage08c_halpha_A` | `6562.8` | Centro de la ventana Halpha predefinida. |
+| `stage08c_halpha_half_width_A` | `5` | Semiancho de la busqueda local Halpha. |
+| `stage08c_search_wavelength_min_A` | `None` | Limite azul opcional del barrido global. |
+| `stage08c_search_wavelength_max_A` | `None` | Limite rojo opcional del barrido global. |
+
 ## Paralelizacion
 
 | Clave `CFG` | Valor actual | Explicacion | Cuando cambiarlo |

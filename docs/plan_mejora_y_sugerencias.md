@@ -1,14 +1,14 @@
 # Plan de mejora y sugerencias — Pipeline 15_MUSE
 
-Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación de `Untitled`/`-Copy1`, cadena `Far_*` para objetos lejanos, nuevo `06_inject_halpha_signal` con inyección-recuperación por PCA). Revisado: 2026-06-14, tras el cambio de `crop_npix` a 50 y la incorporación de chequeos de consistencia de crop. Revisado: 2026-06-17, tras las Fases 0-9 del refactor de objetos lejanos. Auditado: 2026-06-18 contra el árbol de trabajo y los QC reales disponibles. Actualizado: 2026-06-21 con el cierre multi-línea/multi-posición de C2.
+Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación de `Untitled`/`-Copy1`, cadena `Far_*` para objetos lejanos, nuevo `06_inject_halpha_signal` con inyección-recuperación por PCA). Revisado: 2026-06-14, tras el cambio de `crop_npix` a 50 y la incorporación de chequeos de consistencia de crop. Revisado: 2026-06-17, tras las Fases 0-9 del refactor de objetos lejanos. Auditado: 2026-06-18 contra el árbol de trabajo y los QC reales disponibles. Actualizado: 2026-06-21 con los cierres de C2 y C4.
 
 > Estado auditado 2026-06-18: el diagnóstico original se conserva como registro
 > del punto de partida. La cadena lejana canónica `04b -> 06 local -> 07 -> 07b
 > -> 08` fue validada sobre la copia aislada `ROXs12b_refactor_validation`; 04b
 > coincide exactamente con el baseline y 07b/08 concuerdan hasta precisión
-> numérica. La suite contiene 49 pruebas. También existen ejecuciones reales de
+> numérica. La suite contiene 52 pruebas. También existen ejecuciones reales de
 > 01b, 03b, 09, 10 y 11 sobre `LkCa_15`. C1 fue cerrado después sobre la copia
-> aislada `ROXs12b_HaInject_SNR5_C1_validation`. Siguen pendientes C4, C6, C7,
+> aislada `ROXs12b_HaInject_SNR5_C1_validation`. Siguen pendientes C6, C7,
 > la regresión real automatizada, logging/trazabilidad y la migración de los
 > notebooks restantes. El checkpoint de O1 registra el estado validado y añade un
 > `environment.yml` reproducible; el filtrado automático de outputs queda como
@@ -21,7 +21,7 @@ Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación d
 | C1 | Completo y ejecutado | Inyección nominal matched-filter de 5 sigma propagada por 04b/07b/08; `box3_sum` recupera S/N medio 8.80 frente a 8.97 esperado |
 | C2 | Completo y ejecutado | Local-surface y PCA evaluados en 3 líneas × 3 posiciones × 9 niveles de S/N; existen throughput, completitud, QC y figura consolidados |
 | C3 | Completo y ejecutado | Stage 11 ejecutado en `LkCa_15`; ruido empírico/propagado = 3.63 |
-| C4 | Pendiente | No existe aún cálculo de falsos positivos/look-elsewhere |
+| C4 | Completo y ejecutado | 31 controles al mismo radio calibran máximos sobre 3465 canales; máximo del objeto FAP global 90.6% y Halpha FAP global 100% |
 | C5 | Parcial | Stage 10 produce límites físicos para una posición/PA; falta cobertura espacial/espectral y cierre de caveats publicables |
 | C6 | Pendiente | La equivalencia con el baseline no reemplaza la comparación rápida-vs-robusta por canal propuesta |
 | C7 | Pendiente | No hay CCF con templates, corrección baricéntrica ni ajuste de RV |
@@ -31,7 +31,7 @@ Fecha: 2026-06-10. Revisado: 2026-06-11, tras la reorganización (eliminación d
 | O4 | Parcial | Hay variantes low-memory e `IncrementalPCA`, pero no están consolidadas como ruta canónica |
 | O5 | Pendiente | Los 04c y los dos 00_config siguen como copias separadas |
 | O6 | Pendiente | No hay logging formal ni hashes/versiones de entradas en todos los QC |
-| O7 | Parcial | 49 pruebas y validación manual real; falta regresión automatizada con producto real pequeño |
+| O7 | Parcial | 52 pruebas y validación manual real; falta regresión automatizada con producto real pequeño |
 
 ## 1. Diagnóstico general
 
@@ -136,8 +136,38 @@ contiene 32 cubos y una pila `(32, 3465, 40, 40)`. En la posición de inyección
 `sigma_propagated=22.65`, `sigma_empirical=82.24` y el cociente es `3.63`: los
 sistemáticos residuales dominan sobre el piso STAT propagado.
 
-### C4. Tasa de falsos positivos y look-elsewhere — *pendiente*
-Con ~3700 canales, picos de `snr_like` ~3–4 son esperables por azar. Cuantificarlo: con los espectros de control de Stage 8 (ya guardados en el `.npz`), medir la distribución de máximos por espectro de control y derivar el umbral de `peakSNR` que corresponde a una tasa de falsos positivos dada. Eso convierte el "peakSNR ~4 pero no outlier" de 07b en un enunciado estadístico.
+### C4. Tasa de falsos positivos y look-elsewhere — *completo y ejecutado* ✔
+
+`musepipe/stages/stage08c_look_elsewhere.py` implementa una busqueda unilateral
+de lineas en emision sin reemplazar Stage 8. En
+`ROXs12b_refactor_validation` extrajo 31 controles al mismo radio a partir de
+36 angulos candidatos. Para cada control construyo un espectro nulo
+leave-neighborhood-out, excluyendo la posicion objetivo y vecinos dentro de
+`15 deg`; cada nulo uso 28-29 referencias. Los máximos se buscaron sobre los
+mismos 3465 canales buenos y conservaron por construccion la correlacion
+espectral y los residuos no gaussianos reales.
+
+El maximo global del objeto fue `snr_like=4.433` en `8565.78 A`, mientras los
+maximos nulos abarcaron `4.266-7.064`; su FAP global empirica es `29/32 =
+90.625%`. Los umbrales globales son `5.816` para FAP 10% y `6.953` para FAP
+5%. La resolucion finita es `1/(31+1)=3.125%`, por lo que FAP 1% se declara
+explicitamente no resoluble y no se extrapola.
+
+En la ventana Halpha `6562.8 +/- 5 A`, el maximo es `snr_like=2.049` en
+`6564.53 A`. La FAP puntual del canal es `6.25%`, la FAP que incluye la busqueda
+dentro de la ventana es `31.25%` y la FAP global sobre todo el espectro es
+`100%`. Por tanto no hay evidencia de una linea Halpha significativa ni de
+otro pico global en Stage 8. Productos:
+
+- `runs/ROXs12b_refactor_validation/tables/stage08c_null_maxima.csv`
+- `runs/ROXs12b_refactor_validation/tables/stage08c_object_candidates.csv`
+- `runs/ROXs12b_refactor_validation/tables/stage08c_global_thresholds.csv`
+- `runs/ROXs12b_refactor_validation/stages/stage08c_look_elsewhere_qc.json`
+- `runs/ROXs12b_refactor_validation/plots/stage08c_look_elsewhere/stage08c_look_elsewhere_summary.png`
+
+La limitacion restante es espacial: los controles densos al mismo radio pueden
+estar correlacionados entre si. El QC lo declara y evita interpretar la grilla
+como 31 ensayos perfectamente independientes.
 
 ### C5. Límite superior de acreción — *parcial, implementado para una posición*
 Aunque Hα no sea robusta, el producto científico natural es un límite superior de F(Hα) → L(Hα) → Ṁ (escalas tipo Alcalá et al.). C2 ya aporta throughput y variación espacial/espectral; falta integrar esos productos con la calibración de flujo. Stage 10 hace la conversión para `LkCa_15`, pero todavía consume el caso histórico de una sola separación/PA y no constituye un mapa de límites.
@@ -222,8 +252,8 @@ reales, pero siguen como rutas paralelas y no cierran la consolidación propuest
 - Añadir a cada QC JSON: hash git del código, versiones de paquetes y hash/fecha de los archivos de entrada. Con eso cada resultado es trazable a código + datos exactos.
 
 ### O7. Tests mínimos (1 día, después de O2) — *implementado para el alcance migrado* ✔
-La suite contiene 49 pruebas para estadística, espectro, aperturas, ajuste local,
-Stage 04b, Stage 06 local-surface, Stage 07, Stage 07b y Stage 08. Incluye cubos
+La suite contiene 52 pruebas para estadística, espectro, aperturas, ajuste local,
+Stage 04b, Stage 06 local-surface, Stage 07, Stage 07b, Stage 08 y Stage 08c. Incluye cubos
 sintéticos, ranking Halpha, inyección-recuperación, canales enmascarados y
 contratos de FITS/CSV/QC. `ROXs12b_short` y `ROXs12b` tienen regresiones reales
 manuales documentadas; falta convertir una de ellas en un test automatizado y
@@ -353,11 +383,11 @@ Creado `01b_align_resampling_tests.ipynb`, complementario al `01_align_test` exi
 
 Parámetros `stage01b_*` opcionales con default. Funciones `apply_spatial_alignment` y `regrid_cube_spectral_axis` copiadas verbatim de stage01 (sincronizar hasta O2). **Ejecución real confirmada en `LkCa_15` (2026-06-13)**: T1 pasa con peor RMS `0.00092 px`; T2–T6 produjeron el QC descrito arriba. **Sugerencia derivada de T4 para C3/C4**: aplicar un factor de corrección de correlación (o medir σ sobre el cubo ya remuestreado, no sobre ruido independiente) a las sumas de apertura de 06/09.
 
-## 7. Orden sugerido de ejecución (actualizado 2026-06-18)
+## 7. Orden sugerido de ejecución (actualizado 2026-06-21)
 
 | Semana | Acción | Por qué primero |
 |---|---|---|
-| 1 | C4 + regresión real pequeña automatizada | Convierte picos locales en umbrales estadísticos y protege cambios futuros |
-| 2 | Integrar los productos C2 en el mapa de límites C5 | Lleva el throughput y la varianza espacial ya medidos al producto científico publicable |
+| 1 | Integrar los productos C2/C4 en el mapa de límites C5 | Lleva throughput, varianza espacial y umbrales globales al producto científico publicable |
+| 2 | Regresión real pequeña automatizada | Protege los cierres C1-C4 frente a cambios futuros |
 | 3 | Consolidar O4 | Convierte las variantes low-memory en una ruta operativa reproducible |
 | 4+ | C6–C7, O5–O6 y migración restante | Cierra ciencia espectral, duplicados y trazabilidad completa |

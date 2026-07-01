@@ -17,6 +17,7 @@ Las etapas para objetos lejanos ya migradas son:
 | 07, lineas de acrecion | `musepipe/stages/stage07_accretion_lines.py` | `Far_07_accretion_line_spectra.ipynb` |
 | 07b, robustez de Halpha | `musepipe/stages/stage07b_halpha_robustness.py` | `Far_07b_halpha_robustness_checks.ipynb` |
 | 08, espectro completo | `stage08_full_spectrum_for_modeling.py` | `Far_08_full_spectrum_for_modeling.ipynb` |
+| 08c, falsos positivos | `musepipe/stages/stage08c_look_elsewhere.py` | API `run_stage08c()` |
 
 `Far_` se conserva por compatibilidad y contexto historico. No identifica una
 segunda implementacion: los notebooks migrados son interfaces sobre el codigo
@@ -64,6 +65,7 @@ Con `stage04b_input_mode = native_stage02`, la ruta principal es:
   -> 07 accretion-line spectra (inspeccion opcional)
   -> 07b Halpha robustness
   -> 08 full spectrum
+  -> 08c look-elsewhere / false-alarm calibration
 ```
 
 Stage 03 es opcional si 04b usa `fakecont_stage03`. Stage 04/PCA no es parte de
@@ -78,6 +80,7 @@ MUSE_RUN_ID=ROXs12b python -c "from musepipe.stages import run_stage06_local; ru
 MUSE_RUN_ID=ROXs12b python -c "from musepipe.stages import run_stage07; run_stage07()"
 MUSE_RUN_ID=ROXs12b python -c "from musepipe.stages import run_stage07b; run_stage07b()"
 MUSE_RUN_ID=ROXs12b python stage08_full_spectrum_for_modeling.py
+MUSE_RUN_ID=ROXs12b python -c "from musepipe.stages import run_stage08c; run_stage08c()"
 ```
 
 Los nueve casos PCA de C2 se ejecutan desde
@@ -124,7 +127,7 @@ Para actualizar un entorno `MUSE` existente con la misma especificación:
 conda env update --name MUSE --file environment.yml --prune
 ```
 
-Las versiones están fijadas al entorno usado para la validación de 49 pruebas.
+Las versiones están fijadas al entorno usado para la validación de 52 pruebas.
 `maoppy` se instala desde PyPI y es necesario para el perfil
 `stage01_profile=maoppy_refined`; sin él, Stage 01 usa su fallback de centrado
 por pico.
@@ -138,7 +141,7 @@ python -m unittest discover -s tests
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
 ```
 
-La suite actual contiene 49 pruebas y el entorno reproducible esta fijado en
+La suite actual contiene 52 pruebas y el entorno reproducible esta fijado en
 `environment.yml`.
 
 ## Documentacion
