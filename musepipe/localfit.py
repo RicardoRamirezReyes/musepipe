@@ -7,6 +7,7 @@ import math
 import numpy as np
 
 from .apertures import aperture_weights
+from .parallel import run_channel_chunks
 from .stats import robust_sigma
 
 
@@ -117,6 +118,7 @@ def subtract_local_surface_cube(
     sigma_clip=3.0,
     max_iter=3,
     min_fit_pixels=30,
+    n_jobs=1,
 ):
     """Subtract a local surface model channel by channel."""
 
@@ -130,26 +132,29 @@ def subtract_local_surface_cube(
     model = np.empty_like(cube, dtype=np.float32)
     nfit = np.zeros(nz, dtype=int)
 
-    for k in range(nz):
-        model_k, n_good = fit_local_surface_2d(
-            cube[k],
-            yc=yc,
-            xc=xc,
-            fit_radius_px=fit_radius_px,
-            mask_radius_px=mask_radius_px,
-            model_kind=model_kind,
-            extra_exclusion_yx=extra_exclusion_yx,
-            extra_exclusion_radius_px=extra_exclusion_radius_px,
-            sigma_clip=sigma_clip,
-            max_iter=max_iter,
-            min_fit_pixels=min_fit_pixels,
-        )
-        model[k] = model_k
-        residual[k] = cube[k].copy()
-        local = np.isfinite(model_k)
-        residual[k, local] = cube[k, local] - model_k[local]
-        nfit[k] = n_good
+    def _subtract_range(z0, z1):
+        # Per-channel work identical to the serial loop; disjoint output slots.
+        for k in range(z0, z1):
+            model_k, n_good = fit_local_surface_2d(
+                cube[k],
+                yc=yc,
+                xc=xc,
+                fit_radius_px=fit_radius_px,
+                mask_radius_px=mask_radius_px,
+                model_kind=model_kind,
+                extra_exclusion_yx=extra_exclusion_yx,
+                extra_exclusion_radius_px=extra_exclusion_radius_px,
+                sigma_clip=sigma_clip,
+                max_iter=max_iter,
+                min_fit_pixels=min_fit_pixels,
+            )
+            model[k] = model_k
+            residual[k] = cube[k].copy()
+            local = np.isfinite(model_k)
+            residual[k, local] = cube[k, local] - model_k[local]
+            nfit[k] = n_good
 
+    run_channel_chunks(_subtract_range, nz, n_jobs=n_jobs)
     return residual, model, nfit
 
 
