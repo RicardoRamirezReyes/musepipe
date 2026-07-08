@@ -134,6 +134,21 @@ m_star_associated — sin tipificación espectral (T3/T4/T6, pending G3) NO se d
 BD vs M. 5 archivos de test, 20 casos. Suite 325 passed. Pendiente: resolver la ambigüedad requiere
 G3 real (SpT/Teff) + segunda época astrométrica y densidad de fondo definitiva.
 
+**G5 implementada + corrida (provisional) — 2026-07-08. CIERRE DEL BLOQUE G.** Módulo nuevo
+`musepipe/characterization.py` (aditivo, reutiliza los writers deterministas y helpers de hash de
+F1 `report.py` sin tocar sus interfaces — V6) + `scripts/build_characterization.py`. Consolida
+G0–G4 en `runs/ROXs12b_B_adp/report/characterization/`: 6 tablas (final_line_table,
+final_physical_properties, adopted_parameters, final_classification, uncertainty_budget,
+final_spectra_index) + `assumptions_and_limitations.md` + `characterization.md` +
+`characterization_summary.json`. **V1 trazabilidad completa** (citas + QC de fase presentes, cadena
+sin rupturas), **V2 consistencia** (Hα G2 upper_limit = H01 non_detection ✓), **V3 etiquetas**
+(masa/radio/Ṁ nunca direct_measurement), **V4 determinismo** (dos corridas → hash idéntico),
+**V6 F1 intacto** (4 tests F1 verdes, no toca run_summary.json). 5 archivos de test, 11 casos.
+Suite 336 passed. Figuras G5-3 (plantilla) / G5-4 (HRD) / G5-7 (heatmap) diferidas (G3 real /
+polish). El paquete es PROVISIONAL: 1 issue bloqueante heredado (A-block abierto, G3 diferido →
+clasificación ambigua). Con esto **G0–G5 están todas iniciadas/cerradas de forma provisional**;
+lo que falta para paper-validez: cerrar A-block + G3 real (bibliotecas externas).
+
 ## 3. Tabla de fases
 
 | Fase | Spec | Contenido | Depende de | Produce para |
