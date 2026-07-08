@@ -101,7 +101,23 @@ Throughput 0.768 (E4). Provisional: LSF de config (`h01_lsf_fwhm_A`=2.5, A4 M2
 no medida — spec §2.3 pararía; usada con flag), error de calibración λ ausente
 (A4 M1), covarianza G1 no aplicada al MC (errores independientes). Pendientes:
 covarianza por bloques en el MC, sensibilidad a ventanas §3.5, figuras V4,
-conciliación cuantitativa con stage07 (V2).
+conciliación cuantitativa con stage07 (V2). Figuras diferidas de G1 (V2/V3/V4) y G2
+(ventanas por línea, RV vs λ) YA generadas en `runs/ROXs12b_B_adp/plots/stage_g1|g2/`.
+
+**G3 iniciada (library-agnostic + sintético) — 2026-07-08.** Checkpoint §8.1: usuario
+confirmó familias (BT-Settl / BHAC15+ATMO2020 / Alcalá+2017+Aoyama / Luhman-Bonnefoy,
+cita+versión en config) y eligió **agnóstico + sintético, ajustes reales diferidos
+`pending_libraries`**. Paquete nuevo `musepipe/models/`: protocolos
+(SpectralLibrary/ExtinctionLaw/EvolutionaryModel) + etiquetas (§1.1: masa/radio/edad/logg/Ṁ
+nunca `direct_measurement`); `extinction.py` (CCM reusado de H03, cita obligatoria);
+`prep.py` (LSF + remuestreo conserva-flujo); `synthetic.py` (mini-rejilla + tracks);
+`fit.py` (χ² + mapa Teff–A_V, `not_constrained` si Δχ²<1); `accretion.py` (Lacc multilínea,
+límite combinado = más restrictivo, Ṁ MC). Stage `stage_g3_accretion.py` corrido:
+L_acc ≤ 4.5e-6 L☉ (Hα, único con relación en config), **Ṁ ≈ 1.4e-12 M☉/yr** (usa flujo 5σ
+de G2 + factor 1.25; difiere de E3 5.2e-13 por definición de límite, no por la cadena —
+V5 prueba cadena idéntica para inputs iguales). Plantilla/atmósfera/tracks = `not_constrained`
+(pending_libraries). 7 archivos de test, 27 casos. Suite 305 passed. Pendientes reales:
+§3.2/§3.3/§3.4 con datos externos, relaciones Lacc para líneas ≠ Hα.
 
 ## 3. Tabla de fases
 
