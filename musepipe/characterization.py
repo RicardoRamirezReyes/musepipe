@@ -195,6 +195,7 @@ def build_characterization(run_id, project_root=None):
     write_json_deterministic(cp["out_dir"] / "characterization_summary.json", summary)
     _write_assumptions(cp["out_dir"] / "assumptions_and_limitations.md", cfg, trace, g4)
     _render_markdown(cp["out_dir"] / "characterization.md", summary, figures)
+    _write_readme(cp["out_dir"] / "README.md", summary, figures)
     # determinism hash over the package (excludes nothing volatile but timestamps)
     summary["determinism_hash"] = report_tree_hash(cp["out_dir"])
     write_json_deterministic(cp["out_dir"] / "characterization_summary.json", summary)
@@ -237,6 +238,74 @@ def _write_assumptions(path, cfg, trace, g4):
     ]
     for i, (txt, phase, effect) in enumerate(items, 1):
         lines.append(f"{i}. {txt}  \n   _phase:_ {phase} · _effect:_ {effect}")
+    Path(path).write_text("\n".join(lines) + "\n")
+
+
+TABLE_DOCS = {
+    "final_line_table.csv": "Every catalog line (G2): status, flux (direct + fit), EW, centroid, "
+                            "FWHM (obs + intrinsic), RV, z, 5σ upper limit with throughput applied.",
+    "final_physical_properties.csv": "G3 properties (full schema): value, err_stat, err_sys, unit, "
+                                     "label, assumptions, citations, validity_range, limitations, depends_on. "
+                                     "not_constrained rows kept.",
+    "adopted_parameters.csv": "Input parameters adopted (distance, A_V, RV, extinction law, L_acc–L_line "
+                              "relation, mass, radius, libraries) with value, error, citation and consuming phase.",
+    "final_classification.csv": "G4 hypothesis ranking with log-likelihood and dominant tests.",
+    "uncertainty_budget.csv": "Consolidated statistical vs systematic budget per main result "
+                              "(Mdot, throughput, spectral covariance).",
+    "final_spectra_index.csv": "Published spectra (final + per method) with sha256, method, covariance.",
+}
+
+
+def _write_readme(path, summary, figures):
+    fc = summary.get("final_class") or {}
+    lines = [
+        f"# Characterization package — {summary['run_id']}\n",
+        "Machine-readable consolidation of phases **G0–G5** (extends the F1 `report/`). "
+        "Generated deterministically by `musepipe.characterization.build_characterization`; "
+        "**do not edit by hand** (the determinism test would catch it).\n",
+        "> **PROVISIONAL.** Built on the ESO ADP cube while the A-block is open (A1 alignment, "
+        "M3 absolute flux, M5 STAT) and the G3 template/atmosphere/track fits are deferred "
+        "(pending external libraries). Nothing here is paper-valid yet.\n",
+        "## Headline results\n",
+        f"- **Hα:** non-detection → Ṁ ≲ 5×10⁻¹³ M☉/yr (99%, E3); consistent across H01/H03/G2.",
+        f"- **Source (G4):** real bound companion → class **{fc.get('label')}**, robustness "
+        f"**{fc.get('robustness')}** (planet vs BD vs M undetermined until G3 spectral typing).",
+        f"- **Lines measured (G2):** {summary['n_lines']}  ·  **physical properties (G3):** "
+        f"{summary['n_physical_properties']}.",
+        f"- **Traceability:** {'complete' if summary['traceability']['complete'] else 'BROKEN'}  ·  "
+        f"**open issues:** {len(summary['open_issues'])}.\n",
+        "## Tables (`.csv`)\n",
+    ]
+    for t in summary["tables_generated"]:
+        lines.append(f"- **`{t}`** — {TABLE_DOCS.get(t, '')}")
+    lines += [
+        "\n## Other files\n",
+        "- **`characterization_summary.json`** — machine-readable summary (phase QC hashes, "
+        "traceability chains, consistency checks, determinism hash).",
+        "- **`characterization.md`** — human-readable summary.",
+        "- **`assumptions_and_limitations.md`** — numbered active assumptions, the phase that "
+        "introduced each, and its estimated effect.",
+        "- **`extra/`** — non-standard extras (kept separate from the fixed set).\n",
+        "## Figures\n",
+    ]
+    for f in figures:
+        state = "available" if f["present"] else f["path"]
+        lines.append(f"- **{f['name']}** — {state}")
+    lines += [
+        "\n## Reproduce\n",
+        "```bash",
+        "conda activate MUSE",
+        f"python scripts/build_characterization.py --run-id {summary['run_id']}",
+        "```",
+        "Requires the phase products/QCs (G0–G4) and the F1 `report/` package to exist. "
+        "Two runs produce byte-identical files (determinism hash in the summary).\n",
+        "## What would make this paper-valid\n",
+        "1. Close the A-block: A1 `muse_exp_align` re-reduction, M3 absolute flux calibration, "
+        "M5 STAT (see `runs/ROXs12b_raw/PAPER_BLOCKERS.md`).",
+        "2. Run the real G3 fits (BT-Settl / BHAC15+ATMO2020 / Luhman–Bonnefoy) → SpT/Teff/mass "
+        "resolve the G4 classification ambiguity.",
+        "3. A 2nd astrometric epoch and a final background-density source strengthen G4.",
+    ]
     Path(path).write_text("\n".join(lines) + "\n")
 
 
