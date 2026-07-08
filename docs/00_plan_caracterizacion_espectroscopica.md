@@ -87,6 +87,22 @@ de continuo §3.2, perturbación PSF real), 31 controles (§4.3), figuras V2–V
 impacto en χ² de X10 (§V5, diferido: D1 ya `uninterpretable`). Rama de facto
 `stage-f1-report`, no `phase-g1-validation`.
 
+**G2 implementada + corrida (provisional) — 2026-07-08.** Módulos nuevos
+`musepipe/constants.py` (c, factores FWHM/σ) y `musepipe/lines.py` (medición
+genérica: continuo local, flujo directo + por ajuste gaussiana⊗LSF, EW con signo
+emisión-negativa, centroide, FWHM observada e intrínseca deconvuelta, asimetría,
+RV, estado detección/límite, errores MC) + stage `stage_g2_measure_lines.py`.
+7 archivos de test (22 casos). Cero lógica específica de Hα (catálogo en config;
+default = las 24 líneas de stage07). Corrida sobre el espectro canónico X11
+`spec_final_object.fits`: **0 detectadas, 23 límites superiores, 1 no medible**
+— coherente con la no-detección. **V3 (reconciliación Hα): G2 `upper_limit` vs
+H01 `non_detection` = consistente** (dos estadísticas del mismo dato concuerdan).
+Throughput 0.768 (E4). Provisional: LSF de config (`h01_lsf_fwhm_A`=2.5, A4 M2
+no medida — spec §2.3 pararía; usada con flag), error de calibración λ ausente
+(A4 M1), covarianza G1 no aplicada al MC (errores independientes). Pendientes:
+covarianza por bloques en el MC, sensibilidad a ventanas §3.5, figuras V4,
+conciliación cuantitativa con stage07 (V2).
+
 ## 3. Tabla de fases
 
 | Fase | Spec | Contenido | Depende de | Produce para |
