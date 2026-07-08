@@ -283,6 +283,35 @@ def _resolve_h04_n_jobs(config, n_cases):
     return max(1, min(resolve_n_jobs(requested), int(n_cases)))
 
 
+def _resolve_h04_process_pool(config, n_cases):
+    """Worker count for PROCESS-based parallelism over the E4 case grid.
+
+    Returns 0 when disabled (the default). The ThreadPool tops out near ~1.6x
+    because the per-channel psffit work builds the PSF design in Python (GIL) on
+    top of the BLAS calls. A fork ProcessPool lets each worker inherit the ~3GB
+    base cube and the (unpicklable) extractor closures copy-on-write, so real
+    cores are used without pickling cubes; only the small H04Case goes in and the
+    per-case row list comes back. ``h04_process_pool`` accepts an int worker
+    count, ``True`` (cpu-based via ``resolve_n_jobs``), or ``None``/``False`` to
+    stay disabled. A resolved count < 2 disables it (a 1-worker pool is pointless).
+    """
+    from ..parallel import resolve_n_jobs
+
+    requested = config.get("h04_process_pool")
+    if requested is None or requested is False:
+        return 0
+    n = resolve_n_jobs(None) if requested is True else resolve_n_jobs(requested)
+    n = min(int(n), int(n_cases))
+    return n if n >= 2 else 0
+
+
+def _fork_supported():
+    """True on POSIX platforms where multiprocessing can use the fork start method."""
+    import multiprocessing as mp
+
+    return "fork" in mp.get_all_start_methods()
+
+
 def estimate_runtime_budget(config, n_cases, n_methods):
     seconds = float(n_cases) * float(n_methods) * float(config.get("h04_expected_seconds_per_case_method", 60.0))
     hours = seconds / 3600.0
@@ -762,6 +791,111 @@ def _blocked_product(config, paths, positions, cases, methods, budget, reason):
     return StageH04Product(rows=[], qc=_json_ready(qc))
 
 
+# Set on the parent immediately before forking the E4 process pool so each
+# worker inherits it copy-on-write (never pickled). Cleared after the pool exits.
+_FORK_CTX = None
+
+
+def _compute_case_rows(case, ctx):
+    """Inject one case into a private cube copy and extract every method.
+
+    Pure function of ``(case, ctx)`` where ``ctx`` bundles the shared, read-only
+    state: the case injects into its OWN copy (``inject(..., copy=True)``) and
+    only reads shared read-only objects (base cube, psf model, extractor
+    closures), so the returned rows are independent of execution order. The
+    serial, threaded and forked backends therefore produce identical rows.
+    """
+    sigma_flux = ctx["sigma_flux"]
+    line_center = ctx["line_center"]
+    lsf_fwhm = ctx["lsf_fwhm"]
+    methods = ctx["methods"]
+    extractors = ctx["extractors"]
+    cfg = ctx["config"]
+
+    injected_flux = float(case.input_snr) * sigma_flux
+    continuum = ctx["continuum_flux_density"] if case.continuum_mode == "flat" else 0.0
+    source = InjectionSource(
+        y=case.position_y,
+        x=case.position_x,
+        total_line_flux=injected_flux,
+        line_center_A=line_center,
+        line_fwhm_A=lsf_fwhm * float(case.template_factor),
+        label=case.injection_id,
+        continuum_flux_density=continuum,
+        psf_fwhm_scale=case.psf_fwhm_scale,
+    )
+    cube_injected = inject(
+        ctx["base_cube"], [source],
+        wavelengths_A=ctx["wavelengths_A"], psf_model=ctx["psf_model"], copy=True,
+    )
+    case_rows = []
+    for method in methods:
+        extractor = extractors[method] if isinstance(extractors, dict) else extractors
+        result = _call_extractor(extractor, cube_injected, ctx["wavelengths_A"], case, method, cfg)
+        measurement = measure_recovery_with_h01_estimator(
+            result,
+            line_center_A=line_center,
+            line_fwhm_A=lsf_fwhm * float(case.template_factor),
+            continuum_window_A=ctx["continuum_window_A"],
+        )
+        case_rows.append(_row_for_method(case, method, injected_flux, measurement, ctx["threshold"]))
+    return case_rows
+
+
+def _fork_worker(case):
+    """Process-pool entry point: read the fork-inherited context and run one case."""
+    ctx = _FORK_CTX
+    if ctx is None:
+        raise RuntimeError("H04 process-pool worker started without inherited context.")
+    return _compute_case_rows(case, ctx)
+
+
+def _map_cases_forked(cases, ctx, n_workers):
+    """Map cases over a fork ProcessPool; ``pool.map`` restores input order."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    global _FORK_CTX
+    fork_context = mp.get_context("fork")
+    _FORK_CTX = ctx  # forked children inherit this read-only snapshot (COW)
+    try:
+        with ProcessPoolExecutor(max_workers=int(n_workers), mp_context=fork_context) as pool:
+            return list(pool.map(_fork_worker, cases))
+    finally:
+        _FORK_CTX = None
+
+
+def _run_case_grid(cases, ctx, config):
+    """Compute all per-case rows, restoring input order across three backends.
+
+    All three are numerically identical because each case is an independent pure
+    function of ``(case, ctx)``:
+      * serial (default);
+      * ThreadPool (``h04_n_jobs``) — GIL-capped ~1.6x on the psffit design build;
+      * fork ProcessPool (``h04_process_pool``) — the ~3GB base cube and the
+        unpicklable extractor closures are inherited copy-on-write.
+    ``h04_process_pool`` takes precedence when set and fork is available; if a
+    process pool is requested where fork is unavailable, fall back to a
+    same-width ThreadPool rather than silently dropping to serial.
+    """
+    process_pool = _resolve_h04_process_pool(config, len(cases))
+    if process_pool >= 2 and _fork_supported():
+        per_case = _map_cases_forked(cases, ctx, process_pool)
+        return [row for case_rows in per_case for row in case_rows]
+
+    n_jobs = _resolve_h04_n_jobs(config, len(cases))
+    if process_pool >= 2:
+        n_jobs = max(n_jobs, process_pool)
+    if n_jobs == 1:
+        return [row for case in cases for row in _compute_case_rows(case, ctx)]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=n_jobs) as pool:
+        per_case = list(pool.map(lambda case: _compute_case_rows(case, ctx), cases))
+    return [row for case_rows in per_case for row in case_rows]
+
+
 def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube=None, wavelengths_A=None, psf_model=None):
     cfg = dict(config)
     root = Path(cfg.get("project_root") or Path.cwd()).resolve()
@@ -802,46 +936,24 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
     threshold = float(cfg.get("h04_detection_threshold_snr", 5.0))
     continuum_window_A = float(cfg.get("h04_continuum_window_A", cfg.get("h01_continuum_window_A", 80.0)))
 
-    def _rows_for_case(case):
-        # Each case injects into its own cube copy and reads only shared,
-        # read-only state (base_cube, psf_model, extractor closures) → the
-        # cases are independent, so the per-case row list is deterministic and
-        # order is restored by the caller regardless of execution order.
-        injected_flux = float(case.input_snr) * sigma_flux
-        continuum = continuum_flux_density if case.continuum_mode == "flat" else 0.0
-        source = InjectionSource(
-            y=case.position_y,
-            x=case.position_x,
-            total_line_flux=injected_flux,
-            line_center_A=line_center,
-            line_fwhm_A=lsf_fwhm * float(case.template_factor),
-            label=case.injection_id,
-            continuum_flux_density=continuum,
-            psf_fwhm_scale=case.psf_fwhm_scale,
-        )
-        cube_injected = inject(base_cube, [source], wavelengths_A=wavelengths_A, psf_model=psf_model, copy=True)
-        case_rows = []
-        for method in methods:
-            extractor = extractors[method] if isinstance(extractors, dict) else extractors
-            result = _call_extractor(extractor, cube_injected, wavelengths_A, case, method, cfg)
-            measurement = measure_recovery_with_h01_estimator(
-                result,
-                line_center_A=line_center,
-                line_fwhm_A=lsf_fwhm * float(case.template_factor),
-                continuum_window_A=continuum_window_A,
-            )
-            case_rows.append(_row_for_method(case, method, injected_flux, measurement, threshold))
-        return case_rows
-
-    case_n_jobs = _resolve_h04_n_jobs(cfg, len(cases))
-    if case_n_jobs == 1:
-        rows = [row for case in cases for row in _rows_for_case(case)]
-    else:
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=case_n_jobs) as pool:
-            per_case = list(pool.map(_rows_for_case, cases))  # map preserves input order
-        rows = [row for case_rows in per_case for row in case_rows]
+    # Shared read-only state for the per-case worker. Bundling it lets serial,
+    # threaded and forked backends call the SAME module-level _compute_case_rows,
+    # which is what guarantees identical rows regardless of execution order.
+    ctx = {
+        "base_cube": base_cube,
+        "wavelengths_A": wavelengths_A,
+        "psf_model": psf_model,
+        "extractors": extractors,
+        "methods": methods,
+        "config": cfg,
+        "line_center": line_center,
+        "lsf_fwhm": lsf_fwhm,
+        "sigma_flux": sigma_flux,
+        "continuum_flux_density": continuum_flux_density,
+        "threshold": threshold,
+        "continuum_window_A": continuum_window_A,
+    }
+    rows = _run_case_grid(cases, ctx, cfg)
 
     regression = historic_regression_check(cfg, paths)
     if bool(cfg.get("h04_require_historic_regression", True)) and regression["verdict"] != "pass":
