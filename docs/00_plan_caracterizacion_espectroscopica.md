@@ -119,6 +119,21 @@ V5 prueba cadena idéntica para inputs iguales). Plantilla/atmósfera/tracks = `
 (pending_libraries). 7 archivos de test, 27 casos. Suite 305 passed. Pendientes reales:
 §3.2/§3.3/§3.4 con datos externos, relaciones Lacc para líneas ≠ Hα.
 
+**G4 implementada + corrida (provisional) — 2026-07-08.** Checkpoint §8.1: usuario eligió
+densidad de fondo Besançon de config (provisional) e infra completa. Módulo nuevo
+`musepipe/classify.py` (matriz hipótesis × prueba transparente; verdicts supports/neutral/
+disfavors/excludes → log-verosimilitud con pesos de config; agrupación de pruebas
+correlacionadas T3/T4/T6; P(fondo) Poisson; leave-one-out; robustez secure/probable/ambiguous;
+hash de umbrales congelados anti-sesgo) + stage `stage_g4_classify.py`. Umbrales congelados en
+config (hash 3c3ddb4a…). Corrida sobre ROXs12b_B_adp: disponibles T1/T2/T7/T8/T9;
+no disponibles T3/T4/T5/T6 (G3 diferido / sin líneas detectadas). P(fondo)=6.3e-4 (<1%).
+**Clase = `substellar_companion`, robustez = `ambiguous`**: T1 (astrometría en posición ligada,
+CPM Bowler+2017) + T2 (fuente puntual S/N 12.3) + T7 (no-artefacto, H02 survives) confirman un
+**compañero ligado y real** (no fondo, no artefacto), pero empatan substellar/brown_dwarf/
+m_star_associated — sin tipificación espectral (T3/T4/T6, pending G3) NO se distingue planeta vs
+BD vs M. 5 archivos de test, 20 casos. Suite 325 passed. Pendiente: resolver la ambigüedad requiere
+G3 real (SpT/Teff) + segunda época astrométrica y densidad de fondo definitiva.
+
 ## 3. Tabla de fases
 
 | Fase | Spec | Contenido | Depende de | Produce para |
