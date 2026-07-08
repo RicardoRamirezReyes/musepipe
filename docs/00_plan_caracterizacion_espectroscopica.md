@@ -71,6 +71,22 @@ antes de arrancar G1; G2 puede desarrollarse en paralelo como estaba previsto.
 Notebook de inspección de la cadena: `A1_F1_run_inspection.ipynb` (solo
 lectura, cumple §7/G0 §1.3).
 
+**G1 arrancada (provisional) — 2026-07-08.** Módulo nuevo `musepipe/covariance.py`
+(covarianza espectral por lag/bloques desde controles, factor espacial de
+resampleo, presupuesto en cuadratura, reglas de veredicto) + 4 tests (16 casos).
+Corrida sobre `ROXs12b_B_adp`: `stages/g1_channel_covariance.npz`,
+`tables/g1_bias_budget.csv`, `tables/g1_sensitivity.csv`, `stage_g1_qc.json`.
+Veredictos: **psffit y optimal_psfsub = `validated_with_bias`** (pérdida de
+throughput −27%/−32%, estable y corregida en E3); **aperture y optimal_ls =
+`rejected`** (insensibles en la posición de borde del compañero — no bloquea
+porque el canónico X11 es psffit). Covarianza espectral: longitud 1.45±0.08
+canales, **n_eff/n=0.69** (>0.5, no dispara el gate §8). Inflación espacial del
+resampleo: box3≈6.5×, box5≈17× — confirma el M5 rojo (blocker #7) y valida el
+plan-B de ruido empírico. Pendientes G1 (provisional): grilla E4 completa (sesgo
+de continuo §3.2, perturbación PSF real), 31 controles (§4.3), figuras V2–V4,
+impacto en χ² de X10 (§V5, diferido: D1 ya `uninterpretable`). Rama de facto
+`stage-f1-report`, no `phase-g1-validation`.
+
 ## 3. Tabla de fases
 
 | Fase | Spec | Contenido | Depende de | Produce para |
