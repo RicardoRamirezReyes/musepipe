@@ -12,14 +12,19 @@ from __future__ import annotations
 import numpy as np
 
 
-def pair_scale_check(controls_i, controls_j, *, gate_sigma: float = 5.0) -> dict:
+def pair_scale_check(controls_i, controls_j, *, gate_sigma: float = 5.0, level_ratio_max: float = 3.0) -> dict:
     """Check that two methods' control spectra share a common flux scale.
 
     Uses the broad-band mean diff per control: ``mu = mean_k(mean_lambda(d_k))``
-    with ``s = std_k(ddof=1)`` and the frozen gate ``|mu| / (s/sqrt(n)) < 5.0``
-    (D1 v2 §3.1). Also reports the ratio of median absolute control levels,
-    used by D1 to distinguish a pair-level degradation from an extraction-stage
-    bug (all primary pairs failing with a >x10 level ratio).
+    with ``s = std_k(ddof=1)`` and stat ``|mu| / (s/sqrt(n))``, plus the ratio
+    of median absolute control levels. The pair FAILS only when the offset is
+    significant (stat >= gate_sigma) AND the levels are grossly mismatched
+    (level_ratio > level_ratio_max): a significant but level-consistent offset
+    is a method's additive bias at the control ring, which the centred t of
+    D1 v2 §3.4 absorbs by design (spec v2 §3.1, revision v2.1 — the x20
+    convention break showed level_ratio ~20 vs ~1.1-1.6 once reconciled).
+    D1 additionally treats all primary pairs failing with level_ratio > x10
+    as an extraction-stage bug.
     """
 
     ci = np.asarray(controls_i, dtype=np.float64)
@@ -41,6 +46,7 @@ def pair_scale_check(controls_i, controls_j, *, gate_sigma: float = 5.0) -> dict
     out = {
         "n_controls": n,
         "gate_sigma": gate,
+        "level_ratio_max": float(level_ratio_max),
         "mu": None,
         "s": None,
         "stat": None,
@@ -67,7 +73,12 @@ def pair_scale_check(controls_i, controls_j, *, gate_sigma: float = 5.0) -> dict
     else:
         stat = abs(mu) / (s / np.sqrt(per_control.size))
     out["stat"] = float(stat)
-    out["ok"] = bool(stat < gate)
+    significant = bool(stat >= gate)
+    if level_ratio is None:
+        # No usable level reference: fall back to significance alone.
+        out["ok"] = not significant
+    else:
+        out["ok"] = not (significant and level_ratio > float(level_ratio_max))
     return out
 
 

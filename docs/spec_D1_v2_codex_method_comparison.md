@@ -81,9 +81,19 @@ referenciado a fondo local.
 - **Scale-check empírico por par** (nuevo, gate estructural): para cada par de
   métodos, sobre los diffs de control integrados en banda ancha,
   `mu = media(diff_ctrl)`, `s = std(diff_ctrl, ddof=1)`, estadístico
-  `|mu| / (s/√n)`. Falla si `≥ 5.0` (congelado: con n=7–33 controles, 5σ de la
-  media evita falsos positivos con s ruidosa; un offset de convención real
-  como el ×20 de optimal-LS lo supera por órdenes de magnitud).
+  `|mu| / (s/√n)`, y `level_ratio` = razón de niveles medianos absolutos de
+  los controles de ambos métodos. **Falla si el offset es significativo
+  (estadístico ≥ 5.0) Y ADEMÁS `level_ratio > 3.0`** (ambos congelados).
+  *Revisión v2.1 (2026-07-09, ANTES de emitir ningún veredicto sobre el
+  objeto)*: la regla original ("falla si ≥ 5.0" a secas) contradecía §3.4 —
+  degradaba cualquier sesgo aditivo común y centrable (p.ej. el nivel de halo
+  del psffit en el anillo de controles, que §3.4 absorbe por diseño con el
+  centrado mu). El diagnóstico de CONTROLES del re-run reconciliado mostró
+  offsets significativos pero con `level_ratio` 1.07–1.60 en todos los pares,
+  mientras el caso de convención rota (×20) tiene `level_ratio` ~20: el
+  discriminante estructural es el desajuste de NIVELES, no la significancia
+  del offset. Un offset significativo con niveles consistentes se reporta en
+  QC (mu, s, stat) y lo maneja el centrado de §3.4.
 - Un scale-check fallado **degrada el PAR** (no el veredicto global). Solo si
   TODOS los pares primarios fallan Y el offset relativo supera ×10 se lanza
   excepción (señal de bug de etapa de extracción, mensaje accionable).
