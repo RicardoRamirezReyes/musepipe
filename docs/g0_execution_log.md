@@ -35,7 +35,7 @@ como issues en `stage_g0_qc.json`. El árbitro de estado sigue siendo F1
 | B1 align / B2 xcorr / B3 localize | green/red/yellow | B2 QC ausente en el run ADP |
 | C1 psf | yellow | provisional sobre ADP |
 | C2 aperture / C3 optimal / C4 psffit | yellow/green/green | |
-| D1 compare | red | `verdict=uninterpretable` (escala de flujo inter-método, blocker #9) |
+| D1 compare | yellow | **D1 v2 (2026-07-09)**: blocker #9 cerrado (reconciliación de escala); `verdict=divergent_continuum` (B6 rojo), canónico=`psffit` (ver `docs/d1_canonical_method_decision.md`) |
 | D2 calibrate | yellow | M1 λ y M3 flujo no disponibles; flux scale=1 |
 | E1 halpha | yellow | **no-detección**; 7 controles → FAP mín 0.125 |
 | E2 artifacts | red(raw)/survives | T5 pass; overall reinterpretado para no-detección |
