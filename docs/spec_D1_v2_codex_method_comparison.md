@@ -182,8 +182,12 @@ skyline y gap interpolado de C1 (como v1).
 Para cada par y banda, los t individuales de control
 `t_k = (d_k − mu)/s` (leave-one-out no requerido; documentado como t directo
 centrado). Un control es "malo" si su p (df=n−1) < 0.0455. Un par está
-"sucio" si sus controles no se distribuyen como se espera (fracción de malos
-significativamente > 5%, ver V7) O si su scale-check §3.1 falla.
+"sucio" si sus controles no se distribuyen como se espera O si su scale-check
+§3.1 falla. Regla congelada para "no se distribuyen como se espera": test
+binomial unilateral de exceso — con N filas de control del par y K malas,
+el par es sucio si P(≥K | N, 0.0455) < **alpha = 0.01**. Caso degenerado
+(solo sintético): si s = 0 con todos los d_k idénticos, los controles son
+perfectamente consistentes (t=0, p=1), no sucios.
 
 - Par primario sucio → se excluye del veredicto y se registra en
   `pairs_degraded` con su causa.

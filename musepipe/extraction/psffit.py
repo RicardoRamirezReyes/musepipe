@@ -250,6 +250,10 @@ def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cub
         "COVFAC": float(cov_factor),
         "ERRINFL": float(np.nanmedian(np.sqrt(np.clip(chi2r, 0.0, np.inf)))),
         "INFLAPP": False,
+        # The [p_star, p_comp, 1, y, x] design's plane IS this method's
+        # background convention; amplitudes are already total NORMRAD flux.
+        "BKGMODE": "psffit_plane",
+        "SCALEREF": "normrad_total_flux",
     }
 
 

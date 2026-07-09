@@ -157,6 +157,7 @@ def build_production_extractors(config, paths, *, wave_A, psf_model):
             skyline_windows_A=x02_cfg.get("x02_skyline_windows_A", []),
             interpolated_windows_A=x02_cfg.get("x02_interpolated_windows_A", []),
             n_controls=0,
+            local_bkg_annulus_px=x02_cfg.get("x02_local_bkg_annulus_px"),
         )
         return ext.product
 
@@ -183,6 +184,7 @@ def build_production_extractors(config, paths, *, wave_A, psf_model):
             skyline_windows_A=x02_cfg.get("x02_skyline_windows_A", []),
             interpolated_windows_A=x02_cfg.get("x02_interpolated_windows_A", []),
             n_controls=0,
+            local_bkg_annulus_px=x02_cfg.get("x02_local_bkg_annulus_px"),
         )
         return ext.product
 

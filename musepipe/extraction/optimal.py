@@ -16,6 +16,7 @@ from ..psf import evaluate_psf_model
 from ..stats import robust_sigma, robust_sigma_axis0
 from .aperture import (
     FLAG_CLIPPED,
+    annulus_background_spectrum,
     aperture_correction_from_psf,
     channel_flags,
     sha256_file,
@@ -39,6 +40,11 @@ class OptimalExtraction:
     apcorr_mode: str
     norm_radius_px: float
     variant: str
+    # Controls processed exactly like the object (same local background
+    # reference, same apcorr): the physical scale of ``product.flux``
+    # (D1 v2 §3.1 "control = object").
+    control_spectra_cal: np.ndarray | None = None
+    bkg_mode: str = "none"
 
 
 def circular_window_indices(shape, center_yx, radius_px):
@@ -142,6 +148,7 @@ def optimal_raw_spectrum(
     clip_sigma=4.0,
     clip_max_iter=2,
     n_jobs=1,
+    bkg_spectrum=None,
 ):
     cube = np.asarray(cube_zyx, dtype=np.float64)
     variance = np.asarray(variance_zyx, dtype=np.float64)
@@ -152,6 +159,10 @@ def optimal_raw_spectrum(
         raise ValueError("variance_zyx shape must match cube_zyx.")
     if wave.ndim != 1 or wave.size != cube.shape[0]:
         raise ValueError("wave_A must be 1D and match cube spectral length.")
+    if bkg_spectrum is not None:
+        bkg_spectrum = np.asarray(bkg_spectrum, dtype=np.float64)
+        if bkg_spectrum.shape != wave.shape:
+            raise ValueError("bkg_spectrum must match wave_A length.")
 
     nz, ny, nx = cube.shape
     ypix, xpix = circular_window_indices((ny, nx), center_yx, window_radius_px)
@@ -168,6 +179,10 @@ def optimal_raw_spectrum(
         local_map = np.zeros((ny, nx), dtype=np.float64)
         for z in range(z0, z1):
             data = cube[z, ypix, xpix]
+            if bkg_spectrum is not None and np.isfinite(bkg_spectrum[z]):
+                # Local background reference: subtracting a per-channel scalar
+                # is separable from the Horne estimator (D1 v2 §3.1).
+                data = data - bkg_spectrum[z]
             var = variance[z, ypix, xpix]
             p = normalized_psf_window(psf_model, wave[z], center_yx, ypix, xpix)
             valid = np.isfinite(data) & np.isfinite(var) & (var > 0) & np.isfinite(p) & (p > 0)
@@ -215,6 +230,7 @@ def control_optimal_spectra(
     n_controls=8,
     exclude_angle_deg=25.0,
     n_jobs=1,
+    local_bkg_annulus_px=None,
 ):
     cube = np.asarray(cube_zyx, dtype=np.float64)
     _, ny, nx = cube.shape
@@ -229,6 +245,16 @@ def control_optimal_spectra(
     )
     spectra = []
     for center in controls:
+        bkg = None
+        if local_bkg_annulus_px is not None:
+            bkg = annulus_background_spectrum(
+                cube,
+                center,
+                local_bkg_annulus_px[0],
+                local_bkg_annulus_px[1],
+                exclude_yx=star_yx,
+                exclude_radius=float(local_bkg_annulus_px[2]) if len(local_bkg_annulus_px) > 2 else 30.0,
+            )
         raw = optimal_raw_spectrum(
             cube,
             variance_zyx,
@@ -239,6 +265,7 @@ def control_optimal_spectra(
             clip_sigma=clip_sigma,
             clip_max_iter=clip_max_iter,
             n_jobs=n_jobs,
+            bkg_spectrum=bkg,
         )
         spectra.append(raw["flux"])
     if not spectra:
@@ -277,6 +304,7 @@ def make_optimal_product(
     exclude_angle_deg: float = 25.0,
     clip_flag_fraction: float = 0.05,
     n_jobs: int = 1,
+    local_bkg_annulus_px: Sequence[float] | None = None,
 ) -> OptimalExtraction:
     cube = np.asarray(cube_zyx, dtype=np.float64)
     wave = np.asarray(wave_A, dtype=np.float64)
@@ -293,6 +321,19 @@ def make_optimal_product(
     if not np.isfinite(stat_factor) or stat_factor <= 0:
         stat_factor = 1.0
     variance = variance * stat_factor
+    object_bkg = None
+    if local_bkg_annulus_px is not None:
+        # Same local background reference for object and controls: re-references
+        # any residual pedestal (e.g. the stage04b local-surface residual for
+        # the LS variant) so all methods share the flux convention (D1 v2 §3.1).
+        object_bkg = annulus_background_spectrum(
+            cube,
+            object_yx,
+            local_bkg_annulus_px[0],
+            local_bkg_annulus_px[1],
+            exclude_yx=star_yx,
+            exclude_radius=float(local_bkg_annulus_px[2]) if len(local_bkg_annulus_px) > 2 else 30.0,
+        )
     raw = optimal_raw_spectrum(
         cube,
         variance,
@@ -303,6 +344,7 @@ def make_optimal_product(
         clip_sigma=clip_sigma,
         clip_max_iter=clip_max_iter,
         n_jobs=n_jobs,
+        bkg_spectrum=object_bkg,
     )
     cov_factor = covariance_factor_for_npix(raw["npix_eff"], covariance_factor_box3)
     raw_variance = raw["variance"] * cov_factor
@@ -326,6 +368,7 @@ def make_optimal_product(
             n_controls=n_controls,
             exclude_angle_deg=exclude_angle_deg,
             n_jobs=n_jobs,
+            local_bkg_annulus_px=local_bkg_annulus_px,
         )
         if control_spectra.shape[0] >= 2:
             raw_flux_err_emp = robust_sigma_axis0(control_spectra)
@@ -369,6 +412,10 @@ def make_optimal_product(
     if input_cube_sha is None:
         input_cube_sha = sha256_file(input_cube_path) if input_cube_path.exists() else ""
     label = f"optimal_{variant}_r{float(window_radius_px):g}"
+    if local_bkg_annulus_px is not None:
+        bkg_mode = f"annulus_{float(local_bkg_annulus_px[0]):g}_{float(local_bkg_annulus_px[1]):g}"
+    else:
+        bkg_mode = "none"
     header = {
         "FORMATV": FORMAT_VERSION,
         "METHOD": "optimal",
@@ -391,6 +438,8 @@ def make_optimal_product(
         "PNORM": "window_renorm_plus_apcorr",
         "VARIANT": str(variant),
         "VARSRC": variance_source,
+        "BKGMODE": bkg_mode,
+        "SCALEREF": "normrad_total_flux",
     }
     product = SpectrumProduct(
         wave_A=wave,
@@ -418,6 +467,8 @@ def make_optimal_product(
         apcorr_mode=apcorr_mode,
         norm_radius_px=float(norm_radius),
         variant=str(variant),
+        control_spectra_cal=control_spectra * apcorr[None, :],
+        bkg_mode=bkg_mode,
     )
 
 
