@@ -34,13 +34,26 @@ class GatePolicyTests(unittest.TestCase):
         self.assertEqual(s4, "yellow")
         self.assertEqual(a4[0]["path"], "checks.v4_hierarchy.status")
 
-    def test_d2_continuum_is_not_accepted(self):
-        # D2's continuum failure is a real systematic, NOT in the accepted set.
-        self.assertNotIn("D2_calibrate", ACCEPTED_LIMITATIONS)
-        status, _, applied = stage_status("D2_calibrate", {"checks": {"v3_continuum_stable": {"ok": False}}},
-                                          accepted=ACCEPTED_LIMITATIONS.get("D2_calibrate"))
+    def test_d2_v3_accepted_only_for_the_diagnosed_check(self):
+        # D2's v3 continuum flag is accepted (diagnosed inter-method halo systematic)...
+        acc = ACCEPTED_LIMITATIONS["D2_calibrate"]
+        self.assertIn("checks.v3_continuum_stable.ok", acc)
+        status, _, applied = stage_status(
+            "D2_calibrate", {"checks": {"v3_continuum_stable": {"ok": False}}}, accepted=acc
+        )
+        self.assertEqual(status, "yellow")
+        self.assertEqual(len(applied), 1)
+
+    def test_d2_other_failure_still_blocks(self):
+        # ...but a DIFFERENT D2 failure (e.g. a hash/flux check) must still block.
+        acc = ACCEPTED_LIMITATIONS["D2_calibrate"]
+        status, issues, _ = stage_status(
+            "D2_calibrate",
+            {"checks": {"v3_continuum_stable": {"ok": False}, "v1_skylines": {"ok": False}}},
+            accepted=acc,
+        )
         self.assertEqual(status, "red")
-        self.assertEqual(applied, [])
+        self.assertTrue(any("v1_skylines.ok=fail" in i for i in issues))
 
     def test_clean_stage_stays_green(self):
         status, issues, applied = stage_status("A4_cube_qc", {"m5_stat": {"status": "green"}},

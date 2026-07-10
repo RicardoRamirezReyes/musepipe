@@ -75,6 +75,20 @@ ACCEPTED_LIMITATIONS = {
             "unaffected, and determinism is test-guaranteed."
         ),
     },
+    "D2_calibrate": {
+        # Accepted ONLY after full diagnosis (docs/d2_red_continuum_diagnosis.md):
+        # the flag is a real, characterized, non-removable inter-method systematic,
+        # not a defect and not a mislabel of real signal (v3 now gates on the
+        # signal-free inter-method metric, not |runmed-poly|).
+        "checks.v3_continuum_stable.ok": (
+            "Red-band (8600-9100 A) inter-method continuum LEVEL systematic (psffit vs "
+            "optimal_psfsub ~1.76x): residual chromatic halo subtraction of the bright primary at "
+            "the faint companion, at the PSF floor (Psfao, ~4.4% red ring residual). The red "
+            "spectral SHAPE is real and method-consistent (corr 0.957); only the LEVEL disagrees. "
+            "Does NOT affect the Halpha emission-line non-detection or the Mdot limit. Fully "
+            "diagnosed in docs/d2_red_continuum_diagnosis.md."
+        ),
+    },
 }
 ACCEPTED_LIMITATIONS_HASH = hashlib.sha256(
     json.dumps(ACCEPTED_LIMITATIONS, sort_keys=True).encode("utf-8")

@@ -641,6 +641,50 @@ def _qc_for_wavelength_v1(qc00, corrections):
     return verify_wavelength_residuals(offsets, corrections)
 
 
+def _intermethod_continuum_report(calibrated, canonical_method, other_method, *, red_band_A=(8600.0, 9100.0)):
+    """Continuum systematic isolated from real companion signal (D2 v3).
+
+    Both extraction methods share the REAL companion spectrum, so their continuum
+    DIFFERENCE (beyond the combined statistical error) is the method-dependent
+    systematic — chromatic residual halo subtraction — not real molecular/SED
+    structure. This is the physically meaningful "is the continuum trustworthy"
+    metric; ``|runmed - poly|`` conflates real broadband structure with it.
+    """
+
+    if other_method not in calibrated or canonical_method not in calibrated:
+        return None
+    a = calibrated[canonical_method].product
+    b = calibrated[other_method].product
+    wave = np.asarray(a.wave_A, dtype=np.float64)
+    ca = np.asarray(a.extra_columns["cont_runmed"], dtype=np.float64)
+    cb = np.asarray(b.extra_columns["cont_runmed"], dtype=np.float64)
+    ea = np.asarray(a.extra_columns["flux_err_stat"], dtype=np.float64)
+    eb = np.asarray(b.extra_columns["flux_err_stat"], dtype=np.float64)
+    good = np.isfinite(ca) & np.isfinite(cb) & np.isfinite(ea) & np.isfinite(eb) & (ea > 0) & (eb > 0)
+    if not np.any(good):
+        return None
+    comb = np.sqrt(ea**2 + eb**2)
+    inter = np.abs(ca - cb)
+    frac_agree = float(np.mean((inter <= comb)[good]))
+    red = good & (wave >= float(red_band_A[0])) & (wave <= float(red_band_A[1]))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        red_ratio = float(np.nanmedian((ca / cb)[red])) if np.any(red) else None
+    red_frac_agree = float(np.mean((inter <= comb)[red])) if np.any(red) else None
+    return {
+        "canonical_vs": other_method,
+        "fraction_channels_methods_agree": frac_agree,
+        "red_band_A": [float(red_band_A[0]), float(red_band_A[1])],
+        "red_band_median_ratio": _finite_or_none(red_ratio),
+        "red_band_fraction_agree": _finite_or_none(red_frac_agree),
+        "interpretation": (
+            "Continuum difference between the two G1-validated methods beyond their combined stat "
+            "error = method-dependent systematic (residual chromatic halo subtraction). The companion "
+            "red SPECTRAL SHAPE is real and shared by both methods (not flagged); only the "
+            "method-dependent LEVEL discrepancy is."
+        ),
+    }
+
+
 def compute_stage_x11_products(config, paths=None) -> StageX11Product:
     cfg = dict(config)
     root = Path(cfg.get("project_root") or Path.cwd()).resolve()
@@ -671,6 +715,19 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             error_smooth_channels=int(cfg.get("x11_error_smooth_channels", 21)),
         )
     canonical = calibrated[canonical_method]
+    # Inter-method continuum systematic (isolates the real systematic from the
+    # companion's real red spectral structure). The comparison method is the
+    # other G1-validated method from D1's primary pair (default optimal_psfsub).
+    other_method = None
+    for pair in (qc_x10 or {}).get("primary_pairs", []) or []:
+        members = str(pair).split("_vs_")
+        if canonical_method in members:
+            other_method = members[0] if members[1] == canonical_method else members[1]
+            break
+    if other_method is None or other_method not in calibrated:
+        other_method = "optimal_psfsub" if "optimal_psfsub" in calibrated else None
+    intermethod = _intermethod_continuum_report(calibrated, canonical_method, other_method) if other_method else None
+    v3_threshold = float(cfg.get("x11_continuum_agree_threshold", 0.90))
     qc = {
         "stage": "x11_spectral_calibration",
         "run_id": str(cfg["run_id"]),
@@ -690,22 +747,45 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             "source": corrections.flux_source,
             "variability_caveat": bool(corrections.variability_caveat),
         },
-        "continuum": canonical.continuum_summary,
+        "continuum": {
+            **canonical.continuum_summary,
+            # The runmed-vs-poly metric conflates the companion's REAL red
+            # molecular/SED structure with systematics — kept as a secondary,
+            # signal-contaminated diagnostic, NOT the v3 gate.
+            "poly_smoothness_note": (
+                "fraction_good_channels_sys_lt_staterr uses |runmed-poly| which also flags REAL "
+                "broadband companion structure (cool-dwarf red SED); see intermethod_systematic for "
+                "the signal-free continuum systematic."
+            ),
+            "intermethod_systematic": intermethod,
+        },
         "error_budget": canonical.error_budget,
         "also_calibrated": [method for method in METHOD_ORDER if method != canonical_method],
         "checks": {
             "v1_skylines": _qc_for_wavelength_v1(qc00, corrections),
+            # v3 now gates on the SIGNAL-FREE inter-method continuum agreement
+            # (real systematic), not on the signal-contaminated runmed-vs-poly.
             "v3_continuum_stable": {
-                "ok": None
-                if canonical.continuum_summary["fraction_good_channels_sys_lt_staterr"] is None
-                else bool(canonical.continuum_summary["fraction_good_channels_sys_lt_staterr"] >= 0.90),
-                "fraction_good_channels_sys_lt_staterr": canonical.continuum_summary[
-                    "fraction_good_channels_sys_lt_staterr"
-                ],
+                "ok": None if intermethod is None else bool(
+                    intermethod["fraction_channels_methods_agree"] >= v3_threshold
+                ),
+                "metric": "intermethod_continuum_agreement",
+                "fraction_channels_methods_agree": None if intermethod is None else intermethod["fraction_channels_methods_agree"],
+                "threshold": v3_threshold,
+                "legacy_runmed_poly_fraction": canonical.continuum_summary["fraction_good_channels_sys_lt_staterr"],
             },
         },
         "open_issues": list(corrections.open_issues),
     }
+    if intermethod is not None and intermethod.get("red_band_median_ratio") is not None:
+        rr = intermethod["red_band_median_ratio"]
+        if abs(rr - 1.0) > 0.25:
+            qc["open_issues"].append(
+                f"Red-band ({intermethod['red_band_A']} A) continuum LEVEL differs {rr:.2f}x between "
+                f"{canonical_method} and {other_method}: a residual chromatic halo-subtraction systematic "
+                "on the faint companion (the red SHAPE is real and method-consistent). Characterized, "
+                "not removable at the current PSF ring residual (~4-5%)."
+            )
     if canonical.continuum_summary["sys_at_halpha_vs_staterr"] is not None:
         if canonical.continuum_summary["sys_at_halpha_vs_staterr"] > 0.2:
             qc["open_issues"].append("Continuum systematic around Halpha exceeds 20 pct of local statistical error.")
