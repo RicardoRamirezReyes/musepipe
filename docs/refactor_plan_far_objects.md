@@ -65,7 +65,7 @@ Runs detectados:
 | `ROXs12b_HaInject_SNR5` | `ROXs12b` | `ROX12b` | 170 | 1 | Carpeta y config no coinciden en `run_id`; requiere cuidado. |
 | `ROXs12b_short` | `ROXs12b_short` | `ROX12b` | 170 | 1 | Buen candidato para smoke tests. |
 | `ROXs42Bb` | `ROXs42Bb` | `ROX42` | 120 | 1 | Objeto lejano adicional. |
-| `YSES 2b` | `YSES 2b` | `YSES 2b` | 100 | 1 | Tiene espacio en el nombre; conviene corregir en fase posterior. |
+| `YSES_2b` | `YSES_2b` | `YSES 2b` | 100 | 1 | Renombrado 2026-07-10 (antes `YSES 2b`, con espacio); 3.ª col = nombre del objeto. |
 
 Estado de notebooks `Far_*`:
 
@@ -120,13 +120,13 @@ Uso:
 
 ### Validacion secundaria
 
-Runs candidatos: `ROXs42Bb`, `YSES 2b`
+Runs candidatos: `ROXs42Bb`, `YSES_2b`
 
 Uso:
 
 - Confirmar que el refactor no queda amarrado a coordenadas especificas de
   ROXs12b.
-- `YSES 2b` debe tratarse con cuidado por el espacio en el nombre de carpeta.
+- `YSES_2b` (renombrado 2026-07-10; antes `YSES 2b`, con espacio en el nombre de carpeta).
 
 ### Run de inyeccion
 
@@ -683,7 +683,7 @@ Verificacion:
   inspecciono visualmente.
 - Suite completa: `Ran 43 tests ... OK`.
 - `ROXs12b`, `ROXs12b_short`, `ROXs42Bb`, `LkCa_15` y el run historico de
-  inyeccion resuelven coordenadas sin leer cubos. `YSES 2b` falla temprano por
+  inyeccion resuelven coordenadas sin leer cubos. `YSES_2b` falla temprano por
   falta de Stage 04b QC/coordenadas validas.
 
 Validacion controlada:

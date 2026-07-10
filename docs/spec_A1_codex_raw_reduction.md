@@ -37,7 +37,7 @@ post-calibración, QC JSON y figuras de verificación.
 ## 1. Límites duros (violarlos = fallo de la tarea)
 
 1. **No modificar ni borrar nada** dentro de los runs históricos existentes:
-   `runs/ROXs12b*`, `runs/LkCa_15`, `runs/ROXs42Bb`, `runs/YSES 2b`. La única
+   `runs/ROXs12b*`, `runs/LkCa_15`, `runs/ROXs42Bb`, `runs/YSES_2b`. La única
    excepción permitida es crear y usar el run nuevo `runs/ROXs12b_raw/` para A1.
 2. **No modificar** módulos existentes de `musepipe/` (config, stats, stages…).
    Solo se crean archivos nuevos: `musepipe/reduction/` (nuevo paquete),

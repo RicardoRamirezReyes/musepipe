@@ -264,7 +264,7 @@ pequeño.
 - **Orquestador ligero — pendiente**: con O2 hecho, un `run_pipeline.py --run-id ROXs12b --stages 01,02,03,04b,08` que ejecute etapas en orden, valide prerrequisitos y registre tiempos. Evita el error de correr etapas fuera de orden o sobre el run equivocado.
 - **Manifiesto por run — pendiente**: `runs/<RUN_ID>/manifest.json` actualizado por cada etapa (etapa, fecha, entradas, salidas, hash de config). Responde de un vistazo "¿este run está completo y consistente?".
 - **Gestión de disco — pendiente**: 23 GB y creciendo. Los stacks intermedios (stage01, stage03) son regenerables; un script `prune_run.py` que borre intermedios conservando config + QC + tablas + productos finales liberaría ~60–70% por run. `ROXs12b_ERIS` está vacío (0 bytes) — decidir si va o se borra.
-- **Nombres de run sin espacios — pendiente**: `YSES 2b` → `YSES_2b` (los espacios en rutas acaban rompiendo algo en shell/FITS headers).
+- **Nombres de run sin espacios — hecho (2026-07-10)**: `YSES 2b` → `YSES_2b` (los espacios en rutas acaban rompiendo algo en shell/FITS headers).
 - **Documentación**: completado en Fase 9. El README raíz describe arquitectura,
   selección de run, nombres canónicos, comandos y estado de validación.
 - **Stage 8 como plantilla**: aplicado a `Far_04b`, `Far_07` y `Far_07b`; delegan en

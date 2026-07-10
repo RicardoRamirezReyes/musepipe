@@ -660,7 +660,7 @@ Orden de implementación sugerido (cada hito deja algo usable):
   con la misma firma `extract(cube, var, psf, coords, cfg) → SpectrumProduct`),
   `musepipe/injection.py` (E4), `musepipe/report.py` (F1).
 - El formato estándar de espectro (§2.3) es el contrato entre bloques: para un
-  target nuevo (ROXs 42B b, YSES 2b ya presentes en `runs/`) basta un config
+  target nuevo (ROXs 42B b, YSES_2b ya presentes en `runs/`) basta un config
   nuevo y correr la misma cadena.
 - Tests por módulo: sintético + contrato, siguiendo el patrón de las 52
   pruebas existentes; añadir una regresión automatizada sobre

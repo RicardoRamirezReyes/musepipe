@@ -228,7 +228,7 @@ runs/ROXs12b/plots/stage07_accretion_lines/
 
 Estado: implementado y validado con cubos sinteticos y sobre la copia aislada
 `ROXs12b_short_refactor_validation`. Produjo 23 lineas medibles y 27 figuras;
-`He I 5876` fue excluida por la mascara mala. `YSES 2b` necesita coordenadas
+`He I 5876` fue excluida por la mascara mala. `YSES_2b` necesita coordenadas
 Stage 04b validas antes de usar esta etapa.
 
 ## Stage 07b: robustez de Halpha
