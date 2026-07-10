@@ -367,6 +367,67 @@ def _resolve_passband_dir(config: Mapping[str, object], passband_dir, project_ro
     return _module_passband_dir()
 
 
+def _growth_curve_total_spectrum(cube, wave, yx, radii, pb_wave, pb_resp, *, tol=0.01):
+    """Grow the aperture until the band flux plateaus (captures the AO halo).
+
+    Returns (total_spectrum, plateau_radius, growth_curve). The plateau flux is
+    the growth-curve total: once the band flux stops changing by more than
+    ``tol`` (relative) it has captured essentially all the source light.
+    """
+
+    ny, nx = np.asarray(cube).shape[1:]
+    max_r = int(min(yx[0], yx[1], ny - 1 - yx[0], nx - 1 - yx[1]))
+    curve = []
+    best_spec = None
+    best_r = None
+    prev = None
+    for r in radii:
+        if r > max_r:
+            continue
+        spec = extract_aperture_spectrum(np.asarray(cube, dtype=np.float64), (float(yx[0]), float(yx[1])), float(r))
+        band = synthetic_band_flux(wave, spec, pb_wave, pb_resp)
+        curve.append({"radius_px": float(r), "band_flux": None if not np.isfinite(band) else float(band)})
+        best_spec, best_r = spec, float(r)
+        if prev is not None and np.isfinite(band) and prev > 0 and abs(band - prev) / prev < float(tol):
+            break  # converged: this (larger) radius is the plateau
+        prev = band
+    return best_spec, best_r, curve
+
+
+def _rp_truncation_correction(wave, spectrum, pb_wave, pb_resp, *, fit_lo=8200.0, fit_hi=9300.0):
+    """Multiplicative correction for the passband tail beyond the MUSE cutoff.
+
+    Extrapolates the red continuum (log F_lambda linear in log lambda) across
+    the missing tail and returns full-band / in-band response-weighted mean.
+    Returns (correction, slope) or (1.0, None) if it cannot be estimated.
+    """
+
+    wave = np.asarray(wave, dtype=np.float64)
+    spec = np.asarray(spectrum, dtype=np.float64)
+    pb_wave = np.asarray(pb_wave, dtype=np.float64)
+    muse_hi = float(np.nanmax(wave))
+    if float(np.nanmax(pb_wave)) <= muse_hi:
+        return 1.0, None  # passband fully inside the cube; no truncation
+    red = (wave >= fit_lo) & (wave <= fit_hi) & np.isfinite(spec) & (spec > 0)
+    if int(np.count_nonzero(red)) < 10:
+        return 1.0, None
+    slope, intercept = np.polyfit(np.log(wave[red]), np.log(spec[red]), 1)
+    grid = np.linspace(float(np.nanmin(pb_wave)), float(np.nanmax(pb_wave)), 2000)
+    resp = np.interp(grid, pb_wave, pb_resp, left=0.0, right=0.0)
+    in_muse = grid <= muse_hi
+    model_tail = np.exp(slope * np.log(grid) + intercept)
+    flux_on_grid = np.where(in_muse, np.interp(grid, wave, spec, left=0.0, right=0.0), model_tail)
+    denom_full = np.trapz(resp, grid)
+    denom_in = np.trapz(resp[in_muse], grid[in_muse])
+    if denom_full <= 0 or denom_in <= 0:
+        return 1.0, None
+    mean_full = np.trapz(flux_on_grid * resp, grid) / denom_full
+    mean_in = np.trapz(flux_on_grid[in_muse] * resp[in_muse], grid[in_muse]) / denom_in
+    if not np.isfinite(mean_in) or mean_in <= 0:
+        return 1.0, None
+    return float(mean_full / mean_in), float(slope)
+
+
 def compute_m3_flux(
     cube,
     wave,
@@ -374,6 +435,10 @@ def compute_m3_flux(
     *,
     primary_yx=None,
     aperture_radius_px=None,
+    aperture_correction=None,
+    growth_radii_px=None,
+    growth_tol=0.01,
+    apply_truncation_correction=None,
     passband_dir=None,
     project_root=None,
 ) -> dict[str, object]:
@@ -417,12 +482,36 @@ def compute_m3_flux(
             primary_yx = detect_primary_yx(data, wave_arr, band_A=band_A)
     if aperture_radius_px is None:
         aperture_radius_px = float(config.get("m3_aperture_radius_px", config.get("psf_norm_radius_px", 25.0)))
+    if aperture_correction is None:
+        aperture_correction = str(config.get("m3_aperture_correction", "none"))
+    if apply_truncation_correction is None:
+        apply_truncation_correction = bool(config.get("m3_apply_truncation_correction", False))
 
-    spectrum = extract_aperture_spectrum(data, (float(primary_yx[0]), float(primary_yx[1])), float(aperture_radius_px))
+    # Aperture correction: grow the aperture until the band flux plateaus so the
+    # AO halo is captured (the finite aperture otherwise biases the factor low).
+    growth_curve = None
+    plateau_radius = None
+    if str(aperture_correction) == "growth_curve":
+        if growth_radii_px is None:
+            growth_radii_px = config.get("m3_growth_radii_px") or [25, 50, 80, 110, 140, 170, 200]
+        spectrum, plateau_radius, growth_curve = _growth_curve_total_spectrum(
+            data, wave_arr, (float(primary_yx[0]), float(primary_yx[1])),
+            [float(r) for r in growth_radii_px], pb_wave, pb_resp, tol=float(growth_tol),
+        )
+        effective_radius = plateau_radius
+    else:
+        spectrum = extract_aperture_spectrum(data, (float(primary_yx[0]), float(primary_yx[1])), float(aperture_radius_px))
+        effective_radius = float(aperture_radius_px)
 
     flux_unit_cgs = float(config.get("m3_flux_unit_cgs", 1.0e-20))
     synthetic_native = synthetic_band_flux(wave_arr, spectrum, pb_wave, pb_resp)
-    synthetic_cgs = synthetic_native * flux_unit_cgs
+
+    truncation_correction = 1.0
+    truncation_slope = None
+    if apply_truncation_correction:
+        truncation_correction, truncation_slope = _rp_truncation_correction(wave_arr, spectrum, pb_wave, pb_resp)
+
+    synthetic_cgs = synthetic_native * flux_unit_cgs * truncation_correction
     reference_cgs = float(pb["ref_flambda_cgs"])
     factor = flux_factor_from_reference(synthetic_cgs, reference_cgs)
     status = status_flux({band: factor})
@@ -436,16 +525,23 @@ def compute_m3_flux(
         "reference_flux_cgs": reference_cgs,
         "catalog_mag": pb.get("mag"),
         "primary_yx": [float(primary_yx[0]), float(primary_yx[1])],
-        "aperture_radius_px": float(aperture_radius_px),
+        "aperture_correction": str(aperture_correction),
+        "aperture_radius_px": None if effective_radius is None else float(effective_radius),
+        "plateau_radius_px": plateau_radius,
+        "growth_curve": growth_curve,
+        "truncation_correction": float(truncation_correction),
+        "truncation_slope_flam_vs_lam": truncation_slope,
         "flux_unit_cgs": flux_unit_cgs,
         "muse_overlap_frac": overlap,
         "source": config.get("m3_passband_source"),
         "variability_caveat": True,
         "caveats": [
             config.get("m3_caveat"),
-            "Aperture-summed primary flux may miss the broad NFM AO halo (factor biased low); "
-            "aperture_radius_px is recorded.",
-            None if overlap is None else f"{band} band is {float(overlap) * 100:.1f}% inside the MUSE range.",
+            ("Aperture flux corrected to the growth-curve plateau (AO halo captured)."
+             if aperture_correction == "growth_curve"
+             else "Fixed aperture may miss the broad NFM AO halo (factor biased low); use growth_curve."),
+            None if overlap is None else f"{band} band is {float(overlap) * 100:.1f}% inside the MUSE range"
+            + ("" if not apply_truncation_correction else f"; tail corrected x{truncation_correction:.4f}."),
         ],
     }
 
@@ -680,6 +776,8 @@ def m3_flux_phase(args: argparse.Namespace) -> int:
         cfg,
         primary_yx=primary_yx,
         aperture_radius_px=args.aperture_radius,
+        aperture_correction=args.aperture_correction,
+        apply_truncation_correction=args.truncation_correction or None,
         project_root=str(rc.paths.project_root),
     )
     m3["cube_file"] = str(cube_path)
@@ -717,6 +815,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     m3_parser.add_argument("--data-ext", default=None)
     m3_parser.add_argument("--primary-yx", nargs=2, type=float, default=None, metavar=("Y", "X"))
     m3_parser.add_argument("--aperture-radius", type=float, default=None)
+    m3_parser.add_argument("--aperture-correction", choices=["none", "growth_curve"], default=None)
+    m3_parser.add_argument("--truncation-correction", action="store_true")
     m3_parser.set_defaults(func=m3_flux_phase)
 
     args = parser.parse_args(argv)

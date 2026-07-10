@@ -91,6 +91,58 @@ class CubeQcM3Tests(unittest.TestCase):
         yx = detect_primary_yx(self.cube, self.wave)
         self.assertEqual((int(yx[0]), int(yx[1])), self.primary)
 
+    def test_growth_curve_recovers_extended_source_total_flux(self):
+        import tempfile
+
+        # Extended source: bright core + a broad halo spread over many spaxels.
+        wave = np.arange(5000.0, 9300.0, 5.0, dtype=np.float64)
+        ny = nx = 81
+        cy = cx = 40
+        yy, xx = np.indices((ny, nx), dtype=np.float64)
+        r = np.hypot(yy - cy, xx - cx)
+        profile = np.exp(-0.5 * (r / 2.0) ** 2) + 0.02 * np.exp(-0.5 * (r / 15.0) ** 2)
+        total_per_channel = 5000.0
+        image = profile / profile.sum() * total_per_channel
+        cube = np.repeat(image[None, :, :], wave.size, axis=0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_passband(tmp, "RP", 6100.0, 9000.0)
+            ref_cgs = total_per_channel * 1e-20  # reference = the true TOTAL flux
+            cfg = _make_config(ref_cgs, pb_dir=tmp)
+            # A fixed small aperture misses the halo -> factor < 1.
+            small = compute_m3_flux(cube, wave, cfg, primary_yx=(cy, cx), aperture_radius_px=5.0)
+            self.assertLess(small["flux_factor"], 0.9)
+            # Growth curve to the plateau recovers ~all the flux -> factor ~ 1.
+            grown = compute_m3_flux(
+                cube, wave, cfg, primary_yx=(cy, cx),
+                aperture_correction="growth_curve", growth_radii_px=[5, 10, 20, 30, 38], growth_tol=0.005,
+            )
+            self.assertEqual(grown["aperture_correction"], "growth_curve")
+            self.assertGreater(grown["flux_factor"], small["flux_factor"])
+            self.assertAlmostEqual(grown["flux_factor"], 1.0, delta=0.03)
+            self.assertEqual(grown["status"], "green")
+
+    def test_truncation_correction_raises_factor_for_red_sed(self):
+        import tempfile
+
+        # Rising red SED and a passband extending beyond the cube's red cutoff.
+        wave = np.arange(6000.0, 9300.0, 5.0, dtype=np.float64)
+        ny = nx = 21
+        prim = (10, 10)
+        sed = (wave / 6000.0) ** 2.0  # F_lambda rising to the red
+        cube = np.zeros((wave.size, ny, nx), dtype=np.float64)
+        cube[:, prim[0], prim[1]] = sed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_passband(tmp, "RP", 6100.0, 10500.0)  # extends past cube max 9295
+            cfg = _make_config(1e-20, pb_dir=tmp)  # ref value irrelevant here
+            base = compute_m3_flux(cube, wave, cfg, primary_yx=prim, aperture_radius_px=5.0)
+            corr = compute_m3_flux(
+                cube, wave, cfg, primary_yx=prim, aperture_radius_px=5.0, apply_truncation_correction=True
+            )
+            self.assertGreater(corr["truncation_correction"], 1.0)
+            self.assertGreater(corr["flux_factor"], base["flux_factor"])
+
     def test_load_passband_csv_skips_header_and_comments(self):
         import tempfile
 
