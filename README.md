@@ -28,6 +28,41 @@ compartido.
 FITS y 06 local, 07, 07b y 08 pasan sus contratos y revision visual. El run
 original no fue modificado.
 
+## Mapa de etapas (spec ↔ código)
+
+Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
+
+| Spec | Qué hace | Módulo canónico | Script | QC |
+|---|---|---|---|---|
+| A1 | Reducción raw (esorex) | `musepipe/reduction/esorex_driver.py` | `scripts/reduce_raw.sh` | `stage00r_qc.json` |
+| A2 | Decisión ZAP (cielo) | `musepipe/reduction/sky_zap.py` | `scripts/sky_zap.sh` | `stage00s_qc.json` |
+| A3 | Corrección telúrica | `musepipe/reduction/` (telluric) | `scripts/telluric.sh` | `stage00t_qc.json` |
+| A4 | QC del cubo (M1–M5) | `musepipe/qc/cube_qc.py` | `scripts/cube_qc.sh` | `stage00q_qc.json` |
+| B1 | Carga/alineación/crop | `musepipe/stages/stage01_align.py` | — | `stage01_qc.json` |
+| B2 | Xcorr / franjas | `musepipe/stages/stage02_xcorr.py` | `scripts/stage02_xcorr.sh` | `stage02_qc.json` |
+| B3 | Localización del compañero | `musepipe/stages/stage01c_localize.py` | `scripts/stage01c_localize.sh` | `stage01c_qc.json` |
+| C1 | PSF cromática (Moffat/Psfao) | `musepipe/stages/stage_e01_psf.py` (+`stage_e01_psfao.py`) | `scripts/stage_e01_psf.sh` | `stage_e01_qc.json`, `psf_model.json` |
+| 04b | Fondo local (superficie) | `musepipe/stages/stage04b_local_surface.py` | — | `stage04b_qc.json` |
+| C2 | Extracción por apertura | `musepipe/stages/stage_x01_aperture.py` | `scripts/stage_x01_aperture.sh` | `spec_aperture_qc.json` |
+| C3 | Extracción óptima | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
+| C4 | Ajuste de PSF (psffit) | `musepipe/stages/stage_x03_psffit.py` | `scripts/stage_x03_psffit.sh` | `spec_psffit_qc.json` |
+| D1 | Comparación inter-método | `musepipe/stages/stage_x10_compare.py` | `scripts/stage_x10_compare.sh` | `stage_x10_qc.json` |
+| D2 | Calibración espectral | `musepipe/stages/stage_x11_calibrate.py` | `scripts/stage_x11_calibrate.sh` | `stage_x11_qc.json` |
+| E1 | Detección Hα | `musepipe/stages/stage_h01_detect.py` | `scripts/stage_h01_detect.sh` | `stage_h01_qc.json` |
+| E2 | Batería de artefactos | `musepipe/stages/stage_h02_artifacts.py` | `scripts/stage_h02_artifacts.sh` | `stage_h02_qc.json` |
+| E3 | Límites superiores (Ṁ) | `musepipe/stages/stage_h03_limits.py` | `scripts/stage_h03_limits.sh` | `stage_h03_qc.json` |
+| E4 | Inyección-recuperación | `musepipe/stages/stage_h04_injection.py` | `scripts/stage_h04_injection.sh` | `stage_h04_qc.json` |
+| F1 | Paquete final + gate | `musepipe/report.py` | `scripts/build_report.py` | `report/run_summary.json` |
+| G0 | Ejecución cubo real | `musepipe/g0.py` | — | `stage_g0_qc.json` |
+| G1 | Validación de extracción | `musepipe/covariance.py` | — | `stage_g1_qc.json` |
+| G2 | Medición de líneas | `musepipe/lines.py` + `stages/stage_g2_measure_lines.py` | — | `stage_g2_qc.json` |
+| G3 | Inferencia física | `musepipe/models/` + `stages/stage_g3_accretion.py` | — | `stage_g3_qc.json` |
+| G4 | Clasificación de fuente | `musepipe/classify.py` + `stages/stage_g4_classify.py` | — | `stage_g4_qc.json` |
+| G5 | Síntesis final | `musepipe/characterization.py` | `scripts/build_characterization.py` | `report/characterization/` |
+
+La cadena histórica de objetos lejanos (04b→06→07→07b→08→08c) y la cadena cercana/PCA
+(notebooks 00–06, `LkCa_15`) se documentan más arriba en este README.
+
 ## Seleccionar un run
 
 Si se pasa `run_id` a la API, ese valor es explicito. En caso contrario, el run
@@ -153,3 +188,8 @@ La suite actual contiene 52 pruebas y el entorno reproducible esta fijado en
 - `docs/plan_mejora_y_sugerencias.md`: diagnostico cientifico y prioridades
   posteriores.
 - `docs/00_config_parameters.md`: referencia de configuracion existente.
+- `docs/noise_model.md`: modelo de ruido canonico (STAT subestima ~4x, inflacion
+  espacial en apertura, correlacion espectral, origen en el shift subpixel de stage01;
+  regla control=objeto). Toda etapa debe citarlo en vez de re-derivar sigma.
+- `docs/a3_telluric_justification.md`: justificacion de la correccion telurica por
+  STD_TELLURIC (molecfit no convergio) para el paper.
