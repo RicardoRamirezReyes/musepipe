@@ -1,0 +1,184 @@
+# Especificación D2 · `X11_spectral_calibration` — brief de ejecución para Codex (ChatGPT 5.5)
+
+Fecha: 2026-07-01. Etapa D2 (ESENCIAL, nueva) del plan
+`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D1 cerrada con
+método canónico ELEGIDO por el usuario; QC de A4 (factores); C1 (sistemático
+PSF); A2/A3 (sistemáticos de cielo/telúricas, si corrieron).
+
+---
+
+## 0. Rol, objetivo y definición de terminado
+
+**Rol del agente**: convertir el espectro canónico en el producto científico
+final: λ corregida y en marco declarado, flujo en escala validada, continuo
+estimado por dos vías, y un error total con presupuesto de sistemáticos
+explícito. D2 aplica factores medidos aguas arriba; **no mide nada nuevo ni
+corrige nada que no venga de un QC**. Cada número aplicado debe ser trazable
+a la etapa que lo midió.
+
+**Definición de terminado**:
+
+1. `spec_final_object.fits` (formato `SpectrumProduct` + columnas de §3.4)
+   con header que declara TODAS las correcciones aplicadas y sus fuentes.
+2. Presupuesto de sistemáticos tabulado en `stage_x11_qc.json` (§5).
+3. Verificaciones §6 en verde (incluye el sanity check de forma espectral).
+4. `musepipe/stages/stage_x11_calibrate.py` + tests; suite intacta.
+
+---
+
+## 1. Límites duros
+
+1. **Cada corrección viene de un QC aguas arriba, con su clave citada**:
+   Δλ de A4/M1, factor de flujo de A4/M3, factores STAT de A4/M5+B1,
+   sistemático PSF de C1, residuos de A2/A3. Un factor sin procedencia = no
+   se aplica.
+2. **Prohibido corregir dos veces** — los tres dobles conteos clásicos que
+   esta etapa debe verificar ANTES de aplicar nada (§3.1):
+   corrección baricéntrica (¿el cubo ya está en marco baricéntrico?),
+   corrección de apertura (¿`apcorr` ya está aplicada en el producto?),
+   factor STAT (¿`flux_err` ya viene escalado por C2/C3/C4?).
+3. El método canónico es el que el usuario eligió en D1; D2 se ejecuta
+   TAMBIÉN sobre los demás métodos (mismos factores) para que E1 compare,
+   pero solo `spec_final_object.fits` lleva ese nombre.
+4. Sin estética espectral: nada de suavizados, interpolación de canales malos
+   ni "limpiezas" del espectro final. Los flags viajan, los datos no se tocan.
+5. Git: rama `stage-d2-calibrate`.
+
+---
+
+## 2. Entradas
+
+- Producto canónico de D1 (+ los demás métodos).
+- `stage00q_qc.json` (A4): Δλ y término lineal, marco de λ, factor de flujo
+  por banda Gaia, factores STAT.
+- `psf_model.json` / QC de C1: sistemático del anillo del compañero.
+- QC de A2/A3 si corrieron: término de cielo residual, residuo telúrico.
+- Corrección baricéntrica: valor y estado del marco desde A4
+  (`wavelength_frame`, `vbary_kms`).
+- Config: RV sistémica esperada de ROXs 12 (literatura, con error) — solo
+  para la verificación V4, no se aplica al espectro.
+
+## 3. Operaciones
+
+### 3.1 Auditoría anti-doble-conteo (gate, antes de tocar nada)
+
+Leer headers/QC y llenar la tabla `already_applied` de §5: marco de λ del
+producto (`WFRAME`), estado de `apcorr`, modo de error (`ERRMODE`), factores
+ya incluidos en `flux_err`. Cualquier ambigüedad (header que no declara algo)
+→ parar y preguntar; no deducir por el valor de los datos.
+
+### 3.2 Longitud de onda
+
+- Aplicar Δλ (constante o término lineal, según semáforo M1 de A4) a
+  `wave_A`; registrar en header `WLCORR` con la fuente.
+- Dejar el espectro en el marco que YA tiene (típicamente baricéntrico, de
+  scipost) y declararlo; NO transformar de marco aquí. La conversión a marco
+  estelar (RV sistémica) es responsabilidad de E1/modelado, con el valor de
+  config.
+
+### 3.3 Flujo
+
+- Factor de escala global de A4/M3 (mediana de las bandas Gaia, con su error
+  como sistemático `sys_fluxcal`); anotar el caveat de variabilidad de la
+  primaria tal como A4 lo reporta.
+- Verificar consistencia `apcorr` (ya aplicada) contra la curva de
+  crecimiento de C1 una última vez (número en QC, no re-aplicación).
+
+### 3.4 Continuo (dos estimadores, ambos guardados como columnas)
+
+- `cont_runmed`: `continuum_running_median` existente (`musepipe/spectral.py`),
+  ventana 80 Å, máscara de líneas estándar (Hα, Hβ, O I, ±15 Å) + flags.
+- `cont_poly`: polinomio de grado ≤ 5 en log-λ con la misma máscara,
+  sigma-clipping asimétrico (rechaza emisión hacia arriba con más cautela que
+  absorción — el objeto puede tener líneas en emisión reales).
+- `sys_continuum(λ) = |cont_runmed − cont_poly|` entra al presupuesto. Si en
+  la región de Hα supera el 20% del error estadístico local, señalarlo: E1 lo
+  necesita saber.
+
+### 3.5 Error total
+
+- `flux_err_total² = flux_err_stat² + Σ sys_i²` por canal, donde `flux_err_stat`
+  = max(`flux_err`, `flux_err_emp`) por canal (regla conservadora, suavizada
+  con mediana móvil de 21 canales para no heredar ruido del propio estimador
+  de error).
+- Sistemáticos incluidos por canal donde apliquen: PSF (C1, localizado),
+  telúrico (A3, por banda), cielo (A2, ventanas de skylines), fluxcal
+  (global), continuo (§3.4; como columna separada, NO sumada a
+  `flux_err_total` — el modelado decide si la usa). Cada término con su
+  fuente en QC.
+
+## 4. Puntos donde mantener máxima atención
+
+1. **Los tres dobles conteos de §1.2** — la auditoría §3.1 existe porque este
+   es el modo de fallo más probable de una etapa "de pegamento".
+2. **No convertir marcos de λ dos veces**: skylines validan el marco en A4;
+   D2 solo aplica el offset residual. Si A4 dejó el marco en `unavailable`,
+   D2 se bloquea para λ (aplica solo flujo/continuo) y lo dice.
+3. **La regla max() del error estadístico**: aplicada por canal SIN suavizar
+   produce un error "dentado" que sesga χ² del modelado; por eso el suavizado
+   de mediana móvil está en la spec. No cambiar la ventana sin preguntar.
+4. **El continuo no se resta**: se entrega como columnas. Restarlo es decisión
+   de E1/modelado. D2 entrega estado, no interpretación.
+
+## 5. Esquema de `stage_x11_qc.json`
+
+```json
+{
+  "stage": "x11_spectral_calibration",
+  "run_id": "...",
+  "canonical_method": "psffit",
+  "already_applied": {"wframe": "barycentric", "apcorr": true,
+                       "stat_factors_in_flux_err": true},
+  "wavelength": {"dlambda_A": 0.0, "linear_term": 0.0, "source": "stage00q_qc.m1",
+                  "frame_final": "barycentric"},
+  "flux": {"scale_factor": 0.0, "scale_err": 0.0, "source": "stage00q_qc.m3",
+            "variability_caveat": true},
+  "continuum": {"runmed_window_A": 80, "poly_deg": 5,
+                 "sys_at_halpha_vs_staterr": 0.0},
+  "error_budget": [
+    {"term": "stat", "type": "per_channel", "median": 0.0, "source": "max(stat,emp) smoothed"},
+    {"term": "psf", "type": "localized", "median": 0.0, "source": "stage_e01_qc.companion_ring_metric"},
+    {"term": "fluxcal", "type": "global_pct", "value": 0.0, "source": "stage00q_qc.m3"},
+    {"term": "sky", "type": "windows", "value": 0.0, "source": "stage00s_qc"},
+    {"term": "telluric", "type": "bands", "value": 0.0, "source": "stage00t_qc"},
+    {"term": "continuum", "type": "column_only", "median": 0.0, "source": "3.4"}
+  ],
+  "also_calibrated": ["aperture", "optimal_ls", "optimal_psfsub"],
+  "open_issues": []
+}
+```
+
+## 6. Verificaciones
+
+- **V1 — Skylines en cero**: sobre el espectro de CIELO calibrado con el mismo
+  Δλ (no sobre el objeto), centroides de 5 skylines → |residuo| < 0.05 Å.
+  Cierra el lazo de la corrección de λ.
+- **V2 — Errores**: figura `flux_err_stat`, cada sistemático y
+  `flux_err_total` vs λ; el presupuesto se ve, no solo se tabula.
+- **V3 — Continuo estable**: `cont_runmed` vs `cont_poly` superpuestos al
+  espectro; diferencia < 1σ estadística en el 90% de canales buenos.
+- **V4 — Sanity de forma**: espectro final (continuo normalizado) contra una
+  plantilla M8–L0 joven de biblioteca pública (config: ruta/cita de la
+  plantilla). NO es un ajuste: es un chequeo visual+correlación de que la
+  pendiente y las bandas moleculares (TiO/VO) van en la dirección esperada.
+  Discrepancia grosera = algo está mal aguas arriba (fluxcal, halo) → issue.
+- **V5 — Multi-método**: los demás métodos calibrados con los MISMOS factores,
+  superpuestos; las conclusiones de D1 no deben cambiar tras calibrar (si
+  cambian, un factor se aplicó de forma inconsistente → bug).
+
+## 7. Tests
+
+```text
+tests/test_calibrate_no_double.py   # producto que YA declara apcorr/baricéntrico aplicados → D2 no re-aplica (compara salida)
+tests/test_calibrate_budget.py      # sistemáticos sintéticos conocidos → flux_err_total exacto analíticamente
+tests/test_calibrate_maxrule.py     # stat vs emp alternantes → la regla max+suavizado da lo esperado, sin dientes
+tests/test_calibrate_wl.py          # espectro con offset 0.08 Å fabricado → corregido y V1 pasa
+```
+
+## 8. Protocolo de parada y reporte
+
+Preguntar cuando: §3.1 encuentre ambigüedad de doble conteo; A4 tenga M1 o M3
+en rojo (¿aplicar igual con caveat o bloquear?); V4 muestre forma incompatible
+con M8–L0; V5 altere conclusiones de D1. Reporte: tabla de correcciones
+aplicadas con fuentes, presupuesto de errores (figura V2), verificaciones,
+checklist de límites, comando de reproducción.

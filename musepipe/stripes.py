@@ -19,6 +19,8 @@ import warnings
 import numpy as np
 from scipy.ndimage import shift as ndi_shift
 
+from .stats import finite_percentile, median_finite, robust_sigma
+
 __all__ = [
     "safe_float",
     "_optional_float",
@@ -48,6 +50,11 @@ __all__ = [
     "_shift_spectral_integer",
     "_normalize_columns_for_xcorr",
     "xcorr_shift_map",
+    "stripe_channel_amplitudes",
+    "stripe_metric_exclusion_mask",
+    "stripe_metric_summary",
+    "shift_spectral_variance",
+    "apply_stripe_spectral_shifts",
 ]
 
 
@@ -623,3 +630,300 @@ def xcorr_shift_map(cube_use, ref_spec=None, max_lag=6):
         out[p] = _xcorr_shift_pixels(R, T[:, p], max_lag=max_lag)
 
     return out.reshape(ny, nx).astype(np.float32)
+
+
+def _spatial_metric_mask(ny, nx, source_mask=None, edge_trim_pix=0):
+    mask = np.ones((int(ny), int(nx)), dtype=bool)
+    if source_mask is not None:
+        source_mask = np.asarray(source_mask, dtype=bool)
+        if source_mask.shape != mask.shape:
+            raise ValueError(
+                f"source_mask shape {source_mask.shape} does not match cube plane {(ny, nx)}"
+            )
+        mask &= ~source_mask
+
+    trim = int(edge_trim_pix or 0)
+    if trim > 0:
+        if 2 * trim >= ny or 2 * trim >= nx:
+            raise ValueError("edge_trim_pix removes the full spatial frame.")
+        mask[:trim, :] = False
+        mask[-trim:, :] = False
+        mask[:, :trim] = False
+        mask[:, -trim:] = False
+    return mask
+
+
+def _profile_scale(profile, normalization):
+    if normalization in (None, "none"):
+        return 1.0
+    if normalization == "median_abs":
+        med = np.nanmedian(profile)
+        scale = abs(float(med)) if np.isfinite(med) else np.nan
+        return scale if np.isfinite(scale) and scale > 0 else 1.0
+    if normalization == "robust_sigma":
+        scale = robust_sigma(profile)
+        return scale if np.isfinite(scale) and scale > 0 else 1.0
+    raise ValueError("normalization must be 'median_abs', 'robust_sigma', 'none', or None.")
+
+
+def _transverse_profile_for_metric(plane, axis, stripe_masks, spatial_mask, min_pixels):
+    plane = np.asarray(plane, dtype=np.float64)
+    finite = np.isfinite(plane) & spatial_mask
+    ny, nx = plane.shape
+
+    if axis == "x":
+        in_stripes = np.any(np.asarray(stripe_masks, dtype=bool), axis=0)
+        profile = []
+        for x in range(nx):
+            good = finite[:, x] & in_stripes[:, x]
+            if np.count_nonzero(good) >= min_pixels:
+                profile.append(float(np.nanmedian(plane[good, x])))
+            else:
+                profile.append(np.nan)
+        return np.asarray(profile, dtype=np.float64)
+
+    if axis == "y":
+        in_stripes = np.any(np.asarray(stripe_masks, dtype=bool), axis=0)
+        profile = []
+        for y in range(ny):
+            good = finite[y, :] & in_stripes[y, :]
+            if np.count_nonzero(good) >= min_pixels:
+                profile.append(float(np.nanmedian(plane[y, good])))
+            else:
+                profile.append(np.nan)
+        return np.asarray(profile, dtype=np.float64)
+
+    if axis == "angle":
+        profile = []
+        for stripe_mask in stripe_masks:
+            good = finite & np.asarray(stripe_mask, dtype=bool)
+            if np.count_nonzero(good) >= min_pixels:
+                profile.append(float(np.nanmedian(plane[good])))
+            else:
+                profile.append(np.nan)
+        return np.asarray(profile, dtype=np.float64)
+
+    raise ValueError(f"Invalid axis: {axis}")
+
+
+def stripe_channel_amplitudes(
+    cube_zyx,
+    *,
+    nstripes,
+    stripe_orientation="vertical",
+    manual_stripe_ranges=None,
+    stripe_angle_deg=None,
+    source_mask=None,
+    edge_trim_pix=0,
+    normalization="median_abs",
+    min_pixels=3,
+):
+    """Return one robust stripe-amplitude metric per spectral channel.
+
+    The metric collapses each channel along the stripe direction, subtracts the
+    transverse-profile median, and reports ``robust_sigma`` of the normalized
+    residual profile. ``source_mask=True`` pixels are excluded from the collapse.
+    """
+
+    cube = np.asarray(cube_zyx, dtype=np.float64)
+    if cube.ndim != 3:
+        raise ValueError(f"Expected cube shape (nz, ny, nx), got {cube.shape}")
+    nz, ny, nx = cube.shape
+    _, axis, _, stripe_masks = _build_stripe_geometry(
+        ny,
+        nx,
+        int(nstripes),
+        stripe_orientation,
+        manual_stripe_ranges=manual_stripe_ranges,
+        stripe_angle_deg=stripe_angle_deg,
+    )
+    spatial_mask = _spatial_metric_mask(
+        ny,
+        nx,
+        source_mask=source_mask,
+        edge_trim_pix=edge_trim_pix,
+    )
+    amp = np.full(nz, np.nan, dtype=np.float64)
+    for z in range(nz):
+        profile = _transverse_profile_for_metric(
+            cube[z],
+            axis,
+            stripe_masks,
+            spatial_mask,
+            min_pixels=int(min_pixels),
+        )
+        finite = np.isfinite(profile)
+        if np.count_nonzero(finite) < 3:
+            continue
+        scale = _profile_scale(profile[finite], normalization)
+        norm_profile = profile / scale
+        norm_profile = norm_profile - np.nanmedian(norm_profile)
+        amp[z] = robust_sigma(norm_profile)
+    return amp.astype(np.float64)
+
+
+def stripe_metric_exclusion_mask(
+    wavelengths_A,
+    *,
+    excluded_windows_A=((5780.0, 6050.0),),
+    spectral_edge_channels=0,
+):
+    wave = np.asarray(wavelengths_A, dtype=np.float64)
+    excluded = np.zeros(wave.shape, dtype=bool)
+    for wmin, wmax in excluded_windows_A or ():
+        excluded |= (wave >= float(wmin)) & (wave <= float(wmax))
+    edge = int(spectral_edge_channels or 0)
+    if edge > 0:
+        if 2 * edge >= wave.size:
+            raise ValueError("spectral_edge_channels removes the full wavelength axis.")
+        excluded[:edge] = True
+        excluded[-edge:] = True
+    return excluded
+
+
+def stripe_metric_summary(
+    amplitude_pre,
+    amplitude_post,
+    wavelengths_A,
+    *,
+    excluded_windows_A=((5780.0, 6050.0),),
+    spectral_edge_channels=0,
+    dirty_threshold_factor=3.0,
+    table_path="tables/stage02_stripe_metric.csv",
+):
+    pre = np.asarray(amplitude_pre, dtype=np.float64)
+    post = np.asarray(amplitude_post, dtype=np.float64)
+    wave = np.asarray(wavelengths_A, dtype=np.float64)
+    if pre.shape != post.shape or pre.shape != wave.shape:
+        raise ValueError("pre, post, and wavelength arrays must have matching 1D shapes.")
+
+    excluded = stripe_metric_exclusion_mask(
+        wave,
+        excluded_windows_A=excluded_windows_A,
+        spectral_edge_channels=spectral_edge_channels,
+    )
+    usable = (~excluded) & np.isfinite(pre) & np.isfinite(post)
+    pre_med = median_finite(pre[usable])
+    post_med = median_finite(post[usable])
+    post_p95 = finite_percentile(post[usable], 95.0)
+
+    reduction_factor = np.nan
+    if np.isfinite(pre_med) and np.isfinite(post_med):
+        if post_med > 0:
+            reduction_factor = float(pre_med / post_med)
+        elif pre_med <= 0:
+            reduction_factor = 1.0
+
+    threshold = float(dirty_threshold_factor) * post_med if np.isfinite(post_med) else np.nan
+    dirty_mask = usable & np.isfinite(threshold) & (post > threshold)
+    return {
+        "amp_pre_median": None if not np.isfinite(pre_med) else float(pre_med),
+        "amp_post_median": None if not np.isfinite(post_med) else float(post_med),
+        "amp_post_p95": None if not np.isfinite(post_p95) else float(post_p95),
+        "reduction_factor": (
+            None if not np.isfinite(reduction_factor) else float(reduction_factor)
+        ),
+        "dirty_channels": [int(i) for i in np.where(dirty_mask)[0]],
+        "table": str(table_path),
+        "mask_excluded_windows_A": [
+            [float(wmin), float(wmax)] for wmin, wmax in (excluded_windows_A or ())
+        ],
+    }
+
+
+def shift_spectral_variance(block, dz, apply_mode="subpixel"):
+    """Propagate variance through the same 1D spectral shift used for DATA."""
+
+    if apply_mode == "none" or not np.isfinite(dz) or float(dz) == 0.0:
+        return np.asarray(block, dtype=np.float32).copy(), "none"
+    if apply_mode == "integer" or np.isclose(float(dz), np.round(float(dz)), atol=1e-8):
+        return _shift_spectral_integer(block, dz), "integer"
+    if apply_mode != "subpixel":
+        raise ValueError("apply_mode must be 'none', 'integer', or 'subpixel'.")
+
+    arr = np.asarray(block, dtype=np.float64)
+    out = np.full(arr.shape, np.nan, dtype=np.float64)
+    nz = arr.shape[0]
+    for z in range(nz):
+        src = z - float(dz)
+        z0 = int(np.floor(src))
+        frac = src - z0
+        acc = np.zeros(arr.shape[1:], dtype=np.float64)
+        weight = np.zeros(arr.shape[1:], dtype=np.float64)
+        for zi, wi in ((z0, 1.0 - frac), (z0 + 1, frac)):
+            if zi < 0 or zi >= nz or wi == 0.0:
+                continue
+            finite = np.isfinite(arr[zi])
+            acc[finite] += (wi * wi) * arr[zi][finite]
+            weight[finite] += wi * wi
+        good = weight > 0
+        out[z][good] = acc[good]
+    return out.astype(np.float32), "linear_kernel_squared"
+
+
+def apply_stripe_spectral_shifts(
+    cube_zyx,
+    shifts,
+    *,
+    nstripes,
+    stripe_orientation="vertical",
+    manual_stripe_ranges=None,
+    stripe_angle_deg=None,
+    apply_mode="subpixel",
+    is_variance=False,
+):
+    """Apply one spectral shift per stripe and return ``(cube, kernel_label)``."""
+
+    cube = np.asarray(cube_zyx, dtype=np.float32)
+    if cube.ndim != 3:
+        raise ValueError(f"Expected cube shape (nz, ny, nx), got {cube.shape}")
+    shifts = np.asarray(shifts, dtype=np.float64).ravel()
+    nz, ny, nx = cube.shape
+    stripe_ranges, axis, _, stripe_masks = _build_stripe_geometry(
+        ny,
+        nx,
+        int(nstripes),
+        stripe_orientation,
+        manual_stripe_ranges=manual_stripe_ranges,
+        stripe_angle_deg=stripe_angle_deg,
+    )
+    if shifts.size != len(stripe_ranges):
+        raise ValueError(f"Expected {len(stripe_ranges)} shifts, got {shifts.size}.")
+
+    out = cube.copy()
+    kernels = set()
+    for s, (a1, a2) in enumerate(stripe_ranges):
+        dz = float(shifts[s])
+        if not np.isfinite(dz):
+            kernels.add("skipped_nan")
+            continue
+
+        if axis == "y":
+            view = out[:, int(a1):int(a2), :]
+        elif axis == "x":
+            view = out[:, :, int(a1):int(a2)]
+        elif axis == "angle":
+            view = out[:, stripe_masks[s]]
+        else:
+            raise ValueError(f"Invalid axis: {axis}")
+
+        if is_variance:
+            shifted, kernel = shift_spectral_variance(view, dz, apply_mode=apply_mode)
+        elif apply_mode == "none" or dz == 0.0:
+            shifted, kernel = view.astype(np.float32, copy=True), "none"
+        elif apply_mode == "integer":
+            shifted, kernel = _shift_spectral_integer(view, dz), "integer"
+        elif apply_mode == "subpixel":
+            shifted, kernel = _shift_spectral_nan_safe(view, dz), "cubic_nan_safe"
+        else:
+            raise ValueError("apply_mode must be 'none', 'integer', or 'subpixel'.")
+
+        if axis == "y":
+            out[:, int(a1):int(a2), :] = shifted
+        elif axis == "x":
+            out[:, :, int(a1):int(a2)] = shifted
+        else:
+            out[:, stripe_masks[s]] = shifted
+        kernels.add(kernel)
+
+    return out.astype(np.float32, copy=False), ",".join(sorted(kernels))

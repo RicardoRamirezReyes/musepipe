@@ -44,6 +44,8 @@ TABLE_FIELDS = [
     "input_snr",
     "injected_flux",
     "recovered_flux",
+    "recovered_flux_baseline",
+    "recovered_flux_net",
     "recovered_sigma",
     "recovered_snr",
     "throughput",
@@ -144,6 +146,7 @@ def stage_h04_config_from_run(
     cfg.setdefault("h04_expected_seconds_per_case_method", 60.0)
     cfg.setdefault("h04_allow_long_run", False)
     cfg.setdefault("h04_detection_threshold_snr", 5.0)
+    cfg.setdefault("h04_baseline_subtract_throughput", True)
     cfg.setdefault("h04_historic_expected_snr", 8.97)
     cfg.setdefault("h04_historic_tolerance_snr", 0.25)
     cfg.setdefault("h04_require_historic_regression", True)
@@ -480,6 +483,8 @@ def _row_for_method(case, method, injected_flux, measurement, threshold_snr):
         "input_snr": float(case.input_snr),
         "injected_flux": float(injected_flux),
         "recovered_flux": recovered,
+        "recovered_flux_baseline": 0.0,
+        "recovered_flux_net": recovered,
         "recovered_sigma": sigma,
         "recovered_snr": snr,
         "throughput": throughput,
@@ -488,6 +493,47 @@ def _row_for_method(case, method, injected_flux, measurement, threshold_snr):
         "bias_flux_pct": bias,
         "estimator": "stage_h01_detect.matched_filter_point",
     }
+
+
+def _baseline_key(row):
+    return (
+        row["method"],
+        row["position_label"],
+        row["continuum_mode"],
+        float(row["template_factor"]),
+        float(row["psf_fwhm_scale"]),
+    )
+
+
+def _apply_baseline_subtraction(rows):
+    """Subtract the no-injection (injected_flux==0) recovered-flux baseline before
+    computing throughput/bias (differential injection-recovery).
+
+    The matched-filter ``recovered_flux`` at a position carries a pre-existing,
+    position-dependent pedestal (the star-halo/continuum systematic that E1 shows
+    is present at the controls too, hence the non-detection). Dividing the raw
+    recovered flux by the injected flux therefore inflates the throughput above 1
+    at low injected flux and can drive it negative -- it measures the pedestal, not
+    the recovery of the injected line. Subtracting the per-(method, position,
+    continuum_mode, template, psf_scale) baseline measured at ``injected_flux==0``
+    yields a flat, physical throughput (~the true recovery fraction).
+    """
+
+    baseline = {row_key: float(row["recovered_flux"]) for row in rows
+                for row_key in (_baseline_key(row),) if float(row["injected_flux"]) == 0.0}
+    for row in rows:
+        inj = float(row["injected_flux"])
+        base = baseline.get(_baseline_key(row), 0.0)
+        net = float(row["recovered_flux"]) - base
+        row["recovered_flux_baseline"] = base
+        row["recovered_flux_net"] = net
+        if inj == 0.0:
+            row["throughput"] = np.nan
+            row["bias_flux_pct"] = np.nan
+        else:
+            row["throughput"] = net / inj
+            row["bias_flux_pct"] = 100.0 * (net - inj) / inj
+    return rows
 
 
 def _finite_values(rows, key):
@@ -954,6 +1000,8 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
         "continuum_window_A": continuum_window_A,
     }
     rows = _run_case_grid(cases, ctx, cfg)
+    if bool(cfg.get("h04_baseline_subtract_throughput", True)):
+        rows = _apply_baseline_subtraction(rows)
 
     regression = historic_regression_check(cfg, paths)
     if bool(cfg.get("h04_require_historic_regression", True)) and regression["verdict"] != "pass":

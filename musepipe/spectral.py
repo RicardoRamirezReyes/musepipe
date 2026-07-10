@@ -5,6 +5,13 @@ from __future__ import annotations
 import numpy as np
 
 
+STANDARD_LINE_WINDOWS_A = (
+    (6562.8, 15.0),
+    (4861.3, 15.0),
+    (8446.0, 15.0),
+)
+
+
 def nearest_channel_index(waves_A, target_A) -> int:
     """Return index of the finite wavelength channel closest to target_A."""
 
@@ -36,6 +43,84 @@ def continuum_running_median(waves, spec, good_mask, window_A=80.0, min_pixels=1
         local = good & (np.abs(waves - wave) <= half_width)
         if int(np.sum(local)) >= int(min_pixels):
             continuum[i] = np.nanmedian(spec[local])
+    return continuum
+
+
+def median_filter_1d(values, width=21) -> np.ndarray:
+    """Centered NaN-median filter with truncated edges."""
+
+    arr = np.asarray(values, dtype=np.float64)
+    width = int(width)
+    if width <= 1 or arr.size == 0:
+        return arr.copy()
+    half = width // 2
+    out = np.empty_like(arr)
+    for i in range(arr.size):
+        lo = max(0, i - half)
+        hi = min(arr.size, i + half + 1)
+        with np.errstate(invalid="ignore"):
+            out[i] = np.nanmedian(arr[lo:hi])
+    return out
+
+
+def standard_line_free_mask(waves_A, base_mask=None, *, line_windows_A=STANDARD_LINE_WINDOWS_A) -> np.ndarray:
+    """Mask finite wavelengths outside the standard Halpha/Hbeta/OI windows."""
+
+    waves = np.asarray(waves_A, dtype=np.float64)
+    mask = np.isfinite(waves)
+    if base_mask is not None:
+        mask &= np.asarray(base_mask, dtype=bool)
+    for center, half_width in line_windows_A:
+        mask &= np.abs(waves - float(center)) > float(half_width)
+    return mask
+
+
+def continuum_polyfit_loglambda(
+    waves,
+    spec,
+    good_mask,
+    *,
+    degree=5,
+    max_iter=4,
+    lower_sigma=3.0,
+    upper_sigma=5.0,
+) -> np.ndarray:
+    """Fit a polynomial continuum in log(lambda) with asymmetric clipping."""
+
+    waves = np.asarray(waves, dtype=np.float64)
+    spec = np.asarray(spec, dtype=np.float64)
+    good = np.asarray(good_mask, dtype=bool) & np.isfinite(waves) & np.isfinite(spec) & (waves > 0)
+    continuum = np.full(spec.shape, np.nan, dtype=np.float64)
+    if int(np.count_nonzero(good)) < 2:
+        return continuum
+    x_all = np.log(waves)
+    x0 = float(np.nanmedian(x_all[good]))
+    xscale = float(np.nanmax(np.abs(x_all[good] - x0)))
+    if not np.isfinite(xscale) or xscale <= 0:
+        xscale = 1.0
+    x = (x_all - x0) / xscale
+    fit_mask = good.copy()
+    coeff = None
+    for _ in range(max(1, int(max_iter))):
+        n_good = int(np.count_nonzero(fit_mask))
+        if n_good < 2:
+            break
+        deg = min(int(degree), n_good - 1)
+        coeff = np.polyfit(x[fit_mask], spec[fit_mask], deg)
+        model = np.polyval(coeff, x)
+        resid = spec - model
+        local = resid[fit_mask]
+        sigma = 1.4826 * np.nanmedian(np.abs(local - np.nanmedian(local)))
+        if not np.isfinite(sigma) or sigma <= 0:
+            sigma = np.nanstd(local)
+        if not np.isfinite(sigma) or sigma <= 0:
+            break
+        new_mask = good & (resid >= -float(lower_sigma) * sigma) & (resid <= float(upper_sigma) * sigma)
+        if np.array_equal(new_mask, fit_mask):
+            break
+        fit_mask = new_mask
+    if coeff is not None:
+        continuum = np.polyval(coeff, x).astype(np.float64)
     return continuum
 
 
@@ -94,9 +179,13 @@ def integrated_line_flux(spec_1d, line_idxs, dlam_A):
 
 __all__ = [
     "continuum_running_median",
+    "continuum_polyfit_loglambda",
     "integrated_line_flux",
     "make_wavelength_mask",
+    "median_filter_1d",
     "nearest_channel_index",
     "nearest_channel_indices",
+    "standard_line_free_mask",
+    "STANDARD_LINE_WINDOWS_A",
     "spectrum_to_snr",
 ]

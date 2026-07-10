@@ -1,0 +1,12 @@
+# Small default skyline list for A4 cube QC.
+# Values are vacuum/air laboratory wavelengths in Angstrom from common optical
+# sky lines used for MUSE sanity checks; projects may pass a richer catalog.
+name,wave_A
+OI_5577,5577.338
+OI_6300,6300.304
+OI_6363,6363.776
+OH_6863,6863.96
+OH_7246,7246.0
+OH_7913,7913.7
+OH_8344,8344.6
+OH_8827,8827.1
