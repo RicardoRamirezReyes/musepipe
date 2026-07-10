@@ -57,7 +57,7 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | G1 | Validación de extracción | `musepipe/covariance.py` | — | `stage_g1_qc.json` |
 | G2 | Medición de líneas | `musepipe/lines.py` + `stages/stage_g2_measure_lines.py` | — | `stage_g2_qc.json` |
 | G3 | Inferencia física | `musepipe/models/` + `stages/stage_g3_accretion.py` | — | `stage_g3_qc.json` |
-| G4 | Clasificación de fuente | `musepipe/classify.py` + `stages/stage_g4_classify.py` | — | `stage_g4_qc.json` |
+| G4 | Clasificación de fuente | `musepipe/classify.py` + `stages/stage_g4_classify.py` | — | `stage_g4_classification.json` |
 | G5 | Síntesis final | `musepipe/characterization.py` | `scripts/build_characterization.py` | `report/characterization/` |
 
 La cadena histórica de objetos lejanos (04b→06→07→07b→08→08c) y la cadena cercana/PCA
