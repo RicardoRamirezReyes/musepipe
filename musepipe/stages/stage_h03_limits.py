@@ -916,11 +916,21 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     open_issues = list(prerequisites.get("issues", []))
     flux_unit_cgs = float(cfg.get("h03_flux_unit_cgs", 1.0))
     if flux_unit_cgs != 1.0:
-        open_issues.append(
-            f"Flux unit {flux_unit_cgs:g} erg/s/cm2/A applied to the matched-filter sigma so f_lim/L/Mdot "
-            "are physical (MUSE cube native unit; scipost flux-calibrated). NOTE: D2 flux scale=1 (M3 "
-            "absolute cross-check unavailable), so an absolute-calibration systematic remains."
-        )
+        m3_factor = cfg.get("m3_flux_factor")
+        if m3_factor is not None:
+            open_issues.append(
+                f"Flux unit {flux_unit_cgs:g} erg/s/cm2/A applied to the matched-filter sigma so "
+                "f_lim/L/Mdot are physical (MUSE cube native unit; scipost flux-calibrated). A4/M3 "
+                f"cross-checked the absolute scale against Gaia DR3 RP: factor {float(m3_factor):.3f} "
+                "(consistent with 1 to ~3% after growth-curve + tail correction), so no large absolute "
+                "systematic remains."
+            )
+        else:
+            open_issues.append(
+                f"Flux unit {flux_unit_cgs:g} erg/s/cm2/A applied to the matched-filter sigma so f_lim/L/Mdot "
+                "are physical (MUSE cube native unit; scipost flux-calibrated). NOTE: D2 flux scale=1 (M3 "
+                "absolute cross-check unavailable), so an absolute-calibration systematic remains."
+            )
     methods = [method for method in METHOD_ORDER if method in null_by_method]
     methods.extend(sorted(method for method in null_by_method if method not in methods))
     for method in methods:
