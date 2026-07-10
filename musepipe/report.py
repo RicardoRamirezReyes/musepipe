@@ -739,17 +739,24 @@ def _markdown_table(rows, columns):
 def _executive_summary(summary):
     hstage = next((row for row in summary["stages"] if row["stage"] == "E1_halpha"), {})
     e3 = next((row for row in summary["stages"] if row["stage"] == "E3_limits"), {})
-    canonical = ""
     issues = summary.get("open_issues", [])
-    return "\n".join(
-        [
-            f"- Run: {summary['run_id']}",
-            f"- Global package status: {summary['overall_status']}",
-            f"- Halpha stage status: {hstage.get('status', 'unknown')}",
-            f"- Limit stage status: {e3.get('status', 'unknown')}",
-            f"- Open issues: {len(issues)}{canonical}",
-        ]
-    )
+    accepted = summary.get("accepted_limitations", []) or []
+    lines = [
+        f"- Run: {summary['run_id']}",
+        f"- Global package status: {summary['overall_status']}",
+        f"- Halpha stage status: {hstage.get('status', 'unknown')}",
+        f"- Limit stage status: {e3.get('status', 'unknown')}",
+        f"- Open issues: {len(issues)}",
+        f"- Accepted limitations (documented, non-blocking): {len(accepted)} "
+        "- see the Accepted Limitations section",
+    ]
+    if any(a.get("stage") == "D2_calibrate" for a in accepted):
+        lines.append(
+            "- Red-band continuum: diagnosed as real cool-dwarf signal + an inter-method halo "
+            "systematic (not a PSF defect; C1 is already Psfao). Full diagnosis: "
+            "docs/d2_red_continuum_diagnosis.md"
+        )
+    return "\n".join(lines)
 
 
 def render_report_markdown(summary):
