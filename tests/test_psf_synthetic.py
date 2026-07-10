@@ -73,6 +73,9 @@ class PSFSyntheticTests(unittest.TestCase):
                 "project_root": str(root),
                 "stage_e01_input_cube_fits": str(cube_path),
                 "stage_e01_positions_qc": str(qc_path),
+                # Moffat parameter-recovery test: force the Moffat form so the run
+                # stays fast/deterministic (auto would also run the Psfao fit).
+                "e01_psf_form": "moffat",
                 "psf_bin_A": 100.0,
                 "psf_fit_radius_px": 25.0,
                 "psf_norm_radius_px": 18.0,

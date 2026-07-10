@@ -109,16 +109,20 @@ def _box3_apcorr(system, lam_A, params, norm_radius):
         return np.nan
 
 
-def run_stage_e01_psfao(run_id=None, *, project_root=None):
-    rc = load_run_config(run_id, project_root=project_root)
-    cfg = dict(rc.config)
-    stage_dir = rc.paths.stage_dir
+def prepare_psfao_inputs(cfg, stage_dir):
+    """Load the cube/positions/system and derive the psfao binning + radii.
+
+    Split out of ``run_stage_e01_psfao`` so the canonical Moffat stage
+    (``stage_e01_psf``) can reuse the identical psfao setup when it runs the
+    dual-form comparison (spec C1 §3.4). Behaviour is unchanged."""
+
+    from maoppy.instrument import muse_nfm, muse_wfm
+
     cube_path = Path(cfg.get("stage_e01_input_cube_fits", stage_dir / "stage02_xcorr_cube_stack.fits"))
     pos_qc = json.load(open(cfg.get("stage_e01_positions_qc", stage_dir / "stage01c_qc.json")))
     primary = tuple(map(float, pos_qc["primary"]["pos_yx"]))
     companion = tuple(map(float, pos_qc["companion"]["pos_yx"]))
 
-    from maoppy.instrument import muse_nfm, muse_wfm
     system = muse_wfm if str(cfg.get("instrument_mode", "NFM")).upper().startswith("W") else muse_nfm
 
     with fits.open(cube_path) as h:
@@ -138,15 +142,43 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
     mask_radius = float(cfg.get("psf_companion_mask_radius_px", max(10.0, 3.0 * fwhm_prelim)))
     fit_radius = float(cfg.get("psf_fit_radius_px", 80.0))
     norm_radius = float(cfg.get("psf_norm_radius_px", 25.0))
+    return {
+        "cube_path": cube_path,
+        "cube": cube,
+        "stat": stat,
+        "wave": wave,
+        "primary": primary,
+        "companion": companion,
+        "system": system,
+        "bin_A": bin_A,
+        "bad": bad,
+        "bins": bins,
+        "mask_radius": mask_radius,
+        "fit_radius": fit_radius,
+        "norm_radius": norm_radius,
+    }
 
+
+def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *, x0=None):
+    """Fit the Psfao model per wavelength bin (companion masked).
+
+    Returns ``(rows, recons)`` where ``rows`` is the per-bin parameter table
+    (identical structure to the legacy loop) and ``recons`` maps each bin centre
+    wavelength to ``(bin_image, reconstructed_model)`` so a caller can score the
+    reconstruction with any ring metric it likes."""
+
+    from maoppy.instrument import muse_nfm
+
+    x0 = DEFAULT_X0 if x0 is None else x0
     rows = []
+    recons = {}
     for (a, b, mid, sel) in bins:
         img = np.nanmedian(cube[sel], axis=0)
         var = np.nanmedian(stat[sel], axis=0)
         samp = float(muse_nfm.samp(mid * 1e-10))
         try:
-            params, amp, bck, dxdy, ring, _ = fit_bin(
-                img, var, samp, system, companion, mask_radius, fit_radius, DEFAULT_X0
+            params, amp, bck, dxdy, ring, recon = fit_bin(
+                img, var, samp, system, companion, mask_radius, fit_radius, x0
             )
         except Exception as exc:  # pragma: no cover - defensive
             rows.append({"lambda_A": mid, "status": f"fit_failed:{exc}"})
@@ -155,6 +187,16 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
                "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring, "status": "ok"}
         row.update({name: params[i] for i, name in enumerate(PSFAO_PARAM_NAMES)})
         rows.append(row)
+        recons[float(mid)] = (img, recon)
+    return rows, recons
+
+
+def build_psfao_model_document(rows, system, norm_radius, fit_radius, *, system_name="muse_nfm"):
+    """Assemble the psfao ``psf_model.json`` document from per-bin fit rows.
+
+    Split out of ``run_stage_e01_psfao`` (behaviour unchanged) so the canonical
+    stage can build the winning-form document when Psfao is selected. Returns the
+    psf_model dict plus a small ``meta`` dict for QC assembly."""
 
     ok = [r for r in rows if r.get("status") == "ok" and np.isfinite(r.get("ring_residual_pct", np.nan))]
     lam = np.array([r["lambda_A"] for r in ok])
@@ -194,6 +236,40 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
     # normalization round-trip on a fine model at one lambda
     norm_err = _norm_roundtrip(system, float(np.median(lam)), poly, norm_radius)
 
+    psf_model = {"form": "psfao", "system": system_name, "smoothed_poly": poly,
+                 "param_table": param_table, "n_bins_rejected": n_rejected,
+                 "norm_radius_px": norm_radius, "fit_radius_px": fit_radius,
+                 "param_names": list(PSFAO_PARAM_NAMES), "hybrid": False}
+    meta = {"ok": ok, "lam": lam, "rings": rings, "n_ok": len(ok),
+            "n_rejected": n_rejected, "norm_err": norm_err, "poly": poly}
+    return psf_model, meta
+
+
+def run_stage_e01_psfao(run_id=None, *, project_root=None):
+    rc = load_run_config(run_id, project_root=project_root)
+    cfg = dict(rc.config)
+    stage_dir = rc.paths.stage_dir
+
+    inp = prepare_psfao_inputs(cfg, stage_dir)
+    cube_path = inp["cube_path"]
+    cube = inp["cube"]
+    companion = inp["companion"]
+    system = inp["system"]
+    bin_A = inp["bin_A"]
+    bad = inp["bad"]
+    bins = inp["bins"]
+    mask_radius = inp["mask_radius"]
+    fit_radius = inp["fit_radius"]
+    norm_radius = inp["norm_radius"]
+
+    rows, _ = fit_psfao_bins(cube, inp["stat"], inp["wave"], bins, system, companion, mask_radius, fit_radius)
+    psf_model, meta = build_psfao_model_document(rows, system, norm_radius, fit_radius)
+    ok = meta["ok"]
+    lam = meta["lam"]
+    rings = meta["rings"]
+    n_rejected = meta["n_rejected"]
+    norm_err = meta["norm_err"]
+
     # write products
     params_csv = stage_dir / "stage_e01_psfao_params.csv"
     with open(params_csv, "w") as f:
@@ -202,11 +278,8 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
         for r in rows:
             f.write(",".join(str(r.get(c, "")) for c in cols) + "\n")
 
-    psf_model = {"form": "psfao", "system": "muse_nfm", "smoothed_poly": poly,
-                 "param_table": param_table, "n_bins_rejected": n_rejected,
-                 "norm_radius_px": norm_radius, "fit_radius_px": fit_radius,
-                 "param_names": list(PSFAO_PARAM_NAMES), "hybrid": False}
     (stage_dir / "psf_model.json").write_text(json.dumps(psf_model, indent=2))
+    poly = meta["poly"]
 
     qc = {
         "stage": "e01_chromatic_psf", "run_id": rc.run_id, "provisional": True,
@@ -257,4 +330,12 @@ def _norm_roundtrip(system, lam_A, poly, norm_radius):
         return float("nan")
 
 
-__all__ = ["run_stage_e01_psfao", "fit_bin", "make_bins"]
+__all__ = [
+    "run_stage_e01_psfao",
+    "prepare_psfao_inputs",
+    "fit_psfao_bins",
+    "build_psfao_model_document",
+    "fit_bin",
+    "make_bins",
+    "PSFAO_PARAM_NAMES",
+]

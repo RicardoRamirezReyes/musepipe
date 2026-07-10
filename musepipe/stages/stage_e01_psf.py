@@ -34,6 +34,8 @@ class StageE01Product:
     qc: dict
     hybrid_profiles: np.ndarray | None
     hybrid_radii: np.ndarray | None
+    psf_form: str = "moffat"
+    psfao_rows: list[dict] | None = None
 
 
 def stage_e01_paths(run_id, project_root=None):
@@ -72,6 +74,7 @@ def stage_e01_config_from_run(
     cfg["project_root"] = str(run_config.paths.project_root)
     cfg.setdefault("stage_e01_input_cube_fits", str(run_config.paths.stage_dir / "stage02_xcorr_cube_stack.fits"))
     cfg.setdefault("stage_e01_positions_qc", str(run_config.paths.stage_dir / "stage01c_qc.json"))
+    cfg.setdefault("e01_psf_form", "auto")
     cfg.setdefault("psf_bin_A", 100.0)
     cfg.setdefault("psf_min_channels_per_bin", 3)
     cfg.setdefault("psf_fit_radius_px", 28.0)
@@ -268,21 +271,32 @@ def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
     }
 
 
-def _apply_hybrid_if_needed(rows, images, models, masks, positions_qc, cfg):
+def _apply_hybrid(ring_pcts, images, models, masks, primary_yx, companion_yx, fwhm_med, cfg):
+    """Add the azimuthal-median residual (AO ring) hybrid term to the chosen
+    form's per-bin models when the ring metric fails on >20% of bins (spec §3.5).
+
+    Form-agnostic: ``models`` are per-bin model images (Moffat evaluations or
+    Psfao reconstructions). The smoothing scale (>=2*FWHM) and the azimuthal
+    symmetry of ``radial_hybrid_profile`` guarantee it cannot absorb the
+    (masked) companion. Returns
+    ``(models_hybrid, profiles, radii_ref, applied, after_pcts)``."""
+
     threshold = float(cfg.get("psf_hybrid_threshold_pct", 5.0))
     frac_limit = float(cfg.get("psf_hybrid_bin_fraction", 0.2))
-    values = np.asarray([row["ring_residual_pct"] for row in rows], dtype=np.float64)
+    values = np.asarray(ring_pcts, dtype=np.float64)
     fail_frac = float(np.count_nonzero(values > threshold) / max(values.size, 1))
     if fail_frac <= frac_limit:
-        return rows, models, None, None, False
+        return list(models), None, None, False, list(map(float, ring_pcts))
 
-    primary_yx, companion_yx, _ = _positions_from_qc(positions_qc)
-    fwhm_med = float(np.nanmedian([row["fwhm_maj"] for row in rows]))
+    fwhm_med = float(fwhm_med)
     smooth = max(2.0 * fwhm_med, float(cfg.get("psf_hybrid_smoothing_scale_factor", 2.0)) * fwhm_med)
+    width = float(cfg.get("psf_companion_ring_width_px", 3.0))
+    excl = float(cfg.get("psf_companion_mask_radius_px", cfg.get("psf_mask_radius_factor", 3.0) * fwhm_med))
     profiles = []
     radii_ref = None
     models_hybrid = []
-    for row, image, model, mask in zip(rows, images, models, masks):
+    after_pcts = []
+    for image, model, mask in zip(images, models, masks):
         radii, profile = radial_hybrid_profile(
             image - model,
             primary_yx,
@@ -296,23 +310,77 @@ def _apply_hybrid_if_needed(rows, images, models, masks, positions_qc, cfg):
             model_h,
             primary_yx,
             companion_yx,
-            width_px=float(cfg.get("psf_companion_ring_width_px", 3.0)),
-            source_exclusion_radius_px=float(cfg.get("psf_companion_mask_radius_px", cfg.get("psf_mask_radius_factor", 3.0) * fwhm_med)),
+            width_px=width,
+            source_exclusion_radius_px=excl,
         )
-        row["ring_residual_pct_after_hybrid"] = float(metric_h["median_pct"])
-        row["ring_residual_p90_pct_after_hybrid"] = float(metric_h["p90_pct"])
+        after_pcts.append(float(metric_h["median_pct"]))
         if radii_ref is None:
             radii_ref = radii
         if radii.size != radii_ref.size:
             profile = np.interp(radii_ref, radii, profile)
         profiles.append(profile)
         models_hybrid.append(model_h)
-    return rows, models_hybrid, np.asarray(profiles, dtype=np.float32), radii_ref.astype(np.float32), True
+    # Safety guard: the hybrid term must reduce the ring residual. When the base
+    # form already models the AO halo (Psfao), the azimuthal-residual term is
+    # degenerate and — scaled by the inflated Moffat FWHM — can make the metric
+    # WORSE. In that case discard it rather than corrupt a good model.
+    before_med = float(np.nanmedian(values))
+    after_med = float(np.nanmedian(after_pcts))
+    if not (np.isfinite(after_med) and after_med < before_med):
+        return list(models), None, None, False, list(map(float, ring_pcts))
+    return models_hybrid, np.asarray(profiles, dtype=np.float32), radii_ref.astype(np.float32), True, after_pcts
+
+
+def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx):
+    """Fit the physical AO (Psfao) model per bin and score each reconstruction
+    with the SAME canonical companion-ring metric used for Moffat, so §3.4 is an
+    apples-to-apples comparison. Returns a dict with status and, on success, the
+    per-bin rows, reconstructions, per-bin ring pcts and the psfao inputs.
+    Never raises for a missing maoppy: returns ``status='unavailable:...'``."""
+
+    try:
+        import maoppy  # noqa: F401
+        from .stage_e01_psfao import (
+            build_psfao_model_document,
+            fit_psfao_bins,
+            prepare_psfao_inputs,
+        )
+    except Exception as exc:  # pragma: no cover - environment dependent
+        return {"status": f"unavailable:{exc.__class__.__name__}"}
+
+    inp = prepare_psfao_inputs(cfg, stage_dir)
+    rows, recons = fit_psfao_bins(
+        inp["cube"], inp["stat"], inp["wave"], inp["bins"],
+        inp["system"], inp["companion"], inp["mask_radius"], inp["fit_radius"],
+    )
+    width = float(cfg.get("psf_companion_ring_width_px", 3.0))
+    excl = float(inp["mask_radius"])
+    ring_rows = []
+    for mid in sorted(recons):
+        image, recon = recons[mid]
+        metric = companion_ring_metric(
+            image, recon, primary_yx, companion_yx,
+            width_px=width, source_exclusion_radius_px=excl,
+        )
+        ring_rows.append({
+            "wave_center_A": float(mid),
+            "ring_residual_pct": float(metric["median_pct"]),
+            "ring_residual_p90_pct": float(metric["p90_pct"]),
+        })
+    return {
+        "status": "ok",
+        "rows": rows,
+        "recons": recons,
+        "ring_rows": ring_rows,
+        "inp": inp,
+        "build_doc": build_psfao_model_document,
+    }
 
 
 def compute_stage_e01_products(config) -> StageE01Product:
     cfg = dict(config)
     paths = stage_e01_paths(cfg["run_id"], project_root=cfg.get("project_root"))
+    stage_dir = paths["paths"].stage_dir
     cube_path = Path(cfg.get("stage_e01_input_cube_fits", paths["stage02_cube_fits"]))
     positions_path = Path(cfg.get("stage_e01_positions_qc", paths["stage01c_qc_json"]))
     if not positions_path.exists():
@@ -325,94 +393,212 @@ def compute_stage_e01_products(config) -> StageE01Product:
         bad_windows_A=cfg.get("stage_e01_bad_windows_A", []),
         min_channels=int(cfg.get("psf_min_channels_per_bin", 3)),
     )
-    rows, images, models, masks, mask_meta = _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg)
-    rows, final_models, hybrid_profiles, hybrid_radii, hybrid_applied = _apply_hybrid_if_needed(
-        rows,
-        images,
-        models,
-        masks,
-        positions_qc,
-        cfg,
-    )
-    model_doc = build_psf_model_document(
-        [row["wave_center_A"] for row in rows],
-        rows,
-        form="moffat",
-        norm_radius_px=float(cfg.get("psf_norm_radius_px", 25.0)),
-        hybrid=hybrid_applied,
-    )
-    roundtrip = psf_roundtrip_error(
-        model_doc,
-        np.linspace(rows[0]["wave_center_A"], rows[-1]["wave_center_A"], min(10, len(rows))),
-    )
-    metric_key = "ring_residual_pct_after_hybrid" if hybrid_applied else "ring_residual_pct"
-    metric_values = np.asarray([row.get(metric_key, row["ring_residual_pct"]) for row in rows], dtype=np.float64)
-    p90_key = "ring_residual_p90_pct_after_hybrid" if hybrid_applied else "ring_residual_p90_pct"
-    p90_values = np.asarray([row.get(p90_key, row["ring_residual_p90_pct"]) for row in rows], dtype=np.float64)
     primary_yx, companion_yx, _ = _positions_from_qc(positions_qc)
     sep_px = float(np.hypot(companion_yx[0] - primary_yx[0], companion_yx[1] - primary_yx[1]))
-    centroid_diff = max(
-        float(abs(row["y0"] - primary_yx[0])) for row in rows
-    )
-    centroid_diff = max(centroid_diff, max(float(abs(row["x0"] - primary_yx[1])) for row in rows))
-    open_issues = []
     maoppy_status = _maoppy_status()
-    if maoppy_status.startswith("unavailable"):
-        open_issues.append("maoppy contrast fit not run because maoppy is unavailable in this environment.")
-    if np.nanpercentile(metric_values, 90) > float(cfg.get("psf_hybrid_threshold_pct", 5.0)):
-        open_issues.append("Companion-ring residual remains above 5 pct after the fixed C1 sequence.")
-    if centroid_diff > 0.3 and positions_qc.get("chromatic", {}).get("chromatic_centroid_needed"):
-        open_issues.append("PSF centroid differs from B3 chromatic centroid story by >0.3 px.")
-    bins_interpolated = []
-    for lo, hi in cfg.get("stage_e01_bad_windows_A", []):
-        if float(hi) >= rows[0]["wave_center_A"] and float(lo) <= rows[-1]["wave_center_A"]:
-            bins_interpolated.append([float(lo), float(hi)])
-    qc = {
-        "stage": "e01_chromatic_psf",
-        "run_id": cfg["run_id"],
-        "input": {"cube": str(cube_path), "sha256": _sha256(cube_path), "positions_from": str(positions_path)},
-        "binning": {
+
+    # --- Moffat fit (always run: it is the tie-break form and the FWHM source
+    # for the hybrid smoothing scale). -----------------------------------------
+    rows, images, models, masks, mask_meta = _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg)
+    fwhm_med = float(np.nanmedian([row["fwhm_maj"] for row in rows]))
+    moffat_ring = np.asarray([row["ring_residual_pct"] for row in rows], dtype=np.float64)
+    moffat_p90 = np.asarray([row["ring_residual_p90_pct"] for row in rows], dtype=np.float64)
+    moffat_median = float(np.nanmedian(moffat_ring)) if moffat_ring.size else float("nan")
+
+    # --- Psfao fit + selection (spec §3.4). ------------------------------------
+    form_cfg = str(cfg.get("e01_psf_form", "auto")).lower()
+    if form_cfg not in ("auto", "moffat", "psfao"):
+        raise ValueError(f"e01_psf_form must be auto|moffat|psfao, got {form_cfg!r}.")
+    psfao = {"status": "skipped"}
+    if form_cfg in ("auto", "psfao"):
+        psfao = _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx)
+    psfao_ok = psfao.get("status") == "ok"
+    psfao_ring = (
+        np.asarray([r["ring_residual_pct"] for r in psfao["ring_rows"]], dtype=np.float64)
+        if psfao_ok else np.asarray([], dtype=np.float64)
+    )
+    psfao_median = float(np.nanmedian(psfao_ring)) if psfao_ring.size else float("nan")
+
+    if form_cfg == "moffat":
+        chosen, reason = "moffat", "forced by config (e01_psf_form=moffat)"
+    elif form_cfg == "psfao":
+        if not psfao_ok:
+            raise RuntimeError(f"e01_psf_form=psfao but the Psfao fit is unavailable: {psfao.get('status')}")
+        chosen, reason = "psfao", "forced by config (e01_psf_form=psfao)"
+    else:  # auto: lower median ring residual wins; tie -> moffat
+        if psfao_ok and np.isfinite(psfao_median) and psfao_median < moffat_median:
+            chosen = "psfao"
+            reason = f"auto: psfao median ring residual {psfao_median:.2f}% < moffat {moffat_median:.2f}%"
+        else:
+            chosen = "moffat"
+            if psfao_ok:
+                reason = f"auto: moffat median ring residual {moffat_median:.2f}% <= psfao {psfao_median:.2f}% (tie->moffat)"
+            else:
+                reason = f"auto: psfao unavailable ({psfao.get('status')}); moffat by default"
+
+    open_issues = []
+    if not psfao_ok and form_cfg in ("auto", "psfao"):
+        open_issues.append(f"Psfao comparison fit not run ({psfao.get('status')}).")
+
+    norm_radius = float(cfg.get("psf_norm_radius_px", 25.0))
+    chromatic = bool(positions_qc.get("chromatic", {}).get("chromatic_centroid_needed", False))
+    excluded = cfg.get("stage_e01_bad_windows_A", [])
+
+    if chosen == "moffat":
+        chosen_models, hybrid_profiles, hybrid_radii, hybrid_applied, after_pcts = _apply_hybrid(
+            [row["ring_residual_pct"] for row in rows], images, models, masks,
+            primary_yx, companion_yx, fwhm_med, cfg,
+        )
+        if hybrid_applied:
+            for row, after in zip(rows, after_pcts):
+                row["ring_residual_pct_after_hybrid"] = float(after)
+        model_doc = build_psf_model_document(
+            [row["wave_center_A"] for row in rows], rows,
+            form="moffat", norm_radius_px=norm_radius, hybrid=hybrid_applied,
+        )
+        waves_rt = np.linspace(rows[0]["wave_center_A"], rows[-1]["wave_center_A"], min(10, len(rows)))
+        ring_after = np.asarray(after_pcts, dtype=np.float64) if hybrid_applied else moffat_ring
+        p90_values = moffat_p90
+        centroid_diff = max(float(abs(row["y0"] - primary_yx[0])) for row in rows)
+        centroid_diff = max(centroid_diff, max(float(abs(row["x0"] - primary_yx[1])) for row in rows))
+        bins_interpolated = []
+        for lo, hi in excluded:
+            if float(hi) >= rows[0]["wave_center_A"] and float(lo) <= rows[-1]["wave_center_A"]:
+                bins_interpolated.append([float(lo), float(hi)])
+        binning = {
             "bin_A": float(cfg.get("psf_bin_A", 100.0)),
             "n_bins": int(len(rows)),
-            "excluded_windows_A": cfg.get("stage_e01_bad_windows_A", []),
+            "excluded_windows_A": excluded,
             "bins_interpolated": bins_interpolated,
-        },
-        "masks": {
+        }
+        masks_qc = {
             "companion_radius_px": float(mask_meta["mask_radius_px"]),
-            "chromatic_tracking": bool(positions_qc.get("chromatic", {}).get("chromatic_centroid_needed", False)),
+            "chromatic_tracking": chromatic,
             "core_mask_px": float(mask_meta["core_mask_px_max"]),
             "saturation_detected": bool(mask_meta["saturation_detected"]),
-        },
-        "fit": {
+        }
+        fit_qc = {
             "form_chosen": "moffat",
             "maoppy_status": maoppy_status,
             "background_mode": "fixed_external",
             "clip_frac_max": float(np.nanmax([row["clip_frac"] for row in rows])),
             "chi2r_median": float(np.nanmedian([row["chi2r"] for row in rows])),
-        },
-        "smoothing": {
+        }
+        smoothing_qc = {
             "per_param_model": {key: model_doc["coefficients"][key]["model"] for key in model_doc["coefficients"]},
             "outlier_bins": [],
             "centroid_vs_b3_max_diff_px": float(centroid_diff),
+        }
+        psfao_rows = psfao["rows"] if psfao_ok else None
+    else:  # psfao
+        inp = psfao["inp"]
+        psfao_rows = psfao["rows"]
+        ring_rows = psfao["ring_rows"]
+        recons = psfao["recons"]
+        model_doc, meta = psfao["build_doc"](
+            psfao_rows, inp["system"], inp["norm_radius"], inp["fit_radius"],
+        )
+        mids = sorted(recons)
+        p_images = [recons[m][0] for m in mids]
+        p_models = [recons[m][1] for m in mids]
+        p_masks = [source_mask(p_images[0].shape, [companion_yx], inp["mask_radius"]) for _ in mids]
+        chosen_models, hybrid_profiles, hybrid_radii, hybrid_applied, after_pcts = _apply_hybrid(
+            [r["ring_residual_pct"] for r in ring_rows], p_images, p_models, p_masks,
+            primary_yx, companion_yx, fwhm_med, cfg,
+        )
+        if hybrid_applied:
+            for r, after in zip(ring_rows, after_pcts):
+                r["ring_residual_pct_after_hybrid"] = float(after)
+            model_doc["hybrid"] = True
+        waves = [r["wave_center_A"] for r in ring_rows]
+        waves_rt = np.linspace(min(waves), max(waves), min(10, len(waves)))
+        ring_after = np.asarray(after_pcts, dtype=np.float64) if hybrid_applied else psfao_ring
+        p90_values = np.asarray([r["ring_residual_p90_pct"] for r in ring_rows], dtype=np.float64)
+        ok_rows = [r for r in psfao_rows if r.get("status") == "ok"]
+        centroid_diff = max((float(np.hypot(r.get("dy", 0.0), r.get("dx", 0.0))) for r in ok_rows), default=0.0)
+        bins_interpolated = [[float(lo), float(hi)] for lo, hi in inp["bad"]]
+        binning = {
+            "bin_A": float(inp["bin_A"]),
+            "n_bins": int(len(inp["bins"])),
+            "excluded_windows_A": inp["bad"],
+            "bins_interpolated": bins_interpolated,
+        }
+        masks_qc = {
+            "companion_radius_px": float(inp["mask_radius"]),
+            "chromatic_tracking": chromatic,
+            "core_mask_px": 0.0,
+            "saturation_detected": False,
+        }
+        fit_qc = {
+            "form_chosen": "psfao",
+            "model": "maoppy.Psfao",
+            "maoppy_status": maoppy_status,
+            "background_mode": "psffit_flux_bck",
+            "fit_radius_px": float(inp["fit_radius"]),
+            "n_ok_bins": int(meta["n_ok"]),
+            "n_bins_rejected": int(meta["n_rejected"]),
+            "clip_frac_max": 0.0,
+            "chi2r_median": None,
+        }
+        smoothing_qc = {
+            "per_param_model": {name: f"polynomial_deg{max(len(v) - 1, 0)}" for name, v in model_doc["smoothed_poly"].items()},
+            "outlier_bins": [],
+            "centroid_vs_b3_max_diff_px": float(centroid_diff),
+        }
+
+    roundtrip = psf_roundtrip_error(model_doc, waves_rt)
+    ring_median = float(np.nanmedian(ring_after)) if ring_after.size else float("nan")
+    ring_p90 = float(np.nanpercentile(p90_values, 90)) if p90_values.size else float("nan")
+
+    if np.isfinite(ring_p90) and ring_p90 > float(cfg.get("psf_hybrid_threshold_pct", 5.0)):
+        open_issues.append("Companion-ring residual remains above 5 pct after the fixed C1 sequence.")
+    if centroid_diff > 0.3 and chromatic:
+        open_issues.append("PSF centroid differs from B3 chromatic centroid story by >0.3 px.")
+
+    model_comparison = {
+        "metric": "companion_ring_metric.median_pct (canonical, applied to both forms)",
+        "selection_mode": form_cfg,
+        "form_chosen": chosen,
+        "reason": reason,
+        "moffat": {
+            "ring_residual_pct_median": moffat_median,
+            "ring_residual_pct_p90": float(np.nanpercentile(moffat_p90, 90)) if moffat_p90.size else None,
+            "n_bins": int(len(rows)),
         },
+        "psfao": {
+            "status": psfao.get("status"),
+            "ring_residual_pct_median": psfao_median if psfao_ok else None,
+            "ring_residual_pct_p90": float(np.nanpercentile(
+                [r["ring_residual_p90_pct"] for r in psfao["ring_rows"]], 90)) if psfao_ok else None,
+            "n_bins": int(len(psfao["ring_rows"])) if psfao_ok else 0,
+        },
+    }
+
+    qc = {
+        "stage": "e01_chromatic_psf",
+        "run_id": cfg["run_id"],
+        "input": {"cube": str(cube_path), "sha256": _sha256(cube_path), "positions_from": str(positions_path)},
+        "binning": binning,
+        "masks": masks_qc,
+        "fit": fit_qc,
+        "smoothing": smoothing_qc,
         "companion_ring_metric": {
             "radius_px": sep_px,
             "width_px": float(cfg.get("psf_companion_ring_width_px", 3.0)),
-            "residual_pct_median": float(np.nanmedian(metric_values)),
-            "residual_pct_p90": float(np.nanpercentile(p90_values, 90)),
-            "bins_above_5pct": int(np.count_nonzero(metric_values > 5.0)),
+            "residual_pct_median": ring_median,
+            "residual_pct_p90": ring_p90,
+            "bins_above_5pct": int(np.count_nonzero(ring_after > 5.0)),
             "after_hybrid": bool(hybrid_applied),
         },
         "hybrid": {
             "applied": bool(hybrid_applied),
-            "smoothing_scale_px": None
-            if hybrid_profiles is None
-            else float(max(2.0 * np.nanmedian([row["fwhm_maj"] for row in rows]), 0.0)),
+            "smoothing_scale_px": None if not hybrid_applied else float(max(2.0 * fwhm_med, 0.0)),
         },
         "normalization": {
-            "norm_radius_px": float(cfg.get("psf_norm_radius_px", 25.0)),
+            "norm_radius_px": norm_radius,
             "roundtrip_error": float(roundtrip),
         },
+        "model_comparison": model_comparison,
         "open_issues": open_issues,
     }
     return StageE01Product(
@@ -421,6 +607,8 @@ def compute_stage_e01_products(config) -> StageE01Product:
         qc=qc,
         hybrid_profiles=hybrid_profiles,
         hybrid_radii=hybrid_radii,
+        psf_form=chosen,
+        psfao_rows=psfao_rows,
     )
 
 
@@ -428,6 +616,8 @@ def write_stage_e01_products(product: StageE01Product, config, paths):
     paths["paths"].ensure_base_dirs()
     paths["plot_dir"].mkdir(parents=True, exist_ok=True)
     _write_csv(paths["stage_e01_params_csv"], product.fit_rows)
+    if product.psf_form == "psfao" and product.psfao_rows:
+        _write_psfao_csv(paths["paths"].stage_dir / "stage_e01_psfao_params.csv", product.psfao_rows)
     write_json(paths["psf_model_json"], product.psf_model)
     if product.hybrid_profiles is not None:
         fits.HDUList(
@@ -448,10 +638,22 @@ def _write_csv(path, rows):
     if not rows:
         Path(path).write_text("", encoding="utf-8")
         return
+    fieldnames = list(dict.fromkeys(key for row in rows for key in row.keys()))
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_psfao_csv(path, rows):
+    from .stage_e01_psfao import PSFAO_PARAM_NAMES
+
+    cols = ["lambda_A", "samp", "amp", "bck", "dy", "dx", "ring_residual_pct",
+            *PSFAO_PARAM_NAMES, "ring_residual_pct_after_hybrid", "status"]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(",".join(cols) + "\n")
+        for r in rows:
+            f.write(",".join(str(r.get(c, "")) for c in cols) + "\n")
 
 
 def _write_summary_plot(product, paths):
@@ -470,7 +672,7 @@ def _write_summary_plot(product, paths):
     axes[0, 1].plot(wave, [row["beta"] for row in rows])
     axes[0, 1].set_ylabel("beta")
     axes[1, 0].plot(wave, [row["ring_residual_pct"] for row in rows], label="Moffat")
-    if product.qc["hybrid"]["applied"]:
+    if product.qc["hybrid"]["applied"] and all("ring_residual_pct_after_hybrid" in row for row in rows):
         axes[1, 0].plot(wave, [row["ring_residual_pct_after_hybrid"] for row in rows], label="hybrid")
     axes[1, 0].axhline(5.0, color="0.4", ls="--")
     axes[1, 0].set_ylabel("Ring residual [%]")

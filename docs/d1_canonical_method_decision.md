@@ -55,10 +55,40 @@ Ejecución sobre 33 controles (`stages/stage_x10_qc.json`,
   blockers). psffit se adopta como canónico de trabajo para que D2/E1–E3
   puedan seguir, con la reserva anterior explícita.
 
+## Actualización 2026-07-10 — C1 Psfao consolidado; B6 aceptado como sistemática presupuestada
+
+El blocker #8 (integrar Psfao en la ruta canónica de C1) se **cerró** en WP-5:
+`stage_e01_psf.py` ahora ajusta Moffat **y** Psfao por bin, aplica la métrica
+canónica del anillo del compañero a ambas formas, y selecciona por regla de la
+spec (menor residuo mediano; empate→Moffat). Bloque `model_comparison` en
+`stage_e01_qc.json`.
+
+- **Resultado en el cubo ADP (auto):** forma elegida = **psfao** (residuo
+  mediano del anillo 4.99 % vs 18.99 % de Moffat). El `psf_model.json`
+  consolidado es **byte-idéntico** al que producía la etapa lateral
+  `stage_e01_psfao` (param_table Δrel = 0.00e+00): la consolidación es **neutra**.
+- **D1 v2 re-ejecutado** (C1→C2→C3→C4→D1 completo, 2026-07-10): veredicto
+  **sigue `divergent_continuum`** (B6 rojo lejano), idéntico campo a campo al
+  previo. Es decir: **refinar la PSF con el modelo físico Psfao NO cierra la
+  divergencia B6**; el residuo de continuo del bin rojo lejano persiste con la
+  PSF física.
+
+**Decisión del usuario (2026-07-10):** dado que la ruta física ya está agotada
+en C1, la divergencia de continuo B6 se **acepta como error sistemático
+presupuestado** (no se itera C1 con híbrido más agresivo ni se salta a PCA por
+ahora). `psffit` permanece como canónico de trabajo, con la reserva explícita y
+provisional (nada es paper-válido hasta cerrar el A-block). Opciones abiertas si
+en el futuro se decide reducir esta sistemática: (a) híbrido azimutal más
+agresivo en C1, (b) sustracción de residuos por PCA. El
+`action=iterate_C1_refine_PSF_before_PCA` que emite el QC de D1 queda
+**reconocido pero no accionado** por esta decisión.
+
 ## Reproducción
 
 ```bash
 conda activate MUSE
+# C1 consolidado (Moffat vs Psfao + selección; escribe model_comparison en el QC):
+bash scripts/stage_e01_psf.sh --run-id ROXs12b_B_adp        # e01_psf_form=auto (default)
 # D1 v2 (produce el veredicto + recommended_method):
 python -m musepipe.stages.stage_x10_compare --run-id ROXs12b_B_adp
 # D2 consume el canónico fijado en config (x11_canonical_method=psffit):
