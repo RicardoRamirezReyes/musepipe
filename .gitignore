@@ -29,6 +29,13 @@ venv/
 env/
 node_modules/
 
+# Node tooling metadata (not part of the Python pipeline)
+package.json
+package-lock.json
+
+# esorex reduction run log (transient)
+esorex.log
+
 # LaTeX auxiliary outputs; keep source/PDF decisions explicit
 reports/*.aux
 reports/*.log
