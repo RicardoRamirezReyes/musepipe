@@ -241,6 +241,89 @@ def status_wavelength(abs_offset_A: float, residual_scatter_A: float) -> str:
     return "red"
 
 
+# Clean, isolated atomic airglow lines with precise single-component laboratory
+# wavelengths — the reliable set for the M1 wavelength-offset fit (OH bands are
+# unresolved blends, good for the LSF width but not for absolute wavelength).
+M1_CLEAN_AIRGLOW = (
+    Skyline("OI_5577", 5577.338),
+    Skyline("OI_6300", 6300.304),
+    Skyline("OI_6363", 6363.776),
+)
+
+
+def read_sky_spectrum_fits(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read a MUSE SKY_SPECTRUM product (BinTable lambda/data) as (wave, flux)."""
+
+    with fits.open(path) as hdul:
+        table = None
+        for hdu in hdul:
+            cols = getattr(getattr(hdu, "columns", None), "names", None)
+            if cols and "lambda" in cols and "data" in cols:
+                table = hdu.data
+                break
+        if table is None:
+            raise ValueError(f"{path} has no BinTable with 'lambda'/'data' columns.")
+        wave = np.asarray(table["lambda"], dtype=np.float64)
+        flux = np.asarray(table["data"], dtype=np.float64)
+    return wave, flux
+
+
+def measure_m1_m2_from_sky_spectrum(
+    sky_wave,
+    sky_flux,
+    *,
+    lsf_skylines: Sequence[Skyline] | None = None,
+    m1_skylines: Sequence[Skyline] = M1_CLEAN_AIRGLOW,
+    frame: str = "topocentric",
+    vbary_kms: float = 0.0,
+    min_snr_m1: float = 10.0,
+    min_snr_lsf: float = 15.0,
+    half_width_A: float = 4.0,
+    halpha_A: float = 6562.8,
+) -> dict[str, object]:
+    """A4 M1 (wavelength) + M2 (LSF) from an airglow sky spectrum.
+
+    Airglow lines are at rest in the TOPOCENTRIC frame, so the offsets measured
+    here are the cube's wavelength-solution residual. M1 uses clean isolated
+    atomic lines; M2 (LSF) uses all lines above ``min_snr_lsf`` and reports the
+    FWHM interpolated to Halpha.
+    """
+
+    sky_wave = np.asarray(sky_wave, dtype=np.float64)
+    sky_flux = np.asarray(sky_flux, dtype=np.float64)
+    if lsf_skylines is None:
+        lsf_skylines = list(m1_skylines)
+
+    m1_meas = measure_skylines(
+        sky_wave, sky_flux, m1_skylines, frame=frame, vbary_kms=vbary_kms,
+        min_snr=min_snr_m1, half_width_A=half_width_A,
+    )
+    m1 = fit_wavelength_offsets(m1_meas)
+    m1["lines"] = [
+        {"name": m.name, "expected_A": m.expected_wave_A, "centroid_A": m.centroid_A,
+         "offset_A": m.offset_A, "snr": m.snr}
+        for m in m1_meas
+    ]
+    m1["frame"] = frame
+    m1["note"] = "airglow rest = topocentric; offset is the cube wavelength-solution residual"
+
+    lsf_meas = measure_skylines(
+        sky_wave, sky_flux, lsf_skylines, frame=frame, vbary_kms=vbary_kms,
+        min_snr=min_snr_lsf, half_width_A=half_width_A,
+    )
+    m2 = measure_lsf(lsf_meas)
+    lsf_at_halpha = None
+    coeffs = m2.get("poly2_coeffs") or []
+    if coeffs:
+        lsf_at_halpha = float(np.polyval(coeffs, float(halpha_A)))
+    elif m2.get("table_A_fwhm"):
+        lsf_at_halpha = float(np.nanmedian([r["fwhm_A"] for r in m2["table_A_fwhm"]]))
+    m2["lsf_fwhm_at_halpha_A"] = lsf_at_halpha
+    m2["n_lines"] = len(lsf_meas)
+
+    return {"m1_wavelength": m1, "m2_lsf": m2, "lsf_fwhm_at_halpha_A": lsf_at_halpha}
+
+
 def nominal_muse_fwhm_A(wave_A: Sequence[float]) -> np.ndarray:
     """Approximate nominal MUSE FWHM from R~1770 at 4800A to R~3590 at 9300A."""
 
@@ -794,6 +877,59 @@ def m3_flux_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+def m1m2_sky_phase(args: argparse.Namespace) -> int:
+    lsf_lines = read_skylines_csv(args.skylines) if args.skylines else list(M1_CLEAN_AIRGLOW)
+    # Pool the airglow line measurements over all exposures, then fit once — a
+    # single robust offset/scatter (M1) and LSF(lambda) poly (M2) from many points.
+    m1_meas: list[LineMeasurement] = []
+    lsf_meas: list[LineMeasurement] = []
+    n_files = 0
+    for sky_path in args.sky_spectrum:
+        p = Path(sky_path).expanduser()
+        if not p.exists():
+            print(f"ERROR: sky spectrum does not exist: {p}", file=sys.stderr)
+            return 2
+        wave, flux = read_sky_spectrum_fits(p)
+        m1_meas.extend(measure_skylines(wave, flux, M1_CLEAN_AIRGLOW, frame=args.frame,
+                                        vbary_kms=args.vbary_kms, min_snr=10.0, half_width_A=4.0))
+        lsf_meas.extend(measure_skylines(wave, flux, lsf_lines, frame=args.frame,
+                                         vbary_kms=args.vbary_kms, min_snr=15.0, half_width_A=4.0))
+        n_files += 1
+
+    m1 = fit_wavelength_offsets(m1_meas)
+    by_line: dict[str, list[float]] = {}
+    for m in m1_meas:
+        by_line.setdefault(m.name, []).append(m.offset_A)
+    m1["offset_by_line_A"] = {k: float(np.median(v)) for k, v in by_line.items()}
+    m1["n_measurements"] = len(m1_meas)
+    m1["n_exposures"] = n_files
+    m1["frame"] = args.frame
+    m1["note"] = "airglow rest = topocentric; offset = cube wavelength-solution residual"
+    m1["source"] = "MUSE SKY_SPECTRUM (esoreflex scipost cache), pooled over exposures"
+
+    m2 = measure_lsf(lsf_meas)
+    coeffs = m2.get("poly2_coeffs") or []
+    lsf_at_halpha = float(np.polyval(coeffs, float(args.halpha_A))) if coeffs else None
+    m2["lsf_fwhm_at_halpha_A"] = lsf_at_halpha
+    m2["n_measurements"] = len(lsf_meas)
+    m2["n_exposures"] = n_files
+    m2["source"] = "MUSE SKY_SPECTRUM (esoreflex scipost cache) airglow LSF, pooled over exposures"
+
+    qc_path = Path(args.qc_output)
+    payload = {"m1_wavelength": m1, "m2_lsf": m2}
+    if qc_path.exists():
+        qc = json.loads(qc_path.read_text(encoding="utf-8"))
+        qc.update(payload)
+        qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
+    else:
+        qc_path.parent.mkdir(parents=True, exist_ok=True)
+        qc_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"m1 offset={m1.get('offset_median_A'):+.4f} A scatter={m1.get('residual_scatter_A'):.4f} ({m1.get('status')}) | "
+          f"m2 LSF@Halpha={m2.get('lsf_fwhm_at_halpha_A'):.3f} A ({m2.get('status')}) | "
+          f"exposures={n_files}, m1_meas={m1.get('n_measurements')} -> {qc_path}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="A4 cube QC helpers.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -819,6 +955,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     m3_parser.add_argument("--truncation-correction", action="store_true")
     m3_parser.set_defaults(func=m3_flux_phase)
 
+    sky_parser = subparsers.add_parser("m1m2-sky", help="Measure A4/M1 (wavelength) + M2 (LSF) from MUSE SKY_SPECTRUM airglow lines and patch the QC.")
+    sky_parser.add_argument("--sky-spectrum", nargs="+", required=True, help="One or more SKY_SPECTRUM_*.fits (per exposure).")
+    sky_parser.add_argument("--qc-output", required=True)
+    sky_parser.add_argument("--skylines", default="musepipe/qc/data/skylines.csv")
+    sky_parser.add_argument("--frame", default="topocentric", choices=["topocentric", "barycentric"])
+    sky_parser.add_argument("--vbary-kms", type=float, default=0.0)
+    sky_parser.add_argument("--halpha-A", type=float, default=6562.8)
+    sky_parser.set_defaults(func=m1m2_sky_phase)
+
     args = parser.parse_args(argv)
     return int(args.func(args))
 
@@ -833,10 +978,13 @@ __all__ = [
     "detect_wavelength_frame",
     "expected_skyline_wave",
     "fit_wavelength_offsets",
+    "M1_CLEAN_AIRGLOW",
     "compute_m3_flux",
     "detect_primary_yx",
     "flux_factor_from_reference",
     "load_passband_csv",
+    "measure_m1_m2_from_sky_spectrum",
+    "read_sky_spectrum_fits",
     "measure_line_moments",
     "measure_lsf",
     "measure_sky_statistics",
