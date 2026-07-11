@@ -183,6 +183,12 @@ def build_cells(s: dict) -> list[dict]:
     if s.get("evidence_code"):
         cells.append(code(s["evidence_code"]))
 
+    # 5c. Plot opcional (carga datos pesados; requiere kernel MUSE)
+    if s.get("plot_md"):
+        cells.append(md(s["plot_md"]))
+    if s.get("plot_code"):
+        cells.append(code(s["plot_code"]))
+
     # 6. Decisiones
     dec_lines = ["## Decisiones y notas"]
     for text, doc in s["decisions"]:
@@ -385,6 +391,77 @@ STAGES: list[dict] = [
             "print('M1/M2 se midieron del SKY_SPECTRUM cacheado (airglow, 32 exp,',\n"
             "      qc.get('m1_wavelength', {}).get('n_measurements'), 'medidas) porque el')\n"
             "print('cubo restado de cielo tiene <8 skylines usables.')"
+        ),
+        plot_md=(
+            "## De dónde sale R: los datos y la zona\n\n"
+            "**Un solo FITS:** `cube_telcorr.fits` (el producto de A1), extensión **DATA** "
+            "(la STAT no interviene en R). R se mide sobre los **spaxels de cielo vacíos** de ese "
+            "cubo — no hay varios archivos. *(Los 32 `SKY_SPECTRUM` cacheados son de M1/M2, no de R.)*\n\n"
+            "El gráfico reproduce M4 con las funciones canónicas (`compute_sky_residual_metrics`, "
+            "`SKYLINE_WINDOWS`, `CONTINUUM_WINDOWS`):\n\n"
+            "- **Izquierda:** RMS por canal en las aperturas de cielo vs λ. En rojo las ventanas de "
+            "skyline, en verde las de continuo; las punteadas son las medianas cuyo cociente es `R`. "
+            "Se ven los residuos de OH en el rojo (>7200 Å), pero su mediana queda **por debajo** del "
+            "continuo → R < 1.\n"
+            "- **Derecha:** la zona de cielo usada (azul) sobre la luz-blanca; el halo AO de la "
+            "primaria queda excluido.\n\n"
+            "> Necesita el kernel **MUSE** (astropy) y el cubo en disco. Usa una máscara de cielo "
+            "aproximada (percentil 30 de flujo), así que el R reproducido (~0.49) difiere levemente "
+            "del oficial 0.547 (máscara de A4); la conclusión `R ≤ 1.5` es idéntica."
+        ),
+        plot_code=(
+            "MAKE_PLOT = True   # carga el cubo (~3.3 GB) vía astropy; requiere kernel MUSE\n"
+            "if MAKE_PLOT:\n"
+            "    try:\n"
+            "        import numpy as np\n"
+            "        import matplotlib.pyplot as plt\n"
+            "        from astropy.io import fits\n"
+            "        from musepipe.reduction.sky_zap import (\n"
+            "            compute_sky_residual_metrics, SKYLINE_WINDOWS, CONTINUUM_WINDOWS)\n\n"
+            "        qc = nb.load_qc('stages/stage00q_qc.json', RUN_ID)\n"
+            "        cube_path = qc.get('input_cube') or qc.get('cube', {}).get('file')\n"
+            "        print('FITS usado:', cube_path)\n\n"
+            "        h = fits.open(cube_path, memmap=True)\n"
+            "        data = np.asarray(h[1].data, dtype=np.float32)\n"
+            "        hd = h[1].header\n"
+            "        n3 = hd['NAXIS3']\n"
+            "        wave = hd['CRVAL3'] + (np.arange(n3) - (hd['CRPIX3'] - 1)) * hd['CD3_3']\n\n"
+            "        wl = np.nanmedian(data, axis=0)\n"
+            "        finite = np.isfinite(wl)\n"
+            "        thr = np.nanpercentile(wl[finite], 30)\n"
+            "        sky_mask = finite & (wl < thr)   # cielo vacio ~ spaxels mas debiles\n\n"
+            "        m = compute_sky_residual_metrics(data.astype(np.float64), wave, sky_mask)\n"
+            "        R = m['R_skyline_over_continuum']\n"
+            "        rms = m['channel_rms']\n"
+            "        print(f'R reproducido = {R:.3f}   (oficial m4_sky.R = {qc.get(\"m4_sky\", {}).get(\"R\")})')\n\n"
+            "        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4.2),\n"
+            "                                       gridspec_kw={'width_ratios': [2, 1]})\n"
+            "        ax1.plot(wave, rms, lw=0.5, color='0.35')\n"
+            "        for i, (a, b) in enumerate(SKYLINE_WINDOWS):\n"
+            "            ax1.axvspan(a, b, color='tab:red', alpha=0.18,\n"
+            "                        label='ventana skyline' if i == 0 else None)\n"
+            "        for i, (a, b) in enumerate(CONTINUUM_WINDOWS):\n"
+            "            ax1.axvspan(a, b, color='tab:green', alpha=0.25,\n"
+            "                        label='ventana continuo' if i == 0 else None)\n"
+            "        ax1.axhline(m['skyline_rms_median'], color='tab:red', ls='--', lw=1)\n"
+            "        ax1.axhline(m['continuum_rms_median'], color='tab:green', ls='--', lw=1)\n"
+            "        ax1.set_xlabel('λ [Å]'); ax1.set_ylabel('RMS por canal (aperturas de cielo)')\n"
+            "        ax1.set_title(f'M4: RMS vs λ  →  R = med(skyline)/med(continuo) = {R:.3f}')\n"
+            "        ax1.set_ylim(0, np.nanpercentile(rms, 99)); ax1.legend(fontsize=8)\n\n"
+            "        ax2.imshow(np.log10(np.clip(wl, 1, None)), origin='lower', cmap='gray')\n"
+            "        ov = np.zeros((*wl.shape, 4)); ov[sky_mask] = [0.1, 0.5, 1.0, 0.5]\n"
+            "        ax2.imshow(ov, origin='lower')\n"
+            "        ax2.set_title('Zona de cielo (azul) sobre luz-blanca'); ax2.axis('off')\n"
+            "        fig.tight_layout()\n\n"
+            "        outdir = nb.run_dir(RUN_ID) / 'plots' / 'a2_m4'\n"
+            "        outdir.mkdir(parents=True, exist_ok=True)\n"
+            "        fig.savefig(outdir / 'm4_R.png', dpi=110)\n"
+            "        print('figura ->', outdir / 'm4_R.png')\n"
+            "        plt.show()\n"
+            "        h.close()\n"
+            "    except Exception as e:\n"
+            "        print('No se pudo generar el plot:', type(e).__name__, e)\n"
+            "        print('Necesita el kernel MUSE (astropy) y el cubo en disco (campo input_cube del QC).')"
         ),
         decisions=[
             ("La métrica M4 (`R`) y la caracterización del airglow viven en A4/`stage00q_qc.json`; la regla de decisión, en `musepipe/reduction/sky_zap.py`.", None),
