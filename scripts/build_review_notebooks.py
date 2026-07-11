@@ -125,6 +125,12 @@ def build_cells(s: dict) -> list[dict]:
         )
     cells.append(md(howto))
 
+    # 2b. Coste de ejecución (opcional, p.ej. esorex en A1)
+    if s.get("runtime_md"):
+        cells.append(md(s["runtime_md"]))
+        if s.get("runtime_code"):
+            cells.append(code(s["runtime_code"]))
+
     # 3. Setup común
     cells.append(code(
         "import os, sys\n"
@@ -194,6 +200,50 @@ STAGES: list[dict] = [
         inputs="Raw MUSE + calibraciones", outputs="`cube_telcorr.fits`, `stages/stage00r_qc.json`",
         downstream="Todo el bloque B",
         exec=dict(kind="audit", hist_cmd="bash scripts/reduce_raw.sh"),
+        runtime_md=(
+            "## Coste de ejecución (esorex)\n\n"
+            "> ⏱️ **Referencia real** medida en esta máquina (esorex 3.13.10 / MUSE 2.10.16, "
+            "dataset NFM-AO de ROXs 12: **7 exposiciones × 24 IFUs = 168 pixtables**).\n\n"
+            "| Receta | Tiempo | Escala con |\n|---|---:|---|\n"
+            "| bias | 33 min | calibración (~fijo) |\n"
+            "| flat | 52 min | calibración |\n"
+            "| wavecal | 51 min | calibración |\n"
+            "| lsf | 50 min | calibración |\n"
+            "| scibasic (std) | 4.5 min | 1× |\n"
+            "| standard | 1.6 min | 1× |\n"
+            "| scibasic (object) | 24 min | **N_exp** |\n"
+            "| scipost | 73 min | **N_exp** |\n"
+            "| **Total (7 exp)** | **≈ 289 min (~4.8 h)** | |\n\n"
+            "**Fórmula para datos nuevos** (mismo instrumento/máquina):\n\n"
+            "```\n"
+            "T(min) ≈ T_cal + T_std + N_exp·(t_scibasic + t_scipost) + T_combine\n"
+            "```\n\n"
+            "con constantes medidas aquí:\n\n"
+            "- `T_cal ≈ 186 min` = bias+flat+wavecal+lsf. **Una vez por noche/modo**; "
+            "`0` si reutilizas los master calibrations.\n"
+            "- `T_std ≈ 6 min` = scibasic_std + standard (una vez).\n"
+            "- `t_scibasic ≈ 3.4 min/exp`, `t_scipost ≈ 10.5 min/exp` (24 IFUs c/u; plan B = "
+            "scipost por exposición).\n"
+            "- `T_combine ≈ 5 min` = muse_exp_align + muse_exp_combine (plan B, offsets manuales).\n\n"
+            "**Nota:** scibasic/scipost paralelizan sobre los 24 IFUs (OpenMP) → el tiempo escala "
+            "aprox. inverso al nº de núcleos; `cores_factor` ajusta ese factor respecto a esta máquina "
+            "base (=1.0). La calibración domina: reutilizar masters recorta ~3 h."
+        ),
+        runtime_code=(
+            "def estimate_esorex_runtime(n_exp, reuse_calibrations=False, cores_factor=1.0):\n"
+            "    \"\"\"Estima el wall-time de la reducción esorex (min), calibrada en la\n"
+            "    máquina de referencia (7 exp NFM-AO ~= 289 min). Ver tabla de arriba.\"\"\"\n"
+            "    T_cal = 0.0 if reuse_calibrations else 186.0  # bias+flat+wavecal+lsf\n"
+            "    T_std = 6.0                                    # scibasic_std + standard\n"
+            "    t_scibasic, t_scipost = 3.4, 10.5             # min por exposición (24 IFU)\n"
+            "    T_combine = 5.0                                # exp_align + exp_combine\n"
+            "    return (T_cal + T_std + n_exp * (t_scibasic + t_scipost) + T_combine) / cores_factor\n\n"
+            "for n in (1, 3, 7, 10):\n"
+            "    m = estimate_esorex_runtime(n)\n"
+            "    print(f'{n:2d} exp  ->  {m:5.0f} min  (~{m/60:.1f} h)')\n"
+            "print('7 exp reutilizando masters ->',\n"
+            "      f'{estimate_esorex_runtime(7, reuse_calibrations=True):.0f} min')"
+        ),
         qc="stages/stage00r_qc.json",
         salient=["shape", "sha", "offset", "esorex", "muse", "V1", "V3", "V4"],
         decisions=[
