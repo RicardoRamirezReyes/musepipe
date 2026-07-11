@@ -787,11 +787,103 @@ STAGES: list[dict] = [
         exec=dict(kind="module_run", target="musepipe.stages.stage01_align", fn="run_stage01",
                   cost="Ligero (segundos)."),
         qc="stages/stage01_qc.json",
-        salient=["star", "center", "crop", "profile", "fwhm"],
+        salient=["centering_method", "spatial_shift_mode", "crop", "n_cubes", "covariance_factor_box3", "finite_fraction"],
+        narrative_md=(
+            "## Qué hace B1 y por qué importa\n\n"
+            "B1 **carga** el cubo reducido, lo **centra** en la estrella primaria y lo **recorta** a "
+            "una ventana de 170 px → el cubo de trabajo para toda la extracción aguas abajo.\n\n"
+            "Es una **migración por equivalencia**: la lógica venía del notebook histórico "
+            "`01_load_align_crop.ipynb` y se movió a `musepipe/stages/stage01_align.py` reproduciendo "
+            "los productos numéricamente, y solo después se extendió (propagar STAT, registrar "
+            "shifts, `entry_point`).\n\n"
+            "**En este run:** `n_cubes = 1` — la alineación entre exposiciones ya se hizo en A1 "
+            "(plan B, OFFSET_LIST manual), así que el **shift de B1 es 0**; B1 solo centra y recorta "
+            "el cubo combinado.\n\n"
+            "**El nexo con M5 (ruido):** B1 propaga la extensión STAT por las mismas "
+            "transformaciones (kernel `bilinear_kernel_squared`) y registra el **factor de "
+            "covarianza espacial box3 ≈ 6.4×**. Ese es el remuestreo del cubo que correlaciona el "
+            "ruido — la raíz física de que el STAT subestime (M5) y de la inflación de apertura (G1). "
+            "El shift subpixel (spline orden 3) de la alineación es el origen cuantificado en "
+            "[`docs/noise_model.md`](../docs/noise_model.md) §4."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Campos clave del `stage01_qc.json`: centrado, shift, crop, STAT propagado y covarianza."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage01_qc.json', RUN_ID)\n"
+            "c = q['crop']\n"
+            "print('entrada:', q['inputs'][0]['file'])\n"
+            "print(f\"n_cubes = {q['n_cubes']}  (1 = cubo ya combinado en A1; alineación inter-exp = plan B)\")\n"
+            "print(f\"centrado: {q['centering_method']} (perfil {q['profile']}, fallback={q['shifts'][0].get('fallback_used')})\")\n"
+            "print(f\"centro (y,x) = ({c['center_yx'][0]:.2f}, {c['center_yx'][1]:.2f})  [{c['center_source']}]\")\n"
+            "sh = q['spatial_shifts'][0]\n"
+            "print(f\"shift subpixel (y,x) = ({sh['shift_y']}, {sh['shift_x']})  modo={q['spatial_shift_mode']}\")\n"
+            "print(f\"crop = {c['npix']}px  ->  cube_shape {q['cube_shape']}\")\n"
+            "print(f\"fracción finita = {q['finite_fraction_per_cube'][0]:.3f}\")\n"
+            "st = q['stat']\n"
+            "print(f\"STAT propagado: {st['propagated']} (kernel {st['interp_kernel']}); \"\n"
+            "      f\"covarianza box3 = {st['covariance_factor_box3']:.2f}×  <-- nexo con M5/G1\")"
+        ),
+        plot_md=(
+            "## Plot — centrado + crop sobre el campo completo\n\n"
+            "**FITS usado:** `cube_telcorr.fits` (entrada de B1), luz-blanca. Marca el **centro de la "
+            "estrella** (rojo) y las dos cajas: el **crop final de 170 px** (cyan) y el crop inicial "
+            "de 80 px (naranja). El halo AO de la primaria domina el campo — por eso el crop de 170 "
+            "px conserva el halo hasta la posición del compañero."
+        ),
+        plot_code=(
+            "MAKE_PLOT = True   # carga el cubo (~3.3 GB) vía astropy; requiere kernel MUSE\n"
+            "if MAKE_PLOT:\n"
+            "    try:\n"
+            "        import numpy as np\n"
+            "        import matplotlib.pyplot as plt\n"
+            "        from matplotlib.patches import Rectangle\n"
+            "        from astropy.io import fits\n\n"
+            "        q = nb.load_qc('stages/stage01_qc.json', RUN_ID)\n"
+            "        cy, cx = q['crop']['center_yx']\n"
+            "        cb = q['crop_bounds_per_cube'][0]; ib = q['initial_crop_bounds_per_cube'][0]\n"
+            "        cube_path = q['inputs'][0]['file']\n"
+            "        print('FITS usado:', cube_path)\n\n"
+            "        h = fits.open(cube_path, memmap=True)\n"
+            "        wl = np.nanmedian(np.asarray(h[1].data, dtype=np.float32), axis=0); h.close()\n\n"
+            "        fig, ax = plt.subplots(figsize=(6.2, 6))\n"
+            "        ax.imshow(np.log10(np.clip(wl, 1, None)), origin='lower', cmap='gray')\n"
+            "        ax.plot(cx, cy, '+', color='tab:red', ms=14, mew=2,\n"
+            "                label=f'centro estrella ({cx:.1f},{cy:.1f})')\n"
+            "        ax.add_patch(Rectangle((cb['x1'], cb['y1']), cb['x2'] - cb['x1'], cb['y2'] - cb['y1'],\n"
+            "                     fill=False, ec='tab:cyan', lw=2, label=f\"crop {q['crop_npix']}px\"))\n"
+            "        ax.add_patch(Rectangle((ib['x1'], ib['y1']), ib['x2'] - ib['x1'], ib['y2'] - ib['y1'],\n"
+            "                     fill=False, ec='tab:orange', lw=1.2, ls='--', label='crop inicial 80px'))\n"
+            "        ax.set_title('B1 · centrado + crop sobre luz-blanca (log)')\n"
+            "        ax.legend(fontsize=8, loc='upper right'); ax.axis('off'); fig.tight_layout()\n"
+            "        outdir = nb.run_dir(RUN_ID) / 'plots' / 'b1_align'; outdir.mkdir(parents=True, exist_ok=True)\n"
+            "        fig.savefig(outdir / 'crop.png', dpi=110); print('figura ->', outdir / 'crop.png'); plt.show()\n"
+            "    except Exception as e:\n"
+            "        print('No se pudo generar el plot:', type(e).__name__, e)\n"
+            "        print('Necesita el kernel MUSE (astropy) y el cubo en disco.')"
+        ),
         decisions=[
-            ("El shift subpixel (spline orden 3) de la alineación es el ORIGEN físico de la correlación del ruido (§4 del modelo de ruido).", "noise_model.md"),
+            ("**Migración por equivalencia (B1a):** `run_stage01()` reproduce numéricamente el baseline del notebook histórico; STAT propagado y shifts registrados en QC (B1b).", None),
+            ("**Centrado `maoppy_refined`** (centroide de la PSF física AO, fallback usado); crop de 170 px alrededor del centro medido para conservar el halo hasta el compañero.", None),
+            ("**Covarianza box3 ≈ 6.4×** registrada al propagar STAT: es el remuestreo que correlaciona el ruido → raíz física de M5 (STAT subestima) y de la inflación de apertura (G1).", "noise_model.md"),
+            ("**`n_cubes = 1`:** la alineación entre exposiciones ya se hizo en A1 (plan B); el shift de B1 es 0 → B1 no añade remuestreo nuevo, solo centra/recorta.", None),
         ],
-        checks="nb.show(qc, keys=['center','crop'])",
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**B1: cubo centrado en (166.0, 167.8) y recortado a 170 px; STAT propagado; sin "
+            "open_issues.**\n\n"
+            "- **Fecha:** run realineado (cubo `cube_telcorr.fits`, 2026-07-08).\n"
+            "- **Entrada:** `cube_telcorr.fits` (realineado); **salida:** `stage01` stack 170×170 + "
+            "`stage01_qc.json`.\n"
+            "- **Centrado:** `maoppy_refined`, centro medido (166.0, 167.8); **shift = 0** "
+            "(`n_cubes = 1`, alineación ya en A1).\n"
+            "- **Fracción finita:** 0.94; **crop:** 170 px (crop inicial 80 px con guarda de 12 px).\n"
+            "- **STAT:** propagado con kernel `bilinear_kernel_squared`; **covarianza box3 = 6.38×** "
+            "→ el nexo cuantificado con M5/G1 y la regla de σ empírico.\n"
+            "- **Downstream:** el cubo de B1 alimenta B2, B3 y C1."
+        ),
     ),
     dict(
         id="B2", slug="B2_xcorr_stripes", title="Xcorr / franjas", block="B · Preparación",
