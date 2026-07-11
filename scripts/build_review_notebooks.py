@@ -991,11 +991,103 @@ STAGES: list[dict] = [
         downstream="C1–C4 (posición de extracción)",
         exec=dict(kind="script", target="stage01c_localize.sh", cost="Ligero."),
         qc="stages/stage01c_qc.json",
-        salient=["companion", "position", "separation", "band", "detect"],
+        salient=["companion.snr_detection", "sep_arcsec", "pa_deg", "band_used_A", "chromatic_centroid_needed"],
+        narrative_md=(
+            "## Qué hace B3 y por qué\n\n"
+            "B3 **mide** las posiciones de la primaria y del compañero en el cubo de trabajo y las "
+            "valida contra la astrometría publicada (Bowler+2017: sep ~1.78″, PA ~240°), sustituyendo "
+            "las coordenadas *hardcodeadas* por coordenadas medidas. Escribe las coordenadas "
+            "**canónicas** que TODAS las etapas siguientes (C1–C4, E4) leerán del QC — nunca más un "
+            "número a mano.\n\n"
+            "**Decisiones clave:**\n"
+            "- **Banda de detección al ROJO (8800–9350 Å):** el compañero es un objeto subestelar "
+            "**frío** — solo es detectable en el rojo. Colapsar ahí lo hace visible (SNR ~12).\n"
+            "- **Deriva cromática del centroide:** el centroide del compañero se desplaza ~3.56 px "
+            "pico-a-pico con λ (>0.5 px umbral) → `chromatic_centroid_needed = True`; la extracción "
+            "aguas abajo debe seguir el centroide dependiente de λ.\n"
+            "- La posición medida está a **5.23 px** de la vieja coordenada hardcodeada (72,152) → "
+            "productos históricos pudieron usar la posición equivocada (open_issue).\n\n"
+            "El resultado (sep/PA que casan con Bowler+2017) confirma un **compañero real ligado**, "
+            "insumo directo de la clasificación G4."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Posiciones, astrometría vs literatura y deriva cromática del `stage01c_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage01c_qc.json', RUN_ID)\n"
+            "pr, cp, ast = q['primary'], q['companion'], q['astrometry']\n"
+            "print(f\"primaria  (y,x) = ({pr['pos_yx'][0]:.2f}, {pr['pos_yx'][1]:.2f})  ± {pr['err_px']:.2f} px\")\n"
+            "print(f\"compañero (y,x) = ({cp['pos_yx'][0]:.2f}, {cp['pos_yx'][1]:.2f})  ± {cp['err_px']:.2f} px  |  SNR = {cp['snr_detection']:.1f}\")\n"
+            "print(f\"banda de detección = {cp['band_used_A']} Å (rojo: compañero frío)\")\n"
+            "print()\n"
+            "print(f\"separación = {ast['sep_arcsec']:.3f}\\\" (esperado {ast['expected_sep_arcsec']}\\\", {ast['sep_deviation_sigma']:+.2f}σ)\")\n"
+            "print(f\"PA         = {ast['pa_deg']:.2f}° (esperado {ast['expected_pa_deg']}°, {ast['pa_deviation_sigma']:+.2f}σ)\")\n"
+            "print()\n"
+            "ch = q['chromatic']\n"
+            "print(f\"deriva cromática (compañero) = {ch['companion_drift_px_peak_to_peak']:.2f} px pico-a-pico \"\n"
+            "      f\"(umbral {ch['threshold_px']}) -> chromatic_centroid_needed = {ch['chromatic_centroid_needed']}\")\n"
+            "print(f\"legacy hardcoded (x,y) = {q['legacy_check']['hardcoded_companion_xy']}  ->  medido a {q['legacy_check']['distance_px']:.2f} px\")"
+        ),
+        plot_md=(
+            "## Plot — detección en la banda roja (primaria + compañero)\n\n"
+            "**FITS usado:** `stage02_xcorr_cube_stack.fits` (cubo de trabajo 170×170), colapsado en "
+            "la banda de detección (8800–9350 Å). Marca la **primaria** (cyan), el **compañero** "
+            "(círculo verde) y la **posición predicha** de Bowler+2017 (× blanca) — que cae sobre el "
+            "compañero medido. El título lleva sep/PA medidos vs esperados."
+        ),
+        plot_code=(
+            "MAKE_PLOT = True   # cubo de trabajo (~0.4 GB); requiere kernel MUSE\n"
+            "if MAKE_PLOT:\n"
+            "    try:\n"
+            "        import numpy as np\n"
+            "        import matplotlib.pyplot as plt\n"
+            "        from astropy.io import fits\n\n"
+            "        q = nb.load_qc('stages/stage01c_qc.json', RUN_ID)\n"
+            "        cp, pr, ast = q['companion'], q['primary'], q['astrometry']\n"
+            "        cube_path = q['input_cube']['file']\n"
+            "        print('FITS usado:', cube_path)\n"
+            "        h = fits.open(cube_path, memmap=True); data = h[1].data\n"
+            "        data = np.asarray(data[0] if data.ndim == 4 else data, dtype=np.float32)\n"
+            "        hd = h[1].header; n3 = data.shape[0]\n"
+            "        wave = hd.get('CRVAL3', 4749.533) + (np.arange(n3) - (hd.get('CRPIX3', 1.0) - 1)) * hd.get('CD3_3', 1.25)\n"
+            "        lo, hi = cp['band_used_A']; sel = (wave >= lo) & (wave <= hi)\n"
+            "        img = np.nanmedian(data[sel], axis=0); h.close()\n\n"
+            "        py, px = pr['pos_yx']; cy, cx = cp['pos_yx']; ppy, ppx = cp['predicted_pos_yx']\n"
+            "        v = np.nanpercentile(img, [5, 99.5])\n"
+            "        fig, ax = plt.subplots(figsize=(6.4, 6))\n"
+            "        ax.imshow(img, origin='lower', cmap='magma', vmin=v[0], vmax=v[1])\n"
+            "        ax.plot(px, py, '+', color='cyan', ms=14, mew=2, label=f'primaria ({px:.1f},{py:.1f})')\n"
+            "        ax.plot(cx, cy, 'o', mfc='none', mec='lime', ms=16, mew=2, label=f\"compañero SNR={cp['snr_detection']:.1f}\")\n"
+            "        ax.plot(ppx, ppy, 'x', color='white', ms=9, mew=1.5, label='predicho (Bowler+2017)')\n"
+            "        ax.set_title(f\"B3 · banda {lo:.0f}-{hi:.0f} Å · sep={ast['sep_arcsec']:.3f}\\\" \"\n"
+            "                     f\"(esp {ast['expected_sep_arcsec']}) PA={ast['pa_deg']:.1f}° ({ast['pa_deviation_sigma']:+.2f}σ)\")\n"
+            "        ax.legend(fontsize=8, loc='upper right'); ax.axis('off'); fig.tight_layout()\n"
+            "        outdir = nb.run_dir(RUN_ID) / 'plots' / 'b3_localize'; outdir.mkdir(parents=True, exist_ok=True)\n"
+            "        fig.savefig(outdir / 'detection.png', dpi=110); print('figura ->', outdir / 'detection.png'); plt.show()\n"
+            "    except Exception as e:\n"
+            "        print('No se pudo generar el plot:', type(e).__name__, e)"
+        ),
         decisions=[
-            ("Banda de detección ensanchada al rojo (8800–9350 Å): el compañero es muy rojo (enana fría).", None),
+            ("**Banda de detección al rojo (8800–9350 Å):** el compañero es una enana fría, solo detectable en el rojo (SNR ~12).", None),
+            ("**Astrometría casa con Bowler+2017 a <0.1σ** (sep 1.802″ vs 1.81, PA 240.1° vs 240) → compañero real ligado (insumo de G4).", None),
+            ("**Deriva cromática del centroide ~3.56 px** (>0.5 umbral) → `chromatic_centroid_needed`; C1–C4 deben seguir el centroide λ-dependiente.", None),
+            ("Coordenadas **canónicas desde QC** reemplazan la vieja hardcoded (72,152), que estaba a 5.23 px (productos históricos pudieron usar la posición equivocada).", None),
         ],
-        checks="nb.show(qc, keys=['position','separation'])",
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**B3: compañero localizado en (y,x)=(155.6, 75.8), sep 1.802″ / PA 240.1°, casando con "
+            "Bowler+2017 a <0.1σ; SNR 12.3.**\n\n"
+            "- **Fecha:** run realineado (cubo 2026-07-08).\n"
+            "- **Entrada:** `stage02_xcorr_cube_stack.fits`; **salida:** `stage01c_qc.json` + coords "
+            "canónicas para C1–C4/E4.\n"
+            "- **Banda de detección:** 8800–9350 Å (rojo, compañero frío); primaria en (84.9, 84.6).\n"
+            "- **Deriva cromática:** 3.56 px pico-a-pico → `chromatic_centroid_needed = True`.\n"
+            "- **Legacy:** posición medida a 5.23 px de la hardcoded (72,152) — de ahí en adelante se "
+            "usan las coords medidas.\n"
+            "- **Downstream:** C1–C4 y E4 leen la posición del compañero desde este QC."
+        ),
     ),
     # ===================== BLOQUE C — extracción =====================
     dict(
