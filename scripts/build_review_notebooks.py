@@ -162,7 +162,7 @@ def build_cells(s: dict) -> list[dict]:
             "    print('Modo auditoría (RUN=False): se carga el QC existente abajo.')"
         ))
 
-    # 5. QC / resultados (o evidencia a medida cuando no hay QC propio)
+    # 5. QC / resultados
     if s.get("qc"):
         salient = s.get("salient", [])
         cells.append(md("## QC / resultados"))
@@ -170,17 +170,18 @@ def build_cells(s: dict) -> list[dict]:
             f"qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
             f"nb.show(qc, keys={salient!r}, title={s['id']!r})"
         ))
-    elif s.get("evidence_md") or s.get("evidence_code"):
-        if s.get("evidence_md"):
-            cells.append(md(s["evidence_md"]))
-        if s.get("evidence_code"):
-            cells.append(code(s["evidence_code"]))
-    else:
+    elif not (s.get("evidence_md") or s.get("evidence_code")):
         cells.append(md(
             "## QC / resultados\n\n"
             "Esta etapa no escribe un QC propio en este run; su resultado queda "
             "embebido en la reducción / documentado en la nota de decisión de abajo."
         ))
+
+    # 5b. Evidencia / explicación a medida (adicional; puede coexistir con el QC)
+    if s.get("evidence_md"):
+        cells.append(md(s["evidence_md"]))
+    if s.get("evidence_code"):
+        cells.append(code(s["evidence_code"]))
 
     # 6. Decisiones
     dec_lines = ["## Decisiones y notas"]
@@ -258,13 +259,68 @@ STAGES: list[dict] = [
             "      f'{estimate_esorex_runtime(7, reuse_calibrations=True):.0f} min')"
         ),
         qc="stages/stage00r_qc.json",
-        salient=["shape", "sha", "offset", "esorex", "muse", "V1", "V3", "V4"],
+        salient=["shape", "sha", "offset", "esorex", "muse"],
+        evidence_md=(
+            "## Verificaciones (V1–V6): qué comprueban y qué respondieron\n\n"
+            "El QC de A1 (`stage00r_qc.json`) no re-reduce: **verifica** que el cubo entregado es "
+            "sano y trazable. Cada check tiene un significado concreto:\n\n"
+            "| Check | Qué comprueba | Resultado | Significado |\n|---|---|---|---|\n"
+            "| **V1** STAT | La extensión STAT (varianza) existe, es positiva y con pocos NaN "
+            "(excluyendo canales láser AO y spaxels de borde) | **ok** (NaN 0.24%, 216 canales láser "
+            "y 6972 spaxels de borde excluidos) | El cubo trae su mapa de varianza y no está corrupto "
+            "→ base para toda la propagación de error aguas abajo |\n"
+            "| **V2** estándar | Continuo del estándar vs su curva de respuesta | **unavailable** | "
+            "No hay curva de respuesta del estándar para esta reducción → no se pudo cerrar la "
+            "validación de flujo relativa aquí (se cierra por otra vía en A4/M3 vs Gaia) |\n"
+            "| **V3** WCS | `CRVAL3` y paso espectral correctos | **ok** | Solución de longitud de "
+            "onda y WCS sanos → los λ del cubo son fiables |\n"
+            "| **V4** vs ADP | Correlación de la imagen luz-blanca del cubo propio con la del ADP de "
+            "ESO | **ok** (corr = 0.9994, shift entero (0,0)) | El cubo auto-reducido reproduce la "
+            "morfología del ADP oficial → validación cruzada independiente de la reducción |\n"
+            "| **V5** espectro estelar | Razón del espectro de la estrella entre cubo y ADP | "
+            "**unavailable** | Los dos cubos ponen la estrella en píxeles distintos; hace falta "
+            "registro por-cubo → no comparable con la API punto-único |\n"
+            "| **V6** máscara de cielo | La máscara de cielo de scipost es limpia | **unavailable** | "
+            "scipost no exporta la máscara como producto 2D verificable → no auditable aquí |\n\n"
+            "V1/V3/V4 pasan; V2/V5/V6 son **lagunas de proveniencia documentadas** (no fallos "
+            "físicos). Por eso el semáforo A1 = **yellow**. La celda de abajo los imprime en vivo."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage00r_qc.json', RUN_ID)\n"
+            "labels = {\n"
+            "    'v1_stat_present':      'V1 · STAT presente y sano',\n"
+            "    'v2_std_residual_rms':  'V2 · Residuo del estándar (respuesta de flujo)',\n"
+            "    'v3_wcs_ok':            'V3 · WCS / eje espectral',\n"
+            "    'v4_adp_whitelight_corr':'V4 · Correlación luz-blanca vs ADP',\n"
+            "    'v5_adp_star_spec_ratio':'V5 · Razón de espectro estelar vs ADP',\n"
+            "    'v6_sky_mask_clean':    'V6 · Máscara de cielo limpia',\n"
+            "}\n"
+            "ver = q.get('verification', {})\n"
+            "for k, lab in labels.items():\n"
+            "    v = ver.get(k, {})\n"
+            "    res = 'ok' if v.get('ok') else v.get('status', '?')\n"
+            "    print(f'{lab}\\n   -> {res}\\n   {v.get(\"message\", \"\")}\\n')"
+        ),
         decisions=[
-            ("**Alineación por plan B (OFFSET_LIST manual)**, no `exp_align` — era espurio; el cubo realineado ≡ ADP a través de B.", None),
-            ("Provenance QC en **AMARILLO**: V1/V3/V4 pass; V2/V5/V6 no disponibles (documentado, no fallos).", None),
-            ("Nada es paper-válido hasta cerrar el A-block (directiva del usuario 2026-07-07).", None),
+            ("**Alineación por plan B (OFFSET_LIST manual)**, no `exp_align` — daba offsets espurios de hasta 3.305\" (cross-match de speckles NFM); el manual desde el centroide de la primaria da máx 0.62\". El cubo realineado ≡ ADP a través del bloque B.", None),
+            ("Provenance QC = **AMARILLO**: V1/V3/V4 pasan; V2/V5/V6 = `unavailable` (lagunas documentadas, no fallos). Ver tabla de verificaciones arriba.", None),
+            ("**Estado A-block (actualizado 2026-07-10):** los 6 blockers duros están **CERRADOS** → F1 realineado = `yellow`, **0 bloqueantes**. Quedan 4 `open_issues` NO bloqueantes (V2/V5/V6, agrupación de calibraciones BIAS, molecfit no convergió→STD_TELLURIC). El paquete ya **no bloquea por A**; la validez para paper es juicio científico con esos caveats declarados. **Supera la directiva absoluta del 2026-07-07.**", None),
         ],
-        checks="print('cube shape / provenance:')\nnb.show(qc, keys=['shape','offset','esorex'])",
+        checks="print('open_issues A1 (no bloqueantes):')\nfor i, s in enumerate(qc.get('open_issues', []), 1):\n    print(f'  {i}. {s}')",
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**A1: `cube_telcorr.fits` reducido y alineado; semáforo A1 = `yellow` (no bloqueante).**\n\n"
+            "- **Fecha:** reducción 2026-07-08 (esorex 3.13.10 / MUSE 2.10.16); provenance QC escrito "
+            "2026-07-09.\n"
+            "- **Datos:** 7 exposiciones NFM-AO (OB 3444577, Prog 109.23B7.002, "
+            "MUSE.2022-09-01T00:36–02:03).\n"
+            "- **Alineación:** plan B, OFFSET_LIST manual desde el centroide de la primaria (máx "
+            "0.62\"), porque `muse_exp_align` dio offsets espurios de hasta 3.305\".\n"
+            "- **Verificaciones:** V1/V3/V4 pass; V2/V5/V6 `unavailable` (documentadas).\n"
+            "- **Cubo:** 3681×330×338, sha256 `9fff16b7…`; corr luz-blanca vs ADP = 0.9994.\n"
+            "- **A-block:** 6 blockers duros cerrados (F1 yellow, 0 bloqueantes); 4 caveats no "
+            "bloqueantes documentados. Nada es aún paper-final sin declarar esos caveats."
+        ),
     ),
     dict(
         id="A2", slug="A2_sky_zap", title="Decisión ZAP (cielo)", block="A · Reducción",
