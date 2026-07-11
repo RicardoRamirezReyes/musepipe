@@ -99,6 +99,10 @@ def build_cells(s: dict) -> list[dict]:
         f"| **Consume aguas abajo** | {s['downstream']} |\n"
     ))
 
+    # 1b. Narrativa opcional (qué es / por qué), antes del cómo-ejecutar
+    if s.get("narrative_md"):
+        cells.append(md(s["narrative_md"]))
+
     # 2. Cómo ejecutar de forma independiente
     cmd = canonical_cmd(s["exec"])
     if s["exec"]["kind"] == "audit":
@@ -158,7 +162,7 @@ def build_cells(s: dict) -> list[dict]:
             "    print('Modo auditoría (RUN=False): se carga el QC existente abajo.')"
         ))
 
-    # 5. QC / resultados
+    # 5. QC / resultados (o evidencia a medida cuando no hay QC propio)
     if s.get("qc"):
         salient = s.get("salient", [])
         cells.append(md("## QC / resultados"))
@@ -166,6 +170,11 @@ def build_cells(s: dict) -> list[dict]:
             f"qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
             f"nb.show(qc, keys={salient!r}, title={s['id']!r})"
         ))
+    elif s.get("evidence_md") or s.get("evidence_code"):
+        if s.get("evidence_md"):
+            cells.append(md(s["evidence_md"]))
+        if s.get("evidence_code"):
+            cells.append(code(s["evidence_code"]))
     else:
         cells.append(md(
             "## QC / resultados\n\n"
@@ -184,6 +193,10 @@ def build_cells(s: dict) -> list[dict]:
     if s.get("checks"):
         cells.append(md("## Checks"))
         cells.append(code(s["checks"]))
+
+    # 8. Conclusión fechada (opcional)
+    if s.get("conclusion_md"):
+        cells.append(md(s["conclusion_md"]))
 
     return cells
 
@@ -261,10 +274,82 @@ STAGES: list[dict] = [
         downstream="A3, A4",
         exec=dict(kind="audit", hist_cmd="bash scripts/sky_zap.sh"),
         qc=None,
+        narrative_md=(
+            "## Qué es ZAP y por qué se necesita\n\n"
+            "**ZAP** (*Zurich Atmosphere Purge*, Soto et al. 2016) es una sustracción de "
+            "**residuos de cielo** para MUSE basada en PCA. El pipeline "
+            "(`muse_scipost subtract_sky`) ya resta un modelo de cielo, pero el **airglow** "
+            "(líneas de OH y [O I] atmosféricas) es intenso y **varía en el tiempo** entre la "
+            "exposición de ciencia y el modelo → suelen quedar **residuos de skylines**. ZAP "
+            "construye una base PCA con los spaxels de **cielo** (con las fuentes enmascaradas) "
+            "y elimina las componentes que describen esos residuos, dejando la señal astrofísica.\n\n"
+            "**Por qué importa aquí:** un residuo de skyline mal restado puede **imitar o "
+            "contaminar** una línea espectral. Buscamos una línea débil de Hα en el compañero, "
+            "así que el cielo residual es un contaminante de primer orden.\n\n"
+            "**El peligro (por qué NO se aplica a ciegas):** ZAP necesita suficientes spaxels de "
+            "cielo *reales*. En el **campo diminuto de NFM**, con una estrella brillante y su "
+            "compañero, la fracción de cielo es baja y las eigencomponentes pueden **absorber "
+            "señal del compañero** — incluso *fabricar o borrar* una línea en Hα. Regla del "
+            "proyecto: ante la duda, **no tocar la señal**.\n\n"
+            "**Decisión pre-registrada** (`musepipe.reduction.sky_zap.classify_zap_decision`), "
+            "por métrica, no por juicio. `R` = RMS mediano en ventanas de skyline ÷ RMS mediano "
+            "en continuo, medido en aperturas de cielo vacías:\n\n"
+            "| Condición | Decisión |\n|---|---|\n"
+            "| `R ≤ 1.5` | **no necesario** → `zap_applied = False` |\n"
+            "| `R > 2.0` | **necesario** → `zap_applied = True` |\n"
+            "| `1.5 < R ≤ 2.0` | zona gris → checkpoint (no aplicar, preguntar) |\n"
+            "| fracción de cielo `< 0.25` | cielo insuficiente → checkpoint (no aplicar) |\n\n"
+            "Los parámetros de ZAP quedan en *default*; no se itera buscando 'el mejor resultado'."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Métrica **M4 de cielo** del QC del cubo (`stages/stage00q_qc.json`) aplicada a la "
+            "regla de decisión pre-registrada."
+        ),
+        evidence_code=(
+            "qc = nb.load_qc('stages/stage00q_qc.json', RUN_ID)\n"
+            "m4 = qc.get('m4_sky', {})\n"
+            "R = m4.get('R')\n"
+            "print(f'm4_sky.R = {R}   (RMS skyline / RMS continuo en aperturas vacías)   "
+            "[status {m4.get(\"status\")}]')\n\n"
+            "# Regla pre-registrada (sky_zap.classify_zap_decision): low=1.5, high=2.0\n"
+            "LOW, HIGH = 1.5, 2.0\n"
+            "if R is None:\n"
+            "    decision = 'sin dato'\n"
+            "elif R <= LOW:\n"
+            "    decision = 'not_needed  ->  zap_applied = False'\n"
+            "elif R > HIGH:\n"
+            "    decision = 'needed      ->  zap_applied = True'\n"
+            "else:\n"
+            "    decision = 'gray_zone   ->  checkpoint (no aplicar)'\n"
+            "print(f'Regla:  R <= {LOW} no necesario | R > {HIGH} necesario     =>     {decision}')\n\n"
+            "print()\n"
+            "print('Corroboración (nota del QC):')\n"
+            "print('  ', qc.get('note'))\n"
+            "print('M1/M2 se midieron del SKY_SPECTRUM cacheado (airglow, 32 exp,',\n"
+            "      qc.get('m1_wavelength', {}).get('n_measurements'), 'medidas) porque el')\n"
+            "print('cubo restado de cielo tiene <8 skylines usables.')"
+        ),
         decisions=[
-            ("El cubo restado de cielo no tiene skylines usables (residual al nivel de ruido); ver M1/M2 en A4, medidos del SKY_SPECTRUM cacheado.", None),
+            ("La métrica M4 (`R`) y la caracterización del airglow viven en A4/`stage00q_qc.json`; la regla de decisión, en `musepipe/reduction/sky_zap.py`.", None),
         ],
         checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**Decisión: ZAP NO aplicado — `zap_applied = False` (`not_needed`).**\n\n"
+            "- **Fecha del análisis:** 2026-07-09 (QC A4/M4 sobre el cubo realineado, commit "
+            "`700f009`); el cubo se redujo el 2026-07-08.\n"
+            "- **Datos:** cubo NFM-AO auto-reducido `cube_telcorr.fits` (OB 3444577, "
+            "Prog 109.23B7.002, **7 exposiciones** MUSE.2022-09-01T00:36–02:03) + `SKY_SPECTRUM` "
+            "cacheado (32 exposiciones) para caracterizar el airglow.\n"
+            "- **Evidencia:** `R = 0.547 ≤ 1.5` (umbral *no necesario*); el cubo restado de cielo "
+            "tiene **<8 skylines usables** (residual al nivel de ruido). En el campo diminuto NFM, "
+            "ZAP aportaría ~0 y arriesgaría absorber señal del compañero.\n"
+            "- **Estado M4 = yellow:** el residuo es bajo, pero la escasez de skylines hace la "
+            "métrica menos robusta que en WFM. No bloqueante.\n"
+            "- **Para el paper:** registrar como decisión con su métrica (R=0.547), **no** como "
+            "omisión. Nada es paper-válido hasta cerrar el A-block."
+        ),
     ),
     dict(
         id="A3", slug="A3_telluric", title="Corrección telúrica", block="A · Reducción",
