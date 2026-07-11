@@ -1099,13 +1099,124 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_e01_psf.sh",
                   cost="Moderado (Psfao con lru_cache; minutos)."),
         qc="stages/stage_e01_qc.json",
-        salient=["form", "model_comparison", "ring", "residual", "psfao", "moffat"],
+        salient=["form_chosen", "reason", "ring_residual_pct_median", "bins_above_5pct", "n_ok_bins"],
+        narrative_md=(
+            "## Qué hace C1 y la decisión Moffat vs Psfao\n\n"
+            "C1 ajusta la **PSF cromática de la primaria** (por bin de λ) para modelar el halo "
+            "estelar y poder tenerlo en cuenta en la posición del compañero. Ajusta **dos formas** "
+            "por bin — un doble **Moffat** y un **Psfao** físico (`maoppy.Psfao`, PSF de óptica "
+            "adaptiva NFM) — y **selecciona** por una métrica canónica: el residuo en el **anillo "
+            "del compañero** (radio ≈ 71 px, ancho 3 px).\n\n"
+            "**Por qué Psfao:** el halo AO de NFM es ancho y un Moffat no lo ajusta bien en el rojo; "
+            "Psfao es el modelo físico del halo AO.\n\n"
+            "**Decisión (blocker #8 cerrado):** selección automática por residuo mediano del anillo → "
+            "**Psfao 4.44 % < Moffat 15.65 %** → se elige **Psfao**. El **híbrido** azimutal se probó "
+            "y se **descartó** (con Psfao empeoraba: la escala venía de la FWHM inflada del Moffat).\n\n"
+            "**El nexo con B6/D1 (importante):** aun con Psfao, el **p90** del residuo del anillo es "
+            "~31 % (17 bins por encima del 5 %) — los bins del **rojo lejano** no cierran. Ese es el "
+            "sistemático **B6** que reaparece en D1 como `divergent_continuum` y se acepta como "
+            "presupuestado ([`docs/d1_canonical_method_decision.md`](../docs/d1_canonical_method_decision.md)). "
+            "La PSF física **no** lo elimina — es el piso a esta geometría.\n\n"
+            "**Producto:** `psf_model.json` con los parámetros Psfao (`r0`, `beta`, …) por bin, "
+            "suavizados con un polinomio; lo consumen C3/C4/E4."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Comparación de modelos, métrica del anillo y ajuste del `stage_e01_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_e01_qc.json', RUN_ID)\n"
+            "mc = q['model_comparison']; rm = q['companion_ring_metric']; fit = q['fit']\n"
+            "print('forma elegida:', mc['form_chosen'], '|', mc['reason'])\n"
+            "print(f\"  Moffat: mediana {mc['moffat']['ring_residual_pct_median']:.2f}%  p90 {mc['moffat']['ring_residual_pct_p90']:.1f}%  ({mc['moffat']['n_bins']} bins)\")\n"
+            "print(f\"  Psfao : mediana {mc['psfao']['ring_residual_pct_median']:.2f}%  p90 {mc['psfao']['ring_residual_pct_p90']:.1f}%  ({mc['psfao']['n_bins']} bins)\")\n"
+            "print()\n"
+            "print(f\"anillo del compañero: radio {rm['radius_px']:.1f} px, ancho {rm['width_px']:.0f} px; \"\n"
+            "      f\"residuo mediano {rm['residual_pct_median']:.2f}% (p90 {rm['residual_pct_p90']:.1f}%), \"\n"
+            "      f\"bins >5% = {rm['bins_above_5pct']}  <-- B6 rojo lejano\")\n"
+            "print(f\"ajuste: {fit['model']} (form={fit['form_chosen']}), fit_radius {fit['fit_radius_px']:.0f} px, \"\n"
+            "      f\"{fit['n_ok_bins']} bins OK / {fit['n_bins_rejected']} rechazados\")\n"
+            "print(f\"híbrido aplicado: {q['hybrid']['applied']}\")"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — la decisión: Moffat vs Psfao (residuo del anillo)\n\n"
+                    "Del `stage_e01_qc.json` (barato). Psfao baja la **mediana** del residuo del anillo "
+                    "por debajo del objetivo 5 %; Moffat no. El **p90** de ambos sigue alto (~31–34 %) "
+                    "= el residuo B6 del rojo lejano que ni Psfao cierra."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_e01_qc.json', RUN_ID); mc = q['model_comparison']\n"
+                    "    med = [mc['moffat']['ring_residual_pct_median'], mc['psfao']['ring_residual_pct_median']]\n"
+                    "    p90 = [mc['moffat']['ring_residual_pct_p90'], mc['psfao']['ring_residual_pct_p90']]\n"
+                    "    x = np.arange(2); cols = ['tab:red', 'tab:green']\n"
+                    "    fig, ax = plt.subplots(figsize=(6.4, 4.2))\n"
+                    "    ax.bar(x - 0.18, med, 0.36, color=cols, label='mediana')\n"
+                    "    ax.bar(x + 0.18, p90, 0.36, color=cols, alpha=0.45, label='p90')\n"
+                    "    ax.axhline(5, color='k', ls='--', lw=1, label='objetivo <5%')\n"
+                    "    for i, v in enumerate(med): ax.text(i - 0.18, v + 0.6, f'{v:.1f}%', ha='center', fontsize=9)\n"
+                    "    ax.set_xticks(x); ax.set_xticklabels(['Moffat', 'Psfao'])\n"
+                    "    ax.set_ylabel('residuo del anillo del compañero [%]')\n"
+                    "    ax.set_title(f\"C1 · selección: {mc['form_chosen'].upper()} (mediana {med[1]:.1f}% < {med[0]:.1f}%)\")\n"
+                    "    ax.legend(fontsize=8); fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'c1_psf'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'moffat_vs_psfao.png', dpi=110)\n"
+                    "    print('figura ->', outdir / 'moffat_vs_psfao.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — la PSF cromática: r0 (Fried) vs λ\n\n"
+                    "Del `psf_model.json` `param_table` (barato). El parámetro de Fried `r0` **sube "
+                    "con λ** (mejor seeing en el rojo, ~r0 ∝ λ^1.2) — por eso la PSF es *cromática* y "
+                    "se ajusta por bin. Es el modelo que C3/C4/E4 consumen."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    p = nb.load_qc('stages/psf_model.json', RUN_ID); pt = p['param_table']\n"
+                    "    lam = np.array(pt['lambda_A']); r0 = np.array(pt['r0'], dtype=float)\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4.2))\n"
+                    "    ax.plot(lam, r0, 'o-', color='tab:blue', ms=4)\n"
+                    "    ax.set_xlabel('λ [Å]'); ax.set_ylabel('r0 (parámetro de Fried) [m]')\n"
+                    "    ax.set_title(f\"C1 · PSF cromática {p['form'].upper()} ({p['system']}): r0 sube al rojo (mejor seeing)\")\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'c1_psf'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'chromatic_r0.png', dpi=110)\n"
+                    "    print('figura ->', outdir / 'chromatic_r0.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+        ],
         decisions=[
             ("**Blocker #8 CERRADO**: C1 ajusta Moffat **y** Psfao por bin y selecciona por menor residuo del anillo (empate→Moffat).", "d1_canonical_method_decision.md"),
-            ("**Forma elegida = psfao** (residuo de anillo ~4.6% vs ~19% Moffat). `psf_model.json` byte-idéntico a la etapa lateral: consolidación neutra.", None),
-            ("Híbrido azimutal **descartado**: con Psfao empeoraba (5%→44%) por la FWHM inflada de Moffat.", None),
+            ("**Forma elegida = psfao** (residuo de anillo mediano 4.44% vs 15.65% Moffat). `psf_model.json` byte-idéntico a la etapa lateral: consolidación neutra.", None),
+            ("Híbrido azimutal **descartado**: con Psfao empeoraba (la escala venía de la FWHM inflada del Moffat).", None),
+            ("**Residuo B6 del rojo lejano NO se cierra** (p90 ~31%, 17 bins >5%): es el piso a esta geometría → sistemática presupuestada que reaparece en D1 (`divergent_continuum`).", "d1_canonical_method_decision.md"),
         ],
-        checks="nb.show(qc, keys=['form','model_comparison','ring'])",
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**C1: PSF cromática ajustada; forma = Psfao (auto); residuo del anillo mediano 4.44% "
+            "(<5% objetivo).**\n\n"
+            "- **Fecha:** consolidación WP-5, 2026-07-10 (commit `c3704b8`).\n"
+            "- **Ajuste:** `maoppy.Psfao` (muse_nfm), fit_radius 78 px, 43 bins OK / 3 rechazados; "
+            "anillo del compañero radio 71 px.\n"
+            "- **Selección:** Psfao 4.44% < Moffat 15.65% (mediana del residuo del anillo); híbrido "
+            "descartado.\n"
+            "- **B6 abierto/aceptado:** p90 ~31% (17 bins >5%) en el rojo lejano — la PSF física no "
+            "lo cierra; sistemática presupuestada (D1 `divergent_continuum`).\n"
+            "- **Consolidación neutra:** `psf_model.json` byte-idéntico al de la etapa lateral previa.\n"
+            "- **Downstream:** `psf_model.json` (params Psfao por bin) lo consumen C3, C4 y E4."
+        ),
     ),
     dict(
         id="04b", slug="C_04b_local_surface", title="Fondo local (superficie)", block="C · Extracción",
