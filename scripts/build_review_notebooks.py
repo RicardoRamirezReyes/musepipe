@@ -1770,13 +1770,141 @@ STAGES: list[dict] = [
         downstream="D2 (consume el canónico de config)",
         exec=dict(kind="script", target="stage_x10_compare.sh", cost="Moderado."),
         qc="stages/stage_x10_qc.json",
-        salient=["verdict", "action", "reason", "recommended_method", "level_ratio"],
-        decisions=[
-            ("**Decisión humana: canónico = `psffit`** (validado por G1, físico en el borde), registrado en `config.json` (`x11_canonical_method`).", "d1_canonical_method_decision.md"),
-            ("**Veredicto = `divergent_continuum`** (B6 rojo lejano, t=+4.5). Es divergencia REAL, no de convención (level_ratio 1.0015).", None),
-            ("**B6 aceptado como sistemática presupuestada**: Psfao no la cierra; `action=iterate_C1` reconocido pero NO accionado.", None),
+        salient=["verdict", "action", "recommended_method", "kind", "n_controls"],
+        narrative_md=(
+            "## Qué hace D1 y cómo decide\n\n"
+            "D1 compara los métodos de extracción **por pares y por banda** para decidir cuáles son "
+            "consistentes, y emite un `recommended_method` — **nunca fija el canónico** (esa es la "
+            "decisión humana).\n\n"
+            "**El estadístico es un t control-centrado** (`statistics.kind = t_control_centred`): para "
+            "cada banda y par, compara la diferencia de continuo del objeto contra la **distribución "
+            "de las diferencias de los 33 controles** (df = 32). Al restar `mu_ctrl` (la diferencia "
+            "media de controles = sesgo_i − sesgo_j), **D1 ya está referenciado a controles** — por "
+            "eso el pedestal de sobre-sustracción NO driva su veredicto (el trabajo de referenciación "
+            "de C3/D2 solo puso a D2 al nivel de lo que D1 ya hacía).\n\n"
+            "**Bandas:** B1–B6 (continuo), LHa/LHb/LOI (líneas). **Umbrales:** `|t|>2.08` divergente "
+            "(p<0.0455), `|t|>3.25` fuerte (p<0.0027).\n\n"
+            "**Veredicto = `divergent_continuum`** en el par primario (psffit vs optimal_psfsub, los "
+            "dos validados por G1): **B6 t=+4.1 (fuerte)** y B2 t=−3.0 (marginal). Como es un t "
+            "control-centrado, ese +4.1 es el **sistemático cromático genuino** (~1.35× en nivel), no "
+            "el pedestal. `optimal_ls` es el **outlier**: todos sus pares divergen 18–34 → G1 lo "
+            "rechaza.\n\n"
+            "`recommended_method = None` (D1 se niega a auto-elegir con divergencia); el humano eligió "
+            "**psffit** ([`docs/d1_canonical_method_decision.md`](../docs/d1_canonical_method_decision.md)). "
+            "La `action = iterate_C1_refine_PSF_before_PCA` queda **reconocida pero no accionada** "
+            "(Psfao ya está; B6 aceptado como sistemática presupuestada)."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Veredicto, t control-centrado del par primario por banda, y el outlier `optimal_ls`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_x10_qc.json', RUN_ID)\n"
+            "st = q['statistics']\n"
+            "print('veredicto:', q['verdict'], '| recommended:', q['recommended_method'], '| action:', q['action'])\n"
+            "print(f\"estadístico: {st['kind']} (n_controles={st['n_controls']}, df={st['n_controls']-1}); \"\n"
+            "      f\"umbral divergente p<{st['p_divergent']}, fuerte p<{st['p_strong']}\")\n"
+            "bands = ['B1','B2','B3','B4','B5','B6','LHa','LHb','LOI']\n"
+            "pp = 'psffit_vs_optimal_psfsub'\n"
+            "print(f'\\nt control-centrado del par primario ({pp}):')\n"
+            "for b in bands:\n"
+            "    t = q['t_matrix'][pp][b]\n"
+            "    flag = '  <-- FUERTE' if abs(t) > 3.25 else ('  <- marginal' if abs(t) > 2.08 else '')\n"
+            "    print(f'   {b:4s}: t = {t:+.2f}{flag}')\n"
+            "print('\\noptimal_ls es el outlier (|t| máx por par):')\n"
+            "for pair, row in q['t_matrix'].items():\n"
+            "    if 'optimal_ls' in pair:\n"
+            "        tmax = max(abs(v) for v in row.values())\n"
+            "        print(f'   {pair:34s} |t|max = {tmax:.1f}')"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — el t control-centrado por par × banda\n\n"
+                    "Del `t_matrix` del QC. Rojo/azul = divergencia (|t| grande). **psffit vs "
+                    "optimal_psfsub** (fila primaria) es consistente salvo **B6 (+4.1)** y B2 (−3.0); "
+                    "**todos los pares con `optimal_ls`** divergen 18–34 (sobre-sustracción) → ls "
+                    "rechazado. psffit vs aperture es consistente en todo."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_x10_qc.json', RUN_ID)\n"
+                    "    tm = q['t_matrix']\n"
+                    "    bands = ['B1','B2','B3','B4','B5','B6','LHa','LHb','LOI']\n"
+                    "    pairs = list(tm.keys())\n"
+                    "    M = np.array([[tm[p].get(b, np.nan) for b in bands] for p in pairs])\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4.2))\n"
+                    "    im = ax.imshow(M, cmap='RdBu_r', vmin=-5, vmax=5, aspect='auto')\n"
+                    "    ax.set_xticks(range(len(bands))); ax.set_xticklabels(bands)\n"
+                    "    ax.set_yticks(range(len(pairs))); ax.set_yticklabels([p.replace('_vs_', ' vs ') for p in pairs], fontsize=8)\n"
+                    "    for i in range(len(pairs)):\n"
+                    "        for j in range(len(bands)):\n"
+                    "            v = M[i, j]\n"
+                    "            if np.isfinite(v):\n"
+                    "                ax.text(j, i, f'{v:.1f}', ha='center', va='center', fontsize=7, color='k' if abs(v) < 3 else 'w')\n"
+                    "    ax.set_title('D1 · t control-centrado por par × banda (|t|>3.25 fuerte)')\n"
+                    "    fig.colorbar(im, label='t'); fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'd1_compare'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'tmatrix.png', dpi=110); print('figura ->', outdir / 'tmatrix.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — el par primario: qué driva `divergent_continuum`\n\n"
+                    "El t del par primario (psffit vs optimal_psfsub) por banda, con los umbrales "
+                    "divergente (2.08) y fuerte (3.25). **B6 (+4.1) cruza el umbral fuerte** y B2 "
+                    "(−3.0) el divergente → veredicto `divergent_continuum`. Es el sistemático "
+                    "cromático genuino (~1.35×), ya libre del pedestal (t control-centrado)."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_x10_qc.json', RUN_ID)\n"
+                    "    bands = ['B1','B2','B3','B4','B5','B6','LHa','LHb','LOI']\n"
+                    "    tv = [q['t_matrix']['psffit_vs_optimal_psfsub'][b] for b in bands]\n"
+                    "    t_div, t_str = 2.08, 3.25\n"
+                    "    cols = ['tab:red' if abs(v) > t_str else ('tab:orange' if abs(v) > t_div else '0.6') for v in tv]\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4))\n"
+                    "    ax.bar(bands, tv, color=cols)\n"
+                    "    for s in (t_div, t_str):\n"
+                    "        ax.axhline(s, color='k', ls=':', lw=0.8); ax.axhline(-s, color='k', ls=':', lw=0.8)\n"
+                    "    ax.axhline(0, color='k', lw=0.6)\n"
+                    "    ax.set_ylabel('t control-centrado')\n"
+                    "    ax.set_title('D1 · par primario psffit vs optimal_psfsub → divergent_continuum (B6 fuerte, B2 marginal)')\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'd1_compare'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'primary_pair.png', dpi=110); print('figura ->', outdir / 'primary_pair.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['verdict','recommended','level_ratio'])",
+        decisions=[
+            ("**Decisión humana: canónico = `psffit`** (validado por G1, físico en el borde); D1 solo recomienda (`recommended_method=None` con divergencia).", "d1_canonical_method_decision.md"),
+            ("**Veredicto = `divergent_continuum`** en el par primario: B6 t=+4.1 (fuerte), B2 t=−3.0 (marginal). t **control-centrado** → es el sistemático genuino (~1.35×), no el pedestal.", None),
+            ("**`optimal_ls` rechazado**: outlier en todos sus pares (|t| 18–34) por sobre-sustracción.", None),
+            ("**B6 aceptado como sistemática presupuestada**: `action=iterate_C1` reconocida pero NO accionada (Psfao ya está; ver D2 y la referenciación de continuo).", "d2_red_continuum_diagnosis.md"),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**D1: veredicto `divergent_continuum` (par primario psffit vs optimal_psfsub); t "
+            "control-centrado; recommended_method=None.**\n\n"
+            "- **Fecha:** D1 v2 sobre el run realineado (2026-07-09).\n"
+            "- **Estadístico:** t control-centrado (33 controles, df=32) → ya libre del pedestal de "
+            "sobre-sustracción.\n"
+            "- **Driver:** B6 t=+4.1 (fuerte), B2 t=−3.0 (marginal) = sistemático cromático genuino "
+            "(~1.35× en nivel).\n"
+            "- **ls rechazado:** outlier en todos sus pares (|t| 18–34).\n"
+            "- **Canónico:** el humano eligió **psffit** (D1 no auto-elige con divergencia).\n"
+            "- **Acción:** `iterate_C1` reconocida pero no accionada (B6 aceptado como sistemática "
+            "presupuestada; ver D2)."
+        ),
     ),
     dict(
         id="D2", slug="D2_calibrate", title="Calibración espectral", block="D · Método",
