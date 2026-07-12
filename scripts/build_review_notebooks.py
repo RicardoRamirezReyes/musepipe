@@ -1338,11 +1338,128 @@ STAGES: list[dict] = [
         downstream="D1, E1 (controles)",
         exec=dict(kind="script", target="stage_x01_aperture.sh", cost="Ligero–moderado."),
         qc="stages/spec_aperture_qc.json",
-        salient=["aperture", "radius", "control", "background", "apcorr"],
-        decisions=[
-            ("Principio **control = objeto**: controles con annulus bkg + apcorr, procesados idénticos al objeto.", "noise_model.md"),
+        salient=["apertures", "errors.mode", "aperture_correction.median", "v4_apcorr_range_ok", "bad_window_channels"],
+        narrative_md=(
+            "## Qué hace C2 y por qué\n\n"
+            "C2 extrae el espectro del compañero por **apertura** (`box3` por defecto, `box5`) y define "
+            "el **contrato de producto espectral estándar** (`wave, flux, flux_err, apcorr, npix, "
+            "flags`) sobre el que se construyen **todos** los extractores (C3, C4) y D1/E1. Es "
+            "infraestructura: cero ciencia nueva, la extracción ya estaba validada.\n\n"
+            "**Decisiones clave:**\n"
+            "- **`control = objeto`:** 33 aperturas de control se procesan **idénticas** al objeto "
+            "(mismo radio, annulus de fondo, apcorr) → el σ es **empírico** (M5 STAT rojo, así que no "
+            "se usa el STAT directo). [`docs/noise_model.md`](../docs/noise_model.md)\n"
+            "- **Corrección de apertura (growth-curve de la PSF):** box3 capta solo una fracción de "
+            "la **PSF AO ancha** → una corrección grande y **cromática** (mediana ~44.7×, ~118× en el "
+            "azul → ~21× en el rojo). El chequeo `v4_apcorr_range` **falla** por ese rango enorme — "
+            "se marca, no se esconde.\n"
+            "- **Apcorr con extracción *wings-intact*** (cubo crudo + annulus), **no** el residual de "
+            "04b: 04b sobre-sustrae las alas del compañero (daría box5 < box3, no físico), así que la "
+            "curva de crecimiento se mantiene auto-consistente sobre el cubo crudo.\n\n"
+            "La apertura NO es el método canónico (G1 la **rechaza** por insensible en el borde del "
+            "compañero); C2 aporta el contrato de producto y el control 'A: apertura' para D1."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Aperturas, errores empíricos, corrección de apertura y chequeos del `spec_aperture_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/spec_aperture_qc.json', RUN_ID)\n"
+            "err = q['errors']; ac = q['aperture_correction']; ck = q['checks']\n"
+            "print('apertures:', q['apertures'], '| posiciones de:', q['positions_from'].split('/')[-1])\n"
+            "print(f\"errores: modo={err['mode']}, covarianza box3={err['covariance_factor_box3']:.2f}×, \"\n"
+            "      f\"stat/empírico={err['stat_vs_empirical_median_ratio']:.2f}\")\n"
+            "print(f\"apcorr ({ac['mode']}): mediana {ac['median']:.1f}× , máx {ac['max']:.1f}× , norm r={ac['norm_radius_px']:.0f}px\")\n"
+            "print(f\"flags: bad-window {q['flags']['bad_window_channels']}, skyline {q['flags']['skyline_channels']}, clipped {q['flags']['clipped_channels']}\")\n"
+            "print(f\"checks: v2_error_ratio={ck['v2_error_ratio_ok']} v3_roundtrip={ck['v3_roundtrip_ok']} v4_apcorr_range={ck['v4_apcorr_range_ok']}  (v4 falla: apcorr enorme)\")\n"
+            "print()\n"
+            "for i, s in enumerate(q['open_issues'], 1):\n"
+            "    print(f'  open_issue {i}: {s}')"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — el espectro por apertura (box3) + ruido empírico\n\n"
+                    "Del producto `spec_aperture_object.fits` y los 33 controles "
+                    "(`spec_aperture_controls.npz`). El flujo es **muy ruidoso** (banda ±1σ empírica); "
+                    "el continuo suavizado **sube al rojo** (SED real de enana fría) y **no hay nada "
+                    "en Hα** (contexto de la no-detección). El hueco es la ventana del láser AO."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    h = fits.open(rd / 'stages' / 'spec_aperture_object.fits'); d = h[1].data\n"
+                    "    w = np.asarray(d['wave_A'], float); flux = np.asarray(d['flux'], float); h.close()\n"
+                    "    ctrl = np.load(rd / 'stages' / 'spec_aperture_controls.npz')['control_spectra']\n"
+                    "    sig = np.nanstd(ctrl, axis=0)\n"
+                    "    k = np.ones(41) / 41; sm = np.convolve(np.nan_to_num(flux), k, mode='same')\n"
+                    "    fig, ax = plt.subplots(figsize=(11, 4))\n"
+                    "    ax.fill_between(w, -sig, sig, color='0.8', label='±1σ empírico (33 controles)')\n"
+                    "    ax.plot(w, flux, lw=0.3, color='0.5', alpha=0.6)\n"
+                    "    ax.plot(w, sm, lw=1.2, color='tab:blue', label='flujo compañero (suavizado 41ch)')\n"
+                    "    ax.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
+                    "    ax.set_ylim(np.nanpercentile(flux, 2), np.nanpercentile(flux, 98))\n"
+                    "    ax.set_xlabel('λ [Å]'); ax.set_ylabel('flujo (apcorr aplicada)')\n"
+                    "    ax.set_title('C2 · espectro por apertura box3 del compañero (errores empíricos)')\n"
+                    "    ax.legend(fontsize=8); fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'c2_aperture'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'spectrum.png', dpi=110); print('figura ->', outdir / 'spectrum.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — la corrección de apertura cromática\n\n"
+                    "La corrección `box3 → flujo total` baja de ~118× en el azul (PSF AO peor) a ~21× "
+                    "en el rojo (PSF más apretada); mediana ~44.7×. Su rango enorme es lo que hace "
+                    "fallar `v4_apcorr_range` — es real (PSF AO ancha), no un defecto."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    h = fits.open(rd / 'stages' / 'spec_aperture_object.fits'); d = h[1].data\n"
+                    "    w = np.asarray(d['wave_A'], float); apc = np.asarray(d['apcorr'], float); h.close()\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 3.6))\n"
+                    "    ax.plot(w, apc, lw=0.8, color='tab:purple')\n"
+                    "    ax.axhline(np.nanmedian(apc), color='k', ls='--', lw=1, label=f'mediana {np.nanmedian(apc):.1f}×')\n"
+                    "    ax.set_xlabel('λ [Å]'); ax.set_ylabel('corrección de apertura ×')\n"
+                    "    ax.set_title('C2 · corrección de apertura (box3 capta poco de la PSF AO ancha)')\n"
+                    "    ax.legend(fontsize=8); fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'c2_aperture'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'apcorr.png', dpi=110); print('figura ->', outdir / 'apcorr.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['radius','control'])",
+        decisions=[
+            ("Principio **control = objeto**: 33 controles con annulus bkg + apcorr, procesados idénticos al objeto → σ **empírico** (M5 rojo).", "noise_model.md"),
+            ("**Corrección de apertura cromática grande** (mediana 44.7×): box3 capta poco de la PSF AO ancha; `v4_apcorr_range` falla por el rango (marcado, no oculto).", None),
+            ("**Apcorr wings-intact** (cubo crudo + annulus), no el residual 04b, que sobre-sustrae las alas (box5<box3).", None),
+            ("Apertura **no canónica**: G1 la rechaza por insensible en el borde; C2 aporta el contrato de producto y el control 'A' para D1.", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**C2: espectro por apertura (box3/box5) en el formato de producto estándar; errores "
+            "empíricos; apcorr cromática mediana 44.7×.**\n\n"
+            "- **Fecha:** cadena D1 v2 sobre el run realineado (2026-07-09).\n"
+            "- **Entrada:** cubo stage02; posiciones de B3; 33 controles.\n"
+            "- **Espectro:** muy ruidoso, continuo real que sube al rojo (enana fría), **nada en Hα** "
+            "(no-detección).\n"
+            "- **Errores empíricos** (M5 STAT rojo); covarianza box3 = 6.38×.\n"
+            "- **Apcorr:** growth-curve, 118× (azul) → 21× (rojo); `v4_apcorr_range` falla por el "
+            "rango (real, PSF AO ancha); apcorr wings-intact para no sobre-sustraer alas.\n"
+            "- **Rol:** contrato de producto para C3/C4/D1/E1; método de apertura no canónico "
+            "(psffit lo es)."
+        ),
     ),
     dict(
         id="C3", slug="C3_optimal", title="Extracción óptima", block="C · Extracción",
