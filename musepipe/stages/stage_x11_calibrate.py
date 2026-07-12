@@ -642,23 +642,46 @@ def _qc_for_wavelength_v1(qc00, corrections):
     return verify_wavelength_residuals(offsets, corrections)
 
 
-def _load_control_bias(stage_dir, method, waves, good_mask, window_A):
-    """Control-mean continuum bias for a method (None if its controls are absent)."""
+# Raw (pre-calibration) control npz per method, used as a fallback when the
+# calibrated control npz (written by the E1/E2 glue) is not present yet.
+_RAW_CONTROL_NPZ = {
+    "aperture": "spec_aperture_controls.npz",
+    "optimal_ls": "spec_optimal_controls.npz",
+    "optimal_psfsub": "spec_optimal_psfsub_controls.npz",
+    "psffit": "spec_psffit_controls.npz",
+}
+
+
+def _method_control_bias(stage_dir, method, waves, good_mask, window_A, *, flux_scale=1.0):
+    """Control-mean continuum bias for a method on the calibrated flux scale.
+
+    Prefers the calibrated control npz; falls back to the raw control npz scaled
+    by the D2 flux scale (so a fresh run without the E1/E2 glue still works).
+    Returns None if no controls are available.
+    """
 
     if stage_dir is None:
         return None
-    npz = Path(stage_dir) / f"spec_calibrated_{method}_controls.npz"
-    if not npz.exists():
-        return None
-    try:
-        controls = np.load(npz)["control_spectra"]
-    except (OSError, KeyError, ValueError):
-        return None
-    return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
+    stage_dir = Path(stage_dir)
+    cal = stage_dir / f"spec_calibrated_{method}_controls.npz"
+    if cal.exists():
+        try:
+            controls = np.load(cal)["control_spectra"]
+            return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
+        except (OSError, KeyError, ValueError):
+            pass
+    raw_name = _RAW_CONTROL_NPZ.get(method)
+    if raw_name and (stage_dir / raw_name).exists():
+        try:
+            controls = np.load(stage_dir / raw_name)["control_spectra"] * float(flux_scale)
+            return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
+        except (OSError, KeyError, ValueError):
+            pass
+    return None
 
 
 def _intermethod_continuum_report(
-    calibrated, canonical_method, other_method, *, red_band_A=(8600.0, 9100.0), stage_dir=None, window_A=80.0
+    calibrated, canonical_method, other_method, *, red_band_A=(8600.0, 9100.0), stage_dir=None, window_A=80.0, flux_scale=1.0
 ):
     """Continuum systematic isolated from real companion signal (D2 v3).
 
@@ -696,8 +719,8 @@ def _intermethod_continuum_report(
     # isolates the genuine method-dependent systematic. Reported alongside (does
     # not overwrite flux or drive the gate).
     after_ref = None
-    ba = _load_control_bias(stage_dir, canonical_method, wave, good, window_A)
-    bb = _load_control_bias(stage_dir, other_method, wave, good, window_A)
+    ba = _method_control_bias(stage_dir, canonical_method, wave, good, window_A, flux_scale=flux_scale)
+    bb = _method_control_bias(stage_dir, other_method, wave, good, window_A, flux_scale=flux_scale)
     if ba is not None and bb is not None:
         car, cbr = ca - ba, cb - bb
         inter_r = np.abs(car - cbr)
@@ -720,6 +743,11 @@ def _intermethod_continuum_report(
                 "Referencing each method to its own same-radius controls removes the source-free "
                 "halo-subtraction pedestal; the remaining ratio is the genuine chromatic systematic."
             ),
+            "note_d1": (
+                "D1's per-band t-test already subtracts the control-mean difference (control-centered), "
+                "so its divergent_continuum verdict already reflects this referenced systematic; only "
+                "D2's raw-continuum v3 metric needed the same referencing (now applied)."
+            ),
         }
     return {
         "canonical_vs": other_method,
@@ -734,6 +762,40 @@ def _intermethod_continuum_report(
             "red SPECTRAL SHAPE is real and shared by both methods (not flagged); only the "
             "method-dependent LEVEL discrepancy is."
         ),
+    }
+
+
+def _v3_continuum_block(intermethod, v3_threshold, canonical):
+    """v3 continuum-stability gate on the control-referenced agreement.
+
+    Uses the control-referenced inter-method agreement when available (consistent
+    with D1's control-centered t-test); falls back to the raw agreement. Keeps the
+    raw value and the legacy runmed-vs-poly fraction as secondary diagnostics.
+    """
+
+    if intermethod is None:
+        return {
+            "ok": None,
+            "metric": "intermethod_continuum_agreement",
+            "fraction_channels_methods_agree": None,
+            "threshold": v3_threshold,
+            "legacy_runmed_poly_fraction": canonical.continuum_summary["fraction_good_channels_sys_lt_staterr"],
+        }
+    raw_frac = intermethod["fraction_channels_methods_agree"]
+    after = intermethod.get("after_control_reference")
+    referenced = after is not None
+    frac = after["fraction_channels_methods_agree"] if referenced else raw_frac
+    return {
+        "ok": bool(frac >= v3_threshold),
+        "metric": (
+            "intermethod_continuum_agreement_control_referenced" if referenced
+            else "intermethod_continuum_agreement"
+        ),
+        "fraction_channels_methods_agree": frac,
+        "raw_fraction_channels_methods_agree": raw_frac,
+        "control_referenced": referenced,
+        "threshold": v3_threshold,
+        "legacy_runmed_poly_fraction": canonical.continuum_summary["fraction_good_channels_sys_lt_staterr"],
     }
 
 
@@ -766,6 +828,23 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             continuum_poly_deg=int(cfg.get("x11_continuum_poly_deg", 5)),
             error_smooth_channels=int(cfg.get("x11_error_smooth_channels", 21)),
         )
+    # Step 1: deliver a control-referenced continuum for characterization (G3).
+    # Add `continuum_bias` (each method's own control-mean continuum) and
+    # `cont_runmed_biasref` = cont_runmed - bias as labeled extra columns; the
+    # detection flux and cont_runmed are left untouched (E1/E3 unaffected).
+    _stage_dir = paths["spec_final_object"].parent
+    _cont_window_A = float(cfg.get("x11_continuum_window_A", 80.0))
+    for method, cal in calibrated.items():
+        prod = cal.product
+        cont = np.asarray(prod.extra_columns["cont_runmed"], dtype=np.float64)
+        bias = _method_control_bias(
+            _stage_dir, method, np.asarray(prod.wave_A, dtype=np.float64),
+            np.isfinite(cont), _cont_window_A, flux_scale=corrections.flux_scale,
+        )
+        if bias is not None:
+            prod.extra_columns["continuum_bias"] = bias
+            prod.extra_columns["cont_runmed_biasref"] = cont - bias
+
     canonical = calibrated[canonical_method]
     # Inter-method continuum systematic (isolates the real systematic from the
     # companion's real red spectral structure). The comparison method is the
@@ -785,6 +864,7 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             other_method,
             stage_dir=paths["spec_final_object"].parent,
             window_A=float(cfg.get("x11_continuum_window_A", 80.0)),
+            flux_scale=corrections.flux_scale,
         )
         if other_method
         else None
@@ -825,17 +905,12 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
         "also_calibrated": [method for method in METHOD_ORDER if method != canonical_method],
         "checks": {
             "v1_skylines": _qc_for_wavelength_v1(qc00, corrections),
-            # v3 now gates on the SIGNAL-FREE inter-method continuum agreement
-            # (real systematic), not on the signal-contaminated runmed-vs-poly.
-            "v3_continuum_stable": {
-                "ok": None if intermethod is None else bool(
-                    intermethod["fraction_channels_methods_agree"] >= v3_threshold
-                ),
-                "metric": "intermethod_continuum_agreement",
-                "fraction_channels_methods_agree": None if intermethod is None else intermethod["fraction_channels_methods_agree"],
-                "threshold": v3_threshold,
-                "legacy_runmed_poly_fraction": canonical.continuum_summary["fraction_good_channels_sys_lt_staterr"],
-            },
+            # v3 gates on the SIGNAL-FREE inter-method continuum agreement (real
+            # systematic), not the signal-contaminated runmed-vs-poly. It now uses
+            # the CONTROL-REFERENCED agreement (consistent with D1, whose per-band
+            # t-test is already control-centered); comparing raw continua
+            # double-counts the source-free halo pedestal. Raw kept as diagnostic.
+            "v3_continuum_stable": _v3_continuum_block(intermethod, v3_threshold, canonical),
         },
         "open_issues": list(corrections.open_issues),
     }
