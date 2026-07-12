@@ -1914,13 +1914,137 @@ STAGES: list[dict] = [
         downstream="E1, E3, G2",
         exec=dict(kind="script", target="stage_x11_calibrate.sh", cost="Ligero–moderado."),
         qc="stages/stage_x11_qc.json",
-        salient=["v3_continuum", "intermethod", "fraction_channels", "flux_factor", "scale"],
-        decisions=[
-            ("**Diagnóstico honesto del 'continuo rojo inestable'**: 3 cosas reales (señal de enana fría + sistemático de nivel inter-método 1.76× + rigidez del polinomio). NO es defecto de PSF.", "d2_red_continuum_diagnosis.md"),
-            ("`v3_continuum_stable` recableado para gatear sobre la métrica libre de señal (`fraction_channels_methods_agree`), no sobre `|runmed−poly5|`.", None),
-            ("El sistemático rojo NO afecta la línea Hα ni el límite de Ṁ → limitación aceptada documentada en F1.", None),
+        salient=["canonical_method", "scale_factor", "v3_continuum_stable.ok", "fraction_channels_methods_agree", "control_referenced"],
+        narrative_md=(
+            "## Qué hace D2 y qué integramos\n\n"
+            "D2 convierte el espectro canónico (psffit) en el **producto científico final**: λ "
+            "corregida y en marco declarado, flujo en escala validada, continuo por dos vías, y un "
+            "**error total con presupuesto de sistemáticos explícito**. **Aplica factores medidos "
+            "aguas arriba** (trazables al QC que los midió) — no mide nada nuevo.\n\n"
+            "- **λ:** Δλ = −0.074 Å (de A4/M1), marco final **baricéntrico**.\n"
+            "- **Flujo:** escala = 1.0 (M3 factor 0.973 validado vs Gaia DR3, consistente con 1).\n"
+            "- **Continuo:** running-median y polinomio; su diferencia es el término `sys_continuum`.\n"
+            "- **Error:** `stat` (empírico, M5 rojo) + sistemáticos (flujo-cal, psf, cielo, telúrico, "
+            "continuo). El total está **dominado por el stat**.\n\n"
+            "**Diagnóstico del 'continuo rojo inestable'** ([`docs/d2_red_continuum_diagnosis.md`]"
+            "(../docs/d2_red_continuum_diagnosis.md)): son 3 cosas reales (señal de enana fría + "
+            "sistemático de nivel inter-método + rigidez del polinomio), **no** un defecto de PSF.\n\n"
+            "**La referenciación a controles que integramos (2026-07-11):** `v3_continuum_stable` "
+            "gatea ahora sobre la concordancia inter-método **control-referenciada** "
+            "(**0.867**, consistente con el t control-centrado de D1), guardando la cruda (0.317) como "
+            "diagnóstico; el sistemático rojo baja de **1.76× → 1.35×**; y el producto final lleva la "
+            "columna `cont_runmed_biasref` para G3. v3 sigue <0.90 → falla por el sistemático "
+            "cromático **genuino**, no por el pedestal. **No afecta la línea Hα ni el límite de Ṁ.**"
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Calibración aplicada + la referenciación de continuo (antes/después) del `stage_x11_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_x11_qc.json', RUN_ID)\n"
+            "print('canónico:', q['canonical_method'])\n"
+            "print(f\"λ: Δλ={q['wavelength']['dlambda_A']:.3f} Å, marco={q['wavelength']['frame_final']}, {q['wavelength']['status']}\")\n"
+            "print(f\"flujo: escala={q['flux']['scale_factor']:.3f} ({q['flux']['source'][:60]}...)\")\n"
+            "im = q['continuum']['intermethod_systematic']; ar = im['after_control_reference']\n"
+            "print()\n"
+            "print('continuo inter-método (psffit vs optimal_psfsub):')\n"
+            "print(f\"  ANTES  (crudo)       fraction_agree={im['fraction_channels_methods_agree']:.3f}  red_ratio={im['red_band_median_ratio']:.2f}×\")\n"
+            "print(f\"  DESPUÉS (referenciado) fraction_agree={ar['fraction_channels_methods_agree']:.3f}  red_ratio={ar['red_band_median_ratio']:.2f}×\")\n"
+            "print(f\"  sesgo rojo psffit/psfsub = {ar['canonical_control_bias_red']:+.0f} / {ar['other_control_bias_red']:+.0f}\")\n"
+            "v3 = q['checks']['v3_continuum_stable']\n"
+            "print(f\"\\nv3_continuum_stable: ok={v3['ok']} (métrica={v3['metric']}, umbral {v3['threshold']}) -> falla por el sistemático genuino\")"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — la referenciación a controles (antes/después)\n\n"
+                    "Continuos de los dos métodos G1-validados (psffit, optimal_psfsub), crudos vs "
+                    "referenciados a sus controles. En el **rojo** (>7500 Å, donde el compañero se "
+                    "detecta) los referenciados **concuerdan**; la concordancia global sube de 0.317 a "
+                    "0.867. *(El azul, λ<7000, tiene SNR<1: su discrepancia está dentro del error "
+                    "combinado — no es señal.)*"
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID); wave = 4749.533203125 + 1.25 * np.arange(3681)\n"
+                    "    def col(fn, c):\n"
+                    "        h = fits.open(rd / 'stages' / fn); v = np.asarray(h[1].data[c], float); h.close(); return v\n"
+                    "    fig, (axl, axr) = plt.subplots(1, 2, figsize=(13, 4.3), sharey=True)\n"
+                    "    axl.plot(wave, col('spec_calibrated_psffit_object.fits', 'cont_runmed'), lw=1.1, color='tab:blue', label='psffit')\n"
+                    "    axl.plot(wave, col('spec_calibrated_optimal_psfsub_object.fits', 'cont_runmed'), lw=1.1, color='tab:orange', label='optimal_psfsub')\n"
+                    "    axl.set_title('ANTES: continuos crudos (concuerdan 0.317)')\n"
+                    "    axr.plot(wave, col('spec_calibrated_psffit_object.fits', 'cont_runmed_biasref'), lw=1.1, color='tab:blue', label='psffit ref')\n"
+                    "    axr.plot(wave, col('spec_calibrated_optimal_psfsub_object.fits', 'cont_runmed_biasref'), lw=1.1, color='tab:orange', label='optimal_psfsub ref')\n"
+                    "    axr.set_title('DESPUÉS: referenciados a controles (0.867)')\n"
+                    "    for ax in (axl, axr):\n"
+                    "        ax.set_xlabel('λ [Å]'); ax.axvline(6563, color='tab:red', ls=':'); ax.axhline(0, color='0.7', lw=0.6); ax.legend(fontsize=8)\n"
+                    "    axl.set_ylabel('continuo'); axl.set_ylim(-1500, 1500)\n"
+                    "    axr.text(5000, -1300, 'azul: SNR<1\\n(dentro del error)', fontsize=7, color='0.4')\n"
+                    "    fig.suptitle('D2 · referenciación a controles: acerca los dos métodos G1-validados')\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'referencing.png', dpi=110); print('figura ->', outdir / 'referencing.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — el presupuesto de error\n\n"
+                    "Cada componente del error del `spec_final_object.fits` vs λ (escala log). El total "
+                    "está **dominado por el `stat`** (empírico, M5 rojo); el sistemático de continuo "
+                    "(runmed vs poly) es el segundo; flujo-cal/cielo/telúrico son ~0."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID); wave = 4749.533203125 + 1.25 * np.arange(3681)\n"
+                    "    h = fits.open(rd / 'stages' / 'spec_final_object.fits'); d = h[1].data\n"
+                    "    comp = {'stat': 'flux_err_stat', 'flujo-cal': 'sys_fluxcal', 'psf': 'sys_psf',\n"
+                    "            'cielo': 'sys_sky', 'telúrico': 'sys_telluric', 'continuo': 'sys_continuum'}\n"
+                    "    sm = lambda x, n=51: np.convolve(np.nan_to_num(np.abs(x)), np.ones(n) / n, mode='same')\n"
+                    "    fig, ax = plt.subplots(figsize=(11, 4))\n"
+                    "    for lab, c in comp.items():\n"
+                    "        if c in d.columns.names:\n"
+                    "            ax.plot(wave, sm(np.asarray(d[c], float)), lw=1, label=lab)\n"
+                    "    ax.plot(wave, sm(np.asarray(d['flux_err_total'], float)), lw=2, color='k', label='TOTAL')\n"
+                    "    h.close()\n"
+                    "    ax.set_yscale('log'); ax.set_xlabel('λ [Å]'); ax.set_ylabel('error (|componente|, suavizado)')\n"
+                    "    ax.set_title('D2 · presupuesto de error: stat + sistemáticos'); ax.legend(fontsize=8, ncol=4)\n"
+                    "    outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.tight_layout(); fig.savefig(outdir / 'error_budget.png', dpi=110)\n"
+                    "    print('figura ->', outdir / 'error_budget.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['intermethod','fraction_channels','flux_factor'])",
+        decisions=[
+            ("**Diagnóstico honesto del 'continuo rojo inestable'**: 3 cosas reales (señal de enana fría + sistemático de nivel inter-método + rigidez del polinomio). NO es defecto de PSF.", "d2_red_continuum_diagnosis.md"),
+            ("**Referenciación a controles integrada** (2026-07-11): v3 gatea sobre la métrica referenciada (0.867 vs cruda 0.317); sistemático rojo 1.76×→1.35×; columna `cont_runmed_biasref` entregada para G3.", None),
+            ("D1 **ya era control-centrado** (su veredicto refleja el sistemático genuino); esto solo puso a D2 al mismo nivel. v3 sigue <0.90 → sistemático cromático genuino, limitación aceptada en F1.", None),
+            ("El sistemático rojo NO afecta la línea Hα ni el límite de Ṁ; escala de flujo 1.0 validada vs Gaia; error total dominado por el stat.", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**D2: producto final `spec_final_object` (psffit); Δλ −0.074 Å baricéntrico; flujo escala "
+            "1.0 (Gaia); error dominado por el stat.**\n\n"
+            "- **Fecha:** calibración D1 v2 realineado (2026-07-09); referenciación integrada "
+            "2026-07-11.\n"
+            "- **λ/flujo:** todos los factores trazables a A4 (M1 offset, M3 Gaia).\n"
+            "- **Continuo:** referenciación a controles integrada — v3 sobre 0.867 (cruda 0.317), "
+            "rojo 1.76×→1.35×, columna `cont_runmed_biasref` para G3.\n"
+            "- **v3 sigue fallando** (0.867<0.90) por el sistemático cromático genuino → limitación "
+            "aceptada; F1 sigue yellow.\n"
+            "- **Endpoint intacto:** la línea Hα (E1) y el límite de Ṁ (E3) no dependen de esto.\n"
+            "- **Downstream:** `spec_final_object` alimenta E1, E3 y G2."
+        ),
     ),
     # ===================== BLOQUE E — resultado =====================
     dict(
