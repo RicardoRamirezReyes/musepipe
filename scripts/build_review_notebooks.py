@@ -1469,11 +1469,94 @@ STAGES: list[dict] = [
         downstream="D1, E1",
         exec=dict(kind="script", target="stage_x02_optimal.sh", cost="Moderado."),
         qc="stages/spec_optimal_qc.json",
-        salient=["optimal", "psfsub", "local", "control", "throughput"],
+        salient=["variants", "snr_gain_vs_aperture.median", "continuum_bias_vs_aperture_pct", "v3_continuum_bias_ok", "fwhm_pm10pct"],
+        narrative_md=(
+            "## Qué hace C3 y las dos variantes\n\n"
+            "C3 es **extracción óptima de Horne (1986)**: por canal, pondera cada píxel por el "
+            "**perfil de PSF esperado** (de C1) y la varianza inversa "
+            "(`f = Σ M·P·D/V / Σ M·P²/V`). Al bajar el peso de los píxeles ruidosos, **gana S/N** "
+            "frente a la apertura (aquí ~**6.9× mediana**). La fórmula es cerrada; el valor está en "
+            "implementarla exacta (tests analíticos de flujo y varianza).\n\n"
+            "**Dos variantes del fondo:**\n"
+            "- **`optimal_ls`** — usa el residual de superficie local (04b) como fondo.\n"
+            "- **`optimal_psfsub`** — ajusta y **resta la PSF de la primaria** primero, y luego "
+            "extrae ópticamente el compañero.\n\n"
+            "**Decisión:** G1 **valida `psfsub`** (`validated_with_bias`) y la usa como una de las dos "
+            "citables (con psffit). **`ls` sobre-sustrae el continuo** (el pedestal de 04b) → sesgo de "
+            "continuo **−373 % vs apertura**, `v3_continuum_bias` **falla**. Ambas comparten la forma "
+            "roja real (SED de enana fría) pero `ls` queda con un gran desplazamiento negativo.\n\n"
+            "Errores **empíricos** (M5 rojo); **robusta a errores de PSF** (±10 % FWHM → 0 % de sesgo "
+            "de flujo)."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Ganancia de S/N, sesgo de continuo, modelo psfsub y chequeos del `spec_optimal_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/spec_optimal_qc.json', RUN_ID)\n"
+            "sg = q['snr_gain_vs_aperture']; ck = q['checks']; pm = q['psfsub_model']\n"
+            "print('variantes:', q['variants'], '| ventana:', q['window_px'], 'px | PSF:', q['psf_model'].split('/')[-1])\n"
+            "print(f\"ganancia S/N vs apertura: mediana {sg['median']:.2f}× (p10 {sg['p10']:.2f}, p90 {sg['p90']:.1f})\")\n"
+            "print(f\"sesgo de continuo vs apertura: {q['continuum_bias_vs_aperture_pct']:.0f}%   <-- ls sobre-sustrae\")\n"
+            "print(f\"sensibilidad a PSF (±10% FWHM): {q['psf_sensitivity']['fwhm_pm10pct_flux_bias_pct']:.1f}% de sesgo (robusto)\")\n"
+            "print(f\"psfsub: amplitud mediana {pm['amplitude_median']:.3g}, n_fit {pm['n_fit_median']:.0f}, \"\n"
+            "      f\"fit_radius {pm['fit_radius_px']:.0f}px, exclude {pm['exclude_radius_px']:.0f}px\")\n"
+            "print(f\"checks: v1_snr_gain={ck['v1_snr_gain_ok']} v2_error={ck['v2_error_ratio_ok']} \"\n"
+            "      f\"v3_continuum_bias={ck['v3_continuum_bias_ok']} (falla: sesgo ls) v4_clip={ck['v4_clip_concentration_ok']}\")\n"
+            "print('open_issue:', q['open_issues'][0])"
+        ),
+        plot_md=(
+            "## Plot — las dos variantes: ls vs psfsub\n\n"
+            "Los espectros suavizados de `spec_optimal_object.fits` (ls) y "
+            "`spec_optimal_psfsub_object.fits` (psfsub). **`ls` (naranja)** queda muy por debajo de "
+            "cero = sobre-sustracción del continuo (el sesgo −373 %); **`psfsub` (verde)** queda cerca "
+            "de cero y **sube al rojo** (SED real de enana fría). Comparten la forma, difieren en "
+            "nivel — por eso G1 valida psfsub y rechaza ls."
+        ),
+        plot_code=(
+            "try:\n"
+            "    import numpy as np\n"
+            "    import matplotlib.pyplot as plt\n"
+            "    from astropy.io import fits\n"
+            "    rd = nb.run_dir(RUN_ID)\n"
+            "    def spec(path):\n"
+            "        h = fits.open(rd / 'stages' / path); d = h[1].data\n"
+            "        w = np.asarray(d['wave_A'], float); f = np.asarray(d['flux'], float); h.close(); return w, f\n"
+            "    sm = lambda x, n=41: np.convolve(np.nan_to_num(x), np.ones(n) / n, mode='same')\n"
+            "    w, fls = spec('spec_optimal_object.fits')\n"
+            "    _, fps = spec('spec_optimal_psfsub_object.fits')\n"
+            "    fig, ax = plt.subplots(figsize=(11, 4))\n"
+            "    ax.plot(w, sm(fls), lw=1.2, color='tab:orange', label='optimal_ls (superficie local)')\n"
+            "    ax.plot(w, sm(fps), lw=1.2, color='tab:green', label='optimal_psfsub (resta de PSF) — validada G1')\n"
+            "    ax.axhline(0, color='0.6', lw=0.7); ax.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
+            "    allv = np.concatenate([sm(fls), sm(fps)])\n"
+            "    ax.set_ylim(np.nanpercentile(allv, 2), np.nanpercentile(allv, 98))\n"
+            "    ax.set_xlabel('λ [Å]'); ax.set_ylabel('flujo (suavizado 41ch)')\n"
+            "    ax.set_title('C3 · dos variantes: ls sobre-sustrae el continuo (−373% vs apertura), psfsub no')\n"
+            "    ax.legend(fontsize=8); fig.tight_layout()\n"
+            "    outdir = rd / 'plots' / 'c3_optimal'; outdir.mkdir(parents=True, exist_ok=True)\n"
+            "    fig.savefig(outdir / 'ls_vs_psfsub.png', dpi=110); print('figura ->', outdir / 'ls_vs_psfsub.png'); plt.show()\n"
+            "except Exception as e:\n"
+            "    print('No se pudo generar el plot:', type(e).__name__, e)"
+        ),
         decisions=[
-            ("Dos variantes: `optimal_psfsub` (validada por G1) y `optimal_ls` (rechazada, insensible en el borde).", None),
+            ("Extracción óptima de Horne ponderada por la PSF de C1 → **~6.9× ganancia de S/N** vs apertura (`v1` pasa).", None),
+            ("Dos variantes: **`optimal_psfsub` validada por G1** (`validated_with_bias`) y **`optimal_ls` rechazada** — sobre-sustrae el continuo (sesgo −373%, `v3` falla).", None),
+            ("Errores empíricos (M5 rojo); robusta a errores de PSF (±10% FWHM → 0% de sesgo de flujo).", None),
         ],
-        checks="nb.show(qc, keys=['optimal','control'])",
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**C3: extracción óptima de Horne; ~6.9× ganancia de S/N vs apertura; dos variantes "
+            "(ls, psfsub).**\n\n"
+            "- **Fecha:** cadena D1 v2 sobre el run realineado (2026-07-09).\n"
+            "- **Entrada:** cubo stage02 + PSF de C1 (`psf_model.json`); ventana 8 px.\n"
+            "- **psfsub** (resta de PSF de la primaria): validada por G1, una de las dos citables.\n"
+            "- **ls** (superficie local): **sobre-sustrae** el continuo (−373 % vs apertura, "
+            "`v3_continuum_bias` falla) — rechazada.\n"
+            "- **Robusta a PSF** (±10 % FWHM → 0 % de sesgo); errores empíricos (M5 rojo).\n"
+            "- **Downstream:** psfsub entra en D1 (par primario psffit vs optimal_psfsub); ls no."
+        ),
     ),
     dict(
         id="C4", slug="C4_psffit", title="Ajuste de PSF (psffit)", block="C · Extracción",
