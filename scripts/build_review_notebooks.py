@@ -2460,12 +2460,127 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_h04_injection.sh",
                   cost="Pesado (~22 min grid 112 casos con `h04_process_pool`)."),
         qc="stages/stage_h04_qc.json",
-        salient=["throughput", "psffit", "hierarchy", "v3_monotonic", "v4_hierarchy", "nulls"],
-        decisions=[
-            ("**Throughput psffit ≈ 0.80–0.90** (canónico); optimal_psfsub 0.72; aperture/optimal_ls insensibles en el borde.", None),
-            ("V3-monotonic + V4-hierarchy FALLAN por patología de borde (optimal_ls/aperture) — canónico psffit NO afectado → limitación aceptada en F1.", None),
+        salient=["per_method_at_snr5", "v2_nulls_clean.status", "v4_hierarchy.status", "n_injections"],
+        narrative_md=(
+            "## Qué hace E4 y qué valida\n\n"
+            "E4 **inyecta** señales sintéticas de Hα de flujo/SNR conocidos en la posición del "
+            "compañero y mide cuánto **recupera** cada método → el **throughput** "
+            "(flujo recuperado / inyectado). Ese factor es el que **E3 usa** para corregir el límite "
+            "de flujo.\n\n"
+            "**Grid:** 112 inyecciones × 4 métodos (+ perturbaciones de PSF).\n\n"
+            "**Throughput @ SNR5:** psffit **0.667**, optimal_psfsub **0.667** (recuperan ~2/3), "
+            "aperture **0.375**, optimal_ls **0.194** (insensibles — el compañero está en el gradiente "
+            "del halo, en el borde del campo).\n\n"
+            "**Verificaciones:**\n"
+            "- **v2_nulls_clean PASS** (64 nulos, 0 hits → sin falsos positivos).\n"
+            "- **v3_monotonic PASS**, **v5_continuum PASS** (0% degradación).\n"
+            "- **v4_hierarchy FAIL** (`optimal_ls` rompe el orden esperado de throughput) — es la "
+            "**patología de borde** (ls/aperture insensibles en el gradiente del halo); el canónico "
+            "**psffit no se ve afectado** → limitación aceptada en F1.\n"
+            "- **v1_regression `unavailable`** (la regresión histórica de Stage06 no está disponible).\n\n"
+            "**Salvedad** (open_issue): la regresión histórica de Stage06 no pasó → 'H04 no válido "
+            "para E3' formalmente; los throughputs se usan con esa salvedad declarada."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Throughput por método y las 5 verificaciones del `stage_h04_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_h04_qc.json', RUN_ID)\n"
+            "th = q['throughput']['per_method_at_snr5']; ck = q['checks']\n"
+            "print(f\"grid: {q['grid']['n_injections']} inyecciones × {len(q['grid']['methods'])} métodos\")\n"
+            "print('\\nthroughput @ SNR5:')\n"
+            "for m in ['psffit','optimal_psfsub','aperture','optimal_ls']:\n"
+            "    print(f\"   {m:15s} {th[m]['throughput']:.3f} ± {th[m]['err']:.3f}\")\n"
+            "print('\\nverificaciones:')\n"
+            "for name, c in ck.items():\n"
+            "    extra = f\"  {c.get('failures')}\" if c.get('failures') else ''\n"
+            "    print(f\"   {name:16s} {c['status']}{extra}\")\n"
+            "print('\\nopen_issues:')\n"
+            "for s in q['open_issues']:\n"
+            "    print('  -', s)"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — throughput por método (lo que E3 consume)\n\n"
+                    "El throughput @ SNR5 por método. **psffit/psfsub ~0.67** (verde); aperture 0.37 y "
+                    "**optimal_ls 0.19** (rojo) son insensibles en el borde → `v4_hierarchy` falla "
+                    "(ls rompe el orden). El canónico psffit no se ve afectado."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_h04_qc.json', RUN_ID)\n"
+                    "    th = q['throughput']['per_method_at_snr5']; v4 = q['checks']['v4_hierarchy']\n"
+                    "    methods = ['psffit', 'optimal_psfsub', 'aperture', 'optimal_ls']\n"
+                    "    vals = [th[m]['throughput'] for m in methods]; errs = [th[m]['err'] for m in methods]\n"
+                    "    cols = ['tab:green', 'tab:green', 'tab:orange', 'tab:red']\n"
+                    "    fig, ax = plt.subplots(figsize=(8, 4.2))\n"
+                    "    ax.bar(range(len(methods)), vals, yerr=errs, color=cols, capsize=4)\n"
+                    "    for i, v in enumerate(vals): ax.text(i, v + 0.03, f'{v:.2f}', ha='center', fontsize=9)\n"
+                    "    ax.set_xticks(range(len(methods))); ax.set_xticklabels(methods, fontsize=9)\n"
+                    "    ax.set_ylabel('throughput @ SNR5 (recuperado/inyectado)'); ax.set_ylim(0, 0.9)\n"
+                    "    ax.set_title(f\"E4 · throughput por método (v4_hierarchy={v4['status']}: {v4['failures']} rompe el orden)\")\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'e4_injection'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'throughput.png', dpi=110); print('figura ->', outdir / 'throughput.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — la curva de recuperación (pendiente = throughput)\n\n"
+                    "Flujo neto recuperado vs inyectado por método (variante nominal). Pasa por el "
+                    "origen y la **pendiente es el throughput**: psffit/psfsub siguen ~0.67 (paralelos, "
+                    "bajo el 1:1 ideal); aperture 0.37 y ls 0.19 son mucho más planos (insensibles). "
+                    "*(psffit y psfsub coinciden en 0.67; psffit va discontinuo para verse.)*"
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import pandas as pd\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    q = nb.load_qc('stages/stage_h04_qc.json', RUN_ID); th = q['throughput']['per_method_at_snr5']\n"
+                    "    d = pd.read_csv(rd / 'tables' / 'injection_throughput_by_method.csv')\n"
+                    "    d = d[(d.variant == 'nominal') & (d.continuum_mode == 'none')]\n"
+                    "    styles = {'psffit': ('tab:green', '--'), 'optimal_psfsub': ('tab:blue', '-'),\n"
+                    "              'aperture': ('tab:orange', '-'), 'optimal_ls': ('tab:red', '-')}\n"
+                    "    fig, ax = plt.subplots(figsize=(8.5, 4.3))\n"
+                    "    for m, (c, ls) in styles.items():\n"
+                    "        g = d[d.method == m].groupby('injected_flux')['recovered_flux_net'].median()\n"
+                    "        ax.plot(g.index, g.values, 'o' + ls, color=c, ms=5, label=f\"{m} (T={th[m]['throughput']:.2f})\")\n"
+                    "    mx = d['injected_flux'].max(); ax.plot([0, mx], [0, mx], 'k:', lw=0.8, label='ideal 1:1 (T=1)')\n"
+                    "    ax.set_xlabel('flujo inyectado'); ax.set_ylabel('flujo neto recuperado (mediana)')\n"
+                    "    ax.set_title('E4 · recuperación: pendiente = throughput; aperture/ls insensibles en el borde')\n"
+                    "    ax.legend(fontsize=8); fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'e4_injection'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'recovery.png', dpi=110); print('figura ->', outdir / 'recovery.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['throughput','v4_hierarchy'])",
+        decisions=[
+            ("**Throughput @SNR5: psffit/psfsub ≈ 0.67** (canónico psffit); aperture 0.37, optimal_ls 0.19 (insensibles en el borde del halo). Son los factores que E3 usa.", None),
+            ("**v2_nulls/v3_monotonic/v5 PASS**; **v4_hierarchy FAIL** (optimal_ls rompe el orden por la patología de borde) — canónico psffit NO afectado → limitación aceptada en F1.", None),
+            ("Salvedad: la regresión histórica de Stage06 no pasó ('H04 no válido para E3' formalmente); throughputs usados con la salvedad declarada.", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**E4: throughput @SNR5 medido — psffit/psfsub 0.67, aperture 0.37, optimal_ls 0.19.**\n\n"
+            "- **Fecha:** grid completo de 112 casos, 2026-07-08.\n"
+            "- **Valida** los throughputs que E3 consume; recuperación limpia en los nulos "
+            "(v2 PASS, 0 hits).\n"
+            "- **v4_hierarchy FAIL** por optimal_ls (patología de borde: ls/aperture insensibles en el "
+            "gradiente del halo); el canónico psffit no se afecta → limitación aceptada.\n"
+            "- **v1_regression unavailable**; open_issue: la regresión histórica de Stage06 no pasó "
+            "('H04 no válido para E3' formalmente).\n"
+            "- **Downstream:** el throughput psffit 0.67 es el que E3 aplica para el límite de Ṁ."
+        ),
     ),
     # ===================== BLOQUE F — paquete =====================
     dict(
