@@ -19,6 +19,7 @@ from ..reduction.telluric import TELLURIC_BANDS
 from ..spectral import (
     continuum_polyfit_loglambda,
     continuum_running_median,
+    control_reference_bias,
     median_filter_1d,
     standard_line_free_mask,
 )
@@ -641,7 +642,24 @@ def _qc_for_wavelength_v1(qc00, corrections):
     return verify_wavelength_residuals(offsets, corrections)
 
 
-def _intermethod_continuum_report(calibrated, canonical_method, other_method, *, red_band_A=(8600.0, 9100.0)):
+def _load_control_bias(stage_dir, method, waves, good_mask, window_A):
+    """Control-mean continuum bias for a method (None if its controls are absent)."""
+
+    if stage_dir is None:
+        return None
+    npz = Path(stage_dir) / f"spec_calibrated_{method}_controls.npz"
+    if not npz.exists():
+        return None
+    try:
+        controls = np.load(npz)["control_spectra"]
+    except (OSError, KeyError, ValueError):
+        return None
+    return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
+
+
+def _intermethod_continuum_report(
+    calibrated, canonical_method, other_method, *, red_band_A=(8600.0, 9100.0), stage_dir=None, window_A=80.0
+):
     """Continuum systematic isolated from real companion signal (D2 v3).
 
     Both extraction methods share the REAL companion spectrum, so their continuum
@@ -670,12 +688,46 @@ def _intermethod_continuum_report(calibrated, canonical_method, other_method, *,
     with np.errstate(divide="ignore", invalid="ignore"):
         red_ratio = float(np.nanmedian((ca / cb)[red])) if np.any(red) else None
     red_frac_agree = float(np.mean((inter <= comb)[red])) if np.any(red) else None
+
+    # Control-mean referencing (D1 v2 §3.1, model-free): subtract each method's
+    # own control-mean continuum bias, then re-measure the inter-method continuum
+    # agreement. Both extractions carry a chromatic residual-halo bias of OPPOSITE
+    # sign (psffit +, psfsub -); referencing removes the source-free baseline and
+    # isolates the genuine method-dependent systematic. Reported alongside (does
+    # not overwrite flux or drive the gate).
+    after_ref = None
+    ba = _load_control_bias(stage_dir, canonical_method, wave, good, window_A)
+    bb = _load_control_bias(stage_dir, other_method, wave, good, window_A)
+    if ba is not None and bb is not None:
+        car, cbr = ca - ba, cb - bb
+        inter_r = np.abs(car - cbr)
+        frac_r = float(np.mean((inter_r <= comb)[good]))
+        red_frac_r = float(np.mean((inter_r <= comb)[red])) if np.any(red) else None
+        with np.errstate(divide="ignore", invalid="ignore"):
+            red_ratio_r = float(np.nanmedian((car / cbr)[red])) if np.any(red) else None
+        after_ref = {
+            "method": "control_mean_referenced (each method minus its own control-mean continuum)",
+            "fraction_channels_methods_agree": frac_r,
+            "red_band_fraction_agree": _finite_or_none(red_frac_r),
+            "red_band_median_ratio": _finite_or_none(red_ratio_r),
+            "canonical_control_bias_red": _finite_or_none(
+                float(np.nanmedian(ba[red])) if np.any(red) else None
+            ),
+            "other_control_bias_red": _finite_or_none(
+                float(np.nanmedian(bb[red])) if np.any(red) else None
+            ),
+            "interpretation": (
+                "Referencing each method to its own same-radius controls removes the source-free "
+                "halo-subtraction pedestal; the remaining ratio is the genuine chromatic systematic."
+            ),
+        }
     return {
         "canonical_vs": other_method,
         "fraction_channels_methods_agree": frac_agree,
         "red_band_A": [float(red_band_A[0]), float(red_band_A[1])],
         "red_band_median_ratio": _finite_or_none(red_ratio),
         "red_band_fraction_agree": _finite_or_none(red_frac_agree),
+        "after_control_reference": after_ref,
         "interpretation": (
             "Continuum difference between the two G1-validated methods beyond their combined stat "
             "error = method-dependent systematic (residual chromatic halo subtraction). The companion "
@@ -726,7 +778,17 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             break
     if other_method is None or other_method not in calibrated:
         other_method = "optimal_psfsub" if "optimal_psfsub" in calibrated else None
-    intermethod = _intermethod_continuum_report(calibrated, canonical_method, other_method) if other_method else None
+    intermethod = (
+        _intermethod_continuum_report(
+            calibrated,
+            canonical_method,
+            other_method,
+            stage_dir=paths["spec_final_object"].parent,
+            window_A=float(cfg.get("x11_continuum_window_A", 80.0)),
+        )
+        if other_method
+        else None
+    )
     v3_threshold = float(cfg.get("x11_continuum_agree_threshold", 0.90))
     qc = {
         "stage": "x11_spectral_calibration",

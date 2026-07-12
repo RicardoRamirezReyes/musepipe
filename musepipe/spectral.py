@@ -46,6 +46,33 @@ def continuum_running_median(waves, spec, good_mask, window_A=80.0, min_pixels=1
     return continuum
 
 
+def control_reference_bias(
+    waves, control_spectra, good_mask=None, *, window_A=80.0, min_pixels=15
+) -> np.ndarray:
+    """Per-channel extraction bias estimated from same-radius control apertures.
+
+    The controls are extracted identically to the object but contain no
+    companion, so their MEAN spectrum is the extraction/background bias at the
+    source radius (residual chromatic halo subtraction, pedestal). It is
+    smoothed with the same running-median window used for the object continuum,
+    because the bias is a smooth chromatic function with no spectral lines; the
+    smoothing keeps the referenced continuum from inheriting per-channel control
+    noise. Subtracting this bias from a method's continuum re-references it to a
+    source-free baseline — the model-free "control = object" correction
+    (D1 v2 §3.1); it does not touch emission lines (the mean control has none).
+    """
+
+    waves = np.asarray(waves, dtype=np.float64)
+    controls = np.asarray(control_spectra, dtype=np.float64)
+    if controls.ndim != 2 or controls.shape[1] != waves.size:
+        raise ValueError("control_spectra must be (n_controls, n_channels) matching waves.")
+    with np.errstate(all="ignore"):
+        mean_control = np.nanmean(controls, axis=0)
+    finite = np.isfinite(mean_control)
+    mask = finite if good_mask is None else (np.asarray(good_mask, dtype=bool) & finite)
+    return continuum_running_median(waves, mean_control, mask, window_A=window_A, min_pixels=min_pixels)
+
+
 def median_filter_1d(values, width=21) -> np.ndarray:
     """Centered NaN-median filter with truncated edges."""
 

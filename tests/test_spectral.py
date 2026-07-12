@@ -4,6 +4,7 @@ import numpy as np
 
 from musepipe.spectral import (
     continuum_running_median,
+    control_reference_bias,
     make_wavelength_mask,
     nearest_channel_index,
     nearest_channel_indices,
@@ -32,6 +33,31 @@ class SpectralTests(unittest.TestCase):
         good[2] = False
         continuum = continuum_running_median(waves, spec, good, window_A=10.0, min_pixels=1)
         np.testing.assert_allclose(continuum, np.full(5, 2.0))
+
+    def test_control_reference_bias_recovers_constant_pedestal(self):
+        # Controls = a constant pedestal + zero-mean noise; the smoothed
+        # control-mean should recover the pedestal (model-free bias estimate).
+        rng = np.random.default_rng(0)
+        waves = np.linspace(5000.0, 9000.0, 400)
+        pedestal = -30.0
+        controls = pedestal + rng.normal(0.0, 5.0, size=(33, waves.size))
+        bias = control_reference_bias(waves, controls, window_A=200.0, min_pixels=5)
+        self.assertTrue(np.all(np.isfinite(bias)))
+        self.assertAlmostEqual(float(np.median(bias)), pedestal, delta=2.0)
+
+    def test_control_reference_bias_ignores_a_line_in_one_control(self):
+        # A strong emission "line" in a single control must not leak into the
+        # bias (running median over the source-free mean is robust).
+        waves = np.linspace(5000.0, 9000.0, 400)
+        controls = np.zeros((10, waves.size))
+        controls[0, 200] += 1e4  # spurious line in one control
+        bias = control_reference_bias(waves, controls, window_A=200.0, min_pixels=5)
+        self.assertLess(abs(float(np.median(bias))), 1.0)
+
+    def test_control_reference_bias_validates_shape(self):
+        waves = np.arange(10.0)
+        with self.assertRaises(ValueError):
+            control_reference_bias(waves, np.zeros((3, 9)))
 
     def test_make_wavelength_mask_applies_bounds_and_drop_range(self):
         waves = np.array([5700.0, 5800.0, 6060.0, 7000.0, np.nan])
