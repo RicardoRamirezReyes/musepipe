@@ -2055,12 +2055,132 @@ STAGES: list[dict] = [
         downstream="E2, E3, G2 (V3)",
         exec=dict(kind="script", target="stage_h01_detect.sh", cost="Ligero–moderado."),
         qc="stages/stage_h01_qc.json",
-        salient=["verdict", "non_detection", "fap", "rv", "z", "lsf"],
-        decisions=[
-            ("**VEREDICTO = `non_detection`** — ningún método supera el FAP global; el pico psffit es RV-inconsistente. ENDPOINT CIENTÍFICO.", None),
-            ("LSF = 2.383 Å (medida, A4/M2), 33 controles → min_resolvable_fap ≈ 0.029.", None),
+        salient=["verdict", "reason", "global_fap_lt", "significant_methods", "rv_consistent"],
+        narrative_md=(
+            "## Qué hace E1 y el resultado\n\n"
+            "E1 busca **emisión de Hα** del compañero con un **matched filter** (plantilla de la línea "
+            "esperada) y calibra la significancia con **controles** (FAP empírico). Es el **endpoint "
+            "científico**.\n\n"
+            "Por método: busca en ±500 km/s alrededor de Hα (6562.8 Å, rv_sys −7) → un `z` del matched "
+            "filter. La **FAP** = fracción de los 33 máximos nulos (posiciones de control) que superan "
+            "el pico del objeto. **Criterio de detección:** `global_fap < 0.01` **Y** un par admisible "
+            "(psffit+aperture) **Y** rv dentro de la LSF.\n\n"
+            "**VEREDICTO = `non_detection`** (`no_method_passes_global_fap`): ningún método pasa. Los "
+            "picos del objeto (z 1.0–3.4) caen **dentro de sus distribuciones nulas** (FAP 0.62–0.97 "
+            "≫ 0.01). El pico de **psffit z=3.41** parece 'algo', pero sus nulos llegan a 8 (borde "
+            "ruidoso, ~10× ruido) → FAP 0.88; además `rv_consistent=False` (v=+128 vs esperado ~−7) y "
+            "FWHM 10 Å (demasiado ancho para Hα) → **ruido, no línea**.\n\n"
+            "**Inputs:** LSF 2.383 Å (medida en A4/M2), rv_sys −7 (estimación de literatura), 33 "
+            "controles → `min_resolvable_fap` ≈ 0.029 (aún >0.01; un FAP<1% estricto necesitaría ~99 "
+            "controles — salvedad).\n\n"
+            "**Resultado robusto: no hay señal de acreción en Hα de ROXs 12 B.**"
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Veredicto, criterio y el pico/FAP/rv de cada método del `stage_h01_qc.json` + la tabla."
+        ),
+        evidence_code=(
+            "import pandas as pd\n"
+            "q = nb.load_qc('stages/stage_h01_qc.json', RUN_ID)\n"
+            "v = q['verdict']; cr = q['criterion']\n"
+            "print('VEREDICTO:', v['verdict'], '|', v['reason'], '| métodos significativos:', v['significant_methods'])\n"
+            "print(f\"criterio: global_fap<{cr['global_fap_lt']}, par admisible {cr['admissible_pairs']}, rv dentro de LSF\")\n"
+            "print(f\"línea: Hα {q['line']['rest_A']} Å, rv_sys {q['line']['rv_sys_kms']} km/s, búsqueda ±{q['line']['search_half_width_kms']:.0f} km/s\")\n"
+            "print()\n"
+            "d = pd.read_csv(nb.run_dir(RUN_ID) / 'tables' / 'halpha_detection_by_method.csv')\n"
+            "for _, r in d.iterrows():\n"
+            "    print(f\"  {r['method']:15s} z={r['matched_z']:.2f}  FAP={r['global_empirical_fap']:.2f}  \"\n"
+            "          f\"v={r['peak_velocity_kms']:+.0f} km/s  rv_ok={r['rv_consistent']}  fwhm={r['fwhm_A']:.1f} Å\")\n"
+            "print(f\"\\nmin_resolvable_fap = {d['minimum_resolvable_fap'].iloc[0]:.3f} (33 controles; <0.01 necesita ~99)\")"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — la no-detección: pico del objeto vs distribución nula\n\n"
+                    "Por método, los 33 **máximos nulos** (matched filter en posiciones de control, "
+                    "gris) y el **pico del objeto** (estrella). En todos, el pico del objeto queda "
+                    "**dentro de la nube nula** → FAP ≫ 0.01. psffit tiene z alto (3.41) pero sus "
+                    "nulos llegan a 8 (borde ruidoso) → FAP 0.88; rv inconsistente."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import pandas as pd\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    z = np.load(rd / 'stages' / 'stage_h01_null_maxima.npz')\n"
+                    "    d = pd.read_csv(rd / 'tables' / 'halpha_detection_by_method.csv').set_index('method')\n"
+                    "    methods = ['aperture', 'optimal_psfsub', 'psffit', 'optimal_ls']\n"
+                    "    rng = np.random.default_rng(1)\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4.5))\n"
+                    "    for i, m in enumerate(methods):\n"
+                    "        nulls = z[f'{m}_null_maxima']; x = i + rng.uniform(-0.12, 0.12, nulls.size)\n"
+                    "        ax.scatter(x, nulls, s=14, color='0.6', alpha=0.7, label='máximos nulos (33 controles)' if i == 0 else None)\n"
+                    "        obj = d.loc[m, 'matched_z']; fap = d.loc[m, 'global_empirical_fap']; rv = d.loc[m, 'rv_consistent']\n"
+                    "        ax.scatter(i, obj, s=170, marker='*', color='tab:orange' if rv else 'tab:red', zorder=5,\n"
+                    "                   edgecolor='k', label='pico del objeto' if i == 0 else None)\n"
+                    "        ax.text(i, obj + 0.35, f'z={obj:.2f}\\nFAP={fap:.2f}\\nrv_ok={rv}', ha='center', fontsize=7)\n"
+                    "    ax.set_xticks(range(len(methods))); ax.set_xticklabels(methods, fontsize=9)\n"
+                    "    ax.set_ylabel('z del matched filter (máximo en la ventana Hα)')\n"
+                    "    ax.set_title('E1 · no-detección: el pico del objeto queda dentro de la nube nula (FAP >> 0.01)')\n"
+                    "    ax.legend(fontsize=8, loc='upper left'); fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'e1_halpha'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'detection.png', dpi=110); print('figura ->', outdir / 'detection.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — la región de Hα en el espectro canónico\n\n"
+                    "El espectro psffit (`spec_final_object.fits`) alrededor de Hα con la banda ±1σ "
+                    "empírica y la posición esperada de Hα (6562.8 Å a rv=−7). **No hay línea** por "
+                    "encima del ruido en la posición esperada."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID); wave = 4749.533203125 + 1.25 * np.arange(3681)\n"
+                    "    h = fits.open(rd / 'stages' / 'spec_final_object.fits'); flux = np.asarray(h[1].data['flux'], float); h.close()\n"
+                    "    sig = np.nanstd(np.load(rd / 'stages' / 'spec_calibrated_psffit_controls.npz')['control_spectra'], axis=0)\n"
+                    "    ha = 6562.8 * (1 + (-7.0) / 299792.458)\n"
+                    "    w = (wave >= 6400) & (wave <= 6750)\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4))\n"
+                    "    ax.fill_between(wave[w], -sig[w], sig[w], color='0.85', label='±1σ empírico')\n"
+                    "    ax.plot(wave[w], flux[w], lw=0.9, color='tab:blue', label='flujo psffit')\n"
+                    "    ax.axvline(ha, color='tab:red', ls=':', label=f'Hα esperado ({ha:.1f} Å)')\n"
+                    "    ax.axhline(0, color='0.6', lw=0.6)\n"
+                    "    ax.set_xlabel('λ [Å]'); ax.set_ylabel('flujo'); ax.legend(fontsize=8)\n"
+                    "    ax.set_title('E1 · región de Hα: sin línea sobre el ruido en la posición esperada')\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'e1_halpha'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'halpha_region.png', dpi=110); print('figura ->', outdir / 'halpha_region.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['verdict','fap','rv'])",
+        decisions=[
+            ("**VEREDICTO = `non_detection`** — ningún método supera el FAP global (0.62–0.97 ≫ 0.01); los picos caen dentro de la nube nula. **ENDPOINT CIENTÍFICO: no hay señal de acreción en Hα.**", None),
+            ("El pico psffit (z=3.41) es RV-inconsistente (v=+128) y demasiado ancho (10 Å) → ruido, no línea; su nube nula llega a z=8 (borde ~10× ruido).", None),
+            ("LSF = 2.383 Å (medida, A4/M2), 33 controles → min_resolvable_fap ≈ 0.029 (un FAP<1% estricto necesitaría ~99 controles).", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**E1: veredicto `non_detection` — no hay señal de acreción en Hα de ROXs 12 B.**\n\n"
+            "- **Fecha:** cadena D1 v2 realineado (2026-07-09), con LSF medida.\n"
+            "- **Todos los métodos:** FAP 0.62–0.97 ≫ 0.01; picos del objeto dentro de sus nubes "
+            "nulas.\n"
+            "- **psffit z=3.41** (el mayor) es rv-inconsistente (+128 km/s) y demasiado ancho (10 Å) "
+            "→ ruido.\n"
+            "- **Inputs:** LSF 2.383 Å medida, 33 controles (min_fap 0.029; ~99 para 1% estricto), "
+            "rv_sys −7 (literatura).\n"
+            "- **Downstream:** alimenta E3 (límite superior de Ṁ) y G2. Es el endpoint científico "
+            "del proyecto."
+        ),
     ),
     dict(
         id="E2", slug="E2_artifacts", title="Batería de artefactos", block="E · Resultado",
