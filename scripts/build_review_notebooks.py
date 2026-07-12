@@ -2190,11 +2190,130 @@ STAGES: list[dict] = [
         downstream="E3, F1",
         exec=dict(kind="script", target="stage_h02_artifacts.sh", cost="Ligero."),
         qc="stages/stage_h02_qc.json",
-        salient=["overall", "t2", "chi2", "centroid", "interpretation"],
-        decisions=[
-            ("**T2 reinterpretado para no-detección** (spec §2): el máximo global NO tiene forma de PSF (chi2≈0.99) → *apoya* la no-detección. Es limitación aceptada en F1.", None),
+        salient=["overall", "overall_raw", "t2.status", "t5.status", "overall_interpretation"],
+        narrative_md=(
+            "## Qué hace E2 y cómo se reinterpreta\n\n"
+            "E2 corre una **batería FIJA de 5 tests de artefactos** sobre el resultado de E1 (siempre "
+            "completa, gane o no E1). Para una no-detección, la pregunta es: **¿es robusta?**\n\n"
+            "- **T1 (coincidencia** con stripe/skyline/laser): `unavailable` (no hay listas — "
+            "exposición única, sin QC de stripes).\n"
+            "- **T2 (forma de PSF del máximo global):** el máximo de Hα **NO** se ajusta mejor con una "
+            "PSF que con un plano (`chi2_ratio` 1.007 ≈ 1) y está **elongado** (1.54, no puntual). "
+            "status `fail` — pero para una **no-detección** esto se **reinterpreta** (spec §2): que el "
+            "máximo NO tenga forma de PSF significa que es **ruido**, no una fuente → **apoya la "
+            "no-detección**.\n"
+            "- **T3 (split de exposición):** `unavailable` (exposición única).\n"
+            "- **T4 (variación de knobs):** `unavailable` (variantes de validación no generadas).\n"
+            "- **T5 (placebos):** buscar en λ **fuera de línea** (6200/6400/6700/7100 Å) → **sin "
+            "detección espuria** (max_fap 0.029, ninguno <0.01). **PASS**: el método no fabrica "
+            "detecciones en λ aleatorios.\n\n"
+            "**`overall_raw = fails`** (driven por T2) → **reinterpretado a `overall = survives`** "
+            "(`non_detection_robust`). Es una **limitación aceptada** documentada en F1 (la "
+            "reinterpretación de T2 para no-detección)."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Los 5 tests con su status y la reinterpretación del `stage_h02_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_h02_qc.json', RUN_ID)\n"
+            "print('E1 input:', q['input_verdict_e1'], '| método seleccionado:', q['selected_method'])\n"
+            "print(f\"T1 coincidencia: {q['t1']['status']}\")\n"
+            "t2 = q['t2']\n"
+            "print(f\"T2 forma-PSF del máximo: {t2['status']}  (chi2_ratio_psf_vs_plane={t2['chi2_ratio_psf_vs_plane']:.3f}, \"\n"
+            "      f\"elongación={t2['elongation_vs_psf']:.2f}) -> NO es PSF -> apoya no-detección\")\n"
+            "print(f\"T3 split exposición: {q['t3']['status']} ({q['t3'].get('reason','')})\")\n"
+            "print(f\"T4 variación knobs: {q['t4']['status']} ({q['t4'].get('reason','')})\")\n"
+            "print(f\"T5 placebos: {q['t5']['status']}  (max_fap={q['t5']['placebo_max_fap_global']:.3f}, any_above={q['t5']['any_above_threshold']})\")\n"
+            "print()\n"
+            "print(f\"overall_raw = {q['overall_raw']}  ->  overall = {q['overall']}\")\n"
+            "print('interpretación:', q['overall_interpretation'])"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — T5 placebos: el método no inventa detecciones\n\n"
+                    "El `z` del matched filter buscando en centros **fuera de línea** (6200–7100 Å) por "
+                    "método, y el **Hα real** (★) en 6562.8. El Hα real cae en el **mismo nivel de "
+                    "ruido** que los placebos → no hay detección espuria y la no-detección es robusta."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import pandas as pd\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    q = nb.load_qc('stages/stage_h02_qc.json', RUN_ID)\n"
+                    "    df = pd.DataFrame(q['t5']['rows'])\n"
+                    "    centers = sorted(df['center_A'].unique())\n"
+                    "    methods = ['aperture', 'optimal_psfsub', 'psffit', 'optimal_ls']\n"
+                    "    real = pd.read_csv(rd / 'tables' / 'halpha_detection_by_method.csv').set_index('method')['matched_z']\n"
+                    "    cmap = dict(zip(methods, ['tab:blue', 'tab:green', 'tab:red', 'tab:orange']))\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4.3))\n"
+                    "    for m in methods:\n"
+                    "        zc = [df[(df.center_A == c) & (df.method == m)]['matched_z'].values[0] for c in centers]\n"
+                    "        ax.plot(centers, zc, 'o-', color=cmap[m], ms=6, label=f'placebo {m}')\n"
+                    "        ax.scatter([6562.8], [real[m]], marker='*', s=160, color=cmap[m], edgecolor='k', zorder=5)\n"
+                    "    ax.axvline(6562.8, color='0.5', ls=':', label='Hα real (★)')\n"
+                    "    ax.set_xlabel('centro de búsqueda [Å]'); ax.set_ylabel('z del matched filter')\n"
+                    "    ax.set_title('E2 · T5 placebos: λ off-line da ruido; Hα real (★) igual → sin detección espuria')\n"
+                    "    ax.legend(fontsize=7, ncol=2); fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'e2_artifacts'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 't5_placebos.png', dpi=110); print('figura ->', outdir / 't5_placebos.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — la batería a golpe de vista\n\n"
+                    "Status de los 5 tests. T2 en rojo (`fail`, pero reinterpretado: el máximo no es "
+                    "PSF → apoya la no-detección); T5 en verde (placebos limpios); T1/T3/T4 en gris "
+                    "(no disponibles por la exposición única)."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_h02_qc.json', RUN_ID)\n"
+                    "    tests = {'T1 coincidencia\\n(stripe/skyline/laser)': q['t1']['status'],\n"
+                    "             'T2 forma PSF\\ndel máximo': q['t2']['status'],\n"
+                    "             'T3 split de\\nexposición': q['t3']['status'],\n"
+                    "             'T4 variación de\\nknobs': q['t4']['status'],\n"
+                    "             'T5 placebos\\n(λ off-line)': q['t5']['status']}\n"
+                    "    col = {'pass': 'tab:green', 'fail': 'tab:red', 'unavailable': '0.7'}\n"
+                    "    names = list(tests)\n"
+                    "    fig, ax = plt.subplots(figsize=(8, 3.6))\n"
+                    "    ax.barh(names, [1] * len(names), color=[col.get(tests[n], '0.7') for n in names])\n"
+                    "    for i, n in enumerate(names):\n"
+                    "        ax.text(0.5, i, tests[n], ha='center', va='center', fontsize=9, color='w', weight='bold')\n"
+                    "    ax.set_xlim(0, 1); ax.set_xticks([]); ax.invert_yaxis()\n"
+                    "    ax.set_title(f\"E2 · batería: overall_raw={q['overall_raw']} -> {q['overall']} (T2 reinterpretado)\")\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'e2_artifacts'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'battery.png', dpi=110); print('figura ->', outdir / 'battery.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['overall','t2','interpretation'])",
+        decisions=[
+            ("**T2 reinterpretado para no-detección** (spec §2): el máximo global NO tiene forma de PSF (chi2_ratio 1.007, elongación 1.54) → *apoya* la no-detección. `overall_raw=fails` → `overall=survives`. Limitación aceptada en F1.", None),
+            ("**T5 placebos PASS**: buscar en λ off-line no fabrica detecciones (max_fap 0.029, ninguno <0.01) → método limpio.", None),
+            ("T1/T3/T4 `unavailable` por la exposición única (sin stripe QC, sin split, sin variantes de knobs).", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**E2: la no-detección es ROBUSTA (`overall=survives`, reinterpretado de `fails`).**\n\n"
+            "- **Fecha:** 2026-07-09 (re-run con PSF Psfao).\n"
+            "- **T2** `fail` reinterpretado: el máximo de Hα no es PSF (chi2_ratio 1.007, elong 1.54) "
+            "→ ruido → apoya la no-detección.\n"
+            "- **T5** PASS: placebos en λ off-line sin detección espuria (max_fap 0.029).\n"
+            "- **T1/T3/T4** `unavailable` por la exposición única.\n"
+            "- **F1:** la reinterpretación de T2 es una **limitación aceptada** documentada (no un "
+            "rojo bloqueante).\n"
+            "- **Downstream:** con la no-detección robusta, E3 calcula el límite superior de Ṁ."
+        ),
     ),
     dict(
         id="E3", slug="E3_upper_limits", title="Límites superiores (Ṁ)", block="E · Resultado",
