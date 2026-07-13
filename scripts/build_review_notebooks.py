@@ -2721,11 +2721,94 @@ STAGES: list[dict] = [
         downstream="G1–G5",
         exec=dict(kind="pyscript", target="run_g0.py", cost="Ligero."),
         qc="stages/stage_g0_qc.json",
-        salient=["hash_chain", "legacy", "entry_point"],
+        salient=["hash_chain_ok", "stat_verdict", "n_flagged", "frozen_criteria_untouched"],
+        narrative_md=(
+            "## Qué hace G0 y por qué\n\n"
+            "G0 es la **entrada del bloque G (caracterización)**. Ejecuta la cadena multi-método "
+            "**de extremo a extremo sobre el cubo real** por primera vez y deja constancia de "
+            "cualquier fallo de infraestructura **antes** de tocar nada. Es *ejecutar, inspeccionar y "
+            "corregir lo mínimo* — no reescribir.\n\n"
+            "**Verifica:**\n"
+            "- **`hash_chain` = pass**: la proveniencia de los productos es trazable (el sha del cubo "
+            "de entrada casa a lo largo de la cadena).\n"
+            "- **`stat_verdict` = red**: M5 STAT no usable (factor 4.26) — marcado, se usa ruido "
+            "empírico aguas abajo.\n"
+            "- **`legacy_comparison`**: el run realineado vs el legacy ADP (flujo integrado por "
+            "banda), **3/9 bandas flagged**. Es **documentario** (las razones no son fiables donde el "
+            "continuo es negativo, p.ej. post-Hα).\n"
+            "- **`frozen_criteria_untouched` = True**: no se tocaron los criterios congelados del gate "
+            "para pasar (sin trampas).\n\n"
+            "**Deviación honesta** (open_issue): se reprodujo **retroactivamente** vía "
+            "`scripts/run_g0.py` sobre un run `stage-*` existente, no en una rama `phase-g0` fresca — "
+            "'G0 cumplido en sustancia'. Con `hash_chain_ok=True`, el paquete es consistente en "
+            "proveniencia → entrada a G1–G5."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Cadena de hash, veredicto STAT, comparación legacy y criterios congelados del "
+            "`stage_g0_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_g0_qc.json', RUN_ID)\n"
+            "print('hash_chain_ok:', q['hash_chain_ok'], '| status:', q['hash_chain']['status'])\n"
+            "sv = q['stat_verdict']\n"
+            "print(f\"stat_verdict: {sv['status']} (usable={sv['usable']}, factor {sv['factor']}) -> ruido empírico\")\n"
+            "lc = q['legacy_comparison']\n"
+            "print(f\"legacy: {lc['n_flagged']}/{lc['n_bands']} bandas flagged vs {lc['legacy_run']} (documentario)\")\n"
+            "print('frozen_criteria_untouched:', q['frozen_criteria_untouched'])\n"
+            "print(f\"cubo: {q['input_cube']['file'].split('/')[-1]} (entry_point={q['input_cube']['entry_point']}, NaN {q['input_cube']['nan_fraction_data']:.3f})\")\n"
+            "print('\\nopen_issues:')\n"
+            "for a in q['open_issues']:\n"
+            "    s = a['issue'] if isinstance(a, dict) else a\n"
+            "    print('  -', s[:100])"
+        ),
+        plot_md=(
+            "## Plot — comparación con el legacy (ADP)\n\n"
+            "Razón del flujo integrado por banda (realineado / legacy ADP), del "
+            "`g0_legacy_comparison.csv`. Rojo = flagged. Es **documentario**: donde el continuo es "
+            "negativo (p.ej. post-Hα) la razón no es fiable — la diferencia principal es la "
+            "calibración de flujo entre reducciones, esperada."
+        ),
+        plot_code=(
+            "try:\n"
+            "    import numpy as np\n"
+            "    import pandas as pd\n"
+            "    import matplotlib.pyplot as plt\n"
+            "    rd = nb.run_dir(RUN_ID)\n"
+            "    d = pd.read_csv(rd / 'tables' / 'g0_legacy_comparison.csv')\n"
+            "    x = np.arange(len(d))\n"
+            "    fig, ax = plt.subplots(figsize=(10, 4.3))\n"
+            "    ax.bar(x, d['ratio_new_over_legacy'], 0.55, color=['tab:red' if f else 'tab:green' for f in d['flagged']])\n"
+            "    ax.axhline(1.0, color='k', ls='--', lw=1, label='ratio=1 (idéntico)'); ax.axhline(0, color='0.6', lw=0.6)\n"
+            "    ax.set_xticks(x); ax.set_xticklabels(d['band'], rotation=30, ha='right', fontsize=8)\n"
+            "    for i, r in enumerate(d['ratio_new_over_legacy']):\n"
+            "        ax.text(i, r + 0.05 * np.sign(r), f'{r:.2f}', ha='center', fontsize=7)\n"
+            "    ax.set_ylabel('flujo realineado / legacy (ADP)')\n"
+            "    ax.set_title(f\"G0 · comparación con legacy ADP: {int(d['flagged'].sum())}/{len(d)} bandas flagged (documentario)\")\n"
+            "    ax.legend(fontsize=8); fig.tight_layout()\n"
+            "    outdir = rd / 'plots' / 'g0_real_cube'; outdir.mkdir(parents=True, exist_ok=True)\n"
+            "    fig.savefig(outdir / 'legacy_comparison.png', dpi=110); print('figura ->', outdir / 'legacy_comparison.png'); plt.show()\n"
+            "except Exception as e:\n"
+            "    print('No se pudo generar el plot:', type(e).__name__, e)"
+        ),
         decisions=[
-            ("G0 cerrado retroactivamente; `hash_chain_ok=True`. Comparación legacy = calibración de flujo distinta (esperado).", "g0_execution_log.md"),
+            ("G0 cerrado **retroactivamente** (`hash_chain_ok=True`, criterios congelados intactos); ejecución real-cube verificada.", "g0_execution_log.md"),
+            ("Comparación legacy = calibración de flujo distinta entre reducciones (esperado); 3/9 bandas flagged, documentario (continuo negativo).", None),
+            ("M5 STAT red → ruido empírico aguas abajo (consistente con A4).", "noise_model.md"),
         ],
-        checks="nb.show(qc, keys=['hash_chain','entry_point'])",
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**G0: cadena real-cube ejecutada y verificada; `hash_chain_ok=True`, criterios "
+            "congelados intactos.**\n\n"
+            "- **Fecha:** cierre retroactivo 2026-07-08.\n"
+            "- **Proveniencia:** hash_chain pass (cubo realineado, entry_point `realigned_cube`).\n"
+            "- **STAT:** red (M5, factor 4.26) → ruido empírico.\n"
+            "- **Legacy:** 3/9 bandas flagged vs ADP, documentario (calibración de flujo distinta).\n"
+            "- **Deviación honesta:** reproducido retroactivamente vía `run_g0.py`, no en rama fresca "
+            "— cumplido en sustancia.\n"
+            "- **Downstream:** entrada a G1 (validación de extracción), G2–G5."
+        ),
     ),
     dict(
         id="G1", slug="G1_extraction_validation", title="Validación de extracción", block="G · Caracterización",
