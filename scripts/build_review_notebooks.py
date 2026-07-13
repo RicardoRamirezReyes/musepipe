@@ -2591,13 +2591,126 @@ STAGES: list[dict] = [
         downstream="Revisión humana / decisión de publicación",
         exec=dict(kind="pyscript", target="build_report.py", cost="Ligero."),
         qc="report/run_summary.json",
-        salient=["overall_status", "accepted_limitations", "gate_policy", "open_issues"],
-        decisions=[
-            ("**Gate `overall_status: yellow`, 0 rojos bloqueantes** en el realineado (era rojo en ADP).", None),
-            ("Política de gate congelada: SOLO 4 rojos específicos (A4/M5, D2 continuo, E2/T2, E4 jerarquía) bajan a 'limitación aceptada'; cualquier OTRO rojo bloquea.", "d2_red_continuum_diagnosis.md"),
-            ("F1 se niega correctamente a dar luz verde de paper mientras el A-block siga provisional.", None),
+        salient=["overall_status", "accepted_limitations_hash", "schema_version"],
+        narrative_md=(
+            "## Qué hace F1 y cómo gatea\n\n"
+            "F1 consolida todos los QC de A→E en el **paquete final** y aplica el **gate**: un "
+            "semáforo por etapa (green/yellow/red) + una **política de gate congelada** que degrada "
+            "ciertos rojos *documentados* a yellow **'limitación aceptada'** (no los esconde: los "
+            "conserva y anota). **Cualquier OTRO rojo bloquea.**\n\n"
+            "**Semáforo:** 15 yellow, 1 green (B1), 1 `not_run` (A3), **0 rojos** → overall "
+            "**yellow**.\n\n"
+            "**4 limitaciones aceptadas** (congeladas, hash `e4478990`) — las mismas que fuimos "
+            "viendo etapa por etapa:\n"
+            "- **A4/M5 STAT**: la varianza STAT subestima ~4–6× por la covarianza del remuestreo "
+            "(inherente al drizzle).\n"
+            "- **D2/v3 continuo**: sistemático de NIVEL inter-método en el rojo (residuo de halo "
+            "cromático; ya lo referenciamos a controles).\n"
+            "- **E2/T2**: el test de forma-PSF reinterpretado para una NO-detección (el máximo no es "
+            "PSF → apoya la no-detección).\n"
+            "- **E4/v4_hierarchy**: la patología de borde del throughput (aperture/ls insensibles; "
+            "canónico psffit no afectado).\n\n"
+            "`hash_chain` = **pass** (proveniencia de productos trazable). **F1 se niega "
+            "correctamente a dar luz verde de paper** mientras el A-block siga provisional: es "
+            "**yellow, no green**."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Semáforo por etapa, las 4 limitaciones aceptadas y la cadena de hash del "
+            "`report/run_summary.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('report/run_summary.json', RUN_ID)\n"
+            "from collections import Counter\n"
+            "cnt = Counter(s['status'] for s in q['stages'])\n"
+            "print('overall_status:', q['overall_status'], '|', dict(cnt))\n"
+            "hc = q.get('hash_chain', {})\n"
+            "hc_ok = all(c.get('actual') == c.get('expected') for c in hc.get('checks', [])) if hc.get('checks') else None\n"
+            "print(f\"hash_chain: {'pass' if hc_ok else hc_ok} | open_issues: {len(q['open_issues'])} | gate hash: {q['gate_policy']['accepted_limitations_hash']}\")\n"
+            "print('\\nsemáforo por etapa:')\n"
+            "for s in q['stages']:\n"
+            "    mark = f\"  (limitación aceptada ×{s['accepted_limitations']})\" if s['accepted_limitations'] else ''\n"
+            "    print(f\"   {s['stage']:20s} {s['status']:9s} issues={s['issue_count']}{mark}\")\n"
+            "print('\\n4 limitaciones aceptadas:')\n"
+            "for a in q['accepted_limitations']:\n"
+            "    print(f\"   {a['path']:32s} {a['reason'][:75]}...\")"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — el semáforo del gate\n\n"
+                    "Status de las 17 etapas. **0 rojos** → overall **yellow**. B1 verde, A3 `not_run`, "
+                    "el resto yellow; `⚠×1` marca las 4 etapas con una limitación aceptada "
+                    "(A4, D2, E2, E4)."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('report/run_summary.json', RUN_ID)\n"
+                    "    st = q['stages']\n"
+                    "    col = {'green': 'tab:green', 'yellow': 'gold', 'red': 'tab:red', 'not_run': '0.8'}\n"
+                    "    names = [s['stage'] for s in st]; stats = [s['status'] for s in st]; accl = [s['accepted_limitations'] for s in st]\n"
+                    "    fig, ax = plt.subplots(figsize=(8, 6))\n"
+                    "    ax.barh(range(len(names)), [1] * len(names), color=[col.get(s, '0.5') for s in stats])\n"
+                    "    for i, (n, s, a) in enumerate(zip(names, stats, accl)):\n"
+                    "        ax.text(0.02, i, f\"{n}  [{s}]\" + (f'  ⚠×{a}' if a else ''), va='center', fontsize=8, color='k')\n"
+                    "    ax.set_yticks([]); ax.set_xticks([]); ax.invert_yaxis(); ax.set_xlim(0, 1)\n"
+                    "    ax.set_title(f\"F1 · semáforo: overall={q['overall_status'].upper()} (0 rojos; 15 yellow, 1 green, 1 not_run)\")\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'f1_report'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'gate.png', dpi=110); print('figura ->', outdir / 'gate.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — las 4 limitaciones aceptadas\n\n"
+                    "Los 4 rojos degradados a yellow (política de gate congelada). Cada uno es "
+                    "inherente, reinterpretado o documentado — y ya los revisamos en A4, D2, E2, E4."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('report/run_summary.json', RUN_ID)\n"
+                    "    al = q['accepted_limitations']\n"
+                    "    labels = {'m5_stat.status': 'A4/M5 STAT', 'checks.v3_continuum_stable.ok': 'D2/v3 continuo rojo',\n"
+                    "              't2.status': 'E2/T2 forma-PSF', 'checks.v4_hierarchy.status': 'E4 jerarquía'}\n"
+                    "    fig, ax = plt.subplots(figsize=(11, 3.2))\n"
+                    "    for i, a in enumerate(al):\n"
+                    "        lab = labels.get(a['path'], a['path'])\n"
+                    "        ax.text(0.01, len(al) - 1 - i, f'● {lab}', fontsize=10, weight='bold', va='center')\n"
+                    "        ax.text(0.22, len(al) - 1 - i, a['reason'][:110] + '...', fontsize=8, va='center')\n"
+                    "    ax.set_xlim(0, 1); ax.set_ylim(-0.5, len(al) - 0.5); ax.axis('off')\n"
+                    "    ax.set_title(f\"F1 · 4 limitaciones aceptadas (rojos degradados; hash {q['gate_policy']['accepted_limitations_hash']})\")\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'f1_report'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'accepted_limitations.png', dpi=110); print('figura ->', outdir / 'accepted_limitations.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="print('overall_status =', qc.get('overall_status'))\nprint('accepted_limitations =', len(qc.get('accepted_limitations',[])))\nprint('open_issues =', len(qc.get('open_issues',[])))",
+        decisions=[
+            ("**Gate `overall_status: yellow`, 0 rojos bloqueantes** en el realineado (era rojo en ADP): 15 yellow, 1 green (B1), 1 not_run (A3).", None),
+            ("Política de gate **congelada** (hash e4478990): SOLO 4 rojos específicos (A4/M5, D2/v3, E2/T2, E4/hierarchy) bajan a 'limitación aceptada'; cualquier OTRO rojo bloquea.", "d2_red_continuum_diagnosis.md"),
+            ("Las limitaciones aceptadas se **conservan y anotan** (no se esconden); `hash_chain` pass (proveniencia trazable).", None),
+            ("F1 se niega correctamente a dar **luz verde de paper** mientras el A-block siga provisional (yellow, no green).", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**F1: paquete final; overall `yellow`, 0 rojos bloqueantes.**\n\n"
+            "- **Fecha:** consolidado 2026-07-09/10 sobre el run realineado.\n"
+            "- **Semáforo:** 15 yellow, 1 green (B1), 1 not_run (A3), 0 rojos.\n"
+            "- **4 limitaciones aceptadas** (congeladas, documentadas, no ocultas): A4/M5, D2/v3, "
+            "E2/T2, E4/hierarchy.\n"
+            "- **hash_chain pass**; 29 open_issues agregados.\n"
+            "- **Yellow (no green):** F1 se niega a dar luz verde de paper mientras el A-block siga "
+            "provisional — es el comportamiento correcto.\n"
+            "- **Endpoint del paquete:** no-detección de Hα → Ṁ ≲ 8×10⁻¹³ M☉/yr, compañero real "
+            "ligado (caracterización en el bloque G)."
+        ),
     ),
     # ===================== BLOQUE G — caracterización =====================
     dict(
