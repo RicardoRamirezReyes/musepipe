@@ -3076,12 +3076,118 @@ STAGES: list[dict] = [
         exec=dict(kind="module_run", target="musepipe.stages.stage_g3_accretion", fn="run_stage_g3_accretion",
                   cost="Moderado (MC n=2000)."),
         qc="stages/stage_g3_qc.json",
-        salient=["mdot", "l_acc", "not_constrained", "template", "definition_note"],
-        decisions=[
-            ("**Ṁ ≈ 1.3×10⁻¹² M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 solo por definición.", "mdot_limit_definition_note.md"),
-            ("Plantilla/atmósfera/tracks = `not_constrained` (pending_libraries: BT-Settl/BHAC15/Luhman-Bonnefoy diferidas).", None),
+        salient=["mdot_p50_msun_yr", "l_acc_lsun", "combined_accretion", "libraries", "definition"],
+        narrative_md=(
+            "## Qué hace G3 y qué queda diferido\n\n"
+            "G3 es la **inferencia física**: de los flujos/límites de líneas (G2) infiere la "
+            "**luminosidad de acreción L_acc** y la **tasa Ṁ** (relación Hα de Alcalá 2017), y "
+            "*ajustaría* plantillas/atmósferas/tracks para SpT/Teff/masa — pero eso está **diferido "
+            "(pendiente de librerías externas)**.\n\n"
+            "**Acreción:** L_acc ≤ **4.1×10⁻⁶ L☉** (límite superior, de Hα — la única línea con "
+            "relación en config, regla *más restrictiva*); **Ṁ p50 = 1.3×10⁻¹² M☉/yr** (MC n=2000).\n\n"
+            "**Diferencia con E3 (definicional):** G3 usa **5σ** del flujo de Hα de G2 **con** el "
+            "factor de truncamiento de disco R_in=1.25; E3 usa Gumbel 99% **sin** R_in. Misma cadena "
+            "física (Alcalá 2017); el desfase ~1.6× (1.3e-12 vs 8.2e-13) es de **definición**. "
+            "Canónica **sin decidir** (usuario diferido, [`docs/mdot_limit_definition_note.md`]"
+            "(../docs/mdot_limit_definition_note.md)).\n\n"
+            "**Diferido → `not_constrained`:** atmósfera (BT-Settl), tracks (BHAC15/ATMO2020), "
+            "plantillas (Luhman/Bonnefoy) — SpT/Teff/masa necesitan datos externos. **Por eso la "
+            "clasificación de G4 es ambigua.** Provisional."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Acreción, comparación con E3 y el estado de las librerías del `stage_g3_qc.json`."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_g3_qc.json', RUN_ID)\n"
+            "ca = q['combined_accretion']\n"
+            "print(f\"acreción: {ca['kind']} L_acc = {ca['l_acc_lsun']:.2e} L☉ (de {ca['from_line']}, regla {ca['rule']})\")\n"
+            "print(f\"Ṁ p50 = {q['mdot_p50_msun_yr']:.2e} M☉/yr (MC n={q['mc']['n']}); {q['n_lines_with_relation']} línea con relación\")\n"
+            "e3 = nb.load_qc('stages/stage_h03_qc.json', RUN_ID)\n"
+            "e3_mdot = {L['method']: L['mdot'] for L in e3['limits']}['psffit']\n"
+            "print(f\"\\ncomparación: E3 Ṁ={e3_mdot:.2e} (Gumbel99, sin R_in) vs G3 Ṁ={q['mdot_p50_msun_yr']:.2e} (5σ, con R_in) -> {q['mdot_p50_msun_yr']/e3_mdot:.2f}× definicional\")\n"
+            "print('\\nlibrerías (tipado espectral):')\n"
+            "for k, v in q['libraries'].items():\n"
+            "    print(f\"   {k:20s} {v}\")"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — E3 vs G3: la misma física, dos definiciones\n\n"
+                    "Los dos límites de Ṁ: **E3 = 8.2×10⁻¹³** (Gumbel 99%, sin R_in) y **G3 = "
+                    "1.3×10⁻¹²** (5σ, con el factor R_in 1.25). El desfase ~1.6× es puramente "
+                    "**definicional** — misma cadena física (Alcalá 2017). Canónica sin decidir."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_g3_qc.json', RUN_ID)\n"
+                    "    e3 = nb.load_qc('stages/stage_h03_qc.json', RUN_ID)\n"
+                    "    e3_mdot = {L['method']: L['mdot'] for L in e3['limits']}['psffit']\n"
+                    "    g3_mdot = q['mdot_p50_msun_yr']\n"
+                    "    fig, ax = plt.subplots(figsize=(6.5, 4.3))\n"
+                    "    bars = ax.bar(['E3\\n(Gumbel 99%,\\nsin R_in)', 'G3\\n(5σ,\\ncon R_in 1.25)'], [e3_mdot, g3_mdot],\n"
+                    "                  color=['tab:blue', 'tab:green'])\n"
+                    "    for b, v in zip(bars, [e3_mdot, g3_mdot]):\n"
+                    "        ax.text(b.get_x() + b.get_width() / 2, v * 1.02, f'{v:.2e}', ha='center', fontsize=10)\n"
+                    "    ax.set_ylabel('Ṁ límite superior [M☉/yr]')\n"
+                    "    ax.set_title(f'G3 · E3 vs G3: {g3_mdot/e3_mdot:.2f}× (definicional, misma física)')\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'g3_accretion'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'e3_vs_g3.png', dpi=110); print('figura ->', outdir / 'e3_vs_g3.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — qué constriñe G3 y qué queda diferido\n\n"
+                    "G3 **computa** la acreción (L_acc, Ṁ vía Alcalá) pero **difiere** el tipado "
+                    "espectral (atmósfera BT-Settl, tracks, plantillas) por falta de librerías externas "
+                    "→ SpT/Teff/masa `not_constrained` → **G4 ambigua**."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_g3_qc.json', RUN_ID)\n"
+                    "    items = [('acreción (L_acc, Ṁ)', 'computado'),\n"
+                    "             ('atmósfera (BT-Settl)', 'diferido'),\n"
+                    "             ('tracks (BHAC15/ATMO2020)', 'diferido'),\n"
+                    "             ('plantillas (Luhman/Bonnefoy)', 'diferido')]\n"
+                    "    col = {'computado': 'tab:green', 'diferido': '0.7'}\n"
+                    "    names = [i[0] for i in items]\n"
+                    "    fig, ax = plt.subplots(figsize=(8, 3.2))\n"
+                    "    ax.barh(names, [1] * len(names), color=[col[i[1]] for i in items])\n"
+                    "    for i, (n, s) in enumerate(items):\n"
+                    "        ax.text(0.5, i, f'{n}  →  {s}', ha='center', va='center', fontsize=9, color='w' if s == 'computado' else 'k', weight='bold')\n"
+                    "    ax.set_xlim(0, 1); ax.set_xticks([]); ax.set_yticks([]); ax.invert_yaxis()\n"
+                    "    ax.set_title('G3 · acreción computada; tipado espectral diferido (pending_libraries)')\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'g3_accretion'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'characterization_status.png', dpi=110); print('figura ->', outdir / 'characterization_status.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
-        checks="nb.show(qc, keys=['mdot','l_acc','not_constrained'])",
+        decisions=[
+            ("**Ṁ p50 ≈ 1.3×10⁻¹² M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 (8.2e-13) solo por DEFINICIÓN; canónica sin decidir.", "mdot_limit_definition_note.md"),
+            ("L_acc ≤ 4.1×10⁻⁶ L☉ de Hα (única línea con relación, regla más restrictiva).", None),
+            ("Plantilla/atmósfera/tracks = `not_constrained` (pending_libraries: BT-Settl/BHAC15/Luhman-Bonnefoy diferidas) → G4 ambigua.", None),
+        ],
+        checks=None,
+        conclusion_md=(
+            "## Conclusión (registrada)\n\n"
+            "**G3: L_acc ≤ 4.1×10⁻⁶ L☉, Ṁ p50 = 1.3×10⁻¹² M☉/yr (5σ + R_in).**\n\n"
+            "- **Fecha:** 2026-07-08 (provisional).\n"
+            "- **vs E3:** 8.2×10⁻¹³ (Gumbel99, sin R_in) → ~1.6× por definición, no por física; "
+            "canónica sin decidir.\n"
+            "- **Tipado espectral diferido:** atmósfera/tracks/plantillas `not_constrained` (falta de "
+            "librerías externas).\n"
+            "- **Consecuencia:** sin SpT/Teff/masa espectroscópicos, la clasificación de G4 queda "
+            "**ambigua** (planeta/BD/M no resuelto).\n"
+            "- **Downstream:** G4 (clasificación) y G5 (síntesis)."
+        ),
     ),
     dict(
         id="G4", slug="G4_classify", title="Clasificación de fuente", block="G · Caracterización",
