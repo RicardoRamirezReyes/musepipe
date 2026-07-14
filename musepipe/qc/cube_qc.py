@@ -635,7 +635,8 @@ def measure_sky_statistics(
     sky_mask: np.ndarray,
 ) -> dict[str, object]:
     metrics = compute_sky_residual_metrics(cube, wave, sky_mask)
-    values = np.asarray(cube)[:, np.asarray(sky_mask, dtype=bool)]
+    mask = np.asarray(sky_mask, dtype=bool)
+    values = np.asarray(cube)[:, mask]
     med_by_channel = np.nanmedian(values, axis=1)
     rms_by_channel = metrics["channel_rms"]
     cont_mask = wavelength_mask(wave, CONTINUUM_WINDOWS)
@@ -653,6 +654,9 @@ def measure_sky_statistics(
         "rms_continuum": rms_cont,
         "rms_skylines": float(metrics["skyline_rms_median"]),
         "R": r_value,
+        # Fraction of the FOV used as empty sky; feeds the min_sky_fraction
+        # gate of sky_zap.classify_zap_decision (A2 pre-registered rule).
+        "sky_fraction": float(mask.mean()),
         "median_bias": median_bias,
         "n_apertures": None,
         "status": status,

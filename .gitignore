@@ -42,3 +42,11 @@ reports/*.log
 reports/*.out
 reports/*.toc
 reports/*.synctex.gz
+
+# Paper draft: shared via Overleaf, not in this repo (yet)
+paper/
+
+# Internal meeting slides: not part of the published pipeline
+roxs12_reunion.pptx
+roxs12_meeting_en.pptx
+reports/estado_proyecto_ROXs12B_2026-07-08.pptx

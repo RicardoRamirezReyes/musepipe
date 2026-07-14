@@ -4,12 +4,17 @@ Deliberadamente ligero (solo stdlib): cada notebook debe poder abrirse y
 auditar el QC de un run sin importar toda la pila científica. Las etapas
 *ejecutables* sí importan `musepipe` en su propia celda (guardada por RUN).
 
-Resolución del run (mismo orden que `musepipe.config`):
+Resolución del run:
   1. argumento explícito a `resolve_run_id`
   2. variable de entorno `MUSE_RUN_ID`
   3. `DEFAULT_RUN_ID` (abajo)
 
-Los notebooks de revisión usan por defecto el run científico realineado.
+OJO: a diferencia de `musepipe.config.get_run_id`, aquí NO se lee
+`active_run.txt` — los notebooks de revisión auditan por defecto el run
+científico realineado, mientras que `active_run.txt` suele apuntar a un run
+de smoke-test. Si ambos difieren, `resolve_run_id` lo avisa por stdout.
+Todos los comandos canónicos de los notebooks pasan `--run-id` explícito,
+así que la ejecución (RUN=True) nunca depende de `active_run.txt`.
 """
 from __future__ import annotations
 
@@ -26,10 +31,27 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _active_run_txt() -> str | None:
+    """Primera línea no comentada de active_run.txt (o None si no existe)."""
+    path = project_root() / "active_run.txt"
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if value and not value.startswith("#"):
+            return value
+    return None
+
+
 def resolve_run_id(run_id: str | None = None) -> str:
-    if run_id:
-        return run_id
-    return os.environ.get("MUSE_RUN_ID") or DEFAULT_RUN_ID
+    resolved = run_id or os.environ.get("MUSE_RUN_ID") or DEFAULT_RUN_ID
+    active = _active_run_txt()
+    if active and active != resolved:
+        print(
+            f"AVISO: active_run.txt apunta a {active!r} pero este notebook audita "
+            f"{resolved!r}. Los CLI de musepipe SIN --run-id usarían {active!r}."
+        )
+    return resolved
 
 
 def run_dir(run_id: str | None = None) -> Path:

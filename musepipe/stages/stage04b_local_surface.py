@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import time
 import warnings
@@ -902,6 +903,25 @@ def run_stage04b(
     }
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run Stage 04b local-surface subtraction.")
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--project-root", default=None)
+    parser.add_argument("--allow-run-id-mismatch", action="store_true")
+    args = parser.parse_args(argv)
+    config = stage04b_config_from_run(
+        args.run_id,
+        project_root=args.project_root,
+        allow_run_id_mismatch=args.allow_run_id_mismatch,
+    )
+    result = run_stage04b(
+        config,
+        project_root=args.project_root,
+        allow_run_id_mismatch=args.allow_run_id_mismatch,
+    )
+    print(result["qc_json"])
+
+
 __all__ = [
     "STAGE04B_DEFAULTS",
     "build_bad_wavelength_mask",
@@ -912,6 +932,7 @@ __all__ = [
     "make_line_image",
     "make_line_snr_map",
     "peak_inside",
+    "main",
     "resolve_stage04b_peak_candidates",
     "resolve_stage04b_positions",
     "run_stage04b",
@@ -921,3 +942,7 @@ __all__ = [
     "validate_peak_yx",
     "write_stage04b_products",
 ]
+
+
+if __name__ == "__main__":
+    main()
