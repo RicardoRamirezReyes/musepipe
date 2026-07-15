@@ -101,7 +101,9 @@ class SpectrumProduct:
         missing = [key for key in REQUIRED_HEADERS if key not in self.header]
         if missing:
             raise ValueError(f"SpectrumProduct header missing required keys: {missing}")
-        if str(self.header["METHOD"]) not in {"aperture", "optimal", "psffit", "hrsdi"}:
+        # "sgf"/"lpm": spectral-diversity halo-subtraction methods (specs C5/C6,
+        # docs/plan_integracion_halosub_julo2025.md); additive to the contract.
+        if str(self.header["METHOD"]) not in {"aperture", "optimal", "psffit", "hrsdi", "sgf", "lpm"}:
             raise ValueError(f"Invalid METHOD={self.header['METHOD']!r}.")
         if np.any(~np.isfinite(np.asarray(self.wave_A, dtype=float))):
             raise ValueError("wave_A contains non-finite values.")

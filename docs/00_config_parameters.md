@@ -175,6 +175,24 @@ cambie el crop, el centrado de Stage01 o la estructura de stripes.
 | `kernel_230_value` | `230` | Escala espectral del fake continuum, en canales bajo la convencion actual. | Si el continuo queda sub/sobre suavizado. |
 | `stage03_n_jobs` | `8` | Workers para Stage03 fake continuum. | Ajustar segun CPU/RAM. |
 
+## Sustraccion De Halo Espectral (musepipe C5 SGF / C6 LPM)
+
+Claves consumidas por `musepipe.halosub` y las etapas C5 (`stage_x04_sgf`) y
+C6 (`stage_x05_lpm`) del plan `docs/plan_integracion_halosub_julo2025.md`.
+Defaults congelados del paper Julo et al. 2025 (Tabla 1); cambiarlos en un run
+real exige revision de la spec C5/C6 correspondiente.
+
+| Clave `CFG` | Valor actual | Explicacion | Cuando cambiarlo |
+|---|---:|---|---|
+| `halosub_flux_mask_lo` | `0.01` | Fraccion de Fmax bajo la cual un spaxel NO entra al espectro de referencia (demasiado ruidoso). | Campos muy poco iluminados donde queden pocos spaxels. |
+| `halosub_flux_mask_hi` | `0.1` | Fraccion de Fmax sobre la cual un spaxel NO entra al espectro de referencia (nucleo saturado/distorsionado). | Estrellas debiles donde el halo util quede excluido. |
+| `halosub_exclude_radius_px` | `3.0` | Radio de exclusion alrededor de fuentes conocidas (companera) al construir la referencia. | Companeras extensas o muy brillantes. |
+| `halosub_wave_range_A` | `null` | Ventana espectral de trabajo; `null` = banda completa del cubo (notch Na-LGS ya descartado en B). `[6051, 7075]` reproduce la ventana del paper. | Solo para reproducir configuraciones de literatura. |
+| `sgf_window` | `101` | Ventana (canales, impar) del filtro Savitzky-Golay del metodo SGF. | Nunca al vuelo; revision de spec C5. |
+| `sgf_degree` | `1` | Orden del polinomio del filtro SG. | Nunca al vuelo; revision de spec C5. |
+| `lpm_degree` | `4` | Grado de la modulacion de Legendre del metodo LPM. | Solo si el QC `lpm_degree_check` (energy-share) lo justifica, via revision de spec C6. |
+| `lpm_masked_lines_A` | ventanas estandar | Lista `[centro_A, semiancho_A]` de lineas enmascaradas en el ajuste LPM (default: Halpha/Hbeta/OI de `STANDARD_LINE_WINDOWS_A`). | Targets con otras lineas de ciencia (p.ej. CaII, HeI tipo YSES1 b). |
+
 ## Productos De Imagen Y Geometria De Diagnostico
 
 | Clave `CFG` | Valor actual | Explicacion | Cuando cambiarlo |
