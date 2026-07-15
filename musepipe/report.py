@@ -74,6 +74,16 @@ ACCEPTED_LIMITATIONS = {
             "companion position); the CANONICAL psffit throughput is well-behaved (~0.67) and "
             "unaffected, and determinism is test-guaranteed."
         ),
+        # Accepted 2026-07-15 (user decision, 6-method E4 re-run): diagnosed as a
+        # SINGLE unique zero-injection case, present identically in the previous
+        # 4-method E4 (pre-existing, not introduced by the sgf/lpm extension).
+        "checks.v2_nulls_clean.status": (
+            "v2 nulls: 2/96 hits are ONE unique case duplicated across continuum modes: the psffit "
+            "zero-injection baseline at control3 measures z=+5.0029 vs the 5.0 threshold - a "
+            "threshold-grazing noise fluctuation fully consistent with the empirical 33-control FAP "
+            "used everywhere downstream (E1/E3 use empirical nulls, never this binary check). The "
+            "canonical throughput and the Mdot limit are unaffected."
+        ),
     },
     "D2_calibrate": {
         # Accepted ONLY after full diagnosis (docs/d2_red_continuum_diagnosis.md):
