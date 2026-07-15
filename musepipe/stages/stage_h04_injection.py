@@ -26,7 +26,9 @@ C_KMS = 299792.458
 H01_MATCHED_FILTER_POINT = matched_filter_point
 DEFAULT_SNR_GRID = (0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0)
 DEFAULT_TEMPLATE_FACTORS = (1.0, 2.0)
-DEFAULT_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+# sgf/lpm added in WP-H2 (docs/plan_integracion_halosub_julo2025.md): their
+# throughput feeds G1 validation and D1 v3 exactly like the spatial methods.
+DEFAULT_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 
 
 TABLE_FIELDS = [
@@ -1236,7 +1238,9 @@ def run_stage_h04(run_id=None, *, project_root=None, overrides=None, allow_run_i
                 )
             base_cube = base_cube[0]
         psf_model, _psf_source = _load_psf_model(paths, cfg)
-        extractors = build_production_extractors(cfg, paths, wave_A=wave_A, psf_model=psf_model)
+        extractors = build_production_extractors(
+            cfg, paths, wave_A=wave_A, psf_model=psf_model, base_cube=base_cube
+        )
         if cfg.get("h04_injection_flux_sigma") is None:
             positions = resolve_h04_positions(cfg, paths)
             sigma_flux, calib_info = _derive_injection_sigma(
