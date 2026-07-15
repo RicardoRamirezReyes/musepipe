@@ -7,7 +7,7 @@ reimplementa lógica. Por defecto AUDITA el QC existente del run realineado; con
 documenta en la celda "Cómo ejecutar de forma independiente").
 
 Uso:
-    python scripts/build_review_notebooks.py            # genera las 25
+    python scripts/build_review_notebooks.py            # genera las 30
     python scripts/build_review_notebooks.py C1 D2      # solo algunas
 
 Regenerar es idempotente: sobrescribe los .ipynb de `notebooks/`.
@@ -177,10 +177,22 @@ def build_cells(s: dict) -> list[dict]:
     if s.get("qc"):
         salient = s.get("salient", [])
         cells.append(md("## QC / resultados"))
-        cells.append(code(
-            f"qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
-            f"nb.show(qc, keys={salient!r}, title={s['id']!r})"
-        ))
+        if s.get("qc_optional"):
+            cells.append(code(
+                "try:\n"
+                f"    qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
+                f"    nb.show(qc, keys={salient!r}, title={s['id']!r})\n"
+                "except FileNotFoundError as e:\n"
+                "    qc = None\n"
+                "    print('QC aún no existe para este run:', e)\n"
+                "    print('-> Ejecuta la etapa (celda RUN=True de arriba, o el comando de')\n"
+                "    print('   \"Cómo ejecutar de forma independiente\") y re-corre esta celda.')"
+            ))
+        else:
+            cells.append(code(
+                f"qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
+                f"nb.show(qc, keys={salient!r}, title={s['id']!r})"
+            ))
     elif not (s.get("evidence_md") or s.get("evidence_code")):
         cells.append(md(
             "## QC / resultados\n\n"
@@ -192,7 +204,15 @@ def build_cells(s: dict) -> list[dict]:
     if s.get("evidence_md"):
         cells.append(md(s["evidence_md"]))
     if s.get("evidence_code"):
-        cells.append(code(s["evidence_code"]))
+        body = s["evidence_code"]
+        if s.get("qc_optional"):
+            indented = "\n".join("    " + line for line in body.splitlines())
+            body = (
+                "try:\n" + indented + "\n"
+                "except FileNotFoundError as e:\n"
+                "    print('QC aún no existe para este run:', e)"
+            )
+        cells.append(code(body))
 
     # 5c. Plot opcional único (requiere kernel MUSE)
     if s.get("plot_md"):
@@ -217,7 +237,15 @@ def build_cells(s: dict) -> list[dict]:
     # 7. Checks
     if s.get("checks"):
         cells.append(md("## Checks"))
-        cells.append(code(s["checks"]))
+        body = s["checks"]
+        if s.get("qc_optional"):
+            indented = "\n".join("    " + line for line in body.splitlines())
+            body = (
+                "try:\n" + indented + "\n"
+                "except FileNotFoundError as e:\n"
+                "    print('QC aún no existe para este run:', e)"
+            )
+        cells.append(code(body))
 
     # 8. Conclusión fechada (opcional)
     if s.get("conclusion_md"):
@@ -1787,75 +1815,305 @@ STAGES: list[dict] = [
             "psffit vs optimal_psfsub. El producto final lleva `cont_runmed_biasref` para G3."
         ),
     ),
+    dict(
+        id="C5", qc_optional=True, slug="C5_sgf", title="Sustracción de halo SGF", block="C · Extracción",
+        spec="spec_C5_codex_sgf_subtraction.md", run_override=None,
+        what=(
+            "Sustrae el halo estelar por diversidad espectral con filtrado Savitzky-Golay "
+            "(Haffert et al. 2019; Julo et al. 2025 App. A.3) y extrae el producto box3 del residual."
+        ),
+        inputs="`stage02` stack + posiciones (B3) + PSF (C1, solo apcorr)",
+        outputs="`stages/spec_sgf_qc.json`, `spec_sgf_object.fits`, cubo residual",
+        downstream="D1 v3, G1, E4; cubo residual → E1b (mapa FoV)",
+        exec=dict(kind="module_main", target="musepipe.stages.stage_x04_sgf",
+                  cost="Ligero (~1 min: un savgol por exposición + extracción)."),
+        qc="stages/spec_sgf_qc.json",
+        salient=["halosub.n_exposures", "sgf.window", "errors.mode",
+                 "checks.v1_reference_ok", "checks.v2_far_continuum_ok", "checks.v4_scale_convention_ok"],
+        narrative_md=(
+            "## Qué hace C5 y por qué existe\n\n"
+            "C5 implementa el método **estado-del-arte de literatura** (HRSDI/SGF): por spaxel, "
+            "divide por un espectro estelar de referencia (mediana de spaxels con flujo en "
+            "0.01–0.1×Fmax), suaviza el ratio con Savitzky-Golay (d=1, W̆=101 canales) y sustrae "
+            "referencia×ratio_suavizado.\n\n"
+            "**Deliberadamente sin enmascarar líneas y sin PCA**: es la línea base cuyos sesgos "
+            "cuantifica Julo et al. 2025 — auto-sustracción de líneas y continuo negativo vecino, "
+            "con profundidad exacta (en el modelo de juguete) `C̃_P/L̂_P = −(R/(1−R))·(C_S/L_S)` "
+            "(Ec. 1). El QC registra ese **predictor por línea** con C_S/L_S medido en la "
+            "referencia del run, y la corrección práctica es el throughput E4/E3 (como "
+            "Jorquera et al. 2024) — nunca un parche dentro de C5.\n\n"
+            "Los oráculos analíticos del paper están verificados en `tests/test_halosub_toy.py` "
+            "(Fig. 2d y Ec. 1 a 8 decimales) y el contrato de la etapa en "
+            "`tests/test_halosub_stages.py`."
+        ),
+        evidence_md=(
+            "## Evidencia: predictor de auto-sustracción y continuo negativo\n\n"
+            "Predictor Ec. 1 por línea de ciencia (con C_S/L_S medido en la referencia) y fracción "
+            "de canales < −2σ en las bandas laterales del producto."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/spec_sgf_qc.json', RUN_ID)\n"
+            "print(f\"exposiciones: {q['halosub']['n_exposures']}  spaxels ref: {q['halosub']['n_spaxels_kept']}\")\n"
+            "for row in q['self_subtraction_predictor']:\n"
+            "    if row['in_range']:\n"
+            "        print(f\"  {row['line']:8s} C_S/L_S={row['cs_over_ls']:.3f}  R={row['R']:.4f}  \"\n"
+            "              f\"predictor C̃_P/L̂_P={row['predictor']:+.4f}\")\n"
+            "for row in q['negative_continuum']:\n"
+            "    if row['frac_below_minus2sigma'] is not None:\n"
+            "        print(f\"  {row['line']:8s} frac(<−2σ) en bandas laterales = {row['frac_below_minus2sigma']:.3f}\")\n"
+            "print('checks:', {k: v for k, v in q['checks'].items()})"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot — residual SGF y espectro del compañero\n\n"
+                    "Colapso del cubo residual (7000–8500 Å) y espectro `spec_sgf_object` con la banda "
+                    "±1σ de controles. Comparar con C4: aquí el halo se remueve por diversidad "
+                    "espectral, no por modelo espacial."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    q = nb.load_qc('stages/spec_sgf_qc.json', RUN_ID)\n"
+                    "    loc = nb.load_qc('stages/stage01c_qc.json', RUN_ID)\n"
+                    "    (cy, cx) = loc['companion']['pos_yx']\n"
+                    "    with fits.open(q['products']['residual_cube']) as h:\n"
+                    "        res = np.asarray(h['RESIDUAL'].data, float); wave = np.asarray(h['WAVELENGTH'].data, float)\n"
+                    "    sel = (wave >= 7000) & (wave <= 8500)\n"
+                    "    img = np.nanmedian(res[sel], axis=0)\n"
+                    "    hp = fits.open(rd / 'stages' / 'spec_sgf_object.fits')\n"
+                    "    w = np.asarray(hp[1].data['wave_A'], float); f = np.asarray(hp[1].data['flux'], float); hp.close()\n"
+                    "    C = np.load(rd / 'stages' / 'spec_sgf_controls.npz')['control_spectra']\n"
+                    "    sig = np.nanstd(C, axis=0)\n"
+                    "    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2), width_ratios=[1, 2])\n"
+                    "    v = np.nanpercentile(img, [5, 99])\n"
+                    "    axes[0].imshow(img, origin='lower', cmap='magma', vmin=v[0], vmax=v[1])\n"
+                    "    axes[0].plot(cx, cy, 'o', mfc='none', mec='lime', ms=12); axes[0].axis('off')\n"
+                    "    axes[0].set_title('residual SGF (mediana 7000–8500 Å)')\n"
+                    "    axes[1].fill_between(w, -sig, sig, color='0.85', label='±1σ controles')\n"
+                    "    axes[1].plot(w, f, lw=0.4, color='tab:blue', label='compañero (sgf)')\n"
+                    "    axes[1].axvline(6563, color='tab:red', ls=':', label='Hα'); axes[1].axhline(0, color='0.6', lw=0.6)\n"
+                    "    axes[1].set_ylim(np.nanpercentile(f, 2), np.nanpercentile(f, 98))\n"
+                    "    axes[1].set_xlabel('λ [Å]'); axes[1].legend(fontsize=8)\n"
+                    "    axes[1].set_title('C5 · espectro sgf del compañero')\n"
+                    "    fig.tight_layout()\n"
+                    "    outdir = rd / 'plots' / 'c5_sgf'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'residual_and_spectrum.png', dpi=110); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+        ],
+        decisions=[
+            ("**Fiel a la literatura** (SavGol d=1, W̆=101, sin máscara de líneas, sin PCA): línea base cuyos sesgos se miden, no se ocultan.", "spec_C5_codex_sgf_subtraction.md"),
+            ("Predictor Ec. 1 por línea en el QC; la corrección práctica de la auto-sustracción es el throughput E4/E3.", "plan_integracion_halosub_julo2025.md"),
+            ("Sustracción por exposición; residuos combinados con el mismo combinador que el cubo madre (comparabilidad D1).", None),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/spec_sgf_qc.json', RUN_ID)\n"
+            "for k, v in q['checks'].items():\n"
+            "    print(f'  {k}: {v}')\n"
+            "assert q['pca_applied'] is False"
+        ),
+        conclusion_md=(
+            "## Estado\n\n"
+            "**Pendiente de primera ejecución sobre datos reales** (checkpoint de la spec C5: el "
+            "usuario aprueba la spec antes de correr). Kernel y contrato verificados con tests "
+            "sintéticos (2026-07-14)."
+        ),
+    ),
+    dict(
+        id="C6", qc_optional=True, slug="C6_lpm", title="Sustracción de halo LPM", block="C · Extracción",
+        spec="spec_C6_codex_lpm_subtraction.md", run_override=None,
+        what=(
+            "Sustrae el halo estelar modelando cada spaxel como modulación polinomial de Legendre "
+            "(grado 4) del espectro de referencia, con las líneas de ciencia enmascaradas del ajuste "
+            "(Julo et al. 2025 App. A.4)."
+        ),
+        inputs="`stage02` stack + posiciones (B3) + PSF (C1, solo apcorr)",
+        outputs="`stages/spec_lpm_qc.json`, `spec_lpm_object.fits`, cubo residual, mapas de coeficientes",
+        downstream="D1 v3, G1, E4; cubo residual → E1b (mapa FoV)",
+        exec=dict(kind="module_main", target="musepipe.stages.stage_x05_lpm",
+                  cost="Ligero (~1–2 min: una pseudo-inversa compartida + diagnósticos de grado)."),
+        qc="stages/spec_lpm_qc.json",
+        salient=["lpm.degree", "lpm.line_preservation_recovery", "degree_diagnostics.mse_argmin",
+                 "checks.v2_line_preservation_ok", "checks.v4_slow_path_ok", "checks.v5_scale_convention_ok"],
+        narrative_md=(
+            "## Qué hace C6 y por qué preserva las líneas\n\n"
+            "C6 implementa el método **propuesto** por Julo et al. 2025 (LPM): cada spaxel se modela "
+            "como `ŝ_xy = Σ_k β_k · P_k(λ̃) · ŝ` (Legendre de grado 4 modulando la referencia), "
+            "resuelto por mínimos cuadrados **con las líneas de ciencia fuera del ajuste**. El modelo "
+            "interpola suavemente a través de las líneas → el flujo y el perfil del compañero "
+            "sobreviven (sin auto-sustracción estructural), y el continuo vecino no se hunde.\n\n"
+            "**Diagnósticos de grado (QC, nunca ajuste al vuelo):** energy-share por grado "
+            "(Fig. 8 del paper), curva MSE analítica descompuesta en underfit-estrella / "
+            "overfit-planeta / overfit-ruido (Fig. 6 / Ec. B.5) y mapas de coeficientes que "
+            "descomponen la PSF por frecuencia espectral (Fig. 7: radio AO, spikes, anillos de "
+            "Airy). Si señalan que ∂=4 no basta, se revisa la spec — el grado no cambia dentro "
+            "del run.\n\n"
+            "Límite conocido (paper §4.1): la componente del espectro planetario **colineal** con la "
+            "referencia (p.ej. su continuo) se absorbe en el modelo; el LPM es óptimo para "
+            "compañeras dominadas por líneas."
+        ),
+        evidence_md=(
+            "## Evidencia: preservación de línea y diagnósticos de grado"
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/spec_lpm_qc.json', RUN_ID)\n"
+            "l = q['lpm']; d = q['degree_diagnostics']\n"
+            "print(f\"grado={l['degree']}  máscara={l['masked_lines_A']}\")\n"
+            "print(f\"condición={max(l['condition_number']):.2e}  slow_frac={l['slow_fraction_max']:.3f}\")\n"
+            "print(f\"smoke de preservación de línea (control): {l['line_preservation_recovery']}\")\n"
+            "print(f\"energy-share (g1..g9): {[f'{v:.3f}' for v in d['energy_share']]}\")\n"
+            "print(f\"MSE argmin={d['mse_argmin']}  warns: grado={d['degree_check_warn']} mse={d['mse_check_warn']}\")\n"
+            "print('checks:', q['checks'])"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot 1 — mapas de coeficientes (Fig. 7 del paper)\n\n"
+                    "Planos β̂_k del ajuste diagnóstico de grado 9 (primera exposición): los grados "
+                    "bajos muestran el radio AO y los spikes; los altos, anillos de Airy y ruido."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    q = nb.load_qc('stages/spec_lpm_qc.json', RUN_ID)\n"
+                    "    with fits.open(q['products']['coeff_maps']) as h:\n"
+                    "        maps = np.asarray(h['COEFFS_DEG9'].data, float)\n"
+                    "    fig, axes = plt.subplots(2, 5, figsize=(14, 5.6))\n"
+                    "    for k, ax in enumerate(axes.ravel()):\n"
+                    "        m = maps[k]\n"
+                    "        v = np.nanpercentile(m, [25, 75])\n"
+                    "        ax.imshow(m, origin='lower', cmap='RdBu_r', vmin=v[0], vmax=v[1])\n"
+                    "        ax.set_title(f'grado {k}', fontsize=9); ax.axis('off')\n"
+                    "    fig.suptitle('C6 · mapas de coeficientes LPM (descomposición de la PSF)')\n"
+                    "    fig.tight_layout(); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — SGF vs LPM alrededor de Hα (Fig. 13/14 del paper)\n\n"
+                    "Los dos espectros del compañero en ±80 Å de Hα: si hay línea, el SGF la "
+                    "auto-sustrae y hunde el continuo vecino; el LPM la preserva. Requiere C5 corrido."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    def spec(name):\n"
+                    "        h = fits.open(rd / 'stages' / name)\n"
+                    "        w = np.asarray(h[1].data['wave_A'], float); f = np.asarray(h[1].data['flux'], float)\n"
+                    "        h.close(); return w, f\n"
+                    "    w_s, f_s = spec('spec_sgf_object.fits')\n"
+                    "    w_l, f_l = spec('spec_lpm_object.fits')\n"
+                    "    sel = np.abs(w_s - 6563.0) <= 80\n"
+                    "    fig, ax = plt.subplots(figsize=(9, 4))\n"
+                    "    ax.plot(w_s[sel], f_s[sel], lw=1.0, color='tab:blue', label='SGF (C5)')\n"
+                    "    ax.plot(w_l[sel], f_l[sel], lw=1.0, color='tab:orange', label='LPM (C6)')\n"
+                    "    ax.axvline(6563, color='tab:red', ls=':'); ax.axhline(0, color='0.6', lw=0.6)\n"
+                    "    ax.set_xlabel('λ [Å]'); ax.set_title('C6 · SGF vs LPM alrededor de Hα')\n"
+                    "    ax.legend(); fig.tight_layout(); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+        ],
+        decisions=[
+            ("**Grado 4 congelado** (tres vías independientes del paper §3.2); diagnósticos de grado como QC con warnings, nunca ajuste al vuelo.", "spec_C6_codex_lpm_subtraction.md"),
+            ("Máscara de líneas por target (`lpm_masked_lines_A`); una línea de ciencia sin enmascarar = auto-sustracción parcial silenciosa → el notebook la audita contra el catálogo G2.", None),
+            ("Sin pesos por varianza en v1 (OLS plano, como el paper); ponderación por precisión es trabajo futuro explícito.", "plan_integracion_halosub_julo2025.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/spec_lpm_qc.json', RUN_ID)\n"
+            "for k, v in q['checks'].items():\n"
+            "    print(f'  {k}: {v}')\n"
+            "assert q['lpm']['degree'] == 4"
+        ),
+        conclusion_md=(
+            "## Estado\n\n"
+            "**Pendiente de primera ejecución sobre datos reales** (checkpoint de la spec C6). "
+            "Kernel verificado contra los oráculos del paper (Ec. B.5, límite R→0 de Fig. 2d) y "
+            "contrato de etapa con tests sintéticos (2026-07-14)."
+        ),
+    ),
     # ===================== BLOQUE D — método + calibración =====================
     dict(
-        id="D1", slug="D1_method_compare", title="Comparación inter-método", block="D · Método",
-        spec="spec_D1_v2_codex_method_comparison.md", run_override=None,
-        what="Compara los métodos de extracción sobre 33 controles y emite `recommended_method` (nunca fija el canónico).",
-        inputs="C2/C3/C4 + G1 verdicts", outputs="`stages/stage_x10_qc.json`",
+        id="D1", slug="D1_method_compare", title="Comparación inter-método (v3, 6 métodos)", block="D · Método",
+        spec="spec_D1_v3_codex_method_comparison.md", run_override=None,
+        what=(
+            "Compara los 6 métodos de extracción (C2–C6) por pares y banda sobre 33 controles y "
+            "emite `recommended_method` con el árbol v3 (nunca fija el canónico)."
+        ),
+        inputs="C2/C3/C4 + C5/C6 (sgf/lpm) + G1 verdicts + predictor Ec. 1 de C5",
+        outputs="`stages/stage_x10_qc.json`",
         downstream="D2 (consume el canónico de config)",
-        exec=dict(kind="script", target="stage_x10_compare.sh", cost="Moderado."),
+        exec=dict(kind="script", target="stage_x10_compare.sh", cost="Ligero (~6 s)."),
         qc="stages/stage_x10_qc.json",
-        salient=["verdict", "action", "recommended_method", "kind", "n_controls"],
+        salient=["verdict", "action", "recommended_method", "primary_pairs", "spec_version"],
         narrative_md=(
-            "## Qué hace D1 y cómo decide\n\n"
-            "D1 compara los métodos de extracción **por pares y por banda** para decidir cuáles son "
-            "consistentes, y emite un `recommended_method` — **nunca fija el canónico** (esa es la "
-            "decisión humana).\n\n"
-            "**El estadístico es un t control-centrado** (`statistics.kind = t_control_centred`): para "
-            "cada banda y par, compara la diferencia de continuo del objeto contra la **distribución "
-            "de las diferencias de los 33 controles** (df = 32). Al restar `mu_ctrl` (la diferencia "
-            "media de controles = sesgo_i − sesgo_j), **D1 ya está referenciado a controles** — por "
-            "eso el pedestal de sobre-sustracción NO driva su veredicto (el trabajo de referenciación "
-            "de C3/D2 solo puso a D2 al nivel de lo que D1 ya hacía).\n\n"
-            "**Bandas:** B1–B6 (continuo), LHa/LHb/LOI (líneas). **Umbrales:** `|t|>2.08` divergente "
-            "(p<0.0455), `|t|>3.25` fuerte (p<0.0027).\n\n"
-            "**Veredicto = `divergent_continuum`** en el par primario (psffit vs optimal_psfsub, los "
-            "dos validados por G1): **B6 t=+4.1 (fuerte)** y B2 t=−3.0 (marginal). Como es un t "
-            "control-centrado, ese +4.1 es el **sistemático cromático genuino** (~1.35× en nivel), no "
-            "el pedestal. `optimal_ls` es el **outlier**: todos sus pares divergen 18–34 → G1 lo "
-            "rechaza.\n\n"
-            "`recommended_method = None` (D1 se niega a auto-elegir con divergencia); el humano eligió "
-            "**psffit** ([`docs/d1_canonical_method_decision.md`](../docs/d1_canonical_method_decision.md)). "
-            "La `action = iterate_C1_refine_PSF_before_PCA` queda **reconocida pero no accionada** "
-            "(Psfao ya está; B6 aceptado como sistemática presupuestada)."
+            "## Qué hace D1 v3 y cómo decide\n\n"
+            "D1 compara los métodos **por pares y por banda** con un **t control-centrado** "
+            "(df = n_controles − 1): la diferencia del objeto contra la distribución de las "
+            "diferencias de los 33 controles — referenciado a controles por construcción. "
+            "Bandas B1–B6 (continuo) y LHα/LHβ/LOI (líneas); umbrales congelados p<0.0455 "
+            "(divergente) y p<0.0027 (fuerte).\n\n"
+            "**Novedades v3** ([`docs/spec_D1_v3_codex_method_comparison.md`](../docs/spec_D1_v3_codex_method_comparison.md)): "
+            "set de 6 métodos (15 pares) con la familia espectral de Julo et al. 2025 (sgf/lpm), y "
+            "árbol de recomendación congelado (preferencia psffit > lpm > psfsub > sgf > aperture > ls "
+            "entre validados G1, con sgf excluido si el continuo de la compañera es ciencia o si el "
+            "predictor Ec. 1 supera 0.10).\n\n"
+            "**Resultado 2026-07-15**: G1 validó {psffit, sgf, lpm} → **3 pares primarios** "
+            "(psffit–sgf, psffit–lpm, sgf–lpm), todos con controles limpios. `optimal_psfsub` pasó a "
+            "rejected: su T=0.667 histórico venía de un E4 anterior a la consolidación Psfao de C1; "
+            "con el modelo vigente T=0.25 (< 0.4, no bias-bounded). **Veredicto = "
+            "`divergent_continuum`**: B6 (rojo lejano) con t=+14.4/+13.6 de psffit contra sgf/lpm, "
+            "mientras lpm–sgf solo difiere t=−3.1 — la familia espectral es ~consistente donde la "
+            "espacial diverge (afila el diagnóstico hacia el residuo de halo rojo de psffit; salvedad: "
+            "sgf/lpm comparten ŝ, sesgo común posible). LHα marginal (t≈−2.9).\n\n"
+            "`recommended_method = None` (regla: solo recomienda con `consistent`); elegibles "
+            "registrados {psffit, lpm}. **El usuario mantuvo psffit como canónico** (2026-07-15, "
+            "[`docs/d1_canonical_method_decision.md`](../docs/d1_canonical_method_decision.md)); B6 "
+            "sigue como sistemática presupuestada."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
-            "Veredicto, t control-centrado del par primario por banda, y el outlier `optimal_ls`."
+            "Veredicto, pares primarios v3, t por banda de cada par primario, y caveats por método."
         ),
         evidence_code=(
             "from scipy.stats import t as t_dist\n"
             "q = nb.load_qc('stages/stage_x10_qc.json', RUN_ID)\n"
             "st = q['statistics']\n"
-            "# Umbrales t derivados de los p oficiales del QC (dependen de df=n_controls-1):\n"
             "df = st['n_controls'] - 1\n"
             "T_DIV = t_dist.ppf(1 - st['p_divergent'] / 2, df)\n"
             "T_STR = t_dist.ppf(1 - st['p_strong'] / 2, df)\n"
-            "print('veredicto:', q['verdict'], '| recommended:', q['recommended_method'], '| action:', q['action'])\n"
-            "print(f\"estadístico: {st['kind']} (n_controles={st['n_controls']}, df={df}); \"\n"
-            "      f\"umbral divergente p<{st['p_divergent']} (|t|>{T_DIV:.2f}), fuerte p<{st['p_strong']} (|t|>{T_STR:.2f})\")\n"
-            "pp = 'psffit_vs_optimal_psfsub'\n"
-            "bands = list(q['t_matrix'][pp].keys())\n"
-            "print(f'\\nt control-centrado del par primario ({pp}):')\n"
-            "for b in bands:\n"
-            "    t = q['t_matrix'][pp][b]\n"
-            "    flag = '  <-- FUERTE' if abs(t) > T_STR else ('  <- marginal' if abs(t) > T_DIV else '')\n"
-            "    print(f'   {b:4s}: t = {t:+.2f}{flag}')\n"
-            "print('\\noptimal_ls es el outlier (|t| máx por par):')\n"
-            "for pair, row in q['t_matrix'].items():\n"
-            "    if 'optimal_ls' in pair:\n"
-            "        tmax = max(abs(v) for v in row.values())\n"
-            "        print(f'   {pair:34s} |t|max = {tmax:.1f}')"
+            "print('spec:', q['spec_version'], '| veredicto:', q['verdict'], '| recommended:', q['recommended_method'])\n"
+            "print('pares primarios:', q['primary_pairs'])\n"
+            "print('elegibles (árbol v3):', q['recommendation_rules']['eligible'])\n"
+            "print('caveat sgf:', q['method_caveats']['sgf']['excluded_from_recommendation'])\n"
+            "for pp in q['primary_pairs']:\n"
+            "    print(f'\\nt control-centrado ({pp}):')\n"
+            "    for b, t in q['t_matrix'][pp].items():\n"
+            "        if t is None: continue\n"
+            "        flag = '  <-- FUERTE' if abs(t) > T_STR else ('  <- marginal' if abs(t) > T_DIV else '')\n"
+            "        print(f'   {b:4s}: t = {t:+.2f}{flag}')"
         ),
         plots=[
             dict(
                 md=(
-                    "## Plot 1 — el t control-centrado por par × banda\n\n"
-                    "Del `t_matrix` del QC. Rojo/azul = divergencia (|t| grande). **psffit vs "
-                    "optimal_psfsub** (fila primaria) es consistente salvo **B6 (+4.1)** y B2 (−3.0); "
-                    "**todos los pares con `optimal_ls`** divergen 18–34 (sobre-sustracción) → ls "
-                    "rechazado. psffit vs aperture es consistente en todo."
+                    "## Plot 1 — t control-centrado por par × banda (15 pares)\n\n"
+                    "Del `t_matrix` del QC. Las filas primarias (psffit–sgf, psffit–lpm, sgf–lpm) "
+                    "gobiernan el veredicto; el patrón B6 (psffit vs familia espectral t≈+14, "
+                    "lpm–sgf ≈ −3) es la firma nueva que aporta la v3."
                 ),
                 code=(
                     "try:\n"
@@ -1866,19 +2124,21 @@ STAGES: list[dict] = [
                     "    st = q['statistics']\n"
                     "    T_STR = t_dist.ppf(1 - st['p_strong'] / 2, st['n_controls'] - 1)\n"
                     "    tm = q['t_matrix']\n"
-                    "    pairs = list(tm.keys())\n"
+                    "    primary = list(q['primary_pairs'])\n"
+                    "    pairs = primary + [p for p in tm if p not in primary]\n"
                     "    bands = list(tm[pairs[0]].keys())\n"
-                    "    M = np.array([[tm[p].get(b, np.nan) for b in bands] for p in pairs])\n"
-                    "    fig, ax = plt.subplots(figsize=(9, 4.2))\n"
-                    "    im = ax.imshow(M, cmap='RdBu_r', vmin=-5, vmax=5, aspect='auto')\n"
+                    "    M = np.array([[np.nan if tm[p].get(b) is None else tm[p][b] for b in bands] for p in pairs])\n"
+                    "    fig, ax = plt.subplots(figsize=(9.5, 0.42 * len(pairs) + 1.8))\n"
+                    "    im = ax.imshow(M, cmap='RdBu_r', vmin=-6, vmax=6, aspect='auto')\n"
                     "    ax.set_xticks(range(len(bands))); ax.set_xticklabels(bands)\n"
-                    "    ax.set_yticks(range(len(pairs))); ax.set_yticklabels([p.replace('_vs_', ' vs ') for p in pairs], fontsize=8)\n"
+                    "    labels = [('* ' if p in primary else '') + p.replace('_vs_', ' vs ') for p in pairs]\n"
+                    "    ax.set_yticks(range(len(pairs))); ax.set_yticklabels(labels, fontsize=7)\n"
                     "    for i in range(len(pairs)):\n"
                     "        for j in range(len(bands)):\n"
                     "            v = M[i, j]\n"
                     "            if np.isfinite(v):\n"
-                    "                ax.text(j, i, f'{v:.1f}', ha='center', va='center', fontsize=7, color='k' if abs(v) < 3 else 'w')\n"
-                    "    ax.set_title(f'D1 · t control-centrado por par × banda (|t|>{T_STR:.2f} fuerte)')\n"
+                    "                ax.text(j, i, f'{v:.1f}', ha='center', va='center', fontsize=6, color='k' if abs(v) < 4 else 'w')\n"
+                    "    ax.set_title(f'D1 v3 · t por par × banda (* = primario; |t|>{T_STR:.2f} fuerte)')\n"
                     "    fig.colorbar(im, label='t'); fig.tight_layout()\n"
                     "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'd1_compare'; outdir.mkdir(parents=True, exist_ok=True)\n"
                     "    fig.savefig(outdir / 'tmatrix.png', dpi=110); print('figura ->', outdir / 'tmatrix.png'); plt.show()\n"
@@ -1888,11 +2148,10 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Plot 2 — el par primario: qué driva `divergent_continuum`\n\n"
-                    "El t del par primario (psffit vs optimal_psfsub) por banda, con los umbrales "
-                    "divergente (2.08) y fuerte (3.25). **B6 (+4.1) cruza el umbral fuerte** y B2 "
-                    "(−3.0) el divergente → veredicto `divergent_continuum`. Es el sistemático "
-                    "cromático genuino (~1.35×), ya libre del pedestal (t control-centrado)."
+                    "## Plot 2 — los 3 pares primarios: qué driva `divergent_continuum`\n\n"
+                    "t por banda de cada par primario con los umbrales divergente y fuerte. B6 con "
+                    "t≈+14 (psffit vs sgf/lpm) cruza holgadamente el umbral fuerte; entre sgf y lpm "
+                    "el continuo es casi consistente."
                 ),
                 code=(
                     "try:\n"
@@ -1901,46 +2160,47 @@ STAGES: list[dict] = [
                     "    from scipy.stats import t as t_dist\n"
                     "    q = nb.load_qc('stages/stage_x10_qc.json', RUN_ID)\n"
                     "    st = q['statistics']; df = st['n_controls'] - 1\n"
-                    "    t_div = t_dist.ppf(1 - st['p_divergent'] / 2, df)   # umbrales oficiales (p del QC)\n"
+                    "    t_div = t_dist.ppf(1 - st['p_divergent'] / 2, df)\n"
                     "    t_str = t_dist.ppf(1 - st['p_strong'] / 2, df)\n"
-                    "    row = q['t_matrix']['psffit_vs_optimal_psfsub']\n"
-                    "    bands = list(row.keys()); tv = [row[b] for b in bands]\n"
-                    "    cols = ['tab:red' if abs(v) > t_str else ('tab:orange' if abs(v) > t_div else '0.6') for v in tv]\n"
-                    "    fig, ax = plt.subplots(figsize=(9, 4))\n"
-                    "    ax.bar(bands, tv, color=cols)\n"
+                    "    primary = list(q['primary_pairs'])\n"
+                    "    bands = list(q['t_matrix'][primary[0]].keys())\n"
+                    "    x = np.arange(len(bands)); w = 0.8 / len(primary)\n"
+                    "    fig, ax = plt.subplots(figsize=(10, 4.2))\n"
+                    "    for k, pp in enumerate(primary):\n"
+                    "        tv = [q['t_matrix'][pp].get(b) for b in bands]\n"
+                    "        tv = [np.nan if v is None else v for v in tv]\n"
+                    "        ax.bar(x + (k - (len(primary)-1)/2) * w, tv, width=w, label=pp.replace('_vs_', ' vs '))\n"
                     "    for s in (t_div, t_str):\n"
                     "        ax.axhline(s, color='k', ls=':', lw=0.8); ax.axhline(-s, color='k', ls=':', lw=0.8)\n"
                     "    ax.axhline(0, color='k', lw=0.6)\n"
-                    "    ax.set_ylabel('t control-centrado')\n"
-                    "    ax.set_title('D1 · par primario psffit vs optimal_psfsub → divergent_continuum (B6 fuerte, B2 marginal)')\n"
-                    "    fig.tight_layout()\n"
+                    "    ax.set_xticks(x); ax.set_xticklabels(bands); ax.set_ylabel('t control-centrado')\n"
+                    "    ax.set_title('D1 v3 · pares primarios → divergent_continuum (B6 fuerte)')\n"
+                    "    ax.legend(fontsize=8); fig.tight_layout()\n"
                     "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'd1_compare'; outdir.mkdir(parents=True, exist_ok=True)\n"
-                    "    fig.savefig(outdir / 'primary_pair.png', dpi=110); print('figura ->', outdir / 'primary_pair.png'); plt.show()\n"
+                    "    fig.savefig(outdir / 'primary_pairs.png', dpi=110); print('figura ->', outdir / 'primary_pairs.png'); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
         ],
         decisions=[
-            ("**Decisión humana: canónico = `psffit`** (validado por G1, físico en el borde); D1 solo recomienda (`recommended_method=None` con divergencia).", "d1_canonical_method_decision.md"),
-            ("**Veredicto = `divergent_continuum`** en el par primario: B6 t=+4.1 (fuerte), B2 t=−3.0 (marginal). t **control-centrado** → es el sistemático genuino (~1.35×), no el pedestal.", None),
-            ("**`optimal_ls` rechazado**: outlier en todos sus pares (|t| 18–34) por sobre-sustracción.", None),
-            ("**B6 aceptado como sistemática presupuestada**: `action=iterate_C1` reconocida pero NO accionada (Psfao ya está; ver D2 y la referenciación de continuo).", "d2_red_continuum_diagnosis.md"),
+            ("**METHOD_ORDER de 6** con la familia espectral (Julo+25); pares primarios = validados por G1; protocolo anti cherry-picking intacto.", "spec_D1_v3_codex_method_comparison.md"),
+            ("**optimal_psfsub → rejected**: su T histórico venía de un E4 pre-consolidación Psfao; verificado con worktree HEAD que el cambio no proviene del código nuevo.", None),
+            ("**B6 afilado**: psffit vs familia espectral t≈+14 con lpm–sgf ≈ −3; sigue como sistemática presupuestada (decisión 2026-07-10, heredada).", "d1_canonical_method_decision.md"),
+            ("**El usuario mantuvo psffit** como canónico (2026-07-15); elegibles del árbol: {psffit, lpm}; sgf excluido de recomendación (continuo = ciencia).", "d1_canonical_method_decision.md"),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**D1: veredicto `divergent_continuum` (par primario psffit vs optimal_psfsub); t "
-            "control-centrado; recommended_method=None.**\n\n"
-            "- **Fecha:** D1 v2 sobre el run realineado (2026-07-09).\n"
-            "- **Estadístico:** t control-centrado (33 controles, df=32) → ya libre del pedestal de "
-            "sobre-sustracción.\n"
-            "- **Driver:** B6 t=+4.1 (fuerte), B2 t=−3.0 (marginal) = sistemático cromático genuino "
-            "(~1.35× en nivel).\n"
-            "- **ls rechazado:** outlier en todos sus pares (|t| 18–34).\n"
-            "- **Canónico:** el humano eligió **psffit** (D1 no auto-elige con divergencia).\n"
-            "- **Acción:** `iterate_C1` reconocida pero no accionada (B6 aceptado como sistemática "
-            "presupuestada; ver D2)."
+            "**D1 v3: `divergent_continuum` con 3 pares primarios limpios (psffit–sgf, psffit–lpm, "
+            "sgf–lpm); canónico = psffit (decisión del usuario 2026-07-15).**\n\n"
+            "- **Fecha:** cadena D1 v3 sobre el run realineado (2026-07-15).\n"
+            "- **Estadístico:** t control-centrado, 33 controles (df=32), corr_length 2.34 canales.\n"
+            "- **Firma B6:** la familia espectral es ~consistente donde psffit diverge (t≈+14) → el "
+            "residuo apunta al halo rojo del modelo espacial; salvedad de ŝ compartida entre sgf/lpm.\n"
+            "- **Downstream:** D2 calibró los 6 métodos (comparador de continuo = lpm, errata D2 "
+            "v1.1); E1 re-confirmó la no-detección con 6 métodos; E3 con throughput E4 fresco.\n"
+            "- Todo provisional hasta cerrar el A-block."
         ),
     ),
     dict(
@@ -2230,6 +2490,102 @@ STAGES: list[dict] = [
             "rv_sys −7 (literatura).\n"
             "- **Downstream:** alimenta E3 (límite superior de Ṁ) y G2. Es el endpoint científico "
             "del proyecto."
+        ),
+    ),
+    dict(
+        id="E1b", qc_optional=True, slug="E1b_fov_detection", title="Detección ciega FoV (matched filter)", block="E · Resultado",
+        spec="spec_E1b_codex_fov_detection.md", run_override=None,
+        what=(
+            "Mapas matched-filter espacio-espectrales sobre todo el campo desde los cubos "
+            "residuales (sgf/lpm/psfsub), normalizados por ruido de anillos; propone candidatos "
+            "ciegos (Julo et al. 2025 Fig. 9 + App. G)."
+        ),
+        inputs="Cubos residuales C5/C6 (+psfsub reconstruido) + PSF C1 + posiciones B3",
+        outputs="`stages/stage_h01b_qc.json`, `stage_h01b_fovmap_<m>.fits`",
+        downstream="E6 (ROC); targets nuevos: candidatos previos a B3 (checkpoint usuario)",
+        exec=dict(kind="module_main", target="musepipe.stages.stage_h01b_fovmap",
+                  cost="Ligero (~1 min por método)."),
+        qc="stages/stage_h01b_qc.json",
+        salient=["params.threshold_sigma", "params.kernel_source",
+                 "checks.v1_maps_written", "checks.v2_known_source_reported"],
+        narrative_md=(
+            "## Qué hace E1b\n\n"
+            "Para cada cubo residual: plantilla espectral gaussiana (FWHM=LSF) en la línea "
+            "objetivo → mapa M = Σ f·residual → correlación con el kernel de PSF cromática C1 → "
+            "normalización por anillos (μ, σ robustos por radio, filosofía Andres 1994) → mapa z "
+            "y candidatos con z ≥ 5 fuera del núcleo AO.\n\n"
+            "Es la etapa de **detección ciega** del pipeline multi-target: en targets nuevos corre "
+            "antes de fijar `companion` en B3 (la promoción de un candidato es SIEMPRE checkpoint "
+            "del usuario); con compañera conocida es un test de consistencia con E1 (su z se "
+            "reporta como `known_source`). El QC registra además la gaussianidad del ruido por "
+            "anillos (App. G del paper): no-gaussianidad cerca del núcleo NO bloquea — motiva la "
+            "estadística empírica de E3/E6."
+        ),
+        evidence_md=("## Evidencia: candidatos, fuente conocida y ruido por anillos"),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_h01b_qc.json', RUN_ID)\n"
+            "print('kernel:', q['params']['kernel_source'], ' umbral:', q['params']['threshold_sigma'], 'σ')\n"
+            "for m, mq in q['methods'].items():\n"
+            "    ks = mq['known_source']\n"
+            "    z_known = None if ks is None else ks['z']\n"
+            "    print(f\"  {m:14s} candidatos={len(mq['candidates'])}  z(compañera)={z_known}\")\n"
+            "    for c in mq['candidates'][:5]:\n"
+            "        print(f\"     cand y={c['y']} x={c['x']} r={c['r_px']:.1f}px z={c['z']:.1f}\")\n"
+            "print('checks:', q['checks'])"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Plot — mapas z por método + gaussianidad por anillos\n\n"
+                    "Mapas z (Fig. 9 del paper) con estrella (*), compañera conocida (○) y "
+                    "candidatos (□); y fracción |z|>3 por anillo vs expectativa gaussiana (App. G)."
+                ),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from astropy.io import fits\n"
+                    "    q = nb.load_qc('stages/stage_h01b_qc.json', RUN_ID)\n"
+                    "    methods = list(q['methods'])\n"
+                    "    fig, axes = plt.subplots(1, len(methods) + 1, figsize=(5*(len(methods)+1), 4.4))\n"
+                    "    for ax, m in zip(axes, methods):\n"
+                    "        with fits.open(q['methods'][m]['map_fits']) as h:\n"
+                    "            z = np.asarray(h['Z'].data, float)\n"
+                    "        im = ax.imshow(z, origin='lower', cmap='viridis', vmin=-3, vmax=8)\n"
+                    "        sy, sx = q['star_yx']; ax.plot(sx, sy, '*', color='red')\n"
+                    "        if q.get('companion_yx'):\n"
+                    "            cy, cx = q['companion_yx']; ax.plot(cx, cy, 'o', mfc='none', mec='lime', ms=12)\n"
+                    "        for c in q['methods'][m]['candidates']:\n"
+                    "            ax.plot(c['x'], c['y'], 's', mfc='none', mec='orange', ms=10)\n"
+                    "        ax.set_title(f'{m} · z'); ax.axis('off'); fig.colorbar(im, ax=ax, shrink=0.75)\n"
+                    "    ax2 = axes[-1]\n"
+                    "    for m in methods:\n"
+                    "        rn = q['methods'][m]['ring_noise']\n"
+                    "        r = [0.5*(x['r_lo']+x['r_hi']) for x in rn]\n"
+                    "        f3 = [x['frac_abs_z_gt3'] for x in rn]\n"
+                    "        ax2.plot(r, f3, marker='o', ms=3, label=m)\n"
+                    "    ax2.axhline(0.0027, color='k', ls=':', label='gaussiana (0.27%)')\n"
+                    "    ax2.set_xlabel('radio [px]'); ax2.set_ylabel('frac |z|>3'); ax2.set_yscale('log')\n"
+                    "    ax2.legend(fontsize=7); ax2.set_title('gaussianidad por anillos (App. G)')\n"
+                    "    fig.tight_layout(); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+        ],
+        decisions=[
+            ("Umbral 5σ y r_min=3px congelados; la promoción de candidatos a `companion` (B3) es checkpoint del usuario, nunca automática.", "spec_E1b_codex_fov_detection.md"),
+            ("Normalización por anillos con μ/σ robustos (Andres 1994); no-gaussianidad registrada, no bloqueante.", "plan_integracion_halosub_julo2025.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/stage_h01b_qc.json', RUN_ID)\n"
+            "for k, v in q['checks'].items():\n"
+            "    print(f'  {k}: {v}')"
+        ),
+        conclusion_md=(
+            "## Estado\n\n"
+            "**Pendiente de primera ejecución sobre datos reales** (requiere C5/C6 corridos). "
+            "Núcleo y contrato verificados con tests sintéticos (2026-07-14)."
         ),
     ),
     dict(
@@ -2638,6 +2994,154 @@ STAGES: list[dict] = [
         ),
     ),
     # ===================== BLOQUE F — paquete =====================
+    dict(
+        id="E5", qc_optional=True, slug="E5_contrast_curves", title="Curvas de contraste (anillos)", block="E · Resultado",
+        spec="spec_E5_codex_contrast_curves.md", run_override=None,
+        what=(
+            "Contraste mínimo detectable vs separación por método (sgf/lpm), con inyecciones en "
+            "grilla de anillos validadas sobre el mapa E1b (Julo et al. 2025 Fig. 10)."
+        ),
+        inputs="Cubos residuales C5/C6 + cubo madre + PSF C1",
+        outputs="`tables/contrast_curve_by_method.csv`, `tables/contrast_injections.csv`, `stages/stage_h05_qc.json`",
+        downstream="E6 (ROC); notebook 10 de límites de masa (consumidor futuro)",
+        exec=dict(kind="module_main", target="musepipe.stages.stage_h05_contrast",
+                  cost="Ligero-moderado (~min: camino delta lineal, grilla congelada en spec)."),
+        qc="stages/stage_h05_qc.json",
+        salient=["params.threshold_sigma", "params.f_star_line",
+                 "checks.v1_curves_written", "checks.v2_monotonic_trend"],
+        narrative_md=(
+            "## Qué hace E5\n\n"
+            "Inyecta líneas falsas (gaussiana FWHM=LSF × PSF C1) en anillos concéntricos "
+            "(separaciones × 8 ángulos × contrastes 1e-5→1e-2 relativos al flujo estelar en la "
+            "banda de línea) y valida cada una con la MISMA cadena de detección de E1b "
+            "(matched filter + μ̂/σ̂ robustos por anillo, umbral 5σ). Por la linealidad de la "
+            "sustracción con ŝ fija, el residual base y sus anillos se calculan UNA vez y cada "
+            "inyección solo aporta su delta — la grilla completa cuesta segundos y la decisión "
+            "usa la realización de ruido REAL de cada posición (como el paper §3.3.2).\n\n"
+            "La curva reportada es el contraste con ≥50% de detección sobre los ángulos, con "
+            "bandas al 25/75%."
+        ),
+        evidence_md=("## Evidencia: curva por método"),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_h05_qc.json', RUN_ID)\n"
+            "print('F_star(banda línea) =', q['params']['f_star_line'])\n"
+            "for m, mq in q['methods'].items():\n"
+            "    print(f\"  {m}: {mq['n_injections']} inyecciones\")\n"
+            "    for e in mq['curve'][:6]:\n"
+            "        print(f\"    r={e['separation_px']:5.1f}px  c50={e['contrast_50']}  c25={e['contrast_25']}  c75={e['contrast_75']}\")\n"
+            "print('checks:', q['checks'])"
+        ),
+        plots=[
+            dict(
+                md=("## Plot — curva de contraste 5σ (Fig. 10 del paper)\n\n"
+                    "Contraste al 50% con banda 25/75%, eje x en arcsec (25 mas/px)."),
+                code=(
+                    "try:\n"
+                    "    import numpy as np\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    q = nb.load_qc('stages/stage_h05_qc.json', RUN_ID)\n"
+                    "    fig, ax = plt.subplots(figsize=(8.5, 4.4))\n"
+                    "    for m, mq in q['methods'].items():\n"
+                    "        r = [e['separation_px']*0.025 for e in mq['curve'] if e['contrast_50']]\n"
+                    "        c50 = [e['contrast_50'] for e in mq['curve'] if e['contrast_50']]\n"
+                    "        lo = [e['contrast_25'] or np.nan for e in mq['curve'] if e['contrast_50']]\n"
+                    "        hi = [e['contrast_75'] or np.nan for e in mq['curve'] if e['contrast_50']]\n"
+                    "        ax.plot(r, c50, marker='o', ms=3, label=m)\n"
+                    "        ax.fill_between(r, lo, hi, alpha=0.2)\n"
+                    "    ax.set_yscale('log'); ax.set_xlabel('separación [arcsec]')\n"
+                    "    ax.set_ylabel('contraste de línea 5σ'); ax.legend()\n"
+                    "    ax.set_title('E5 · curvas de contraste'); fig.tight_layout(); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+        ],
+        decisions=[
+            ("Detección con la cadena E1b real (no un detector ad-hoc); grillas congeladas en la spec.", "spec_E5_codex_contrast_curves.md"),
+            ("Camino delta lineal exacto (verificado contra fuerza bruta en tests); psfsub opcional con re-sustracción completa.", "plan_integracion_halosub_julo2025.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/stage_h05_qc.json', RUN_ID)\n"
+            "for k, v in q['checks'].items():\n"
+            "    print(f'  {k}: {v}')"
+        ),
+        conclusion_md=(
+            "## Estado\n\n"
+            "**Pendiente de primera ejecución sobre datos reales** (requiere C5/C6). Núcleo y "
+            "contrato verificados con tests sintéticos (2026-07-14)."
+        ),
+    ),
+    dict(
+        id="E6", qc_optional=True, slug="E6_roc_curves", title="Curvas ROC del detector", block="E · Resultado",
+        spec="spec_E6_codex_roc_curves.md", run_override=None,
+        what=(
+            "ROC (DP vs FAP) del matched filter por método y separación, con inyecciones a "
+            "contraste tipo límite y nulo empírico de anillos + canales sin línea (Julo+25 Fig. 11)."
+        ),
+        inputs="Cubos residuales C5/C6 + E5 QC (contrast_50) + PSF C1",
+        outputs="`tables/roc_curves.csv`, `stages/stage_h06_qc.json`",
+        downstream="Insumo informativo del checkpoint D1 v3 (robustez por método)",
+        exec=dict(kind="module_main", target="musepipe.stages.stage_h06_roc",
+                  cost="Moderado (~min: mapas nulos según h06_null_step_channels)."),
+        qc="stages/stage_h06_qc.json",
+        salient=["params.n_null_wavelengths", "checks.v1_curves_written",
+                 "checks.v2_auc_above_random", "checks.v3_null_sample_ok"],
+        narrative_md=(
+            "## Qué hace E6\n\n"
+            "Complementa a E5: en vez de fijar el FAP (5σ) y variar el contraste, fija el "
+            "contraste (el `contrast_50` de E5, régimen de límite de detección) y barre el "
+            "umbral, midiendo DP con inyecciones en anillo (16 ángulos) y FAP con el nulo "
+            "EMPÍRICO: píxeles del anillo del mapa z base + mapas z reconstruidos con la "
+            "plantilla centrada en canales libres de línea (paper §3.3.3 — sin supuestos "
+            "gaussianos). AUC por método y separación."
+        ),
+        evidence_md=("## Evidencia: AUC por método y escenario"),
+        evidence_code=(
+            "q = nb.load_qc('stages/stage_h06_qc.json', RUN_ID)\n"
+            "print('mapas nulos:', q['params']['n_null_wavelengths'])\n"
+            "for m, mq in q['methods'].items():\n"
+            "    for s in mq['scenarios']:\n"
+            "        print(f\"  {m:5s} r={s['separation_px']:5.1f}px c={s['contrast']:.2e} \"\n"
+            "              f\"AUC={s['auc']:.3f} (n_iny={s['n_injections']}, n_nulo={s['n_null']})\")\n"
+            "print('checks:', q['checks'])"
+        ),
+        plots=[
+            dict(
+                md=("## Plot — ROC por método y separación (Fig. 11 del paper)"),
+                code=(
+                    "try:\n"
+                    "    import csv\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    rows = list(csv.DictReader(open(rd / 'tables' / 'roc_curves.csv')))\n"
+                    "    fig, ax = plt.subplots(figsize=(6.4, 5.4))\n"
+                    "    keys = sorted({(r['method'], r['separation_px']) for r in rows})\n"
+                    "    for m, sep in keys:\n"
+                    "        pts = sorted((float(r['fap']), float(r['dp'])) for r in rows\n"
+                    "                     if r['method'] == m and r['separation_px'] == sep)\n"
+                    "        ax.plot([p[0] for p in pts], [p[1] for p in pts], lw=1.1, label=f'{m} r={float(sep):g}px')\n"
+                    "    ax.plot([0, 1], [0, 1], 'k:', lw=0.8, label='aleatorio')\n"
+                    "    ax.set_xlabel('FAP'); ax.set_ylabel('DP'); ax.legend(fontsize=7)\n"
+                    "    ax.set_title('E6 · ROC'); fig.tight_layout(); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+        ],
+        decisions=[
+            ("Nulo empírico (anillos + canales sin línea), nunca gaussiano asumido; informativo para D1 v3, no cambia veredictos.", "spec_E6_codex_roc_curves.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/stage_h06_qc.json', RUN_ID)\n"
+            "for k, v in q['checks'].items():\n"
+            "    print(f'  {k}: {v}')"
+        ),
+        conclusion_md=(
+            "## Estado\n\n"
+            "**Pendiente de primera ejecución sobre datos reales** (requiere C5/C6 y E5). "
+            "Núcleo y contrato verificados con tests sintéticos (2026-07-14/15)."
+        ),
+    ),
     dict(
         id="F1", slug="F1_final_report", title="Paquete final + gate", block="F · Paquete",
         spec="spec_F1_codex_final_products.md", run_override=None,

@@ -5,7 +5,7 @@ notebooks históricos de la raíz (`00_*`…`Far_*`), que quedaron como interfaz
 inspección y **no reflejan las correcciones recientes**. Son interfaces delgadas
 sobre `musepipe/` + `scripts/`: no reimplementan lógica.
 
-Las 25 están **enriquecidas**: cada una explica su etapa, carga la evidencia real
+Las 30 están **enriquecidas**: cada una explica su etapa, carga la evidencia real
 del QC y trae 1–2 figuras — no son esqueletos.
 
 Generados por [`scripts/build_review_notebooks.py`](../scripts/build_review_notebooks.py)
@@ -58,12 +58,17 @@ Utilidades comunes en [`_nbcommon.py`](_nbcommon.py).
 | 10 | [C2_aperture](C2_aperture.ipynb) | Extracción por apertura | sí | espectro + banda de ruido; apcorr cromática |
 | 11 | [C3_optimal](C3_optimal.ipynb) | Extracción óptima | sí | ls vs psfsub (sobre-sustracción) |
 | 12 | [C4_psffit](C4_psffit.ipynb) | Ajuste de PSF (psffit) | sí | cubo residual; espectro canónico |
+| 12b | [C5_sgf](C5_sgf.ipynb) | Sustracción de halo SGF (Julo+25) | sí (pendiente 1ª ejec.) | residual + espectro; predictor Ec. 1 |
+| 12c | [C6_lpm](C6_lpm.ipynb) | Sustracción de halo LPM (Julo+25) | sí (pendiente 1ª ejec.) | mapas de coeficientes; SGF vs LPM en Hα |
 | 13 | [D1_method_compare](D1_method_compare.ipynb) | Comparación inter-método | sí | heatmap t-matrix; par primario |
 | 14 | [D2_calibrate](D2_calibrate.ipynb) | Calibración espectral | sí | referenciación antes/después; presupuesto de error |
 | 15 | [E1_halpha_detect](E1_halpha_detect.ipynb) | Detección Hα | sí | pico vs distribución nula; región de Hα |
+| 15b | [E1b_fov_detection](E1b_fov_detection.ipynb) | Detección ciega FoV (Julo+25) | sí (pendiente 1ª ejec.) | mapas z por método; gaussianidad por anillos |
 | 16 | [E2_artifacts](E2_artifacts.ipynb) | Batería de artefactos | sí | T5 placebos; batería a golpe de vista |
 | 17 | [E3_upper_limits](E3_upper_limits.ipynb) | Límites superiores (Ṁ) | sí | Ṁ por método; cadena física |
 | 18 | [E4_injection](E4_injection.ipynb) | Inyección-recuperación | sí (pesado) | throughput por método; curva de recuperación |
+| 18b | [E5_contrast_curves](E5_contrast_curves.ipynb) | Curvas de contraste (Julo+25) | sí (pendiente 1ª ejec.) | contraste 5σ vs separación con banda 25/75% |
+| 18c | [E6_roc_curves](E6_roc_curves.ipynb) | Curvas ROC (Julo+25) | sí (pendiente 1ª ejec.) | DP vs FAP por método/separación; AUC |
 | 19 | [F1_final_report](F1_final_report.ipynb) | Paquete final + gate | sí | semáforo del gate; 4 limitaciones aceptadas |
 | 20 | [G0_real_cube](G0_real_cube.ipynb) | Ejecución cubo real | sí | comparación con legacy ADP |
 | 21 | [G1_extraction_validation](G1_extraction_validation.ipynb) | Validación de extracción | sí | covarianza del remuestreo; veredictos |
