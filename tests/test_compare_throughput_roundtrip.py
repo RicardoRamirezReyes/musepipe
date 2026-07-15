@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from musepipe.stages.stage_x10_compare import compare_methods
+from musepipe.stages.stage_x10_compare import METHOD_ORDER, compare_methods
 from tests.test_compare_verdicts import clean_controls, make_product, make_wave, synthetic_g1
 
 
@@ -12,7 +12,7 @@ def attenuated_products(true_level=100.0, throughput=None):
     wave = make_wave()
     throughput = throughput or {}
     products = {}
-    for method in ("aperture", "optimal_ls", "optimal_psfsub", "psffit"):
+    for method in METHOD_ORDER:
         t_val = float(throughput.get(method, 1.0))
         flux = np.full(wave.size, true_level * t_val, dtype=np.float64)
         products[method] = make_product(method, flux, wave=wave)

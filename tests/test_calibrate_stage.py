@@ -20,6 +20,8 @@ class CalibrateStageTests(unittest.TestCase):
                 "optimal_ls": "spec_optimal_object",
                 "optimal_psfsub": "spec_optimal_psfsub_object",
                 "psffit": "spec_psffit_object",
+                "sgf": "spec_sgf_object",
+                "lpm": "spec_lpm_object",
             }.items():
                 calibration_product(method=method).write(paths[key])
             paths["stage00q_qc_json"].write_text(

@@ -182,3 +182,15 @@ en rojo (¿aplicar igual con caveat o bloquear?); V4 muestre forma incompatible
 con M8–L0; V5 altere conclusiones de D1. Reporte: tabla de correcciones
 aplicadas con fuentes, presupuesto de errores (figura V2), verificaciones,
 checklist de límites, comando de reproducción.
+
+## Errata v1.1 (2026-07-15, era D1 v3)
+
+Con el set de 6 métodos, el comparador del gate v3 (acuerdo de continuo
+inter-método, control-referenciado) se elige del primer par primario de D1
+que contiene al canónico, EXCLUYENDO `sgf`: el SGF pierde el continuo de la
+compañera por construcción (Julo et al. 2025 §2.1; caveat registrado en la
+spec D1 v3 §2), de modo que un ratio de niveles canónico-vs-sgf mediría el
+método, no la sistemática. Fallback congelado: `lpm`, luego
+`optimal_psfsub`. Motivación observada: con el par `psffit_vs_sgf` el ratio
+de banda roja daba 29.7x, dominado por la pérdida estructural de continuo del
+sgf y no por el residuo cromático de halo que el gate vigila.

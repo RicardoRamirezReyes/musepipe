@@ -1,9 +1,12 @@
-"""Stage X10/D1 v2: compare extraction methods from frozen SpectrumProducts.
+"""Stage X10/D1 v3: compare extraction methods from frozen SpectrumProducts.
 
-Spec: docs/spec_D1_v2_codex_method_comparison.md. Primary pairs come from the
-G1 per-method verdicts; the controls gate acts PER PAIR; the primary statistic
-is a control-centred Student t on band-integrated diffs (df = n_controls - 1)
-with an in-memory throughput correction that is never written to products.
+Spec: docs/spec_D1_v3_codex_method_comparison.md (method set of 6 with the
+C5/C6 spectral-diversity methods + frozen recommendation tree); everything
+else re-frozen from docs/spec_D1_v2_codex_method_comparison.md. Primary pairs
+come from the G1 per-method verdicts; the controls gate acts PER PAIR; the
+primary statistic is a control-centred Student t on band-integrated diffs
+(df = n_controls - 1) with an in-memory throughput correction that is never
+written to products.
 """
 
 from __future__ import annotations
@@ -25,9 +28,12 @@ from ..paths import RunPaths
 from ..stats import robust_sigma_axis0
 
 
-SPEC_VERSION = "D1_v2"
+SPEC_VERSION = "D1_v3"
 BAD_COMPARISON_FLAGS = FLAG_BAD_WINDOW | FLAG_SKYLINE
-METHOD_ORDER = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+# D1 v3 (spec_D1_v3 §0): the C5/C6 spectral-diversity methods join the frozen
+# comparison set. Historical runs with spec_version="D1_v2" QC keep their
+# 4-method interpretation.
+METHOD_ORDER = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 # v1 primary pairs, kept for reference/back-compat only: D1 v2 derives the
 # primary pairs from the G1 method verdicts (spec v2 §3.2).
 PRIMARY_PAIRS = (
@@ -39,19 +45,33 @@ DEFAULT_PAIRS = (
     ("psffit", "aperture"),
     ("psffit", "optimal_ls"),
     ("psffit", "optimal_psfsub"),
+    ("psffit", "sgf"),
+    ("psffit", "lpm"),
     ("optimal_ls", "aperture"),
     ("optimal_psfsub", "aperture"),
     ("optimal_psfsub", "optimal_ls"),
+    ("optimal_psfsub", "sgf"),
+    ("optimal_psfsub", "lpm"),
+    ("lpm", "sgf"),
+    ("lpm", "aperture"),
+    ("lpm", "optimal_ls"),
+    ("sgf", "aperture"),
+    ("sgf", "optimal_ls"),
 )
 # Frozen fallback when G1 is unavailable (spec v2 §3.2) — NOT the v1 pairs.
 FALLBACK_PRIMARY_PAIRS = (("psffit", "optimal_psfsub"),)
 VALIDATED_VERDICTS = {"validated", "validated_with_bias"}
-# Frozen thresholds (spec v2 §3.1, §4.2, §5).
+# Frozen thresholds (spec v2 §3.1, §4.2, §5; re-frozen by v3).
 DEFAULT_P_DIVERGENT = 0.0455
 DEFAULT_P_STRONG = 0.0027
 DEFAULT_SCALE_GATE_SIGMA = 5.0
 DEFAULT_CONTROL_GATE_ALPHA = 0.01
 SCALE_BUG_LEVEL_RATIO = 10.0
+# D1 v3 recommendation tree (spec v3 §2): frozen preference among G1-validated
+# candidates; sgf guarded by the continuum-science flag and the Eq. 1
+# self-subtraction predictor from the C5 QC.
+RECOMMENDATION_PREFERENCE = ("psffit", "lpm", "optimal_psfsub", "sgf", "aperture", "optimal_ls")
+DEFAULT_SGF_PREDICTOR_MAX = 0.10
 
 
 @dataclass(frozen=True)
@@ -952,6 +972,67 @@ def _correlation_summary(products, pair_sigmas):
     return out
 
 
+def recommend_method_v3(verdict, method_verdicts, context=None):
+    """Frozen D1 v3 recommendation tree (spec_D1_v3 §2).
+
+    Emits a recommendation ONLY on a ``consistent`` verdict (v2 behavior),
+    chosen among G1-validated candidates by the frozen preference order, with
+    ``sgf`` guarded by the continuum-science flag and the Eq. 1 predictor.
+    Always returns the per-method caveats for the QC/checkpoint.
+    """
+
+    ctx = dict(context or {})
+    method_verdicts = method_verdicts or {}
+    continuum_science = bool(ctx.get("companion_continuum_is_science", True))
+    predictor_max = float(ctx.get("sgf_predictor_max", DEFAULT_SGF_PREDICTOR_MAX))
+    predictors = ctx.get("sgf_predictors")
+
+    sgf_excluded = None
+    if continuum_science:
+        sgf_excluded = (
+            "companion continuum is science: SGF loses continuum information "
+            "irrecoverably (Julo et al. 2025 Sect. 2.1)."
+        )
+    exceeding = []
+    if predictors:
+        for row in predictors:
+            pred = row.get("predictor")
+            if row.get("in_range") and pred is not None and abs(float(pred)) > predictor_max:
+                exceeding.append(str(row.get("line")))
+        if exceeding and sgf_excluded is None:
+            sgf_excluded = (
+                f"Eq. 1 self-subtraction predictor exceeds {predictor_max:g} "
+                f"for line(s) {exceeding}."
+            )
+
+    caveats = {
+        "companion_continuum_is_science": continuum_science,
+        "lpm": (
+            "planetary-spectrum components collinear with the stellar reference "
+            "are absorbed by the modulation (Julo et al. 2025 Sect. 4.1); optimal "
+            "for line-dominated companions."
+        ),
+        "sgf": {
+            "predictors": predictors if predictors is not None else "unavailable",
+            "excluded_from_recommendation": sgf_excluded,
+        },
+    }
+    candidates = [
+        method
+        for method in RECOMMENDATION_PREFERENCE
+        if str(method_verdicts.get(method, "")) in VALIDATED_VERDICTS
+    ]
+    eligible = [m for m in candidates if not (m == "sgf" and sgf_excluded)]
+    recommended = eligible[0] if (verdict == "consistent" and eligible) else None
+    rules = {
+        "preference_order": list(RECOMMENDATION_PREFERENCE),
+        "candidates_validated": candidates,
+        "eligible": eligible,
+        "sgf_predictor_max": predictor_max,
+    }
+    return {"recommended_method": recommended, "method_caveats": caveats, "rules": rules}
+
+
 def compare_methods(
     products: dict[str, SpectrumProduct],
     controls_by_method: dict[str, np.ndarray] | None = None,
@@ -964,6 +1045,7 @@ def compare_methods(
     p_strong=DEFAULT_P_STRONG,
     scale_gate_sigma=DEFAULT_SCALE_GATE_SIGMA,
     gate_alpha=DEFAULT_CONTROL_GATE_ALPHA,
+    recommendation_context=None,
 ) -> tuple[list[dict], list[dict], dict]:
     header_warnings = validate_product_set(products)
     open_issues = list(header_warnings or [])
@@ -1103,7 +1185,10 @@ def compare_methods(
         open_issues.append(f"Primary pair {pid} degraded: {reason}.")
 
     n_controls = max((sigma["n_controls"] for sigma in pair_sigmas.values()), default=0)
-    recommended = "psffit" if verdict["verdict"] == "consistent" else None
+    recommendation = recommend_method_v3(
+        verdict["verdict"], g1_inputs.get("method_verdicts") or {}, recommendation_context
+    )
+    recommended = recommendation["recommended_method"]
     qc = {
         "stage": "x10_method_comparison",
         "spec_version": SPEC_VERSION,
@@ -1145,6 +1230,8 @@ def compare_methods(
             "corr_length_channels": corr_length,
         },
         "recommended_method": recommended,
+        "method_caveats": recommendation["method_caveats"],
+        "recommendation_rules": recommendation["rules"],
         "checks": checks,
         "correlations": _correlation_summary(products, pair_sigmas),
         "marginal": verdict.get("marginal", []),
@@ -1194,10 +1281,15 @@ def stage_x10_paths(run_id, project_root=None):
         "spec_optimal_object": paths.stage_dir / "spec_optimal_object.fits",
         "spec_optimal_psfsub_object": paths.stage_dir / "spec_optimal_psfsub_object.fits",
         "spec_psffit_object": paths.stage_dir / "spec_psffit_object.fits",
+        "spec_sgf_object": paths.stage_dir / "spec_sgf_object.fits",
+        "spec_lpm_object": paths.stage_dir / "spec_lpm_object.fits",
         "controls_aperture_npz": paths.stage_dir / "spec_aperture_controls.npz",
         "controls_optimal_ls_npz": paths.stage_dir / "spec_optimal_controls.npz",
         "controls_optimal_psfsub_npz": paths.stage_dir / "spec_optimal_psfsub_controls.npz",
         "controls_psffit_npz": paths.stage_dir / "spec_psffit_controls.npz",
+        "controls_sgf_npz": paths.stage_dir / "spec_sgf_controls.npz",
+        "controls_lpm_npz": paths.stage_dir / "spec_lpm_controls.npz",
+        "spec_sgf_qc_json": paths.stage_dir / "spec_sgf_qc.json",
         "method_comparison_csv": paths.table_dir / "method_comparison.csv",
         "method_comparison_controls_csv": paths.table_dir / "method_comparison_controls.csv",
         "stage_x10_qc_json": paths.stage_dir / "stage_x10_qc.json",
@@ -1233,6 +1325,9 @@ def stage_x10_config_from_run(
     cfg.setdefault("x10_p_strong", DEFAULT_P_STRONG)
     cfg.setdefault("x10_scale_gate_sigma", DEFAULT_SCALE_GATE_SIGMA)
     cfg.setdefault("x10_control_gate_alpha", DEFAULT_CONTROL_GATE_ALPHA)
+    # D1 v3 recommendation tree inputs (spec v3 §1-§2).
+    cfg.setdefault("companion_continuum_is_science", True)
+    cfg.setdefault("x10_sgf_predictor_max", DEFAULT_SGF_PREDICTOR_MAX)
     return cfg
 
 
@@ -1242,6 +1337,8 @@ def _product_paths_from_config(cfg, paths):
         "optimal_ls": Path(cfg.get("x10_spec_optimal_object", paths["spec_optimal_object"])),
         "optimal_psfsub": Path(cfg.get("x10_spec_optimal_psfsub_object", paths["spec_optimal_psfsub_object"])),
         "psffit": Path(cfg.get("x10_spec_psffit_object", paths["spec_psffit_object"])),
+        "sgf": Path(cfg.get("x10_spec_sgf_object", paths["spec_sgf_object"])),
+        "lpm": Path(cfg.get("x10_spec_lpm_object", paths["spec_lpm_object"])),
     }
 
 
@@ -1262,6 +1359,8 @@ def _default_control_paths(paths):
         "optimal_ls": paths["controls_optimal_ls_npz"],
         "optimal_psfsub": paths["controls_optimal_psfsub_npz"],
         "psffit": paths["controls_psffit_npz"],
+        "sgf": paths["controls_sgf_npz"],
+        "lpm": paths["controls_lpm_npz"],
     }
 
 
@@ -1305,6 +1404,15 @@ def compute_stage_x10_products(config, paths=None) -> StageX10Product:
     primary_pairs = None
     if primary_override and primary_override != "from_g1":
         primary_pairs = tuple(tuple(pair) for pair in primary_override)
+    sgf_qc_path = Path(cfg.get("x10_spec_sgf_qc_json", paths["spec_sgf_qc_json"]))
+    sgf_predictors = None
+    if sgf_qc_path.exists():
+        sgf_predictors = (read_json(sgf_qc_path) or {}).get("self_subtraction_predictor")
+    recommendation_context = {
+        "companion_continuum_is_science": cfg.get("companion_continuum_is_science", True),
+        "sgf_predictor_max": cfg.get("x10_sgf_predictor_max", DEFAULT_SGF_PREDICTOR_MAX),
+        "sgf_predictors": sgf_predictors,
+    }
     rows, control_rows, qc = compare_methods(
         products,
         controls,
@@ -1315,6 +1423,7 @@ def compute_stage_x10_products(config, paths=None) -> StageX10Product:
         p_strong=float(cfg.get("x10_p_strong", DEFAULT_P_STRONG)),
         scale_gate_sigma=float(cfg.get("x10_scale_gate_sigma", DEFAULT_SCALE_GATE_SIGMA)),
         gate_alpha=float(cfg.get("x10_control_gate_alpha", DEFAULT_CONTROL_GATE_ALPHA)),
+        recommendation_context=recommendation_context,
     )
     qc["run_id"] = str(cfg["run_id"])
     qc["products"] = {method: str(path) for method, path in _product_paths_from_config(cfg, paths).items()}
@@ -1439,7 +1548,9 @@ __all__ = [
     "FALLBACK_PRIMARY_PAIRS",
     "METHOD_ORDER",
     "PRIMARY_PAIRS",
+    "RECOMMENDATION_PREFERENCE",
     "SPEC_VERSION",
+    "recommend_method_v3",
     "StageX10Product",
     "apply_throughput",
     "classify_verdict_v2",

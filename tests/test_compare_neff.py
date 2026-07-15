@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from musepipe.stages.stage_x10_compare import compare_methods
+from musepipe.stages.stage_x10_compare import METHOD_ORDER, compare_methods
 from tests.test_compare_verdicts import make_product, make_wave, synthetic_g1
 
 
@@ -30,11 +30,11 @@ class NeffCalibrationTests(unittest.TestCase):
         base = np.full(self.wave.size, 100.0, dtype=np.float64)
         self.products = {
             m: make_product(m, base, wave=self.wave)
-            for m in ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+            for m in METHOD_ORDER
         }
         self.controls = {
             m: ar1_controls(rng, 30, self.wave.size, phi=self.phi)
-            for m in ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+            for m in METHOD_ORDER
         }
         self.g1 = synthetic_g1(corr_length=self.corr_length)
 

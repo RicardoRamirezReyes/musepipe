@@ -107,11 +107,15 @@ def stage_x11_paths(run_id, project_root=None):
         "spec_optimal_object": paths.stage_dir / "spec_optimal_object.fits",
         "spec_optimal_psfsub_object": paths.stage_dir / "spec_optimal_psfsub_object.fits",
         "spec_psffit_object": paths.stage_dir / "spec_psffit_object.fits",
+        "spec_sgf_object": paths.stage_dir / "spec_sgf_object.fits",
+        "spec_lpm_object": paths.stage_dir / "spec_lpm_object.fits",
         "spec_final_object": paths.stage_dir / "spec_final_object.fits",
         "spec_calibrated_aperture_object": paths.stage_dir / "spec_calibrated_aperture_object.fits",
         "spec_calibrated_optimal_ls_object": paths.stage_dir / "spec_calibrated_optimal_ls_object.fits",
         "spec_calibrated_optimal_psfsub_object": paths.stage_dir / "spec_calibrated_optimal_psfsub_object.fits",
         "spec_calibrated_psffit_object": paths.stage_dir / "spec_calibrated_psffit_object.fits",
+        "spec_calibrated_sgf_object": paths.stage_dir / "spec_calibrated_sgf_object.fits",
+        "spec_calibrated_lpm_object": paths.stage_dir / "spec_calibrated_lpm_object.fits",
         "stage_x11_qc_json": paths.stage_dir / "stage_x11_qc.json",
         "stage_x11_error_budget_png": paths.plot_dir / "stage_x11_error_budget.png",
         "stage_x11_continuum_png": paths.plot_dir / "stage_x11_continuum.png",
@@ -599,6 +603,8 @@ def _product_paths_from_config(cfg, paths):
         "optimal_ls": Path(cfg.get("x11_spec_optimal_object", paths["spec_optimal_object"])),
         "optimal_psfsub": Path(cfg.get("x11_spec_optimal_psfsub_object", paths["spec_optimal_psfsub_object"])),
         "psffit": Path(cfg.get("x11_spec_psffit_object", paths["spec_psffit_object"])),
+        "sgf": Path(cfg.get("x11_spec_sgf_object", paths["spec_sgf_object"])),
+        "lpm": Path(cfg.get("x11_spec_lpm_object", paths["spec_lpm_object"])),
     }
 
 
@@ -649,6 +655,8 @@ _RAW_CONTROL_NPZ = {
     "optimal_ls": "spec_optimal_controls.npz",
     "optimal_psfsub": "spec_optimal_psfsub_controls.npz",
     "psffit": "spec_psffit_controls.npz",
+    "sgf": "spec_sgf_controls.npz",
+    "lpm": "spec_lpm_controls.npz",
 }
 
 
@@ -849,14 +857,28 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
     # Inter-method continuum systematic (isolates the real systematic from the
     # companion's real red spectral structure). The comparison method is the
     # other G1-validated method from D1's primary pair (default optimal_psfsub).
+    # Spec D2 erratum (2026-07-15, era D1 v3): the intermethod CONTINUUM gate
+    # needs a continuum-PRESERVING comparator. sgf destroys the companion
+    # continuum by construction (Julo et al. 2025 Sect. 2.1; D1 v3
+    # method_caveats), so a canonical-vs-sgf level ratio would measure the
+    # method, not the systematic.
+    continuum_comparator_excluded = {"sgf"}
     other_method = None
     for pair in (qc_x10 or {}).get("primary_pairs", []) or []:
         members = str(pair).split("_vs_")
         if canonical_method in members:
-            other_method = members[0] if members[1] == canonical_method else members[1]
+            partner = members[0] if members[1] == canonical_method else members[1]
+            if partner in continuum_comparator_excluded:
+                continue
+            other_method = partner
             break
     if other_method is None or other_method not in calibrated:
-        other_method = "optimal_psfsub" if "optimal_psfsub" in calibrated else None
+        for fallback in ("lpm", "optimal_psfsub"):
+            if fallback in calibrated and fallback != canonical_method:
+                other_method = fallback
+                break
+        else:
+            other_method = None
     intermethod = (
         _intermethod_continuum_report(
             calibrated,

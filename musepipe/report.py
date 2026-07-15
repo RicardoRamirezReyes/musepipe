@@ -132,6 +132,8 @@ SPECTRUM_PRODUCT_CANDIDATES = {
     "optimal_ls": "spec_calibrated_optimal_ls_object.fits",
     "optimal_psfsub": "spec_calibrated_optimal_psfsub_object.fits",
     "psffit": "spec_calibrated_psffit_object.fits",
+    "sgf": "spec_calibrated_sgf_object.fits",
+    "lpm": "spec_calibrated_lpm_object.fits",
     "final": "spec_final_object.fits",
 }
 
@@ -471,7 +473,7 @@ def _copy_or_placeholder(source, dest, title, issue):
 def _plot_spectra_by_method(dest, run_paths, *, halpha_zoom=False):
     plt = _ensure_plot_backend()
     products = []
-    for method in ("aperture", "optimal_ls", "optimal_psfsub", "psffit"):
+    for method in ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm"):
         path = run_paths.stage_dir / SPECTRUM_PRODUCT_CANDIDATES[method]
         if path.exists():
             products.append((method, SpectrumProduct.read(path)))

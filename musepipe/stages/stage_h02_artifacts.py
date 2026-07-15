@@ -84,10 +84,14 @@ def stage_h02_paths(run_id, project_root=None):
         "spec_calibrated_optimal_ls_object": paths.stage_dir / "spec_calibrated_optimal_ls_object.fits",
         "spec_calibrated_optimal_psfsub_object": paths.stage_dir / "spec_calibrated_optimal_psfsub_object.fits",
         "spec_calibrated_psffit_object": paths.stage_dir / "spec_calibrated_psffit_object.fits",
+        "spec_calibrated_sgf_object": paths.stage_dir / "spec_calibrated_sgf_object.fits",
+        "spec_calibrated_lpm_object": paths.stage_dir / "spec_calibrated_lpm_object.fits",
         "controls_calibrated_aperture_npz": paths.stage_dir / "spec_calibrated_aperture_controls.npz",
         "controls_calibrated_optimal_ls_npz": paths.stage_dir / "spec_calibrated_optimal_ls_controls.npz",
         "controls_calibrated_optimal_psfsub_npz": paths.stage_dir / "spec_calibrated_optimal_psfsub_controls.npz",
         "controls_calibrated_psffit_npz": paths.stage_dir / "spec_calibrated_psffit_controls.npz",
+        "controls_calibrated_sgf_npz": paths.stage_dir / "spec_calibrated_sgf_controls.npz",
+        "controls_calibrated_lpm_npz": paths.stage_dir / "spec_calibrated_lpm_controls.npz",
         "cube_psffit_residual": paths.stage_dir / "cube_psffit_residual.fits",
         "cube_residual_object": paths.stage_dir / "cube_residual_local_object.fits",
         "stage_h02_qc_json": paths.stage_dir / "stage_h02_qc.json",
@@ -588,6 +592,17 @@ def compute_stage_h02_products(config, paths=None) -> StageH02Product:
         "overall": _overall_status(t1, t2, t3, t4, t5),
         "open_issues": [],
     }
+    # Spec E2 erratum v1.1 (2026-07-15; F1 audit note 2026-07-10): in a
+    # NON-DETECTION, T2 characterizes the dominant noise maximum (spec sec.2),
+    # so "not PSF-shaped" SUPPORTS the non-detection instead of failing the
+    # battery. overall_raw keeps the unbranched value.
+    qc["overall_raw"] = qc["overall"]
+    if str(input_verdict) == "non_detection" and t2.get("status") == "fail":
+        qc["overall"] = _overall_status(t1, {**t2, "status": "pass"}, t3, t4, t5)
+        qc["open_issues"].append(
+            "T2 not-PSF-shaped on the global maximum SUPPORTS the non-detection "
+            "(spec sec.2 repurposing); overall reinterpreted, overall_raw retained."
+        )
     if t5["status"] == "fail":
         qc["open_issues"].append("T5 placebo failure: E1 FAP calibration is suspect and blocks E1/E3.")
     if qc["overall"] == "mixed":

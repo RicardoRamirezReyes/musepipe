@@ -89,6 +89,8 @@ def clean_controls(wave=None):
         "optimal_ls": base - 0.5 * levels[:, None] * alternating[None, :],
         "optimal_psfsub": base + 0.25 * levels[:, None] * alternating[None, :],
         "psffit": base + levels[:, None] * alternating[None, :],
+        "sgf": base - 0.25 * levels[:, None] * alternating[None, :],
+        "lpm": base + 0.5 * levels[:, None] * alternating[None, :],
     }
 
 
