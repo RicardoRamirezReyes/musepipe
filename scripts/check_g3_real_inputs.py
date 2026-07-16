@@ -19,7 +19,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from musepipe.config import load_run_config  # noqa: E402
+from musepipe.config import load_run_config, project_root_path  # noqa: E402
+from musepipe.models.manifest import (  # noqa: E402
+    LIBRARY_SUBDIRS,
+    MANIFEST_NAME,
+    library_root,
+    verify_manifest,
+)
 
 # Esquema verificado 2026-07-16 (plan §0.2-§0.3). Si el espectro canonico
 # cambia, estos valores DEBEN revisarse junto con las decisiones congeladas.
@@ -151,12 +157,34 @@ def check_config_keys(cfg: dict):
         f"LSF={cfg['h01_lsf_fwhm_A']} A, d={cfg['h03_distance_pc']} pc")
 
 
+def check_libraries(cfg: dict, project_root: Path):
+    """Chequeo opcional WP-G3R-2: verifica los manifiestos de las cinco familias
+    externas. Falla limpio (RuntimeError) si el root o alguna familia no estan,
+    para que el gate base siga sirviendo en maquinas sin datos externos."""
+    root = library_root(cfg, project_root=project_root)  # RuntimeError si no existe
+    missing = []
+    for sub, subdir in LIBRARY_SUBDIRS.items():
+        family_dir = root / subdir
+        if not (family_dir / MANIFEST_NAME).exists():
+            missing.append(subdir)
+            continue
+        info = verify_manifest(family_dir)  # RuntimeError si corrupto/incompleto
+        _ok(subdir, f"{info['n_files']} entradas verificadas")
+    if missing:
+        raise RuntimeError(
+            f"bibliotecas externas ausentes: {missing} — ejecuta "
+            "scripts/fetch_g3_libraries.py <familia> (plan WP-G3R-2)")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", default="ROXs12b_B_adp")
+    parser.add_argument("--libraries", action="store_true",
+                        help="ademas verifica los manifiestos de las 5 familias externas")
     args = parser.parse_args(argv)
 
-    rc = load_run_config(args.run_id, project_root=Path(__file__).resolve().parents[1])
+    project_root = project_root_path(Path(__file__).resolve().parents[1])
+    rc = load_run_config(args.run_id, project_root=project_root)
     print(f"Gate de insumos G3 real — run {rc.run_id}")
     check_config_keys(dict(rc.config))
     wave, flux, err = check_spectrum(rc.paths.stage_dir)
@@ -164,6 +192,8 @@ def main(argv=None) -> int:
     check_g1_covariance(rc.paths.stage_dir, len(wave))
     check_bad_mask(rc.paths.stage_dir, len(wave))
     check_g2_table(rc.paths.table_dir)
+    if args.libraries:
+        check_libraries(dict(rc.config), project_root)
     print("Gate completo: todos los insumos presentes y consistentes.")
     return 0
 
