@@ -25,8 +25,29 @@ ejecutor al cerrar cada WP.
     `stage04b_good_wavelength_mask.npy` en stages/ — resolver ahí cuál usar);
   - `g2_line_measurements.csv`: 24 líneas.
 - Verificación de cierre: gate verde + suite 421 verde. Commit de la fase:
-  (se anota tras commitear).
+  `1597805`.
 
 ## WP-G3R-1 · Decisiones congeladas + checkpoint humano — 2026-07-16
 
-(pendiente de cierre; se completa en esta misma sesión)
+- **Checkpoint humano cumplido**: el usuario aprobó D1–D14 tal como estaban
+  propuestas en el plan («Apruebo D1–D14, ejecuta WP-G3R-0 y WP-G3R-1»,
+  sesión 2026-07-16). Registro completo en
+  `docs/g3_real_frozen_decisions.md`.
+- 37 claves congeladas escritas en `runs/ROXs12b_B_adp/config/config.json`;
+  solo `g3_template_family`/`g3_template_citation` sobrescribieron valores
+  previos (corrección D1: Bonnefoy+2014 era NIR → X-shooter Class III de
+  Manara+2013/2017). Como `runs/` está ignorado por git, el registro
+  commiteado de la congelación es `docs/g3_real_frozen_decisions.md`.
+- D12 transcrita de la fuente (abstract arXiv:1708.07611, verificado
+  2026-07-16): edad ROXs 12 = 6 +4/−2 Myr → `g3_age_myr = 6.0`,
+  `g3_age_err_myr = [2.0, 4.0]`.
+- Verificación de cierre: `python scripts/check_g3_real_inputs.py` verde con
+  la config congelada cargando vía `load_run_config` (validación incluida);
+  suite completa 421 passed (51.7 s), idéntica a la línea base.
+- **El commit que introduce `docs/g3_real_frozen_decisions.md` es el hash de
+  congelación** que los QC de WP-G3R-11/12 deben citar como
+  `frozen_decisions_commit` (localizable con
+  `git log --follow --oneline docs/g3_real_frozen_decisions.md | tail -1`).
+- Siguiente fase: WP-G3R-2 (infraestructura de bibliotecas externas:
+  manifiestos sha256 + descarga de las cinco familias). Hay red en esta
+  máquina (verificado 2026-07-16).
