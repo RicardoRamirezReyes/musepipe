@@ -98,17 +98,18 @@ def fit_grid(wave, flux, flux_err, library, extinction, *, teff_axis, av_axis,
 
 def _node_chi2(flux, model, inv_var, wave, *, veiling, alpha_axis, lambda_ref):
     """chi2 for one grid node: analytic scale, or NNLS (scale, veiling a>=0)."""
-    good = np.isfinite(model)
     if not veiling:
         scale, c2 = _best_scale_chi2(flux, model, inv_var)
         return scale, c2, 0.0, np.nan
     from scipy.optimize import nnls
-    w = np.sqrt(np.where(good, inv_var, 0.0))
-    m = np.where(good, model, 0.0)
+    gm = np.isfinite(model) & np.isfinite(flux) & (inv_var > 0)
+    w = np.where(gm, np.sqrt(inv_var), 0.0)
+    m = np.where(gm, model, 0.0)
+    fw = np.where(gm, flux, 0.0) * w
     best = (np.nan, np.inf, 0.0, np.nan)
     for alpha in alpha_axis:
-        basis = np.where(good, (wave / lambda_ref) ** alpha, 0.0)
-        coef, rnorm = nnls(np.column_stack([m, basis]) * w[:, None], flux * w)
+        basis = np.where(gm, (wave / lambda_ref) ** alpha, 0.0)
+        coef, rnorm = nnls(np.column_stack([m, basis]) * w[:, None], fw)
         c2 = float(rnorm ** 2)
         if c2 < best[1]:
             best = (float(coef[0]), c2, float(coef[1]), float(alpha))

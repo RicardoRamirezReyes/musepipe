@@ -58,12 +58,13 @@ def fit_templates(fit_spec, library, extinction, *, av_axis, lsf_fwhm_A,
                             "veiling_a": 0.0, "veiling_alpha": np.nan,
                             "resolution_mismatch": bool(mismatch)}
             else:
+                gm = good & np.isfinite(model)  # some template bins resample to NaN
+                mm = np.where(gm, model, 0.0)
+                wgt = np.where(gm, np.sqrt(inv_var), 0.0)
+                fw = np.where(gm, flux, 0.0) * wgt
                 for alpha in alpha_axis:
-                    basis = (wave / lambda_ref) ** alpha
-                    a_cols = np.column_stack([np.where(good, model, 0.0),
-                                              np.where(good, basis, 0.0)])
-                    w = np.sqrt(inv_var)
-                    coef, rnorm = nnls(a_cols * w[:, None], flux * w)
+                    basis = np.where(gm, (wave / lambda_ref) ** alpha, 0.0)
+                    coef, rnorm = nnls(np.column_stack([mm, basis]) * wgt[:, None], fw)
                     c2 = float(rnorm ** 2)
                     if c2 < best["chi2"]:
                         best = {"chi2": c2, "av": float(av), "scale": float(coef[0]),
