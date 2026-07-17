@@ -330,3 +330,29 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   Martín+1999 PC3, Slesnick+2004). El código las consume desde config; sin ellas,
   la fila `spt_indices` sale `not_constrained` (honesto, no inventa).
 - Siguiente: WP-G3R-8 (`stage_g3_atmo_fit`: Teff/A_V/logg/Ω + mapas ΔΧ²).
+
+## WP-G3R-8 · `stage_g3_atmo_fit` — Teff/A_V/logg/Ω + mapas — 2026-07-16
+
+- `musepipe/models/fit.py`: extraídos `_marginalized_interval` y `_local_halfstep`
+  (fit_grid los reusa → comportamiento intacto). Nuevo `fit_grid_3d(fit_spec,
+  library, extinction, *, teff_axis, logg_axis, av_axis, lsf_fwhm_A, ...)`:
+  χ² 3-D con Ω analítica por nodo (`_best_scale_chi2`); nodos faltantes de la
+  biblioteca (get lanza) → χ²=inf y se descartan. Salidas: mejor punto; ΔΧ² 3-D;
+  mapas marginalizados ΔΧ²(Teff,A_V) y ΔΧ²(Teff,logg); intervalos 1σ por eje con
+  `not_constrained`; `edge_touch` por eje (perfil marginal ≤ 9 en un borde, V2);
+  `omega_best` con err_stat (∂²χ²/∂Ω² = Σw·m² → 1/√Σ) ⊕ err_sys (10% flux-cal) y
+  total; error de interpolación (medio paso local, D11); flag de inflado D11.
+  Soporta `veiling=True` (NNLS con base a·(λ/λ0)^α, D10) reusando `_node_chi2`.
+- `musepipe/stages/stage_g3_atmo_fit.py` (patrón): fit_grid_3d sobre BT-Settl +
+  variantes veiling (D10) y rango completo (D8, `fit_spec_full`) como
+  sistemáticos; escribe `stages/g3_atmo_fit.npz` (ΔΧ² 3-D + mapas + ejes),
+  `stages/g3_atmo_fit_qc.json`, `stages/g3_rows_atmo.json` (filas `teff`,
+  `a_v_spectral`, `logg` [esperado not_constrained], `omega_scale`), y figuras
+  `plots/g3_dchi2_teff_av.png` / `g3_dchi2_teff_logg.png` (contornos 1/2/3σ =
+  ΔΧ² 2.30/6.17/11.83, Figure/Agg). `compute_` inyectable.
+- Tests `tests/test_g3_atmo_fit.py` (7): V1 recupera Teff exacta + A_V (≤0.5) +
+  Ω (≤10%); logg `not_constrained` (Ω absorbe el factor de gravedad sintético);
+  shapes de mapas; `edge_touch` en Teff de borde; inflado con err sub-estimado;
+  fit_grid 2-D sin cambios; ensamblado+escritura de etapa (npz+figuras). Sin
+  datos reales. **Suite completa 511 passed**.
+- Siguiente: WP-G3R-9 (cadena derivada L_bol, R, masa/edad + MC end-to-end).
