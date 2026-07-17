@@ -395,3 +395,46 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   familias → err_sys; posterior de masa persistido y re-leíble; ensamblado de
   etapa. Sin datos reales. **Suite completa 518 passed**.
 - Siguiente: WP-G3R-10 (acreción multilínea ampliada + V5).
+
+## WP-G3R-10 · Acreción multilínea ampliada + V5 — 2026-07-16
+
+- **Transcripción Alcalá+2017 Tabla B.1** (A&A 600, A20) a config
+  `g3_lacc_relations`. Fuente verificada in situ (ar5iv HTML de arXiv:1612.07054,
+  Tabla B.1): la fila Hα = a 1.13(0.05), b 1.74(0.19) COINCIDE con el valor de
+  config existente → fuente validada. Relación log(Lacc/Lsun) = a·log(Lline/Lsun)
+  + b; σ* = rms [dex]. Transcritas las 12 líneas de la INTERSECCIÓN con el
+  catálogo G2 (claves = nombres G2 exactos), config git-ignored → registro
+  citable AQUÍ:
+
+  | Línea (G2) | λ [nm] | a | b | σ* |
+  |---|---|---|---|---|
+  | Halpha | 656.2800 | 1.13 | 1.74 | 0.41 |
+  | Hbeta | 486.1325 | 1.14 | 2.59 | 0.30 |
+  | He I 5016 | 501.5678 | 0.99 | 3.49 | 0.27 |
+  | He I 5876 | 587.5621 | 1.15 | 3.67 | 0.31 |
+  | He I 6678 | 667.8151 | 1.25 | 4.70 | 0.36 |
+  | He I 7065 | 706.5190 | 1.18 | 4.47 | 0.34 |
+  | O I 8446 | 844.6360 | 1.08 | 3.46 | 0.60 |
+  | Ca II 8498 | 849.8020 | 0.99 | 2.60 | 0.47 |
+  | Ca II 8542 | 854.2090 | 0.97 | 2.43 | 0.48 |
+  | Ca II 8662 | 866.2140 | 0.93 | 2.30 | 0.49 |
+  | Pa 9 | 922.9014 | 1.18 | 3.71 | 0.44 |
+  | Pa 10 | 901.4909 | 1.15 | 3.60 | 0.53 |
+
+  (Líneas prohibidas [O I]/[S II] y Pa 11–18 quedan fuera — sin relación
+  publicada, no se improvisan.)
+- `musepipe/stages/stage_g3_accretion.py` (cambio mínimo, compatible):
+  `_own_mr_from_derived` lee M,R propios de `stages/g3_rows_derived.json`
+  (mass M_Jup, radius R_Jup → Msun/Rsun). Si existe, `mdot_mc` usa M,R propios
+  con `depends_on: [atmospheric_model, evolutionary_model, lacc_relation]` y
+  assumptions actualizadas; si no, comportamiento actual intacto (M,R de config).
+  ADEMÁS calcula SIEMPRE la variante con M,R de config (mismas entradas que H03)
+  y la publica en el bloque V5 (`g3_mdot_config_mr_p50`).
+- Tests `tests/test_g3_accretion_multiline.py` (+3): conversión M,R propia; etapa
+  sin rows_derived reproduce EXACTAMENTE el resultado config-M,R (mismo seed);
+  etapa con rows_derived fabricado usa M,R propios (assumptions/depends distintos,
+  valor ≠ V5). Los 8 tests previos + V5 (`test_g3_h03_consistency`) siguen verdes.
+  **Suite completa 521 passed**.
+- Nota: el stage real de acreción NO se ejecutó (se ejecuta en WP-11); el config
+  ya tiene las 12 relaciones para entonces.
+- Siguiente: WP-G3R-11 (EJECUCIÓN real integrada sobre ROXs12b_B_adp + V1–V6).
