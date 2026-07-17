@@ -138,19 +138,29 @@ al fetch script; formatos inspeccionados in situ (sin adivinar):
   ~0.5 GB en caché). Excede el «cientos de MB» estimado → **pendiente de
   confirmación del usuario** para lanzar la descarga completa (comando
   `python scripts/fetch_g3_libraries.py bt-settl`).
-- ⏸ **ATMO2020** (`tracks_atmo2020`): host SPA sin endpoint directo/API →
-  descarga manual (el subcomando imprime layout de `--input-dir`). PARADA.
+- ✅ **ATMO2020** (`tracks_atmo2020`, Phillips+2020): resuelto SIN descarga
+  manual — el SPA no servía, pero los tracks están en el MISMO host ENS Lyon que
+  BHAC15: `.../isabelle.baraffe/ATMO2020/ATMO_2020_models.tar.gz` (44 MB, con
+  `README`). Convertidor real: lee en memoria los miembros
+  `evolutionary_tracks/ATMO_CEQ/MKO_WISE_IRAC/*_ATMO_CEQ_vega.txt` del tar (76
+  masas), columnas Mass/Age/Teff/Luminosity/Radius/log(g); la columna
+  "Luminosity" es log10(L/Lsun) pese a la etiqueta (como BHAC15) → L linear.
+  3001 puntos, masa 0.0005–0.075 M☉ (0.5–75 MJup), Teff 200–3075 K. Verificada.
+  Licencia: pública, los autores piden contacto antes de publicar (registrado
+  en provenance).
+
+- ⏳ **BT-Settl CIFIST** (`bt-settl-cifist`): descarga completa de los 146 nodos
+  LANZADA en background (usuario confirmó el ~9 GB). Progreso registrado; 0
+  fallos hasta ahora. Al terminar: `fetch verify` de las 5 familias y commit.
 
 Software añadido al fetch script: `_download_text`/`_hrefs`; lectores puros
 `wave_from_linear_wcs`, `to_angstrom` (resuelve unidad por rango físico, PARADA
 si absurdo), `read_kesseli_fits`, `read_manara_visual_fits`, `read_svo_spectrum_votable`,
-`select_btsettl_nodes`, `_kesseli_wanted`; opción `--limit`. Tests nuevos en
-`tests/test_fetch_g3_libraries.py` (14 en total, todos OFFLINE con fixtures
-sintéticas — se corrigió un test que llamaba a la red por error). **Suite
-completa 455 passed** (53 s). `fetch verify`: templates_young/templates_field/
-tracks_bhac15 OK; bt-settl/atmo2020 not present.
+`select_btsettl_nodes`, `_kesseli_wanted`, `parse_atmo2020_ceq`; `_download`
+con reintentos; bt-settl reanudable (salta nodos cacheados, aísla fallos);
+opción `--limit`. Tests nuevos en `tests/test_fetch_g3_libraries.py` (16 en
+total, todos OFFLINE con fixtures sintéticas). **Suite completa 455 passed**.
 
-- Siguiente: (1) confirmar/lanzar la descarga completa BT-Settl (~9 GB, ~1–2 h,
-  en background); (2) ATMO2020 manual cuando el usuario baje el tarball; (3)
-  con eso `check_g3_real_inputs.py --libraries` quedaría verde. Mientras,
+- Siguiente: esperar el fin de BT-Settl (background) → `check_g3_real_inputs.py
+  --libraries` verde con las 5 familias → cierre de WP-G3R-2. Mientras,
   WP-G3R-3/4/5 pueden avanzar con fixtures sintéticas.

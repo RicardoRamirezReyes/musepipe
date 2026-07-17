@@ -53,6 +53,29 @@ class BHAC15ParserTests(unittest.TestCase):
             FETCH.parse_bhac15_iso(" 0.010 2400. -2.0 3.4 0.34\n")
 
 
+_ATMO_TEXT = """# Mass  Age  Teff  Luminosity  Radius  Gravity  MKO_Y
+# M/Msun  Gyr  K  L/Lsun  R/Rsun  log(g[cm/s^2])
+ 0.02800000  1.00000000E-03  2767.26  -2.02914462  0.42146  3.63606  8.41
+ 0.02800000  1.26638017E-03  2761.05  -2.09524140  0.39234  3.69825  8.58
+ 0.07200000  5.00000000E-02  2900.00  -1.50000000  0.90000  4.50000  6.00
+"""
+
+
+class ATMO2020ParserTests(unittest.TestCase):
+    def test_parses_columns_and_log_luminosity(self):
+        arrays = FETCH.parse_atmo2020_ceq(_ATMO_TEXT)
+        self.assertEqual(arrays["mass_msun"].size, 3)
+        np.testing.assert_allclose(sorted(set(arrays["mass_msun"])), [0.028, 0.072])
+        # Luminosity column -2.029 is log10(L/Lsun) -> ~9.35e-3 Lsun
+        idx = int(np.argmin(np.abs(arrays["teff_k"] - 2767.26)))
+        self.assertAlmostEqual(arrays["l_bol_lsun"][idx], 10 ** -2.02914462, places=6)
+        self.assertEqual(arrays["logg"][idx], 3.63606)
+
+    def test_empty_raises(self):
+        with self.assertRaises(RuntimeError):
+            FETCH.parse_atmo2020_ceq("# only header\n")
+
+
 class IntermediateSpectraTests(unittest.TestCase):
     def test_convert_two_column_ascii(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,13 +105,15 @@ class IntermediateSpectraTests(unittest.TestCase):
 
 
 class InstructStopTests(unittest.TestCase):
-    def test_manual_family_without_input_stops(self):
-        # ATMO2020 has no direct source; without --input-dir it must STOP with
-        # exit 2 and touch no network (tests never hit the wire).
+    def test_spectra_family_guard_without_input_stops(self):
+        # The _fetch_spectra_family guard (reached only if a caller forgets
+        # --input-dir) must STOP with exit 2 and touch no network.
         with tempfile.TemporaryDirectory() as tmp:
             args = types.SimpleNamespace(input_dir=None)
             with self.assertRaises(SystemExit) as ctx:
-                FETCH.fetch_tracks_atmo2020(args, {}, Path(tmp))
+                FETCH._fetch_spectra_family(
+                    args, {}, Path(tmp), citation="X", key_cols=("spt",),
+                    source_hint="hint", kind_label="kind")
             self.assertEqual(ctx.exception.code, 2)
 
 

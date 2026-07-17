@@ -48,6 +48,9 @@ FAMILY_SUBDIR = LIBRARY_SUBDIRS
 BHAC15_ISO_URL = (
     "https://perso.ens-lyon.fr/isabelle.baraffe/BHAC15dir/BHAC15_iso.2mass"
 )
+ATMO2020_TAR_URL = (
+    "https://perso.ens-lyon.fr/isabelle.baraffe/ATMO2020/ATMO_2020_models.tar.gz"
+)
 CDS_FTP = "https://cdsarc.cds.unistra.fr/ftp"
 # Manara Class III young templates: 2013 catalogue + 2017 additions (D1).
 MANARA_CATALOGS = ("J/A+A/551/A107", "J/A+A/605/A86")
@@ -177,6 +180,41 @@ def parse_bhac15_iso(text: str) -> dict:
         radii.append(radius)
     if not masses:
         raise RuntimeError("no BHAC15 data rows parsed (unexpected format)")
+    return {
+        "mass_msun": np.asarray(masses, float),
+        "age_gyr": np.asarray(ages, float),
+        "teff_k": np.asarray(teffs, float),
+        "l_bol_lsun": np.asarray(lbols, float),
+        "radius_rsun": np.asarray(radii, float),
+        "logg": np.asarray(loggs, float),
+    }
+
+
+def parse_atmo2020_ceq(text: str) -> dict:
+    """Parse ATMO2020 CEQ evolutionary tracks into the internal track arrays.
+
+    Format (verified 2026-07-16 against evolutionary_tracks/ATMO_CEQ/
+    MKO_WISE_IRAC/*_ATMO_CEQ_vega.txt): columns Mass[Msun] Age[Gyr] Teff[K]
+    Luminosity Radius[Rsun] log(g) + photometry. Despite the 'L/Lsun' header,
+    the Luminosity column is log10(L/Lsun) (negative values), like BHAC15.
+    Each row carries its own mass, so concatenated files parse in one pass.
+    """
+    masses, ages, teffs, lbols, radii, loggs = [], [], [], [], [], []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        try:
+            mass, age, teff, logl, radius, logg = (float(parts[i]) for i in range(6))
+        except ValueError:
+            continue
+        masses.append(mass); ages.append(age); teffs.append(teff)
+        lbols.append(10.0 ** logl); radii.append(radius); loggs.append(logg)
+    if not masses:
+        raise RuntimeError("no ATMO2020 CEQ data rows parsed (unexpected format)")
     return {
         "mass_msun": np.asarray(masses, float),
         "age_gyr": np.asarray(ages, float),
@@ -376,50 +414,49 @@ def fetch_tracks_bhac15(args, cfg: dict, family_dir: Path) -> None:
 
 
 def fetch_tracks_atmo2020(args, cfg: dict, family_dir: Path) -> None:
+    """ATMO2020 CEQ evolutionary tracks (D5) from ENS Lyon (44 MB tarball).
+
+    The CEQ/MKO_WISE_IRAC/*_ATMO_CEQ_vega.txt files carry Teff/L/R/g vs age per
+    mass; only the six physical columns are kept. --input-dir points at an
+    already-extracted directory of those files (skips the download)."""
+    import tarfile
+
     citation = _tracks_citation(cfg, "ATMO2020")
-    if not args.input_dir:
-        _instruct(
-            family_dir, citation=citation,
-            source_hint=("ATMO2020 evolutionary tracks, Phillips et al. 2020 "
-                         "(A&A 637, A38). Host http://opendata.erc-atmo.eu is a "
-                         "single-page app with no directory listing — download "
-                         "the 'ATMO_2020 evolutionary tracks' (CEQ chemistry) by "
-                         "hand."),
-            layout=(
-                "    <input-dir>/index.csv  columns: mass_msun,file\n"
-                "    <input-dir>/<file>     ASCII track: age_gyr teff_k "
-                "log(L/Lsun) radius_rsun logg  (one mass per file)\n"
-                "    (confirm the column order in the header before running; do "
-                "NOT guess units — plan WP-G3R-5 STOP)"),
-        )
-    # Intermediate-directory ingestion: one ASCII file per mass, columns
-    # age_gyr teff_k logL radius_rsun logg (documented in the index).
-    input_dir = Path(args.input_dir)
-    index_path = input_dir / "index.csv"
-    if not index_path.exists():
-        raise RuntimeError(f"missing intermediate index: {index_path}")
-    with index_path.open(encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    ages, masses, teffs, lbols, radii, loggs = [], [], [], [], [], []
-    for row in rows:
-        mass = float(row["mass_msun"])
-        data = np.loadtxt(input_dir / row["file"], comments=("#", "!"))
-        data = np.atleast_2d(data)
-        for age, teff, logl, radius, logg in data[:, :5]:
-            ages.append(age); masses.append(mass); teffs.append(teff)
-            lbols.append(10.0 ** logl); radii.append(radius); loggs.append(logg)
-    arrays = {"mass_msun": np.asarray(masses, float), "age_gyr": np.asarray(ages, float),
-              "teff_k": np.asarray(teffs, float), "l_bol_lsun": np.asarray(lbols, float),
-              "radius_rsun": np.asarray(radii, float), "logg": np.asarray(loggs, float)}
-    meta = {"family": "ATMO2020", "citation": citation, "url": f"local:{input_dir}",
-            "downloaded_utc": _utc_now(),
-            "license": "public (ERC ATMO; cite Phillips et al. 2020)",
-            "n_points": int(arrays["mass_msun"].size)}
-    rel = "atmo2020_tracks.npz"
+    src = family_dir / "_source"
+    if args.input_dir:
+        files = sorted(Path(args.input_dir).rglob("*_ATMO_CEQ_vega.txt"))
+        if not files:
+            raise RuntimeError(
+                f"no *_ATMO_CEQ_vega.txt under --input-dir {args.input_dir}")
+        text = "\n".join(f.read_text(encoding="utf-8", errors="replace") for f in files)
+        n_files, src_url = len(files), f"local:{args.input_dir}"
+    else:
+        tar_path = _download(ATMO2020_TAR_URL, src / "ATMO_2020_models.tar.gz", tries=3)
+        texts = []
+        with tarfile.open(tar_path) as tf:  # read members in-place, no extraction
+            for m in tf.getmembers():
+                if (m.isfile() and "ATMO_CEQ/MKO_WISE_IRAC" in m.name
+                        and m.name.endswith("_ATMO_CEQ_vega.txt")):
+                    texts.append(tf.extractfile(m).read().decode("utf-8", "replace"))
+        if not texts:
+            raise RuntimeError("ATMO2020 tarball has no ATMO_CEQ/MKO_WISE_IRAC tracks")
+        text, n_files, src_url = "\n".join(texts), len(texts), ATMO2020_TAR_URL
+    arrays = parse_atmo2020_ceq(text)
+    meta = {"family": "ATMO2020", "chemistry": "CEQ", "citation": citation,
+            "url": src_url, "downloaded_utc": _utc_now(), "n_mass_files": n_files,
+            "license": ("public (ENS Lyon / ERC ATMO); cite Phillips et al. 2020; "
+                        "authors request contact before publication"),
+            "n_points": int(arrays["mass_msun"].size),
+            "note": "Luminosity column is log10(L/Lsun) despite header; stored linear"}
+    rel = "atmo2020_ceq_tracks.npz"
     write_tracks_npz(family_dir / rel, arrays, meta)
-    provenance = {"family": "tracks_atmo2020", "citation": citation,
-                  "url": meta["url"], "downloaded_utc": meta["downloaded_utc"],
-                  "n_points": meta["n_points"]}
+    provenance = {"family": "tracks_atmo2020", "citation": citation, "url": src_url,
+                  "downloaded_utc": meta["downloaded_utc"], "chemistry": "CEQ",
+                  "n_points": meta["n_points"], "n_mass_files": n_files,
+                  "mass_msun_range": [float(arrays["mass_msun"].min()),
+                                      float(arrays["mass_msun"].max())],
+                  "teff_k_range": [float(arrays["teff_k"].min()),
+                                   float(arrays["teff_k"].max())]}
     _finalise(family_dir, [rel], provenance)
 
 
