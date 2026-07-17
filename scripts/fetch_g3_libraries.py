@@ -66,17 +66,21 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _download(url: str, dest: Path) -> Path:
-    """Stream ``url`` to ``dest``. RuntimeError on any transport failure."""
+def _download(url: str, dest: Path, *, tries: int = 1) -> Path:
+    """Stream ``url`` to ``dest`` with ``tries`` attempts. RuntimeError if all
+    attempts fail (message includes the last transport error)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
-            data = resp.read()
-    except Exception as exc:  # noqa: BLE001 - report any transport error uniformly
-        raise RuntimeError(f"download failed: {url}\n  {exc}") from exc
-    dest.write_bytes(data)
-    return dest
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
+                data = resp.read()
+            dest.write_bytes(data)
+            return dest
+        except Exception as exc:  # noqa: BLE001 - report any transport error uniformly
+            last = exc
+    raise RuntimeError(f"download failed after {tries} tries: {url}\n  {last}")
 
 
 def _download_text(url: str) -> str:
@@ -471,24 +475,37 @@ def fetch_bt_settl(args, cfg, family_dir):
         raise RuntimeError("no BT-Settl nodes selected within the D4 box.")
     downloaded_utc = _utc_now()
     rels: list[str] = []
+    failed: list = []
     print(f"    {len(nodes)} BT-Settl nodes to fetch (~60 MB raw each)...")
     for i, (teff, logg, url) in enumerate(nodes, 1):
-        raw = _download(url, src / f"tmp_{int(teff)}_{logg}.xml")
-        wave, flux = read_svo_spectrum_votable(raw)
-        raw.unlink()  # keep only the trimmed cache product
-        meta = {"teff_k": teff, "logg": logg, "meta_fe_h": 0.0, "alpha": 0.0,
-                "citation": citation, "grid": "BT-Settl CIFIST2011",
-                "flux_unit": "erg/cm2/s/A", "wave_unit": "angstrom",
-                "wave_frame": "vacuum (synthetic)", "source_url": url,
-                "downloaded_utc": downloaded_utc}
-        write_spectrum_npz(family_dir / f"teff{int(teff)}_logg{logg:.1f}.npz",
-                           wave, flux, meta)
-        rels.append(f"teff{int(teff)}_logg{logg:.1f}.npz")
+        rel = f"teff{int(teff)}_logg{logg:.1f}.npz"
+        target = family_dir / rel
+        if target.exists() and target.stat().st_size > 0:
+            rels.append(rel)  # resume: node already cached
+            continue
+        try:
+            raw = _download(url, src / f"tmp_{int(teff)}_{logg}.xml", tries=3)
+            wave, flux = read_svo_spectrum_votable(raw)
+            raw.unlink()  # keep only the trimmed cache product
+            meta = {"teff_k": teff, "logg": logg, "meta_fe_h": 0.0, "alpha": 0.0,
+                    "citation": citation, "grid": "BT-Settl CIFIST2011",
+                    "flux_unit": "erg/cm2/s/A", "wave_unit": "angstrom",
+                    "wave_frame": "vacuum (synthetic)", "source_url": url,
+                    "downloaded_utc": downloaded_utc}
+            write_spectrum_npz(target, wave, flux, meta)
+            rels.append(rel)
+        except Exception as exc:  # noqa: BLE001 - one bad node must not abort 9 GB
+            print(f"      WARN teff{int(teff)} logg{logg}: {exc}", file=sys.stderr)
+            failed.append([teff, logg])
         if i % 10 == 0 or i == len(nodes):
-            print(f"      {i}/{len(nodes)} nodes cached.")
+            print(f"      {i}/{len(nodes)} processed "
+                  f"({len(rels)} cached, {len(failed)} failed).")
+    if not rels:
+        raise RuntimeError("BT-Settl: no nodes cached (all downloads failed).")
     provenance = {"family": "bt-settl-cifist", "citation": citation,
                   "grid": "BT-Settl CIFIST2011 (SVO)", "downloaded_utc": downloaded_utc,
-                  "n_nodes": len(rels), "teff_axis_k": teff_axis, "logg_axis": logg_axis,
+                  "n_nodes": len(rels), "n_failed": len(failed), "failed_nodes": failed,
+                  "teff_axis_k": teff_axis, "logg_axis": logg_axis,
                   "metallicity": "solar (meta=0, alpha=0)", "ssap": SVO_BTSETTL_SSAP,
                   "partial": bool(getattr(args, "limit", None))}
     _finalise(family_dir, rels, provenance)
