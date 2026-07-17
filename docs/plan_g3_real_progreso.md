@@ -488,6 +488,35 @@ M2–M8. Lo robusto: la clase de gravedad (joven preferida) y la masa por tracks
 `g3_consistency.csv` + figuras (fit_spectrum, best_fit, dchi2 ×2, HRD) escritos.
 **PARADA CONSULTIVA: reportado al humano ANTES de G4 (plan WP-11 §8.2).**
 
+### Investigación de la PARADA (usuario pidió investigar antes de decidir)
+
+Evidencia cuantitativa de que el continuo está corrompido por el sistemático C3
+(residuo de halo AO cromático) y de que NO es salvable dentro de G3:
+
+1. **Δχ²(A_V) monótona hasta el borde**: 474 (A_V=0) → 137 (1.0) → 0.0 (A_V=5.0,
+   borde). Sin mínimo interior. La rendija A_V=1.8 (sistema) cuesta Δχ²=122. Los
+   datos quieren >5 mag de extinción (imposible físicamente; 6.4σ sobre 1.8±0.5).
+2. **Continuo far-red no fotosférico**: 8500→9200 Å el flujo sube ~9× (330→3100,
+   S/N 4–9, suave, apcorr=1) mientras un cuerpo negro a 2500 K sube solo ~1.13×
+   ahí → la subida observada es ~8× demasiado empinada para cualquier fotósfera.
+   El azul (6300–7800) está ~0/negativo (41% canales negativos) → distorsión
+   CROMÁTICA (azul sobre-restado + rojo en exceso), firma del halo AO.
+3. **Restringir el rango NO lo arregla** (refit coarse): 6300–9350 → A_V=5,
+   χ²_red=4.49; 6300–8500 (sin far-red) → A_V=3, **χ²_red=4.44** (sigue >3),
+   logg/av siguen en borde. El único rango con S/N>2 (8500–9350) ES el
+   contaminado; quitarlo deja el ajuste sin señal, no lo corrige.
+
+**Conclusión**: la inferencia atmosférica de G3 (Teff/A_V/R, y por herencia
+L_bol/masa) NO es recuperable del `spec_final_object.fits` actual; el continuo
+está corrompido por C3 y no se salva con recorte de rango ni ampliación de
+rejilla. Robusto e independiente del slope: la clase de gravedad (joven ≻ campo
+Δχ²=99, features no slope) y los límites de acreción. La masa por tracks hereda
+el Teff/Ω rielados → NO es evidencia independiente pese a coincidir con Bowler.
+**Recomendación: fix de raíz — re-derivar el espectro con corrección de halo
+(annulus background, que el código soporta y C2 aplica) antes de reintentar G3.**
+Alternativa honesta: aceptar la PARADA y reportar Teff/A_V/R/masa como
+systematics-limited/not_constrained. Decisión del humano (issue + autorización).
+
 ## D7 · Transcripción de índices espectrales (prerequisito de WP-11) — 2026-07-16
 
 Transcritas del paper (Riddick et al. 2007, MNRAS 381, 1067 = arXiv:0708.1275,
