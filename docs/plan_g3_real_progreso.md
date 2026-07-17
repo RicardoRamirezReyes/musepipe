@@ -236,3 +236,29 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   sentidos + retro-compat; `external_data` contra ambas bibliotecas reales
   (EJECUTADO verde). **Suite completa 476 passed**.
 - Siguiente: WP-G3R-5 (adaptadores de tracks BHAC15/ATMO2020).
+
+## WP-G3R-5 · Adaptadores de tracks (BHAC15 y ATMO2020) — 2026-07-16
+
+- `musepipe/models/tracks.py`: clase `TrackGrid` (`EvolutionaryModel`), una por
+  familia desde el npz cacheado. Cita obligatoria (RuntimeError).
+  `__init__(npz_path, *, family, citation, version)`. Las rejillas publicadas son
+  IRREGULARES en (masa, edad); `lookup(l_bol, age, *, teff=None)` las invierte por
+  interpolación lineal dispersa (baricéntrica sobre triangulación de Delaunay,
+  `scipy.spatial`) en (log edad, log L); si se da `teff`, modo alternativo en
+  (log edad, log Teff) para el chequeo de consistencia. Devuelve
+  `mass_msun/radius_rsun/logg/teff_k` (o `l_bol_lsun` en modo teff) +
+  `*_err_interp` (medio spread local del símplex, §4.3) + `in_range` + `clamped`
+  + `mode`. Fuera del casco convexo → `in_range=False` y NaN (NUNCA extrapola).
+  `sample(l_bol_samples, age_samples)` vectorizado (find_simplex + baricéntricas
+  con einsum) para el MC de 4000 muestras sin bucle Python.
+- Tests `tests/test_models_tracks.py` (9): con mini-tracks sintéticos AFINES en
+  (log edad, log L) → recuperación EXACTA (masa y teff); `err_interp` coherente
+  (>0, acotado); fuera de rango → `in_range=False`, NaN, `clamped`; modo teff;
+  cita obligatoria; `sample` vectorizado ≡ lookup; dispersión entre dos familias
+  sintéticas. Test `@pytest.mark.external_data` contra BHAC15 y ATMO2020 reales:
+  `lookup(1e-3 Lsun, 0.006 Gyr)` (edad D12) da masa finita in-range en al menos
+  una familia — EJECUTADO verde. **Suite completa 485 passed**.
+- Parada §: formatos de ambas familias legibles (columnas identificadas en
+  WP-G3R-2) → sin parada.
+- Con esto **WP-G3R-3/4/5 (los tres adaptadores) cerrados**. Siguiente:
+  WP-G3R-6 (preparación del espectro observado, `musepipe/models/observed.py`).
