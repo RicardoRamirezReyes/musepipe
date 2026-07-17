@@ -550,6 +550,31 @@ arregla G3 (verificado). Vuelve al humano: (A) emprender la re-extracción
 profunda (R&D grande), o (B) aceptar el resultado systematics-limited
 (Teff/A_V/R/masa not_constrained; robusto: gravedad joven + límites de acreción).
 
+### CIERRE WP-11 — resultado systematics-limited ACEPTADO — 2026-07-16
+
+El usuario eligió **(B) aceptar systematics-limited**. Config
+`g3_atmosphere_systematics_limited=true` (+ reason + cita).
+`finalize_systematics_limited('ROXs12b_B_adp')` post-procesa el run existente
+(sin re-fit) a la tabla honesta:
+- Teff/A_V/logg/Ω/R/L_bol/masa/logg_evol/SpT → **not_constrained** (valor
+  rielado preservado en `limitations`).
+- **Ṁ = 1.40×10⁻¹² M☉/yr** con M,R de literatura (Bowler+2017), no los propios
+  corruptos. `l_acc_combined` 4.52e-6 L☉ (upper_limit) retenido. `age_used`
+  (prior D12) retenido.
+- QC `stage_g3_qc.json`: bloque `systematics_limited` con la decisión, el bloqueo
+  C3, y los **resultados robustos** (clase joven ΔΧ² field 98.7/nonstellar 4653;
+  límites de acreción). Consistencia: pares atmo → not_computed.
+- Etiquetas válidas (V6). `finalize` + helper `_relabel_systematics_limited`
+  testeados (2 tests). **Suite completa 529 passed**.
+- **Informe final**: `reports/20260717/g3_real_final_report.md` (documenta el
+  bloqueo C3, lo construido WP-3..11, las 3 PARADAS, la investigación, el
+  resultado aceptado y el camino de desbloqueo).
+
+**G4 NO se ejecuta** (PARADA §8.2 antes de clasificar; sin Teff/A_V/masa fiables
+no hay clasificación espectral). La máquina G3 (WP-3..11) queda validada y lista;
+re-correrla sobre un espectro con continuo corregido (fix C3 profundo o cierre
+del bloque A) es barato (`run_stage_g3_all` + `finalize` + G4, mismos comandos).
+
 ## D7 · Transcripción de índices espectrales (prerequisito de WP-11) — 2026-07-16
 
 Transcritas del paper (Riddick et al. 2007, MNRAS 381, 1067 = arXiv:0708.1275,
