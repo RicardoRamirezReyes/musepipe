@@ -149,18 +149,34 @@ al fetch script; formatos inspeccionados in situ (sin adivinar):
   Licencia: pública, los autores piden contacto antes de publicar (registrado
   en provenance).
 
-- ⏳ **BT-Settl CIFIST** (`bt-settl-cifist`): descarga completa de los 146 nodos
-  LANZADA en background (usuario confirmó el ~9 GB). Progreso registrado; 0
-  fallos hasta ahora. Al terminar: `fetch verify` de las 5 familias y commit.
+- ✅ **BT-Settl CIFIST** (`bt-settl-cifist`, Allard+2012): descarga completa
+  terminada — **146/146 nodos, 0 fallos**, ~582 MB en caché (recortada a
+  4000–10000 Å). Rejilla D4 cubierta: Teff 2000–4500 K (30 valores), logg
+  {3.5,4.0,4.5,5.0,5.5}; 146 de 150 combos (4 no existen en CIFIST — normal).
+  Flujo finito y positivo, unidades registradas (erg/cm²/s/Å, vacío sintético).
+  `verify_manifest` OK (147 entradas).
 
 Software añadido al fetch script: `_download_text`/`_hrefs`; lectores puros
 `wave_from_linear_wcs`, `to_angstrom` (resuelve unidad por rango físico, PARADA
 si absurdo), `read_kesseli_fits`, `read_manara_visual_fits`, `read_svo_spectrum_votable`,
 `select_btsettl_nodes`, `_kesseli_wanted`, `parse_atmo2020_ceq`; `_download`
 con reintentos; bt-settl reanudable (salta nodos cacheados, aísla fallos);
-opción `--limit`. Tests nuevos en `tests/test_fetch_g3_libraries.py` (16 en
-total, todos OFFLINE con fixtures sintéticas). **Suite completa 455 passed**.
+`--limit`; `parse_atmo2020_ceq`. Tests nuevos en
+`tests/test_fetch_g3_libraries.py` (18 en total, todos OFFLINE con fixtures
+sintéticas). **Suite completa 457 passed** (53 s).
 
-- Siguiente: esperar el fin de BT-Settl (background) → `check_g3_real_inputs.py
-  --libraries` verde con las 5 familias → cierre de WP-G3R-2. Mientras,
-  WP-G3R-3/4/5 pueden avanzar con fixtures sintéticas.
+**WP-G3R-2 CERRADO (2026-07-16)**: las 5 familias descargadas, convertidas al
+formato de caché interno y verificadas (`fetch verify` y
+`check_g3_real_inputs.py --libraries` verdes). Todo autónomo (ninguna descarga
+manual necesaria al final). Los datos viven fuera del repo
+(`../Data/external_libraries/`, ~0.7 GB en disco: bt-settl 556 MB, campo
+112 MB, atmo2020 43 MB, jóvenes 22 MB, bhac15 0.1 MB); el registro citable es
+esta bitácora
++ los `PROVENANCE.json`/manifiestos por familia. Resúmenes numéricos: BHAC15
+793 pts; ATMO2020 CEQ 3001 pts (0.5–75 MJup); BT-Settl 146 nodos; Kesseli 62
+plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
+
+- Siguiente: WP-G3R-3 (adaptador BT-Settl), WP-G3R-4 (adaptadores plantillas),
+  WP-G3R-5 (adaptadores tracks) — independientes entre sí tras la fase 2, se
+  validan con fixtures sintéticas y usan los tests `external_data` locales
+  contra estas familias reales; y WP-G3R-6 (preparación del espectro).
