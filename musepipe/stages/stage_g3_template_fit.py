@@ -96,7 +96,8 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
     # indices (per-channel; only if config supplies definitions — D7)
     idx_defs = dict(cfg.get("g3_spt_indices", {}))
     idx_cal = dict(cfg.get("g3_spt_indices_calibration", {}))
-    indices, spt_idx_code, spt_idx_err = {}, float("nan"), float("nan")
+    indices, idx_skipped = {}, {}
+    spt_idx_code, spt_idx_err = float("nan"), float("nan")
     if idx_defs:
         if per_channel is None:
             spec = load_final_spectrum(paths["paths"],
@@ -104,9 +105,16 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
             pmask, _ = build_fit_masks(cfg, spec["wave_A"], paths["paths"])
             per_channel = (spec["wave_A"], spec["flux"], spec["flux_err"], pmask)
         pw, pf, pe, pmask = per_channel
-        indices = measure_indices(pw, pf, pe, idx_defs, mask=pmask,
-                                  seed=int(cfg.get("g3_seed", 0)))
-        spt_idx_code, spt_idx_err = indices_to_spt(indices, idx_cal)
+        seed = int(cfg.get("g3_seed", 0))
+        # measure per index so an unusable one (out of coverage / >50% masked,
+        # D7) is skipped and recorded, not fatal to the stage.
+        for iname, idef in idx_defs.items():
+            try:
+                indices.update(measure_indices(pw, pf, pe, {iname: idef}, mask=pmask, seed=seed))
+            except RuntimeError as exc:
+                idx_skipped[iname] = str(exc)
+        if indices:
+            spt_idx_code, spt_idx_err = indices_to_spt(indices, idx_cal)
 
     spt_disc = (abs(stellar_best["spt_best_code"] - spt_idx_code)
                 if np.isfinite(spt_idx_code) else float("nan"))
@@ -146,7 +154,8 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                             "dchi2_by_class": gravity["dchi2_by_class"]},
         "veiling_variant": {"class": stellar_class, "spt_best": veil_fit["spt_best"],
                             "spt_shift": veiling_spt_shift, "chi2_min": veil_fit["chi2_min"]},
-        "indices": indices, "spt_indices": {"code": spt_idx_code, "err": spt_idx_err},
+        "indices": indices, "indices_skipped": idx_skipped,
+        "spt_indices": {"code": spt_idx_code, "err": spt_idx_err},
         "spt_templates": {"class": stellar_class, "code": stellar_best["spt_best_code"],
                           "interval": stellar_best["spt_interval"]},
         "spt_discrepancy_subtypes": spt_disc,
