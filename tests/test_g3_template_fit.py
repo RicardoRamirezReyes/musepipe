@@ -122,6 +122,14 @@ class IndicesTests(unittest.TestCase):
                             {"bad": {"numerator": [[9000, 9100]],
                                      "denominator": [[7200, 7300]]}})
 
+    def test_centered_calibration_polynomial(self):
+        # Riddick-style relation SpT = c0 + c1*(x-center)+... (value 0.5, center 0.5)
+        wave, flux, err = self._spectrum()
+        defs = {"idx": {"numerator": [[8000, 8100]], "denominator": [[7200, 7300]]}}
+        res = measure_indices(wave, flux, err, defs, seed=0, n_mc=50)  # value = 0.5
+        spt, _ = indices_to_spt(res, {"idx": {"spt_poly": [2.0, 10.0], "center": 0.5}})
+        self.assertAlmostEqual(spt, 2.0, places=6)  # (x-center)=0 -> c0
+
 
 class PowerlawAndStageTests(unittest.TestCase):
     def test_powerlaw_fit(self):

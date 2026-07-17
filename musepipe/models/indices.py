@@ -65,15 +65,18 @@ def measure_indices(wave, flux, err, definitions, *, mask=None, seed=0, n_mc=500
 def indices_to_spt(index_values, calibration) -> tuple[float, float]:
     """Combine per-index SpT estimates into (spt_code, err).
 
-    ``calibration``: ``{name: {spt_poly:[c0,c1,...], citation: str}}`` with
-    SpT = c0 + c1·x + … (x = index value). Combined SpT = mean over indices;
-    err combines the per-index MC propagation and the between-index scatter.
+    ``calibration``: ``{name: {spt_poly:[c0,c1,...], center: x0, citation: str}}``
+    with SpT = c0 + c1·(x−x0) + … (x = index value; ``center`` defaults to 0).
+    The centered form matches the published relations (e.g. Riddick et al. 2007)
+    verbatim, avoiding transcription error from expanding into powers of x.
+    Combined SpT = mean over indices; err combines the per-index MC propagation
+    and the between-index scatter.
     """
     ests, errs = [], []
     for name, cal in calibration.items():
         if name not in index_values:
             continue
-        x = index_values[name]["value"]
+        x = index_values[name]["value"] - float(cal.get("center", 0.0))
         xe = index_values[name]["err"]
         coeffs = np.asarray(cal["spt_poly"], float)[::-1]  # np.polyval wants high->low
         ests.append(float(np.polyval(coeffs, x)))

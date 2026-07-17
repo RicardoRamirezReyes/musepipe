@@ -438,3 +438,45 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
 - Nota: el stage real de acreción NO se ejecutó (se ejecuta en WP-11); el config
   ya tiene las 12 relaciones para entonces.
 - Siguiente: WP-G3R-11 (EJECUCIÓN real integrada sobre ROXs12b_B_adp + V1–V6).
+
+## D7 · Transcripción de índices espectrales (prerequisito de WP-11) — 2026-07-16
+
+Transcritas del paper (Riddick et al. 2007, MNRAS 381, 1067 = arXiv:0708.1275,
+ar5iv HTML, Tablas A1/A2/A3 verificadas in situ) a config `g3_spt_indices`
+(ventanas) y `g3_spt_indices_calibration` (relaciones SpT). Riddick+2007 compila
+las ventanas Y da las relaciones SpT-índice polinómicas → una sola fuente
+autoritativa. **Correcciones honestas vs la propuesta D7**: (i) las ventanas PC3
+las atribuye Riddick a Martín et al. **1996** (ref «e»), no 1999; (ii) el índice
+de gravedad Na I lo atribuye a **Kirkpatrick et al. 1999** (ref «c»), no Slesnick
+(la D7 decía «cita a definir, p. ej. Slesnick 2004» → latitud usada). Config
+git-ignored → registro citable AQUÍ.
+
+Ventanas (Tabla A1), índice = flujo medio numerador / denominador [Å]:
+
+| Índice | Numerador | Denominador | Tipo | Orig. |
+|---|---|---|---|---|
+| PC3 | 8235–8265 | 7540–7580 | SpT | Martín 1996 |
+| TiO7 | 8440–8470 | 8400–8420 | SpT | Hawley 2002 |
+| VO2 | 7920–7960 | 8130–8150 | SpT | Lépine 2003 |
+| R1 | 8025–8130 | 8015–8025 | SpT/grav | Riddick 2006 |
+| R2 | 8145–8460 | 8460–8470 | SpT/grav | Riddick 2006 |
+| R3 | (8025–8130)+(8415–8460) | (8015–8025)+(8460–8470) | SpT/grav | Riddick 2006 |
+| Na_a | 8153.3–8163.3 | 8178.3–8188.3 | gravedad | Kirkpatrick 1999 |
+| Na_b | 8153.3–8183.3 | 8189.8–8199.8 | gravedad | Kirkpatrick 1999 |
+
+Relaciones SpT (Tablas A2/A3), SpT = c0 + c1·(x−x0) + c2·(x−x0)² + c3·(x−x0)³:
+
+| Índice | c0 | c1 | c2 | c3 | x0 | rango |
+|---|---|---|---|---|---|---|
+| PC3 | 2.0395 | 24.61 | −50.292 | 39.489 | 0.956 | M3–M8 |
+| TiO7 | 2.2993 | −27.642 | −94.586 | −140.74 | 0.941 | M2–M8 |
+| VO2 | 2.6102 | −7.9389 | −8.3231 | −14.660 | 0.963 | M3–M8 |
+| R1 | 2.8078 | 21.085 | −53.025 | 60.755 | 1.044 | M2.5–M8 |
+| R2 | 2.9091 | 10.503 | −14.105 | 8.5121 | 1.035 | M3–M8 |
+| R3 | 2.8379 | 19.708 | −47.679 | 52.531 | 1.035 | M2.5–M8 |
+
+- `musepipe/models/indices.py`: `indices_to_spt` gana `center` (SpT en potencias
+  de (x−x0), forma verbatim del paper; sin `center` = comportamiento previo).
+  Test nuevo del polinomio centrado. **Suite 522 passed**. Las ventanas evitan
+  las bandas telúricas D9; el enmascarado de líneas G2 lo maneja `measure_indices`
+  (RuntimeError si una ventana >50% enmascarada — se verá en WP-11).
