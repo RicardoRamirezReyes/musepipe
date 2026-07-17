@@ -209,3 +209,30 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   — **EJECUTADO y verde en esta máquina** (no skip). **Suite completa 465 passed**.
 - Parada §: la rejilla real cubre D4 (Teff 2000–4500, logg 3.5–5.5) → sin parada.
 - Siguiente: WP-G3R-4 (adaptadores de plantillas jóvenes/campo).
+
+## WP-G3R-4 · Adaptador de plantillas empíricas (jóvenes + campo) — 2026-07-16
+
+- `musepipe/constants.py`: codificación SpT numérica CONGELADA — `spt_code`/
+  `spt_label` (M0=0.0…M9=9.0, L0=10.0…; clases previas negativas K5=−5.0;
+  medio subtipo 0.5; secuencia OBAFGKMLTY). Con tests (roundtrip, redondeo a
+  medio subtipo, etiqueta inválida → ValueError).
+- `musepipe/models/templates.py`: `EmpiricalTemplateLibrary` (`SpectralLibrary`)
+  con `gravity_class ∈ {young, field}`. Cita y clase obligatorias (RuntimeError);
+  `verify_manifest`; índice `{spt_code → [(archivo, meta)]}` desde `meta_json`.
+  `grid()` devuelve los códigos SpT presentes. `get(spt=)` NO interpola: elige el
+  SpT disponible más cercano (`meta['spt_delta']`), y ante varios objetos del
+  mismo SpT (biblioteca joven) devuelve el primero determinista (`n_at_spt`).
+  `meta` incluye `resolution_fwhm_A` (de la fuente si la declara, si no del
+  parámetro de `__init__`), `gravity_class`, `citation`.
+- `musepipe/models/prep.py`: `prepare_template` gana `template_fwhm_A=None` y
+  `return_flag=False` (D2): si FWHM_plantilla < LSF degrada con kernel
+  √(LSF²−FWHM²); si ≥ LSF no degrada y marca `resolution_mismatch`. Default y
+  firma retro-compatibles (fit.py y tests previos sin cambios).
+- Cobertura real verificada: **joven G5–M9.5 (M0–M9 cubierto, sin parada)**;
+  campo O5–L6 (secuencia M completa). Ambas cargan.
+- Tests `tests/test_models_templates.py` (11): codificación SpT; contrato;
+  regla del más cercano; múltiples por SpT; resolución surfaced (init + fuente);
+  clase/cita obligatorias; regla de resolución de `prepare_template` en los dos
+  sentidos + retro-compat; `external_data` contra ambas bibliotecas reales
+  (EJECUTADO verde). **Suite completa 476 passed**.
+- Siguiente: WP-G3R-5 (adaptadores de tracks BHAC15/ATMO2020).

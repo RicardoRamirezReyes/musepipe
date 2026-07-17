@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from ..constants import fwhm_to_sigma
@@ -58,14 +60,35 @@ def degrade_to_lsf(wave, flux, lsf_fwhm_A):
     return np.convolve(flux, kernel, mode="same")
 
 
-def prepare_template(template, wave_out, *, lsf_fwhm_A, extinction=None, av=0.0, scale=1.0):
-    """Degrade to LSF → resample to wave_out → apply extinction → scale."""
-    flux = degrade_to_lsf(template.wave_A, template.flux, lsf_fwhm_A)
+def prepare_template(template, wave_out, *, lsf_fwhm_A, extinction=None, av=0.0,
+                     scale=1.0, template_fwhm_A=None, return_flag=False):
+    """Degrade to LSF → resample to wave_out → apply extinction → scale.
+
+    ``template_fwhm_A`` (decision D2): if given and < ``lsf_fwhm_A`` the template
+    is degraded by the quadrature kernel √(lsf² − tmpl²); if ≥ ``lsf_fwhm_A`` it
+    is NOT degraded and ``resolution_mismatch`` is flagged. The default
+    (``None``) reproduces the historical behaviour (degrade by the full LSF,
+    valid for ~infinite-resolution models). With ``return_flag=True`` the return
+    is ``(flux, resolution_mismatch)``; otherwise just ``flux`` (back-compatible).
+    """
+    resolution_mismatch = False
+    if template_fwhm_A is None:
+        kernel_fwhm = float(lsf_fwhm_A)
+    elif float(template_fwhm_A) < float(lsf_fwhm_A):
+        kernel_fwhm = math.sqrt(float(lsf_fwhm_A) ** 2 - float(template_fwhm_A) ** 2)
+    else:
+        kernel_fwhm = 0.0  # template coarser than the LSF → do not degrade
+        resolution_mismatch = True
+    if kernel_fwhm > 0:
+        flux = degrade_to_lsf(template.wave_A, template.flux, kernel_fwhm)
+    else:
+        flux = np.asarray(template.flux, dtype=np.float64)
     flux = resample_conserve_flux(template.wave_A, flux, wave_out)
     if extinction is not None and av:
         a_lam = np.asarray(extinction.a_lambda_over_av(wave_out)) * float(av)
         flux = flux * np.power(10.0, -0.4 * a_lam)  # redden the model toward the data
-    return float(scale) * flux
+    flux = float(scale) * flux
+    return (flux, resolution_mismatch) if return_flag else flux
 
 
 __all__ = ["degrade_to_lsf", "prepare_template", "resample_conserve_flux"]
