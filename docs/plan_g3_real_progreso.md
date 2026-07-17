@@ -262,3 +262,36 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   WP-G3R-2) → sin parada.
 - Con esto **WP-G3R-3/4/5 (los tres adaptadores) cerrados**. Siguiente:
   WP-G3R-6 (preparación del espectro observado, `musepipe/models/observed.py`).
+
+## WP-G3R-6 · Preparación del espectro observado — 2026-07-16
+
+- `musepipe/models/observed.py` — ÚNICA puerta de datos reales a los ajustes:
+  - `load_final_spectrum(run_paths, *, err_column="flux_err_total")`: lee la
+    ext `SPECTRUM` de `spec_final_object.fits`; RuntimeError si falta columna.
+  - `build_fit_masks(cfg, wave, run_paths) -> (mask, provenance)` (D9, True =
+    excluir): máscara stage04b + ventanas ±`line_window_kms` (300 km/s) en torno
+    a las líneas del catálogo G2 (`rest_A` de `g2_line_measurements.csv`) +
+    bandas telúricas de config.
+  - `rebin_for_fit(...)` (D8): bins de `n_channels`, descarta bins con
+    >`max_masked_frac` enmascarado, `flux_bin`=media de canales no enmascarados,
+    varianza = (Σσ²)/N² × (n/n_eff) con el `n_eff_over_n_by_block` del bloque G1
+    que contiene el bin. **Hallazgo clave**: los `block_bounds` de G1 indexan el
+    subespacio de canales BUENOS (contiguos, último z1 = 3465 = 3681 − 216 malos,
+    verificado leyendo `spectral_covariance_blocks`), así que el mapeo bin→bloque
+    se hace por longitud de onda de canal-bueno vía la bad-mask; **PARADA** si
+    `n_good ≠ cobertura de block_bounds` (runs desalineados). Devuelve
+    `n_eff_total` para el ranking (§4.4).
+  - `fit_spectrum(cfg, run_paths) -> FitSpectrum` (dataclass congelada:
+    wave_bin/flux_bin/err_bin/n_bins/n_eff/mask_provenance).
+  - `plot_fit_spectrum(...)`: figura QC (canal gris + rebineado con barras +
+    máscaras sombreadas + rango D8) con `Figure/FigureCanvasAgg` (sin pyplot).
+- Tests `tests/test_models_observed.py` (11) con run sintético en tmpdir:
+  esquema + columna faltante; ventana de línea en 6562.8 Å enmascara los canales
+  correctos; PARADA por bad-mask de shape incorrecto; rebineo conserva flujo;
+  inflado de varianza analítico (bloque n_eff/n=1 → factor 1; =0.5 → ×√2);
+  descarte de bin >50% enmascarado; `wave_range` respeta D8; PARADA por
+  cobertura de covarianza ≠ n_good; `fit_spectrum` end-to-end sintético;
+  `plot_fit_spectrum` corre. **Suite completa 496 passed**.
+- **Anti-sesgo respetado**: NO se ejecutó `fit_spectrum` sobre el espectro real
+  (solo fixtures sintéticas); el rebineado real ocurre en WP-G3R-11.
+- Siguiente: WP-G3R-7 (`stage_g3_template_fit`: SpT por plantillas + índices).
