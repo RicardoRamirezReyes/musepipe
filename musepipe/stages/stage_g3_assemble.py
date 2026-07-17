@@ -24,6 +24,7 @@ from ..models.consistency import (
 from ..models.extinction import CCMExtinction
 from ..models.fit import fit_grid_3d
 from ..models.manifest import library_root, verify_manifest
+from ..models.accretion import mdot_mc
 from ..models.observed import FitSpectrum, build_fit_masks, fit_spectrum, load_final_spectrum, plot_fit_spectrum
 from ..models.prep import prepare_template
 from ..models.templates import EmpiricalTemplateLibrary
@@ -35,6 +36,40 @@ from .stage_g3_template_fit import run_stage_g3_template_fit
 
 REAL_PROPS = {"spectral_type", "spt_templates", "spt_indices", "teff", "a_v_spectral",
               "logg", "omega_scale", "radius", "l_bol", "mass", "age_used", "logg_evol"}
+
+# Atmosphere-dependent quantities that become not_constrained when the run is
+# accepted as systematics-limited (WP-11 §8.2). age_used (adopted prior) and the
+# continuum-independent accretion rows are kept.
+NC_ON_SYSTEMATICS = {"spectral_type", "spt_templates", "spt_indices", "teff",
+                     "a_v_spectral", "logg", "omega_scale", "radius", "l_bol",
+                     "mass", "logg_evol"}
+
+
+def _relabel_systematics_limited(rows, *, reason, citation, mdot_lit):
+    """Return rows with atmosphere-dependent quantities → not_constrained (the
+    railed value preserved in limitations) and Mdot recomputed with literature
+    M,R. Continuum-independent accretion rows and age_used are kept."""
+    out = []
+    for r in rows:
+        p = r["property"]
+        if p in NC_ON_SYSTEMATICS:
+            flagged = str(r.get("value", "")).strip()
+            row = {k: "" for k in TABLE_FIELDS}
+            row.update(property=p, value="", label="not_constrained",
+                       calibrations_citations=citation, depends_on=r.get("depends_on", ""),
+                       limitations=f"systematics-limited: {reason} | railed-fit value "
+                                   f"{p}={flagged} NOT trusted")
+            out.append(row)
+        elif p == "mdot" and mdot_lit is not None:
+            row = dict(r)
+            row.update(value=mdot_lit["p50"], err_stat_lo=mdot_lit["p16"],
+                       err_stat_hi=mdot_lit["p84"], data_used="l_acc_combined + literature M,R",
+                       assumptions="M,R from literature (Bowler+2017); G3-derived M,R "
+                                   "systematics-limited", depends_on="[lacc_relation]")
+            out.append(row)
+        else:
+            out.append(r)
+    return out
 
 
 def stage_g3_assemble_paths(run_id, project_root=None):
@@ -415,4 +450,69 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
             "paths": paths}
 
 
-__all__ = ["run_stage_g3_all", "stage_g3_assemble_paths"]
+def finalize_systematics_limited(run_id, *, project_root=None):
+    """Post-process an existing G3 run into the honest systematics-limited table
+    + QC (no re-fitting), per the human decision (config
+    ``g3_atmosphere_systematics_limited``). Atmosphere/derived quantities become
+    not_constrained; Mdot uses literature M,R; the young gravity class and the
+    accretion limits are retained as the robust results."""
+    rc = load_run_config(run_id, project_root=project_root)
+    cfg = dict(rc.config)
+    cfg["run_id"] = rc.run_id
+    cfg["project_root"] = str(rc.paths.project_root)
+    paths = stage_g3_assemble_paths(run_id, project_root=cfg["project_root"])
+    reason = cfg.get("g3_atmosphere_systematics_limited_reason", "systematics-limited")
+    citation = cfg.get("g3_atmosphere_systematics_limited_citation", "")
+
+    with open(paths["final_csv"]) as fh:
+        rows = [dict(r) for r in csv.DictReader(fh)]
+    qc = json.loads(paths["qc_json"].read_text())
+    accretion_qc = (json.loads(paths["accretion_qc"].read_text())
+                    if paths["accretion_qc"].exists() else {})
+    template_json = json.loads(paths["template_json"].read_text())
+
+    lacc = next((float(r["value"]) for r in rows
+                 if r["property"] == "l_acc_combined" and r.get("value") not in ("", None)), None)
+    mdot_lit = None
+    if lacc is not None:
+        mdot_lit = mdot_mc(
+            lacc, float(cfg["h03_companion_mass_msun"]),
+            float(cfg.get("h03_companion_mass_err_msun", 0.0014)),
+            float(cfg["h03_companion_radius_rsun"]),
+            float(cfg.get("h03_companion_radius_err_rsun", 0.02)),
+            float(cfg.get("h03_relation_scatter_dex", 0.30)),
+            n_mc=int(cfg.get("g3_n_mc", 4000)), seed=int(cfg.get("g3_seed", 0)))
+
+    final = _relabel_systematics_limited(rows, reason=reason, citation=citation,
+                                         mdot_lit=mdot_lit)
+    consistency = _consistency(cfg, final, template_json, paths["mass_posterior"])
+
+    qc["systematics_limited"] = {
+        "accepted": True, "reason": reason, "citation": citation,
+        "stops_resolution": ("accepted as systematics-limited (human decision 2026-07-16); "
+                             "atmo/derived rows -> not_constrained"),
+        "robust_results": {
+            "gravity_class": qc.get("spt", {}).get("gravity_classes", {}),
+            "accretion": {"l_acc_combined_lsun": lacc,
+                          "mdot_msun_yr_literature_MR": (mdot_lit["p50"] if mdot_lit else None)},
+        },
+        "flagged_atmo_fit_values": qc.get("atmo", {}),
+    }
+    qc["consistency_pairs"] = consistency
+    qc["open_issues"] = [{"issue": "G3 atmospheric inference systematics-limited (C3 continuum "
+                                   "systematic); Teff/A_V/R/mass not_constrained",
+                          "priority": "accepted_limitation"}]
+
+    with paths["final_csv"].open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=TABLE_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(final)
+    paths["qc_json"].write_text(json.dumps(qc, indent=1, default=str))
+    with paths["consistency_csv"].open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=CONSISTENCY_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(consistency)
+    return {"rows": final, "qc": qc, "consistency": consistency, "mdot_literature": mdot_lit}
+
+
+__all__ = ["finalize_systematics_limited", "run_stage_g3_all", "stage_g3_assemble_paths"]
