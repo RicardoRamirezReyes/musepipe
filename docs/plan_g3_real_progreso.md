@@ -110,3 +110,47 @@ Los archivos de bibliotecas viven fuera del repo (`../Data/external_libraries`,
   intermedio para las dos plantillas). El software para ingerirlas ya está y
   testeado; solo falta el insumo. WP-G3R-3/4/5 (adaptadores) pueden avanzar en
   paralelo con fixtures sintéticas.
+
+### WP-G3R-2 (cont.) · Adquisición autónoma — 2026-07-16
+
+El usuario eligió «adquisición autónoma donde sea factible». Descargadas y
+verificadas **3 familias más** (4/5 totales) con descargadores reales añadidos
+al fetch script; formatos inspeccionados in situ (sin adivinar):
+
+- ✅ **Kesseli campo** (`templates_field`, Kesseli+2017): CDS `J/ApJS/230/16/fits/`.
+  62 plantillas O5→M9 + L0–L3 (selección: enanas metalicidad solar `+0.0_Dwarf`
+  + compuestas sin sufijo; se excluyen gigantes/subenanas/no-solares). Formato:
+  BinTable ext1 `LogLam` (log10 Å) + `Flux` normalizado; marco **vacío (SDSS)**.
+  116.6 MB, `verify_manifest` OK (63 entradas).
+- ✅ **Manara jóvenes** (`templates_young`, Manara+2013 J/A+A/551/A107 + 2017
+  J/A+A/605/A86): CDS `sp/*_V.fit` (brazo VIS X-shooter). 39 plantillas (22+17),
+  SpT G5–M (incluye tardías del 2017). Formato: WCS lineal 1-D; **el WAT1
+  etiqueta "angstroms" pero los valores son nm** (545–1035 nm) — resuelto por
+  rango físico (`to_angstrom`, ×10) y registrado en meta con nota; marco
+  aire/vacío a verificar en WP-6. 22.8 MB, OK (40 entradas).
+- ⏸→código listo **BT-Settl CIFIST** (`bt-settl-cifist`, Allard+2012): SVO SSAP
+  `model=bt-settl-cifist`. Convertidor real añadido (`read_svo_spectrum_votable`,
+  `select_btsettl_nodes`), **validado end-to-end con `--limit 2` nodos reales**
+  (2 npz, manifest OK; artefacto borrado). La caja D4 (meta=alpha=0, Teff
+  2000–4500, logg 3.5–5.5) = **146 nodos**; cada espectro SVO es el rango
+  completo 0–1000 µm (~60 MB), sin recorte servidor → **~9 GB de transferencia**
+  para la rejilla completa (recortada a 4000–10000 Å quedan ~3.4 MB/nodo,
+  ~0.5 GB en caché). Excede el «cientos de MB» estimado → **pendiente de
+  confirmación del usuario** para lanzar la descarga completa (comando
+  `python scripts/fetch_g3_libraries.py bt-settl`).
+- ⏸ **ATMO2020** (`tracks_atmo2020`): host SPA sin endpoint directo/API →
+  descarga manual (el subcomando imprime layout de `--input-dir`). PARADA.
+
+Software añadido al fetch script: `_download_text`/`_hrefs`; lectores puros
+`wave_from_linear_wcs`, `to_angstrom` (resuelve unidad por rango físico, PARADA
+si absurdo), `read_kesseli_fits`, `read_manara_visual_fits`, `read_svo_spectrum_votable`,
+`select_btsettl_nodes`, `_kesseli_wanted`; opción `--limit`. Tests nuevos en
+`tests/test_fetch_g3_libraries.py` (14 en total, todos OFFLINE con fixtures
+sintéticas — se corrigió un test que llamaba a la red por error). **Suite
+completa 455 passed** (53 s). `fetch verify`: templates_young/templates_field/
+tracks_bhac15 OK; bt-settl/atmo2020 not present.
+
+- Siguiente: (1) confirmar/lanzar la descarga completa BT-Settl (~9 GB, ~1–2 h,
+  en background); (2) ATMO2020 manual cuando el usuario baje el tarball; (3)
+  con eso `check_g3_real_inputs.py --libraries` quedaría verde. Mientras,
+  WP-G3R-3/4/5 pueden avanzar con fixtures sintéticas.
