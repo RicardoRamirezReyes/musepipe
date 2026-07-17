@@ -180,3 +180,32 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   WP-G3R-5 (adaptadores tracks) — independientes entre sí tras la fase 2, se
   validan con fixtures sintéticas y usan los tests `external_data` locales
   contra estas familias reales; y WP-G3R-6 (preparación del espectro).
+
+## WP-G3R-3 · Adaptador BT-Settl (`SpectralLibrary`) — 2026-07-16
+
+- `musepipe/models/btsettl.py`: clase `BTSettlLibrary` (implementa
+  `SpectralLibrary`). `__init__(family_dir, *, citation, version, cache_size=64)`
+  — cita obligatoria (RuntimeError, patrón `CCMExtinction`); llama a
+  `verify_manifest` una vez; construye el índice `{(teff,logg)→archivo}` leyendo
+  SOLO el `meta_json` de cada npz (no carga wave/flux). `grid()` devuelve los
+  ejes reales presentes. `get(teff=,logg=)`:
+  - nodo exacto → espectro NATIVO sin remuestrear (camino principal del ajuste
+    de rejilla WP-8);
+  - interpolación BILINEAL en log-flujo entre los 4 vecinos. Como los nodos NO
+    comparten grilla de longitud de onda (270k/210k/195k puntos según Teff), los
+    4 vecinos se alinean por `np.interp` sobre la grilla del vértice inferior
+    (rápido) antes de combinar en log; el remuestreo con conservación de flujo
+    sobre la grilla observada lo hace luego `prepare_template`.
+  - `meta` registra `nodes`, `weights` e `interp_error_halfstep` (medio paso
+    local, spec §4.3); fuera de rejilla o nodo faltante → RuntimeError.
+  - caché LRU acotada (≤64 espectros) con `OrderedDict`.
+- `pytest.ini` nuevo: registra el marker `external_data` y fija
+  `testpaths=tests` (colección idéntica a la actual).
+- Tests `tests/test_models_btsettl.py` (8): contrato del protocolo; bilineal
+  EXACTA para log-flujo lineal en (Teff,logg); nodo exacto nativo; interp 1-D en
+  un eje; cita obligatoria; fuera de rejilla; nodo faltante. Test
+  `@pytest.mark.external_data` que corre contra la familia real (146 nodos):
+  `grid()` cubre D4 y `get(3000,4.0)` da flujo finito y positivo en 4000–10000 Å
+  — **EJECUTADO y verde en esta máquina** (no skip). **Suite completa 465 passed**.
+- Parada §: la rejilla real cubre D4 (Teff 2000–4500, logg 3.5–5.5) → sin parada.
+- Siguiente: WP-G3R-4 (adaptadores de plantillas jóvenes/campo).
