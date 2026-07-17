@@ -174,6 +174,7 @@ def _plot_map(out_path, x_axis, y_axis, dchi2, *, xlabel, ylabel, best):
 def write_stage_g3_atmo_fit(rows, qc, primary, paths, *, make_plots=True):
     paths["paths"].ensure_base_dirs()
     np.savez(paths["npz"], dchi2_3d=primary["dchi2_3d"],
+             scales_3d=primary["scales_3d"],
              dchi2_teff_av=primary["dchi2_teff_av"],
              dchi2_teff_logg=primary["dchi2_teff_logg"],
              teff_axis=primary["teff_axis"], logg_axis=primary["logg_axis"],

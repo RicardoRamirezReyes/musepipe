@@ -12,6 +12,14 @@ import re
 # Speed of light
 C_KMS = 299792.458  # km/s
 
+# Physical constants for the derived chain (WP-G3R-9), cgs, with sources.
+PC_CM = 3.0856775814913673e18       # parsec [cm] (IAU 2015 B2)
+RSUN_CM = 6.957e10                   # nominal solar radius [cm] (IAU 2015 B3)
+RJUP_CM = 7.1492e9                   # nominal Jupiter equatorial radius [cm] (IAU 2015 B3)
+SIGMA_SB_CGS = 5.670374419e-5        # Stefan-Boltzmann [erg cm^-2 s^-1 K^-4] (CODATA 2018)
+LSUN_ERG_S = 3.828e33               # nominal solar luminosity [erg/s] (IAU 2015 B3)
+MSUN_OVER_MJUP = 1047.57            # M_sun / M_Jup (IAU nominal GM ratio)
+
 # Numeric spectral-type code (plan WP-G3R-4, decision D-frozen encoding):
 # M0=0.0 ... M9=9.0, L0=10.0 ...; earlier classes are negative (K5=-5.0),
 # half subtype = 0.5. Continuous so nearest-type lookups are simple.
@@ -53,5 +61,6 @@ def sigma_to_fwhm(sigma):
     return float(sigma) * FWHM_OVER_SIGMA
 
 
-__all__ = ["C_KMS", "FWHM_OVER_SIGMA", "SIGMA_OVER_FWHM", "fwhm_to_sigma",
-           "sigma_to_fwhm", "spt_code", "spt_label"]
+__all__ = ["C_KMS", "FWHM_OVER_SIGMA", "LSUN_ERG_S", "MSUN_OVER_MJUP", "PC_CM",
+           "RJUP_CM", "RSUN_CM", "SIGMA_OVER_FWHM", "SIGMA_SB_CGS",
+           "fwhm_to_sigma", "sigma_to_fwhm", "spt_code", "spt_label"]

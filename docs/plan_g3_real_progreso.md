@@ -356,3 +356,42 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   fit_grid 2-D sin cambios; ensamblado+escritura de etapa (npz+figuras). Sin
   datos reales. **Suite completa 511 passed**.
 - Siguiente: WP-G3R-9 (cadena derivada L_bol, R, masa/edad + MC end-to-end).
+
+## WP-G3R-9 · Cadena derivada — L_bol, R, masa/edad + MC — 2026-07-16
+
+- `musepipe/constants.py`: constantes físicas cgs con fuente (PC_CM, RSUN_CM,
+  RJUP_CM, SIGMA_SB_CGS, LSUN_ERG_S, MSUN_OVER_MJUP).
+- `musepipe/models/derived.py`:
+  - `radius_from_omega(omega, omega_err, distance_pc, distance_err)`: R desde
+    Ω = (R/d)²·(1/flux_unit); R en R☉ y R_Jup con error propagado.
+  - `lbol_from_scaled_model(teff, omega, distance_pc)`: **DECISIÓN DE DISEÑO
+    documentada** — la caché BT-Settl está recortada a 4000–10000 Å y NO puede
+    integrarse para la BC; para un modelo de atmósfera ∫F_superficie dλ ≡ σTeff⁴
+    (definición de Teff), luego L_bol = 4πR²σTeff⁴ = 4πd²·Ω_phys·σTeff⁴ es la
+    integral exacta del modelo escalado sobre todo λ (nada fuera de MUSE se
+    inventa). No es cambio de decisión congelada; es la identidad física.
+  - `mass_age_from_tracks(track_grids, l_bol_samples, age_samples)`: por familia
+    masa/radio/logg (vía `TrackGrid.sample` vectorizado); dispersión de la masa
+    mediana ENTRE familias = err_sys; muestras combinadas (concatenación con
+    igual peso).
+  - `run_mc_chain(cfg, atmo_result, track_grids, rng)`: MC end-to-end (n=4000,
+    semilla config): muestrea nodos (Teff,logg,A_V) por pesos exp(−ΔΧ²/2) del
+    ΔΧ² 3-D + Ω por nodo (`scales_3d`), distancia gaussiana, edad gaussiana
+    asimétrica D12 truncada >0, calibración absoluta 10%, jitter de interpolación
+    D11; percentiles 16/50/84; devuelve las muestras de masa (por familia +
+    combinada). `plot_hrd` (V4): fuente (L_bol,Teff con elipse) sobre isócronas
+    de ambas familias a la edad D12.
+- `musepipe/models/fit.py`: `fit_grid_3d` ahora expone `scales_3d` (Ω por nodo,
+  para el muestreo del MC); `stage_g3_atmo_fit` lo guarda en el npz.
+- `musepipe/stages/stage_g3_derived.py` (patrón): consume la atmo fit + tracks;
+  escribe `stages/g3_rows_derived.json` (filas `radius`, `l_bol`
+  [atmospheric_model_dependent], `mass` [M_Jup, evolutionary_model_dependent,
+  err_sys entre familias], `age_used`, `logg_evol`),
+  `stages/g3_mass_posterior.npz` (por familia + combinada) y
+  `plots/g3_hrd_tracks.png`. `compute_` inyectable.
+- Tests `tests/test_g3_derived.py` (7): radius analítico; L_bol analítico
+  (=4πR²σTeff⁴); masa exacta con tracks sintéticos; MC con errores cero →
+  percentiles degenerados (L_bol recupera el objetivo); dispersión entre dos
+  familias → err_sys; posterior de masa persistido y re-leíble; ensamblado de
+  etapa. Sin datos reales. **Suite completa 518 passed**.
+- Siguiente: WP-G3R-10 (acreción multilínea ampliada + V5).
