@@ -295,3 +295,38 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
 - **Anti-sesgo respetado**: NO se ejecutó `fit_spectrum` sobre el espectro real
   (solo fixtures sintéticas); el rebineado real ocurre en WP-G3R-11.
 - Siguiente: WP-G3R-7 (`stage_g3_template_fit`: SpT por plantillas + índices).
+
+## WP-G3R-7 · `stage_g3_template_fit` — SpT plantillas + índices — 2026-07-16
+
+- `musepipe/models/template_fit.py`:
+  - `fit_templates(fit_spec, library, extinction, *, av_axis, lsf_fwhm_A,
+    veiling=False, ...)`: por cada plantilla del `grid()`, χ² con (A_V, escala)
+    libres (escala analítica reusando `_best_scale_chi2` de fit.py, sin tocarlo);
+    con `veiling=True` añade componente aditiva no negativa a·(λ/λ0)^α por NNLS
+    (`scipy.optimize.nnls`) sobre rejilla (A_V, α) (D10). Devuelve ranking
+    ordenado (spt, chi2, chi2_red, av_best, scale_best, veiling) + resumen
+    (spt_best, intervalo SpT por ΔΧ²≤1, n_eff, flag de inflado D11).
+  - `fit_powerlaw` (proxy no estelar D3, F_λ∝(λ/λ0)^α). `classify_gravity` →
+    ΔΧ² entre la mejor de cada clase `{young, field, nonstellar}` (insumo G4 T3).
+- `musepipe/models/indices.py`: `measure_indices(wave, flux, err, definitions,
+  ...)` — cocientes de flujo medio en ventanas SOLO desde config (D7), con
+  RuntimeError si una ventana cae fuera de cobertura o >50% enmascarada; error
+  por MC gaussiano sembrado. `indices_to_spt(values, calibration)` con
+  polinomio SpT del paper (config); combina índices (media + dispersión).
+- `musepipe/stages/stage_g3_template_fit.py` (patrón accretion): corre las dos
+  vías sobre `fit_spectrum`, `classify_gravity`, variante veiling; escribe
+  `stages/g3_template_fit.json` (ranking, ΔΧ² por clase, índices, veiling) y
+  `stages/g3_rows_template.json` con filas SEPARADAS `spectral_type`
+  (empirical_inference; err_sys = |plantillas−índices| ⊕ shift veiling),
+  `spt_templates`, `spt_indices` (la discrepancia NO se promedia). `compute_`
+  admite `fit_spec/per_channel/libraries` inyectados (testeable sin run real).
+- Tests `tests/test_g3_template_fit.py` (8): V1 sintético (recupera SpT exacta +
+  A_V a ≤0.5); ranking degrada con SpT distante; veiling inyectado recuperado
+  (<40%); `classify_gravity` distingue clases; índices caso analítico +
+  ventana fuera de cobertura → RuntimeError; power-law recupera α; ensamblado de
+  etapa con inyección. Sin ejecución sobre datos reales. **Suite 504 passed**.
+- **Pendiente D7 (checkpoint antes de WP-11)**: transcribir del paper las
+  ventanas numéricas `g3_spt_indices` + `g3_spt_indices_calibration` (Riddick+2007,
+  Martín+1999 PC3, Slesnick+2004). El código las consume desde config; sin ellas,
+  la fila `spt_indices` sale `not_constrained` (honesto, no inventa).
+- Siguiente: WP-G3R-8 (`stage_g3_atmo_fit`: Teff/A_V/logg/Ω + mapas ΔΧ²).
