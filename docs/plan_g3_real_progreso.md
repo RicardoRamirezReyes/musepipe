@@ -439,6 +439,55 @@ plantillas (O5–L3); Manara 39 plantillas VIS (G5–M).
   ya tiene las 12 relaciones para entonces.
 - Siguiente: WP-G3R-11 (EJECUCIÓN real integrada sobre ROXs12b_B_adp + V1–V6).
 
+## WP-G3R-11 · EJECUCIÓN real integrada — 2026-07-16 — **PARADA §8.2**
+
+Código congelado (commits 11c1aa9 + fixes c3300b2/a2ff5d5) ANTES de ver
+resultados (anti-sesgo). Dos bugs evidentes corregidos durante la ejecución
+(NaN en NNLS de veiling; índice inusable no debe abortar el stage). Ejecución
+`run_stage_g3_all('ROXs12b_B_adp')` completa (3169 s ≈ 53 min; el remuestreo
+conservador en Python domina — candidato a vectorizar).
+
+**Resultados obtenidos (PRODUCIDOS pero MARCADOS NO FIABLES por 3 PARADAS):**
+- Atmo (BT-Settl): **Teff 2500 K** (intervalo pinchado), **logg 3.5** (borde
+  inferior), **A_V 5.0** (BORDE SUPERIOR del eje), Ω 0.142, **χ²_red 4.49**
+  (inflado ×2.12). edge_touch logg+av = True.
+- SpT plantillas: **M9** (clase joven; joven ≺ campo por Δχ²=99, ≺ no-estelar
+  por 4653 → gravedad joven preferida, resultado con sentido). SpT índices:
+  código 25 (~T5) ± 110 subtipos → **extrapolado, sin sentido** (Riddick
+  calibra M2–M8). TiO7 saltado (>50% enmascarado por O I 8446/Pa 17/18).
+- Derivados: R **2.24 R_Jup** (de Ω), L_bol 0.00186 L☉, masa **19.2 M_Jup**
+  (BHAC15 y ATMO2020 concuerdan a 0.40σ; vs Bowler+2017 a 0.86σ), edad 6 Myr,
+  logg_evol 3.96, Ṁ 2.2e-12 M☉/yr.
+- Consistencia: masa consistente (familias 0.40σ, literatura 0.86σ);
+  **A_V DISCREPANTE 6.4σ** (5.0 vs 1.8±0.5 del sistema); **R DISCREPANTE 4.1σ**
+  (2.24 vs ~1.3 R_Jup literatura); SpT σ-consistente 0.15σ (por el error enorme
+  del índice) PERO V3 por diferencia cruda = 16.2 subtipos; Teff(SpT) HH14
+  not_computed (escala no accesible, D6 pendiente).
+- V1 (ruido real): Teff recuperada (2900 en [2900,3000] con verdad 3000) pero
+  **A_V NO recuperada** (0.2 en [0,0.8], verdad 1.0) → los datos NO restringen
+  A_V. V5: L_acc/Ṁ calculados (misma cadena que H03). V6: etiquetas OK.
+
+**3 PARADAS §8.2 (vinculantes) → NO se avanza a G4:**
+1. χ²_red = 4.49 > 3 (ajuste atmosférico pobre).
+2. V2: contorno 3σ toca bordes de logg y A_V sin declararse not_constrained.
+3. V3: |SpT_plantillas − SpT_índices| = 16.2 > 2 subtipos.
+
+**Diagnóstico (hipótesis para el humano):** el ajuste rieló A_V al máximo (5.0),
+logg al mínimo (3.5) y Teff al extremo frío (2500) para reproducir un continuo
+rojo muy inclinado (fig `g3_best_fit.png`: datos ~0 en 6300–7800, subiendo a
+~3000 en 9300, con sobre-pico >9200). Ningún fotósfera BT-Settl lo ajusta →
+χ²_red alto + A_V incompatible con el sistema (6.4σ) + R inflado (4.1σ). Es la
+firma del sistemático de continuo **C3 (residuo de halo AO cromático)** ya
+registrado como afectante de G3 [[c3-continuum-oversubtraction]]: distorsiona la
+pendiente del continuo. El índice-SpT es basura por extrapolación fuera de
+M2–M8. Lo robusto: la clase de gravedad (joven preferida) y la masa por tracks
+(concuerda con Bowler+2017), aunque la masa hereda el Teff/Ω rielados.
+
+**Estado:** tabla `g3_physical_properties.csv` (25 filas) + QC
+`stage_g3_qc.json` (3 open_issues blocking, sin pending_libraries) +
+`g3_consistency.csv` + figuras (fit_spectrum, best_fit, dchi2 ×2, HRD) escritos.
+**PARADA CONSULTIVA: reportado al humano ANTES de G4 (plan WP-11 §8.2).**
+
 ## D7 · Transcripción de índices espectrales (prerequisito de WP-11) — 2026-07-16
 
 Transcritas del paper (Riddick et al. 2007, MNRAS 381, 1067 = arXiv:0708.1275,
