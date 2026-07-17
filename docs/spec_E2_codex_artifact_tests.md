@@ -126,3 +126,13 @@ mixed`; T4 revele una perilla dominante inesperada. Reporte: tabla de los 5
 tests, veredicto global, e implicación directa: detección que sobrevive →
 reportar con E4/throughput; candidato que falla → se degrada a no-detección
 con causa; no-detección robusta → luz verde a E3.
+
+## Errata v1.1 (2026-07-15)
+
+`_overall_status` no ramificaba según el veredicto de entrada de E1: en una
+NO-detección, T2 se aplica al máximo global como caracterización del ruido
+(§2), de modo que "no tiene forma de PSF" APOYA la no-detección y no debe
+tumbar la batería. Detectado en la auditoría F1 del 2026-07-10 (nota
+"reinterpreted per spec") y corregido en código en esta errata: `overall`
+ramifica por `input_verdict_e1`, `overall_raw` retiene el valor sin
+ramificar, y el QC lo declara en `open_issues`.

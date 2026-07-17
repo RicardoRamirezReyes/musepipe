@@ -41,7 +41,10 @@ from musepipe.covariance import (
 
 BIAS_BOUNDED_MIN_THROUGHPUT = 0.4
 BIAS_THRESHOLD = 0.05
-METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+# sgf/lpm added in WP-H2 (docs/plan_integracion_halosub_julo2025.md). Methods
+# with no rows in the E4 table (historical runs) get verdict "absent": never
+# validated, never mistaken for "rejected".
+METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 
 
 def _thr(rows, method, pos, *, snr=5.0, fwhm_scale=1.0, variant="nominal"):
@@ -110,7 +113,11 @@ def build_g1(run_id, project_root=None):
     budget_rows = []
     sens_rows = []
     verdicts = {}
+    methods_present = {str(r["method"]) for r in rows}
     for m in METHODS:
+        if m not in methods_present:
+            verdicts[m] = "absent"
+            continue
         t_real = _thr(rows, m, "real")
         bounded = bool(np.isfinite(t_real) and t_real >= BIAS_BOUNDED_MIN_THROUGHPUT)
         # throughput_loss: corrected in E3; unreliable (nan) when not bias_bounded.
@@ -174,7 +181,9 @@ def build_g1(run_id, project_root=None):
         "open_issues": [
             {"issue": f"{n_ctrl} controls used; covariance/per-position bias still noisy; bootstrap error reported.", "priority": "major"},
             {"issue": "PSF-perturbation bias term is unmeasured (injection PSF is flux-normalized -> no-op); the PSF-model systematic of the budget is a placeholder 0.", "priority": "major"},
-            {"issue": "aperture/optimal_ls throughput below bias-bounded threshold at the companion edge -> rejected as extraction methods for this source.", "priority": "major"},
+            {"issue": (
+                ", ".join(sorted(m for m, v in verdicts.items() if v == "rejected")) or "none"
+            ) + " throughput below bias-bounded threshold at the companion edge -> rejected as extraction methods for this source.", "priority": "major"},
         ],
     }
     (stage_dir / "stage_g1_qc.json").write_text(json.dumps(qc, indent=2))

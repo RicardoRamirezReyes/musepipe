@@ -98,10 +98,14 @@ def stage_h01_paths(run_id, project_root=None):
         "spec_calibrated_optimal_ls_object": paths.stage_dir / "spec_calibrated_optimal_ls_object.fits",
         "spec_calibrated_optimal_psfsub_object": paths.stage_dir / "spec_calibrated_optimal_psfsub_object.fits",
         "spec_calibrated_psffit_object": paths.stage_dir / "spec_calibrated_psffit_object.fits",
+        "spec_calibrated_sgf_object": paths.stage_dir / "spec_calibrated_sgf_object.fits",
+        "spec_calibrated_lpm_object": paths.stage_dir / "spec_calibrated_lpm_object.fits",
         "controls_calibrated_aperture_npz": paths.stage_dir / "spec_calibrated_aperture_controls.npz",
         "controls_calibrated_optimal_ls_npz": paths.stage_dir / "spec_calibrated_optimal_ls_controls.npz",
         "controls_calibrated_optimal_psfsub_npz": paths.stage_dir / "spec_calibrated_optimal_psfsub_controls.npz",
         "controls_calibrated_psffit_npz": paths.stage_dir / "spec_calibrated_psffit_controls.npz",
+        "controls_calibrated_sgf_npz": paths.stage_dir / "spec_calibrated_sgf_controls.npz",
+        "controls_calibrated_lpm_npz": paths.stage_dir / "spec_calibrated_lpm_controls.npz",
         "halpha_detection_csv": paths.table_dir / "halpha_detection_by_method.csv",
         "null_maxima_npz": paths.stage_dir / "stage_h01_null_maxima.npz",
         "stage_h01_qc_json": paths.stage_dir / "stage_h01_qc.json",
@@ -147,6 +151,8 @@ def _product_paths_from_config(cfg, paths):
             cfg.get("h01_spec_calibrated_optimal_psfsub_object", paths["spec_calibrated_optimal_psfsub_object"])
         ),
         "psffit": Path(cfg.get("h01_spec_calibrated_psffit_object", paths["spec_calibrated_psffit_object"])),
+        "sgf": Path(cfg.get("h01_spec_calibrated_sgf_object", paths["spec_calibrated_sgf_object"])),
+        "lpm": Path(cfg.get("h01_spec_calibrated_lpm_object", paths["spec_calibrated_lpm_object"])),
     }
 
 
@@ -158,6 +164,8 @@ def _control_paths_from_config(cfg, paths):
             cfg.get("h01_controls_optimal_psfsub_npz", paths["controls_calibrated_optimal_psfsub_npz"])
         ),
         "psffit": Path(cfg.get("h01_controls_psffit_npz", paths["controls_calibrated_psffit_npz"])),
+        "sgf": Path(cfg.get("h01_controls_sgf_npz", paths["controls_calibrated_sgf_npz"])),
+        "lpm": Path(cfg.get("h01_controls_lpm_npz", paths["controls_calibrated_lpm_npz"])),
     }
 
 
@@ -635,8 +643,9 @@ def _write_stage_h01_plot(product: StageH01Product, paths):
     import matplotlib.pyplot as plt
 
     paths["plot_dir"].mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(2, 2, figsize=(11, 7), constrained_layout=True)
-    axes = axes.ravel()
+    n_rows = (len(METHOD_ORDER) + 1) // 2
+    fig, axes = plt.subplots(n_rows, 2, figsize=(11, 3.5 * n_rows), constrained_layout=True)
+    axes = np.asarray(axes).ravel()
     for ax, method in zip(axes, METHOD_ORDER):
         result = product.method_results[method]
         spec = result.product

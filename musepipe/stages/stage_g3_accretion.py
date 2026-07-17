@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from ..config import load_run_config
+from ..constants import MSUN_OVER_MJUP, RJUP_CM, RSUN_CM
 from ..models import validate_label
 from ..models.accretion import combine_accretion, line_lacc, mdot_mc
 from ..models.extinction import CCMExtinction
@@ -37,7 +38,30 @@ def stage_g3_paths(run_id, project_root=None):
         "stage_h03_qc_json": p.stage_dir / "stage_h03_qc.json",
         "table_csv": p.table_dir / "g3_physical_properties.csv",
         "qc_json": p.stage_dir / "stage_g3_qc.json",
+        "rows_derived_json": p.stage_dir / "g3_rows_derived.json",
     }
+
+
+def _own_mr_from_derived(path):
+    """Load own (mass_msun, mass_err, radius_rsun, radius_err) from the WP-9
+    derived rows (mass in M_Jup, radius in R_Jup), or None if unavailable."""
+    if not path.exists():
+        return None
+    try:
+        rows = json.loads(path.read_text())
+        m = next(r for r in rows if r["property"] == "mass")
+        rr = next(r for r in rows if r["property"] == "radius")
+        mass_mjup = float(m["value"])
+        rad_rjup = float(rr["value"])
+        if not (np.isfinite(mass_mjup) and np.isfinite(rad_rjup)):
+            return None
+        m_err_mjup = 0.5 * (float(m.get("err_stat_lo") or 0.0) + float(m.get("err_stat_hi") or 0.0))
+        r_err_rjup = 0.5 * (float(rr.get("err_stat_lo") or 0.0) + float(rr.get("err_stat_hi") or 0.0))
+    except (StopIteration, KeyError, ValueError, TypeError):
+        return None
+    rjup_over_rsun = RJUP_CM / RSUN_CM
+    return (mass_mjup / MSUN_OVER_MJUP, m_err_mjup / MSUN_OVER_MJUP,
+            rad_rjup * rjup_over_rsun, r_err_rjup * rjup_over_rsun)
 
 
 def _read_g2(path):
@@ -88,6 +112,7 @@ def compute_stage_g3_accretion(cfg, paths):
 
     combined = combine_accretion(per_line)
     rows = []
+    md_cfg = None
 
     def add(prop, value, label, *, unit="", data_used="", method="", assumptions="",
             cite="", validity="", limitations="", depends="", lo="", hi="", sys="", seed_v=""):
@@ -109,13 +134,28 @@ def compute_stage_g3_accretion(cfg, paths):
             unit="Lsun", data_used="G2 multiline", method=combined.get("rule", "compatibility_combined"),
             cite="Alcala+2017", limitations=f"from {combined.get('from_line', 'lines')}",
             depends="[lacc_relation, extinction, distance]")
-        md = mdot_mc(combined["l_acc_lsun"], mass, mass_err, radius, radius_err,
-                     float(cfg.get("h03_relation_scatter_dex", 0.30)), n_mc=int(cfg.get("g3_n_mc", 2000)), seed=seed)
+        scatter = float(cfg.get("h03_relation_scatter_dex", 0.30))
+        n_mc = int(cfg.get("g3_n_mc", 2000))
+        own = _own_mr_from_derived(paths["rows_derived_json"])
+        if own is not None:  # WP-9 derived M,R available -> use the object's own
+            m_used, me_used, r_used, re_used = own
+            depends = "[atmospheric_model, evolutionary_model, lacc_relation]"
+            assumptions = "M,R from G3 derived chain (WP-9 MC p50)"
+            mr_source = "g3_derived"
+        else:
+            m_used, me_used, r_used, re_used = mass, mass_err, radius, radius_err
+            depends = "[atmospheric_model(deferred), evolutionary_model(deferred), lacc_relation]"
+            assumptions = "M,R from config (Bowler+2017 hot-start; deferred G3 tracks)"
+            mr_source = "config"
+        md = mdot_mc(combined["l_acc_lsun"], m_used, me_used, r_used, re_used,
+                     scatter, n_mc=n_mc, seed=seed)
         add("mdot", md["p50"], "empirical_inference", unit="Msun/yr",
-            data_used="l_acc_combined + config M,R", method="Mdot=1.25 Lacc R/GM (MC)",
-            assumptions="M,R from config (Bowler+2017 hot-start; deferred G3 tracks)",
-            cite="Alcala+2017; Bowler+2017", depends="[atmospheric_model(deferred), evolutionary_model(deferred), lacc_relation]",
+            data_used=f"l_acc_combined + {mr_source} M,R", method="Mdot=1.25 Lacc R/GM (MC)",
+            assumptions=assumptions, cite="Alcala+2017; Bowler+2017", depends=depends,
             lo=md["p16"], hi=md["p84"], seed_v=seed)
+        # V5 variant: always config M,R (same inputs as H03) for the consistency check
+        md_cfg = mdot_mc(combined["l_acc_lsun"], mass, mass_err, radius, radius_err,
+                         scatter, n_mc=n_mc, seed=seed)
 
     # deferred physical properties (pending external libraries, §8.1 checkpoint)
     for prop, label in (("spectral_type", "not_constrained"), ("teff", "not_constrained"),
@@ -131,7 +171,9 @@ def compute_stage_g3_accretion(cfg, paths):
     ha = next((p for p in per_line if p["name"] == "Halpha"), None)
     if ha is not None:
         v5 = {"status": "computed", "g3_l_acc_halpha_lsun": ha["l_acc_lsun"],
-              "note": "compare against stage_h03 l_acc_lsun (same Alcala relation + inputs)"}
+              "g3_mdot_config_mr_p50": (md_cfg["p50"] if md_cfg else None),
+              "note": "L_acc (and Mdot with config M,R) reproduce H03 under identical "
+                      "inputs (same Alcala relation); H03 uses the same config M,R"}
 
     qc = {
         "stage": "g3_accretion", "run_id": str(cfg["run_id"]), "provisional": True,

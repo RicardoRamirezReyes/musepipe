@@ -29,9 +29,21 @@ class MoffatFit:
     message: str
 
 
+MOFFAT_BETA_FLOOR = 1.05  # Moffat is only a normalizable PSF for beta > 1.
+
+
 def moffat_alpha_from_fwhm(fwhm, beta):
     fwhm = float(fwhm)
     beta = float(beta)
+    # A Moffat has finite integral only for beta > 1; a degree-N beta(lambda)
+    # polynomial from C1 can extrapolate to beta <= 0 at band edges outside its
+    # fit range (seen on the LkCa 15 Moffat fit: 382/3681 channels beta<=0),
+    # which sends 2**(1/beta) to an OverflowError and crashes every downstream
+    # apcorr. Clamp to the physical floor: a no-op for any healthy PSF (beta>1),
+    # and it keeps the aperture correction finite where the model is being
+    # extrapolated into the non-normalizable regime.
+    if not math.isfinite(beta) or beta < MOFFAT_BETA_FLOOR:
+        beta = MOFFAT_BETA_FLOOR
     denom = 2.0 * math.sqrt(max(2.0 ** (1.0 / beta) - 1.0, 1e-12))
     return fwhm / denom
 

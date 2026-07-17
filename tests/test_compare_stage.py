@@ -22,10 +22,14 @@ class CompareStageTests(unittest.TestCase):
             products["optimal_ls"].write(paths["spec_optimal_object"])
             products["optimal_psfsub"].write(paths["spec_optimal_psfsub_object"])
             products["psffit"].write(paths["spec_psffit_object"])
+            products["sgf"].write(paths["spec_sgf_object"])
+            products["lpm"].write(paths["spec_lpm_object"])
             np.savez(paths["controls_aperture_npz"], control_spectra=controls["aperture"])
             np.savez(paths["controls_optimal_ls_npz"], control_spectra=controls["optimal_ls"])
             np.savez(paths["controls_optimal_psfsub_npz"], control_spectra=controls["optimal_psfsub"])
             np.savez(paths["controls_psffit_npz"], control_spectra=controls["psffit"])
+            np.savez(paths["controls_sgf_npz"], control_spectra=controls["sgf"])
+            np.savez(paths["controls_lpm_npz"], control_spectra=controls["lpm"])
 
             cfg = {"run_id": run_id, "project_root": str(root), "x10_sigma_smooth_channels": 1}
             product = compute_stage_x10_products(cfg, paths)

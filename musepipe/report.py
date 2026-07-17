@@ -74,6 +74,16 @@ ACCEPTED_LIMITATIONS = {
             "companion position); the CANONICAL psffit throughput is well-behaved (~0.67) and "
             "unaffected, and determinism is test-guaranteed."
         ),
+        # Accepted 2026-07-15 (user decision, 6-method E4 re-run): diagnosed as a
+        # SINGLE unique zero-injection case, present identically in the previous
+        # 4-method E4 (pre-existing, not introduced by the sgf/lpm extension).
+        "checks.v2_nulls_clean.status": (
+            "v2 nulls: 2/96 hits are ONE unique case duplicated across continuum modes: the psffit "
+            "zero-injection baseline at control3 measures z=+5.0029 vs the 5.0 threshold - a "
+            "threshold-grazing noise fluctuation fully consistent with the empirical 33-control FAP "
+            "used everywhere downstream (E1/E3 use empirical nulls, never this binary check). The "
+            "canonical throughput and the Mdot limit are unaffected."
+        ),
     },
     "D2_calibrate": {
         # Accepted ONLY after full diagnosis (docs/d2_red_continuum_diagnosis.md):
@@ -132,6 +142,8 @@ SPECTRUM_PRODUCT_CANDIDATES = {
     "optimal_ls": "spec_calibrated_optimal_ls_object.fits",
     "optimal_psfsub": "spec_calibrated_optimal_psfsub_object.fits",
     "psffit": "spec_calibrated_psffit_object.fits",
+    "sgf": "spec_calibrated_sgf_object.fits",
+    "lpm": "spec_calibrated_lpm_object.fits",
     "final": "spec_final_object.fits",
 }
 
@@ -471,7 +483,7 @@ def _copy_or_placeholder(source, dest, title, issue):
 def _plot_spectra_by_method(dest, run_paths, *, halpha_zoom=False):
     plt = _ensure_plot_backend()
     products = []
-    for method in ("aperture", "optimal_ls", "optimal_psfsub", "psffit"):
+    for method in ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm"):
         path = run_paths.stage_dir / SPECTRUM_PRODUCT_CANDIDATES[method]
         if path.exists():
             products.append((method, SpectrumProduct.read(path)))

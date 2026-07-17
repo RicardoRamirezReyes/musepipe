@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from musepipe.stages.stage_x10_compare import empirical_sigma_diff
+from musepipe.stages.stage_x10_compare import METHOD_ORDER, empirical_sigma_diff
 
 
 class CompareSigmaDiffTests(unittest.TestCase):
@@ -40,11 +40,11 @@ class CompareSigmaDiffTests(unittest.TestCase):
         base = np.full(wave.size, 100.0, dtype=np.float64)
         products = {
             m: make_product(m, base, wave=wave)
-            for m in ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+            for m in METHOD_ORDER
         }
         controls = {
             m: rng.normal(0.0, 2.0, size=(30, wave.size))
-            for m in ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+            for m in METHOD_ORDER
         }
         _rows, control_rows, qc = compare_methods(products, controls)
         primary = [r for r in control_rows if r["pair"] == "psffit_vs_optimal_psfsub"]

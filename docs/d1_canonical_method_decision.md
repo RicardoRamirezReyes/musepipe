@@ -83,14 +83,45 @@ agresivo en C1, (b) sustracción de residuos por PCA. El
 `action=iterate_C1_refine_PSF_before_PCA` que emite el QC de D1 queda
 **reconocido pero no accionado** por esta decisión.
 
-## Reproducción
+## Actualización 2026-07-15 — D1 v3 (6 métodos): psffit se mantiene como canónico
+
+Con la integración Julo et al. 2025 (plan
+`docs/plan_integracion_halosub_julo2025.md`), D1 v3 corrió sobre
+`ROXs12b_realigned` con 6 métodos. Hechos del checkpoint:
+
+- **G1 a 6 métodos**: validados = {psffit (T=0.66), sgf (0.42), lpm (0.44)};
+  `optimal_psfsub` pasó a **rejected** (T=0.25 < 0.4). Causa verificada: su
+  T=0.667 histórico venía de un E4 anterior a la consolidación Psfao de C1
+  (2026-07-10 18:48); con el modelo C1 vigente no es bias-bounded en el borde
+  del compañero. Verificado con worktree HEAD que el cambio NO proviene del
+  código nuevo (caso de control byte-comparable).
+- **Veredicto D1 v3 = `divergent_continuum`** con 3 pares primarios limpios
+  (psffit–sgf, psffit–lpm, sgf–lpm; 33 controles, df=32). Estructura B6:
+  psffit vs familia espectral t≈+14, lpm vs sgf t=−3.1 — la familia espectral
+  es ~consistente donde la espacial diverge. Afila el diagnóstico de B6 hacia
+  el residuo de halo rojo de psffit, con la salvedad de que sgf/lpm comparten
+  ŝ (sesgo común posible). `recommended_method=None` (regla congelada);
+  elegibles registrados: {psffit, lpm}.
+
+**Decisión del usuario (2026-07-15): `psffit` SE MANTIENE como canónico de
+trabajo.** B6 sigue como sistemática presupuestada (decisión 2026-07-10,
+heredada por la v3). D2 re-corrido con el comparador de continuo corregido
+(lpm, no sgf — errata spec D2 v1.1): acuerdo control-referenciado 0.683,
+ratio banda roja −5.15x, mismo carácter de limitación aceptada que en F1.
+Todo sigue provisional hasta cerrar el A-block.
+
+## Reproducción (era D1 v3, run realineado)
 
 ```bash
 conda activate MUSE
-# C1 consolidado (Moffat vs Psfao + selección; escribe model_comparison en el QC):
-bash scripts/stage_e01_psf.sh --run-id ROXs12b_B_adp        # e01_psf_form=auto (default)
-# D1 v2 (produce el veredicto + recommended_method):
-python -m musepipe.stages.stage_x10_compare --run-id ROXs12b_B_adp
+# C5/C6 (sustracción de halo espectral; productos + cubos residuales):
+python -m musepipe.stages.stage_x04_sgf --run-id ROXs12b_realigned
+python -m musepipe.stages.stage_x05_lpm --run-id ROXs12b_realigned
+# E4 (throughput 6 métodos) y G1 (veredictos por método):
+bash scripts/stage_h04_injection.sh --run-id ROXs12b_realigned --allow-long-run
+python scripts/run_g1.py --run-id ROXs12b_realigned
+# D1 v3 (veredicto + recommended_method + caveats):
+python -m musepipe.stages.stage_x10_compare --run-id ROXs12b_realigned
 # D2 consume el canónico fijado en config (x11_canonical_method=psffit):
-python -m musepipe.stages.stage_x11_calibrate --run-id ROXs12b_B_adp
+python -m musepipe.stages.stage_x11_calibrate --run-id ROXs12b_realigned
 ```
