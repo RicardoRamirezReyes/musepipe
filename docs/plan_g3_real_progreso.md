@@ -517,6 +517,39 @@ el Teff/Ω rielados → NO es evidencia independiente pese a coincidir con Bowle
 Alternativa honesta: aceptar la PARADA y reportar Teff/A_V/R/masa como
 systematics-limited/not_constrained. Decisión del humano (issue + autorización).
 
+### Intento de fix de raíz (usuario eligió re-derivar) — 2026-07-16
+
+Investigado el mecanismo de corrección C3 [[c3-continuum-oversubtraction]]:
+- El **annulus background** ya fue PROBADO y DESCARTADO para psfsub (residuo
+  estructurado/cromático, no pedestal plano).
+- La corrección implementada es **control-mean referencing**
+  (`control_reference_bias` en spectral.py), entregada como columna
+  `continuum_bias` NO destructiva. **El `spec_final_object.fits` de B_adp NO
+  tiene esa columna** (el run precede al commit d76735c), pero los controles
+  psffit (33×3681) SÍ están, así que la calculé directamente.
+- Método canónico = **psffit**. Bias psffit medido: cromático (+693 en 6300–7000
+  → +74–293 en el rojo).
+- **TEST DECISIVO (refit RAW vs corregido)**: RAW → Teff 2500, A_V=5, χ²_red 4.49;
+  **control-referenced (flux−bias) → Teff 2250, A_V=5 (sigue rielado), χ²_red 9.57
+  (PEOR, se dobla)**. La corrección lleva el azul de bajo-S/N a fuertemente
+  negativo (obj−bias=−704 en 6300–7000) → ninguna fotósfera lo ajusta. La razón
+  de inclinación far-red NO cambia (3.52→3.53).
+
+**Conclusión (empírica, definitiva)**: la corrección C3 disponible
+(control-referencing) **NO resuelve el ajuste G3; lo empeora**. El rielado de A_V
+es intrínseco: A_V está sub-restringido (S/N solo en el far-red donde la curva de
+extinción es casi plana; V1 ya mostró A_V no recuperable) y persiste un
+sistemático cromático genuino (~1.35×, error de ala PSF + throughput) que NINGÚN
+método de extracción implementado remueve. Un fix real exige las opciones
+PROFUNDAS del ranking C3 (re-anclar la amplitud de la PSF primaria al radio del
+compañero; o sustracción de perfil radial azimutal) = **desarrollo de
+re-extracción sustancial, con payoff incierto**, no un toggle de config.
+
+**Estado**: el camino de re-derivación con las correcciones disponibles NO
+arregla G3 (verificado). Vuelve al humano: (A) emprender la re-extracción
+profunda (R&D grande), o (B) aceptar el resultado systematics-limited
+(Teff/A_V/R/masa not_constrained; robusto: gravedad joven + límites de acreción).
+
 ## D7 · Transcripción de índices espectrales (prerequisito de WP-11) — 2026-07-16
 
 Transcritas del paper (Riddick et al. 2007, MNRAS 381, 1067 = arXiv:0708.1275,
