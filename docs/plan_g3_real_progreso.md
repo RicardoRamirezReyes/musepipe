@@ -616,3 +616,44 @@ Relaciones SpT (Tablas A2/A3), SpT = c0 + c1·(x−x0) + c2·(x−x0)² + c3·(x
   Test nuevo del polinomio centrado. **Suite 522 passed**. Las ventanas evitan
   las bandas telúricas D9; el enmascarado de líneas G2 lo maneja `measure_indices`
   (RuntimeError si una ventana >50% enmascarada — se verá en WP-11).
+
+## WP-G3R-12 · G4 real parcial (honesto) — 2026-07-16
+
+Tras aceptar el resultado systematics-limited (WP-11), el usuario pidió el "G4
+parcial honesto". `stage_g4_classify.build_matrix` ahora consume el QC G3 real:
+- **T3**: componente de gravedad (`classify_gravity` ΔΧ²) → **supports** las
+  hipótesis jóvenes (planet/substellar/BD/m_star_associated, young ΔΧ²=0) y
+  **excludes** m_star_background (field ΔΧ²=98.7>9), contaminant/artifact
+  (nonstellar 4653). Componente de masa → **not_available** (masa
+  systematics-limited); combinación por el veredicto más desfavorable (D13).
+- **T4 (radio) / T6 (A_V)** → **not_available** (systematics-limited). La ruta
+  real (radio en [0.5,3] R_Jup → supports ligadas; |A_V−sistema|/σ) está
+  implementada y testeada para cuando los insumos sean fiables.
+- **`ambiguity_quantification`**: P(m<13 / 13–75 / >75 M_Jup) por familia +
+  combinada vs fronteras congeladas; aquí **not_available** (masa no fiable),
+  registrando el ΔΧ² de gravedad y la razón C3.
+- Clase combinada D13 + **`tied_at_top`** explícito.
+
+**Resultado real (ROXs12b_B_adp)**: `final_class` =
+**`companion_substellar_or_planetary`** (regla combinada D13), líder
+`substellar_companion`, robustez **ambiguous**, `tied_at_top` =
+[substellar_companion, brown_dwarf, **m_star_associated**] (empate 3-way: la
+gravedad dice "joven ligado" pero NO distingue planeta/BD/estrella-M sin masa).
+Tests_available T1/T2/T3/T7/T8/T9; unavailable T4/T5/T6. La ambigüedad de masa
+**NO se resuelve** — es el bloqueo C3 propagado a G4.
+
+**Interpretación honesta**: G4 confirma un **compañero joven, ligado y real**
+(excluye fondo/contaminante/artefacto por la gravedad + CPM + fuente puntual +
+supera artefactos H02), pero la clase de masa (planeta/enana marrón/estrella M
+joven) queda **sin resolver** por el sistemático C3. Esto reproduce y cuantifica
+la ambigüedad G4 original que el plan buscaba resolver: es irresoluble con este
+espectro.
+
+Tests `tests/test_g4_g3_real.py` (5): helpers de gravedad/masa/combinación; caso
+systematics-limited (T3 gravedad, T4/T6/ambigüedad not_available) y caso de masa
+fiable (la masa resuelve → BD). Los 23 tests G4 previos intactos. **Suite 534
+passed**. G4 se ejecutó sobre el run real (matriz + QC actualizados).
+
+**Estado del plan**: WP-0..12 hechos (12 en forma parcial honesta). WP-13 (G5
+rebuild completo/notebooks) queda moot con el resultado systematics-limited; el
+informe final (`reports/20260717/`) es el cierre. Todo mergeado a `main`.
