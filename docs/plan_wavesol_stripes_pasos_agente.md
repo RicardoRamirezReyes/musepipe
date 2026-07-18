@@ -255,7 +255,13 @@ cita Aoyama&Ikoma19/Hashimoto+20. Report realineado regenerado (aparece en
 > cierre G1 (con la rotación deshecha, los stripes deben verse si existen; separa temporal vs
 > per-slice). Ver `docs/decision_g1_wavesol_2026-07-17.md`.
 
-### PASO S2a 🟢 · Inventario + plan de regeneración
+### PASO S2a ✅ · Inventario + plan de regeneración (HECHO 2026-07-18 inline; tabla retroactiva 2026-07-19)
+> El inventario se hizo inline el 2026-07-18 (SOF supervivientes, productos podados, params de
+> spec_A1 §3, raw verificado) y S2b/S2c se ejecutaron el mismo día. Entregable formal escrito
+> retroactivamente con TIEMPOS MEDIDOS (no estimados):
+> `runs/ROXs12b_raw/tables/regeneration_plan.csv` — S2b 102 min (bias 31.1 + flat 47.3 +
+> scibasic 23.7), S2c 27.8 min (7× scipost 3.7–4.6 min), total ~130 min vs ~180 estimados.
+
 Inventariar qué intermedios sobreviven en `runs/ROXs12b_raw/raw_reduction/`
 (verificado 2026-07-17: wavecal/lsf/standard/OFFSET_LIST/scipost_exp* [solo
 IMAGE_FOV] sí; **muse_bias, muse_flat (⇒ TRACE_TABLE), muse_scibasic_* y los

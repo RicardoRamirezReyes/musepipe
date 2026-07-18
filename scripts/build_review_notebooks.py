@@ -4289,9 +4289,107 @@ STAGES: list[dict] = [
             "(`fase2_justificada`, que salía solo por el p95). **Salvedad:** M2 acota el modo "
             "temporal uniforme, no los stripes rotados; defendible para la no-detección de Hα / "
             "límites (E1/E3), más débil para líneas finas en G2/G3.\n\n"
-            "**Confirmación diferida:** cuando se regeneren los 7 cubos por exposición "
-            "(Fase 2·S2), correr **S0 por exposición + S3** para separar temporal vs stripes. "
-            "Detalle y evidencia en `docs/decision_g1_wavesol_2026-07-17.md`."
+            "**Confirmación (HECHA 2026-07-18):** se regeneraron los 7 cubos por exposición "
+            "(S2) y se corrió **S0 por exposición** (0/7 con estructura de slicer) **+ S3** "
+            "(deriva temporal ~0.04 Å std). Ambas ramas cerradas ⇒ **GATE G1 CERRADO** "
+            "(`gate_g1.decision=closed`). Detalle en `docs/decision_g1_wavesol_2026-07-17.md`."
+        ),
+    ),
+    dict(
+        id="S1", slug="S1_halpha_map",
+        title="Mapas Hα line-to-continuum por spaxel (LSF/ghost, Xie Ec.1)",
+        block="S · wavesol/stripes",
+        spec="plan_wavesol_stripes_2026-07-17.md", run_override=None,
+        what=(
+            "Ajusta el Hα de la primaria por spaxel del halo con `phi=b(1+a·exp(−(λ−μ)²/2σ²))` "
+            "(Xie+20 §4.1, Ec.1) y mapea a (line/continuo), σ, μ y P=a·b·σ·√(2π). Test de Xie "
+            "Fig.3: a y σ **anticorrelados a P≈constante** ⇒ variación de LSF instrumental "
+            "(alineada con slicers), no un *ghost*. Diagnóstico de apoyo a G1."
+        ),
+        inputs="`cube_telcorr.fits` (realineado); geometría B3 (primaria/compañero)",
+        outputs=(
+            "`stages/stageS1_qc.json`, `stages/stageS1_halpha_map.fits`, `plots/s1_halpha/`; "
+            "integrado en E2 (`halpha_map_correlation` + Plot 3 del notebook E2)"
+        ),
+        downstream="Apoyo a la **decisión G1** (¿la variación Hα está alineada con slicers?)",
+        narrative_md=(
+            "## Qué hace S1 y cómo\n\n"
+            "Por spaxel del halo (misma selección por brillo que S0) ajusta el Hα con "
+            "`scipy.optimize.curve_fit` (semillas por momentos, bounds a∈[0,50], μ∈[6540,6590], "
+            "σ∈[0.5,8] Å); los fits sin línea detectada (gate de S/N) devuelven NaN limpio. "
+            "Reutiliza la métrica de estructura de S0 (`structure_metrics`/`stripe_profile`) "
+            "sobre los mapas a y σ, con **control transversal** — la misma disciplina que S0: "
+            "estructura real de slicer debe superar a su control transversal.\n\n"
+            "El núcleo (S1a) es target-agnostic y testeado (8 tests); S1b lo corre full-res "
+            "sobre el realineado e integra en E2 la correlación *zonas sucias de stripes* (mapa "
+            "de offset S0) vs mapas Hα."
+        ),
+        exec=dict(
+            kind="cli",
+            cmd=(
+                "python -m musepipe.qc.halpha_map \\\n"
+                "  --cube /mnt/2TB/MUSE_work/ROXs12b_realigned/cube_telcorr.fits \\\n"
+                "  --qc-output runs/ROXs12b_realigned/stages/stageS1_qc.json \\\n"
+                "  --map-output runs/ROXs12b_realigned/stages/stageS1_halpha_map.fits \\\n"
+                "  --plot-output runs/ROXs12b_realigned/plots/s1_halpha/s1_realigned.png \\\n"
+                "  --orientation vertical\n"
+                "python scripts/s1b_integrate_e2.py --run-dir runs/ROXs12b_realigned"
+            ),
+            cost="Coste: full-res, curve_fit por spaxel ~5 min; S1b re-lee y parchea E2.",
+        ),
+        qc="stages/stageS1_qc.json",
+        salient=[
+            "halpha_map.sigma_median_A", "halpha_map.a_structure_significance",
+            "halpha_map.a_transverse_significance", "halpha_map.sigma_structure_significance",
+            "halpha_map.sigma_transverse_significance", "halpha_map.corr_a_sigma",
+            "halpha_map.P_cov", "halpha_map.n_fit",
+        ],
+        evidence_md=(
+            "## Resultado (realineado, full-res)\n\n"
+            "n_fit=29203, σ_median=2.01 Å. **NO alineado con slicers:** a struct 6.7× vs "
+            "transversal 8.9×; σ struct 8.6× vs transversal 7.9× (estructura ≤ control ⇒ "
+            "isótropo/radial, núcleo-vs-halo). corr(a,σ)=−0.57 pero **P_cov=1.07** (P no "
+            "constante) ⇒ NO es el caso instrumental-LSF de Xie Fig.3. La correlación por "
+            "columna stripe↔σ (−0.91) es un confundido radial (control transversal −0.905). "
+            "Consistente con G1: el cubo combinado es ciego a stripes."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stageS1_qc.json', RUN_ID)['halpha_map']\n"
+            "print(f\"n_fit={q['n_fit']}  sigma_median={q['sigma_median_A']:.3f} A\")\n"
+            "print(f\"a:     struct {q['a_structure_significance']:.1f}x  transv {q['a_transverse_significance']:.1f}x\")\n"
+            "print(f\"sigma: struct {q['sigma_structure_significance']:.1f}x  transv {q['sigma_transverse_significance']:.1f}x\")\n"
+            "print(f\"corr(a,sigma)={q['corr_a_sigma']:.2f}  P_cov={q['P_cov']:.2f} (Xie Fig.3 pide P~const)\")\n"
+            "aligned = lambda s,t: s>3 and s>2*t\n"
+            "print('a slicer-aligned:', aligned(q['a_structure_significance'], q['a_transverse_significance']),\n"
+            "      '| sigma slicer-aligned:', aligned(q['sigma_structure_significance'], q['sigma_transverse_significance']))"
+        ),
+        plots=[
+            dict(
+                md="## Mapas S1 (a, σ, P, y a-vs-σ)",
+                code=(
+                    "from IPython.display import Image, display\n"
+                    "p = nb.run_dir(RUN_ID) / 'plots' / 's1_halpha' / 's1_realigned.png'\n"
+                    "if p.exists(): display(Image(filename=str(p)))\n"
+                    "else: print('falta', p, '- corre la etapa (arriba).')"
+                ),
+            ),
+        ],
+        decisions=[
+            ("Núcleo S1a target-agnostic + 8 tests; S1b integra en E2 (aditivo) con control transversal.", "plan_wavesol_stripes_pasos_agente.md"),
+            ("a/σ NO alineados con slicers (radial); apoya el cierre G1 (sin stripes en el combinado).", "decision_g1_wavesol_2026-07-17.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/stageS1_qc.json', RUN_ID)['halpha_map']\n"
+            "print('sigma_median_A =', round(q['sigma_median_A'],3))\n"
+            "print('corr_a_sigma   =', round(q['corr_a_sigma'],3), '(P_cov', round(q['P_cov'],2),')')"
+        ),
+        conclusion_md=(
+            "## Conclusión (registrada, 2026-07-18)\n\n"
+            "Los mapas Hα a/σ del cubo combinado **no muestran estructura de slicer** (estructura "
+            "≤ control transversal) y **no** cumplen la firma instrumental-LSF de Xie Fig.3 "
+            "(P no constante). Es diagnóstico de apoyo al **cierre G1**: el combinado es ciego a "
+            "los stripes (confirmado por S0 por-exposición). Sin interpretación ghost-vs-"
+            "instrumental adicional (se resolvió por-exposición)."
         ),
     ),
 ]
