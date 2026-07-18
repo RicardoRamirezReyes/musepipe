@@ -115,7 +115,12 @@ Criterio de éxito: todo lo anterior registrado; ningún valor "desconocido".
    (GEOMETRY_TABLE, ASTROMETRY_WCS, line catalogs, extinction table, filter
    list). Nota de atención: **ILLUM se toma contigua a la ciencia** y la
    GEOMETRY/ASTROMETRY correcta depende del modo y de la época — usar la que
-   calselector asocie, no la "más reciente".
+   calselector asocie, no la "más reciente". La corrección ILLUM (flat de
+   iluminación adjunto) en `muse_scibasic` sigue la recomendación de
+   **Xie et al. 2020 (2011.08043) §3.1** para eliminar derivas de throughput
+   entre IFUs; se usa exactamente una ILLUM por tipo de raw (ciencia y STD),
+   la más contigua en tiempo (verificable en `illumination_correction` del
+   `stage00r_qc.json`).
 3. **Checkpoint humano**: presentar al usuario la tabla de archivos a descargar
    (nombre, tipo, tamaño total estimado) y esperar aprobación + credenciales/
    descarga manual si el portal lo requiere.

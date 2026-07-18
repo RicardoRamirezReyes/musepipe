@@ -224,24 +224,26 @@ stripes vs mapas Hα" (claves nuevas `halpha_map_correlation`); figura al inform
   factor ≈ 1; añadiendo sistemático ⇒ factor > 1 recuperado).
 - **No hacer**: no recalcular los límites E3 con esto (solo diagnóstico QC).
 
-### PASO S7a 🟢 · Nota ILLUM en proveniencia A1
-Verificar en los SOF/logs de la cascada que scibasic incluyó ILLUM (memoria:
-sí, nearest-in-time); añadir a `stage00r_qc.json` la clave
-`illumination_correction: {used: true, illum_files: [...]}` + una frase en
-`docs/spec_A1_codex_raw_reduction.md` citando la recomendación de Xie+20 §3.1.
+### PASO S7a ✅ · Nota ILLUM en proveniencia A1 (HECHO 2026-07-18, rama `wavesol-s0b`)
+Verificado en los SOF: `muse_scibasic_{object,std}.sof` incluyen 1 ILLUM c/u
+(object 01:56, std 23:41, nearest-in-time). Añadido `illumination_correction`
+{used, illum_files, note, reference Xie+20 §3.1} a `stage00r_qc.json` (realineado)
++ frase en `docs/spec_A1_codex_raw_reduction.md`.
 
-### PASO S7b 🟢 · Tabla Ṁ vs A_Hα
-Loop del cálculo dereddened de E3 (claves `h03_*` existentes) sobre grid
-A_V = {0, 1, 2, 4} mag (ley CCM ya configurada) SIN re-correr E3 completo:
-script que lee `stage_h03_qc.json` y re-evalúa `f_lim_dereddened` con cada A_V
-→ `tables/mdot_limit_vs_extinction.csv` + figura + párrafo de salvedad (patrón
-Hashimoto: A_Hα ≳ 2 relaja el límite ×~6). Claves QC nuevas bajo
-`extinction_ladder`.
+### PASO S7b ✅ · Tabla Ṁ vs A_Hα (HECHO 2026-07-18, rama `wavesol-s0b`)
+`scripts/s7b_mdot_vs_extinction.py` reutiliza la cadena de conversión de
+`stage_h03_limits` (luminosity/lacc/mdot) desde `f_lim_observed` del método
+canónico sobre A_V={0,1,1.8,2,4}. Reproduce el adoptado A_V=1.8 → Ṁ=8.19e-13
+exacto. `tables/mdot_limit_vs_extinction.csv` + `plots/s7_extinction/` + bloque
+`extinction_ladder` (aditivo) en `stage_h03_qc.json`. Relajación real
+A_V=0→A_Hα=2 = **×8.0** (no ×6; la pendiente Alcala 1.13 ⇒ Ṁ∝ext^1.13).
 
-### PASO S7c 🟢 · Nota Hβ/Hα
-Párrafo en el informe (report.py sección de líneas): con Hβ Y Hα en upper limit
-el cociente no restringe A_Hα; citar el marco Aoyama&Ikoma19/Hashimoto+20 como
-motivación de la tabla S7b. Sin código nuevo salvo el texto del informe.
+### PASO S7c ✅ · Nota Hβ/Hα (HECHO 2026-07-18, rama `wavesol-s0b`)
+Sección "Line Diagnostics" añadida a `musepipe/report.py` (constante
+`LINE_DIAGNOSTICS_NOTE` + placeholder en la plantilla): con Hβ y Hα en upper
+limit el decremento no restringe A_Hα ⇒ límite reportado sobre grid A_V (S7b);
+cita Aoyama&Ikoma19/Hashimoto+20. Report realineado regenerado (aparece en
+`report/report.md`). Tests de report verdes (determinismo/hash).
 
 ---
 
