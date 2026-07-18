@@ -70,6 +70,20 @@ def test_exec_entries_match_real_entry_points(builder):
                 f"{params[0].name if params else '(ninguno)'!r}, no 'run_id' — "
                 "el notebook lo llama posicionalmente con el run id"
             )
+        elif kind == "cli":
+            # Literal command(s) with fixed paths (no --run-id). Every
+            # `python -m <module>` invoked must import and expose main().
+            cmd = ex["cmd"]
+            assert cmd.strip(), f"{s['id']}: exec.cmd vacío"
+            tokens = cmd.replace("\\\n", " ").split()
+            modules = [tokens[i + 1] for i, tok in enumerate(tokens)
+                       if tok == "-m" and i + 1 < len(tokens)]
+            assert modules, f"{s['id']}: exec.cmd no invoca 'python -m <module>'"
+            for target in modules:
+                mod = importlib.import_module(target)
+                assert callable(getattr(mod, "main", None)), (
+                    f"{s['id']}: {target} no define main()"
+                )
         else:
             raise AssertionError(f"{s['id']}: exec.kind desconocido {kind!r}")
 

@@ -34,6 +34,9 @@ REPORT_TEMPLATE = """# MUSE Run Report
 ## Master Tables
 {table_list}
 
+## Line Diagnostics
+{line_diagnostics}
+
 ## Accepted Limitations
 {accepted_limitations}
 
@@ -43,6 +46,21 @@ REPORT_TEMPLATE = """# MUSE Run Report
 ## Reproduction
 {reproduction}
 """
+
+
+# S7c note (fixed prose): with both Balmer lines as upper limits, the decrement
+# cannot pin the extinction, so the accretion limit is reported over an A_V grid.
+LINE_DIAGNOSTICS_NOTE = (
+    "Both Halpha and Hbeta are upper limits (non-detections), so the Balmer decrement "
+    "Halpha/Hbeta does NOT constrain the line-of-sight extinction A_Halpha toward the "
+    "companion. The accretion limit is therefore reported over a grid of assumed A_V "
+    "(`tables/mdot_limit_vs_extinction.csv`, S7b; `extinction_ladder` in stage_h03_qc.json) "
+    "rather than a decrement-derived value. This follows the accreting-companion framework of "
+    "Aoyama & Ikoma (2019) and Hashimoto et al. (2020), in which the Halpha-derived accretion "
+    "luminosity scales with the assumed extinction: a larger A_Halpha relaxes the Mdot limit "
+    "(about x8 from A_V=0 to A_Halpha=2 for this dataset). The adopted A_V (Rizzuto et al. 2015) "
+    "is used for the headline limit; the ladder brackets the systematic."
+)
 
 
 # Gate policy (frozen, auditable): specific red checks that are DOWNGRADED to a
@@ -806,6 +824,7 @@ def render_report_markdown(summary):
         qc_table=_markdown_table(qc_rows, ["stage", "required", "status", "issue_count"]),
         figure_list=_markdown_table(figure_rows, ["figure", "status", "source"]),
         table_list=_markdown_table(table_rows, ["table", "path"]),
+        line_diagnostics=LINE_DIAGNOSTICS_NOTE,
         accepted_limitations=accepted_md,
         historical_context=historical,
         reproduction=reproduction,

@@ -77,6 +77,8 @@ def canonical_cmd(exec_spec: dict) -> str:
         return f"python -c \"from {mod} import {fn}; {fn}('$RUN')\""
     if kind == "pyscript":
         return f"python scripts/{exec_spec['target']} --run-id $RUN"
+    if kind == "cli":
+        return exec_spec["cmd"]  # literal command(s), fixed paths (no --run-id)
     return ""  # audit
 
 
@@ -114,6 +116,19 @@ def build_cells(s: dict) -> list[dict]:
             "producto/QC existente y documenta el comando histórico.\n\n"
             f"Comando histórico (referencia, requiere los raw + `esorex`):\n\n"
             f"```bash\nconda activate MUSE\n{s['exec'].get('hist_cmd','(ver spec)')}\n```\n"
+        )
+    elif s["exec"]["kind"] == "cli":
+        howto = (
+            "## Cómo ejecutar de forma independiente\n\n"
+            "Diagnóstico re-ejecutable sobre un cubo existente (no re-reduce nada); rutas "
+            "fijas, sin `--run-id`:\n\n"
+            "```bash\n"
+            "conda activate MUSE               # kernel/env con astropy + musepipe\n"
+            f"cd {ROOT.name}                    # raíz del repo\n"
+            f"{cmd}\n"
+            "```\n\n"
+            f"{s['exec'].get('cost','')}\n\n"
+            "La celda `RUN=True` de más abajo hace lo mismo desde el notebook."
         )
     else:
         howto = (
@@ -2596,7 +2611,9 @@ STAGES: list[dict] = [
         downstream="E3, F1",
         exec=dict(kind="script", target="stage_h02_artifacts.sh", cost="Ligero."),
         qc="stages/stage_h02_qc.json",
-        salient=["overall", "overall_raw", "t2.status", "t5.status", "overall_interpretation"],
+        salient=["overall", "overall_raw", "t2.status", "t5.status", "overall_interpretation",
+                 "halpha_map_correlation.corr_stripe_scatter_vs_halpha_sigma",
+                 "halpha_map_correlation.halpha_sigma_slicer_aligned"],
         narrative_md=(
             "## Qué hace E2 y cómo se reinterpreta\n\n"
             "E2 corre una **batería FIJA de 5 tests de artefactos** sobre el resultado de E1 (siempre "
@@ -2701,8 +2718,41 @@ STAGES: list[dict] = [
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
+            dict(
+                md=(
+                    "## Plot 3 — S1b: zonas sucias de stripes vs mapas Hα (Xie+20 §4.1)\n\n"
+                    "Correlación por columna entre la perturbación de la solución de onda (scatter "
+                    "del mapa de offset S0) y el ancho σ del Hα (mapa S1). La clave es el **control "
+                    "transversal**: si la correlación en la dirección transversal es casi igual, la "
+                    "correlación es un **confundido radial** (núcleo brillante vs halo débil), NO una "
+                    "firma de slicer. `halpha_*_slicer_aligned` aplica el mismo criterio que el gate "
+                    "G1 (estructura > 3× y > 2× su control transversal)."
+                ),
+                code=(
+                    "try:\n"
+                    "    from IPython.display import Image, display\n"
+                    "    q = nb.load_qc('stages/stage_h02_qc.json', RUN_ID)\n"
+                    "    hmc = q.get('halpha_map_correlation')\n"
+                    "    if not hmc:\n"
+                    "        print('S1b no integrado en este run: falta halpha_map_correlation.')\n"
+                    "        print('-> corre: python scripts/s1b_integrate_e2.py --run-dir', nb.run_dir(RUN_ID))\n"
+                    "    else:\n"
+                    "        print(f\"corr(stripe scatter, Hα σ)      = {hmc['corr_stripe_scatter_vs_halpha_sigma']:.3f}\")\n"
+                    "        print(f\"  control transversal            = {hmc['corr_stripe_scatter_vs_halpha_sigma_transverse']:.3f}  (≈ igual ⇒ confundido radial)\")\n"
+                    "        print(f\"a  estructura {hmc['halpha_a_structure_significance']:.1f}× (transv {hmc['halpha_a_transverse_significance']:.1f}×) -> slicer_aligned={hmc['halpha_a_slicer_aligned']}\")\n"
+                    "        print(f\"σ  estructura {hmc['halpha_sigma_structure_significance']:.1f}× (transv {hmc['halpha_sigma_transverse_significance']:.1f}×) -> slicer_aligned={hmc['halpha_sigma_slicer_aligned']}\")\n"
+                    "        print(f\"corr(a,σ) = {hmc['halpha_corr_a_sigma']:.2f}, P_cov = {hmc['halpha_P_cov']:.2f}  (Xie Fig.3 pide P≈const)\")\n"
+                    "        fig = (q.get('figures') or {}).get('s1_stripe_halpha')\n"
+                    "        from pathlib import Path as _P\n"
+                    "        if fig and _P(fig).exists():\n"
+                    "            display(Image(filename=str(fig)))\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo mostrar S1b:', type(e).__name__, e)"
+                ),
+            ),
         ],
         decisions=[
+            ("**S1b (wavesol/stripes):** los mapas Hα a/σ NO están alineados con slicers (estructura ≤ control transversal ⇒ radial, núcleo vs halo); la fuerte correlación por columna stripe↔σ es un confundido radial (transversal ≈ igual). Consistente con G1 (cubo combinado ciego a stripes). Sin interpretar ghost-vs-instrumental (humano/por-exposición).", "decision_g1_wavesol_2026-07-17.md"),
             ("**T2 reinterpretado para no-detección** (spec §2): el máximo global NO tiene forma de PSF (chi2_ratio 1.007, elongación 1.54) → *apoya* la no-detección. `overall_raw=fails` → `overall=survives`. Limitación aceptada en F1.", None),
             ("**T5 placebos PASS**: buscar en λ off-line no fabrica detecciones (max_fap 0.029, ninguno <0.01) → método limpio.", None),
             ("T1/T3/T4 `unavailable` por la exposición única (sin stripe QC, sin split, sin variantes de knobs).", None),
@@ -4059,6 +4109,287 @@ STAGES: list[dict] = [
             "declarados.\n"
             "- **Para cerrar del todo:** G3 real (librerías BT-Settl/BHAC15/Luhman-Bonnefoy) + 2ª "
             "época astrométrica romperían la ambigüedad."
+        ),
+    ),
+    # ===================== BLOQUE S — wavesol / stripes =====================
+    dict(
+        id="S0", slug="S0_wavesol_map",
+        title="Mapa de offsets de λ por spaxel (checklist G1)", block="S · wavesol/stripes",
+        spec="plan_wavesol_stripes_2026-07-17.md", run_override=None,
+        what=(
+            "Mide, spaxel a spaxel, el corrimiento espectral de las líneas de absorción de la "
+            "primaria contra un espectro de referencia de campo (Xie+20 §4.2.2). Estructura "
+            "alineada con slicers ⇒ diferencias de solución de λ por exposición/slice "
+            "(*stripes*, Hashimoto+20). Es el **insumo formal de la decisión G1**."
+        ),
+        inputs="`cube_telcorr.fits` (realineado) + ADP oficial de ESO (control independiente)",
+        outputs=(
+            "`stages/stageS0_qc.json` (+ `stageS0_adp_qc.json`), "
+            "`stages/stageS0_offset_map.fits`, `plots/s0_wavesol/`"
+        ),
+        downstream="**Decisión G1 (humana)** → Fase 2 (S2–S5) o cierre `fase2_descartable`",
+        narrative_md=(
+            "## Qué hace S0 y cómo\n\n"
+            "Por cada spaxel del halo (selección por brillo, percentil 50) se normaliza el "
+            "continuo por división de *running-median* (mata el continuo cromático del halo AO) "
+            "en 4 ventanas de absorción estelar que **evitan** el láser AO, Hα (la primaria es "
+            "emisora), y las bandas telúricas O₂/H₂O; se cross-correla contra el espectro de "
+            "referencia del campo (`stripes._xcorr_shift_pixels`, subpíxel) y se toma la mediana "
+            "de las ventanas usables. El resultado es un **mapa de offset** (Å) por spaxel.\n\n"
+            "**Corte S/N (lección del preliminar 2026-07-17):** cada spaxel lleva un error "
+            "`err = σ_robusta(offsets_por_ventana)/√N`; el p95 del gate se calcula SOLO sobre "
+            "spaxels con `err < max_err_ch` (0.08 ch ≈ 0.1 Å), porque el p95 crudo lo dominan "
+            "spaxels débiles donde la xcorr falla (preliminar: p95 global 3.9 Å de puro ruido "
+            "vs 0.18 Å en el núcleo r<1\"). El perfil por columnas usa todos (su mediana ya es "
+            "robusta).\n\n"
+            "La **métrica de estructura** colapsa el mapa a lo largo de la dirección de los "
+            "stripes (perfil por columna) y compara su amplitud contra el ruido esperado; el "
+            "perfil **transversal** es el control: stripes reales muestran estructura en el "
+            "perfil de stripe, no en el transversal."
+        ),
+        exec=dict(
+            kind="cli",
+            cmd=(
+                "python -m musepipe.qc.wavesol_map \\\n"
+                "  --cube /mnt/2TB/MUSE_work/ROXs12b_realigned/cube_telcorr.fits \\\n"
+                "  --qc-output runs/ROXs12b_realigned/stages/stageS0_qc.json \\\n"
+                "  --map-output runs/ROXs12b_realigned/stages/stageS0_offset_map.fits \\\n"
+                "  --plot-output runs/ROXs12b_realigned/plots/s0_wavesol/s0_realigned.png \\\n"
+                "  --orientation vertical\n"
+                "python -m musepipe.qc.wavesol_map \\\n"
+                "  --cube ../Data/ROX12b/20220829/ADP.2022-09-12T17_17_39.371.fits \\\n"
+                "  --qc-output runs/ROXs12b_realigned/stages/stageS0_adp_qc.json \\\n"
+                "  --map-output runs/ROXs12b_realigned/stages/stageS0_adp_offset_map.fits \\\n"
+                "  --plot-output runs/ROXs12b_realigned/plots/s0_wavesol/s0_adp.png \\\n"
+                "  --orientation vertical"
+            ),
+            cost="Coste: full-res 330×338, normalización vectorizada; ~minutos por cubo.",
+        ),
+        qc="stages/stageS0_qc.json",
+        salient=[
+            "gate_g1.recommendation", "gate_g1.decision",
+            "metrics.p95_abs_offset_A", "metrics.structure_significance",
+            "metrics.transverse_significance", "metrics.n_selected_low_err",
+            "channel_step_A", "runtime_s",
+        ],
+        evidence_md=(
+            "## Evidencia: realineado vs ADP (control)\n\n"
+            "Los dos cubos deben coincidir: el mapa de offset es un diagnóstico del "
+            "**instrumento/reducción**, no del cubo concreto. El preliminar 2×2 (2026-07-17) "
+            "dio amplitud de columna 72 mÅ (realineado) / 67 mÅ (ADP), a ~1× ruido, sin "
+            "estructura alineada con slicers; el núcleo r<1\" med|off| = 64 / 62 mÅ ≈ el M1 "
+            "global (+74 mÅ).\n\n"
+            "**Full-res reproduce la conclusión clave** (sin estructura de slicer: `stripe_sig` "
+            "≈ control transversal) y la extiende: al medir TODOS los spaxels de bajo error (no "
+            "solo el núcleo) el p95 sube a ~0.32 Å — un scatter de λ por spaxel, consistente "
+            "entre ventanas pero **espacialmente desestructurado**. La celda imprime ambos "
+            "cubos; deben coincidir."
+        ),
+        evidence_code=(
+            "# p95 se mide sobre el subconjunto de bajo error (err<max_err_ch); la\n"
+            "# estructura de slicer se juzga con stripe_sig vs el control transversal.\n"
+            "rows = []\n"
+            "for label, rel in [('realineado', 'stages/stageS0_qc.json'),\n"
+            "                   ('ADP',        'stages/stageS0_adp_qc.json')]:\n"
+            "    try:\n"
+            "        q = nb.load_qc(rel, RUN_ID)\n"
+            "    except FileNotFoundError:\n"
+            "        print(f'[{label}] QC aún no existe: {rel}'); continue\n"
+            "    m = q['metrics']\n"
+            "    rows.append((label, m['p95_abs_offset_A'], m['structure_significance'],\n"
+            "                 m['transverse_significance'], m['n_selected_low_err'],\n"
+            "                 m['n_spaxels_measured'], q['gate_g1']['recommendation']))\n"
+            "hdr = ('cubo', 'p95|off|[A]', 'stripe_sig', 'transv_sig', 'n_low_err',\n"
+            "       'n_meas', 'recomendación')\n"
+            "print('{:>10} {:>12} {:>11} {:>11} {:>10} {:>8}  {}'.format(*hdr))\n"
+            "for r in rows:\n"
+            "    print('{:>10} {:>12.4f} {:>11.2f} {:>11.2f} {:>10d} {:>8d}  {}'.format(*r))\n"
+            "print('\\np95 sobre spaxels de bajo error; stripe_sig<=transv_sig => sin estructura de slicer.')"
+        ),
+        plots=[
+            dict(
+                md=(
+                    "## Checklist G1 — umbrales y argumentos\n\n"
+                    "**Umbrales del plan (recomendación automática, decisión humana):**\n\n"
+                    "| Criterio | Umbral | Dispara Fase 2 si |\n|---|---|---|\n"
+                    "| p95 \\|offset\\| (spaxels `err<0.1 Å`) | 0.1 Å | **>** 0.1 Å |\n"
+                    "| Estructura alineada con slicers | 3× ruido | **>** 3× **y** > 2× el control transversal |\n\n"
+                    "**Argumentos del caso `fase2_descartable` (documentados aunque la decisión sea seguir):**\n\n"
+                    "1. La métrica espacial de S0 **no ve un offset común a todas las exposiciones** "
+                    "(deriva temporal uniforme): ese modo no aparece como estructura espacial, solo "
+                    "**ensancharía la LSF combinada**.\n"
+                    "2. Pero A4·M2 midió **LSF = 2.383 Å**, MÁS ESTRECHA que el nominal → acota ese "
+                    "*smearing* a nivel pequeño (si hubiera deriva grande entre exposiciones, la LSF "
+                    "combinada saldría ensanchada, no estrecha).\n"
+                    "3. El **M1 global (+0.074 Å)** ya corrige el zero-point de λ.\n\n"
+                    "Los tres juntos son el caso para **no** entrar a la Fase 2 (re-reducción por "
+                    "exposición). La decisión final es **humana** (gate G1)."
+                ),
+            ),
+            dict(
+                md="## Mapas S0 (offset, error, perfil de columna, histograma)",
+                code=(
+                    "from IPython.display import Image, display\n"
+                    "rd = nb.run_dir(RUN_ID)\n"
+                    "for label, name in [('realineado', 's0_realigned.png'), ('ADP', 's0_adp.png')]:\n"
+                    "    p = rd / 'plots' / 's0_wavesol' / name\n"
+                    "    if p.exists():\n"
+                    "        print(f'== {label}: {p} ==')\n"
+                    "        display(Image(filename=str(p)))\n"
+                    "    else:\n"
+                    "        print(f'[{label}] falta {p} — corre la etapa (arriba).')"
+                ),
+            ),
+        ],
+        decisions=[
+            ("S0a/S0b: núcleo target-agnostic (`musepipe/qc/wavesol_map.py`) + CLI, normalización vectorizada (gate de equivalencia <1e-9) y corte S/N por spaxel; 14 tests verdes.", "plan_wavesol_stripes_pasos_agente.md"),
+            ("El offset map es diagnóstico del instrumento/reducción: realineado ≈ ADP (control cruzado).", "plan_wavesol_stripes_2026-07-17.md"),
+            ("**Gate G1 (humano):** con este producto se decide entrar o no a la Fase 2 (S2–S5, re-reducción por exposición). La recomendación automática se imprime en Checks.", "plan_wavesol_stripes_2026-07-17.md"),
+            ("**DECIDIDO 2026-07-17:** cerrar como sistemático acotado (interpretación temporal); Fase 2 NO disparada; confirmación diferida (S0 por exposición cuando existan los 7 cubos). Anula la recomendación automática.", "decision_g1_wavesol_2026-07-17.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/stageS0_qc.json', RUN_ID)\n"
+            "m, g = q['metrics'], q['gate_g1']\n"
+            "th = g['thresholds']\n"
+            "p95 = m['p95_abs_offset_A']; sig = m['structure_significance']; sigt = m['transverse_significance']\n"
+            "c1 = p95 <= th['p95_threshold_A']\n"
+            "aligned = (sig > th['significance_threshold']) and (sigt != sigt or sig > 2.0 * sigt)\n"
+            "print('CHECKLIST G1 (realineado, full-res):')\n"
+            "print(f\"  p95|off| = {p95:.4f} A  (umbral {th['p95_threshold_A']} A)   -> {'OK pequeño' if c1 else 'GRANDE'}\")\n"
+            "print(f\"  estructura stripe = {sig:.2f}x ruido   (control transversal {sigt:.2f}x, umbral {th['significance_threshold']}x)\")\n"
+            "print(f\"  {'sin' if not aligned else 'CON'} estructura alineada con slicers dominante\")\n"
+            "print(f\"  n_spaxels bajo corte err<{th['max_err_ch']} ch = {m['n_selected_low_err']} / {m['n_spaxels_measured']} medidos\")\n"
+            "print(f\"\\n  recomendación automática: {g['recommendation']}\")\n"
+            "for r in g['reasons']:\n"
+            "    print('   -', r)\n"
+            "hd = q.get('g1_human_decision')\n"
+            "if hd:\n"
+            "    print(f\"\\n  DECISIÓN G1 (humana, {hd['date']}): {hd['decision']} \"\n"
+            "          f\"[interpretación: {hd['interpretation']}; anula {hd['recommendation_overridden']}]\")\n"
+            "    print(f\"    fase2_triggered = {hd['phase2_triggered']}; confirmación diferida: {hd['deferred_confirmation'][:80]}...\")\n"
+            "    print(f\"    doc: {hd['doc']}\")\n"
+            "else:\n"
+            "    print(f\"  decisión: {g['decision']} (aún no registrada en este QC)\")"
+        ),
+        conclusion_md=(
+            "## Conclusión (registrada, 2026-07-17) — G1 DECIDIDO\n\n"
+            "**S0 (full-res, 330×338):** sin estructura de slicer (`stripe_sig` ≤ control "
+            "transversal) y **realineado ≈ ADP**, pero p95\\|off\\| ≈ 0.32 Å (>0.1 Å), scatter "
+            "por spaxel creciente con el radio.\n\n"
+            "**Clave (por qué el cubo combinado es ciego a los stripes):** las 7 exposiciones "
+            "son de una noche, dithers ≈0, pero el **campo rota 5.9° (PA)** entre ellas "
+            "(derotador `ABSROT` barre 19.3°). Un stripe fijo en el slicer se promedia "
+            "acimutalmente al combinar ⇒ aparece como scatter desestructurado creciente con el "
+            "radio (~7.5 spaxels en el compañero a 1.80″). **S0 sobre el combinado no puede "
+            "confirmar ni descartar stripes**; el 'sin estructura' es esperable en cualquier "
+            "caso.\n\n"
+            "➡️ **DECISIÓN G1 (humana, 2026-07-17): cerrar como sistemático acotado, "
+            "interpretación TEMPORAL** (deriva de zero-point por exposición, acotada por A4·M2 "
+            "LSF=2.383 Å). **Fase 2 NO disparada.** Anula la recomendación automática "
+            "(`fase2_justificada`, que salía solo por el p95). **Salvedad:** M2 acota el modo "
+            "temporal uniforme, no los stripes rotados; defendible para la no-detección de Hα / "
+            "límites (E1/E3), más débil para líneas finas en G2/G3.\n\n"
+            "**Confirmación (HECHA 2026-07-18):** se regeneraron los 7 cubos por exposición "
+            "(S2) y se corrió **S0 por exposición** (0/7 con estructura de slicer) **+ S3** "
+            "(deriva temporal ~0.04 Å std). Ambas ramas cerradas ⇒ **GATE G1 CERRADO** "
+            "(`gate_g1.decision=closed`). Detalle en `docs/decision_g1_wavesol_2026-07-17.md`."
+        ),
+    ),
+    dict(
+        id="S1", slug="S1_halpha_map",
+        title="Mapas Hα line-to-continuum por spaxel (LSF/ghost, Xie Ec.1)",
+        block="S · wavesol/stripes",
+        spec="plan_wavesol_stripes_2026-07-17.md", run_override=None,
+        what=(
+            "Ajusta el Hα de la primaria por spaxel del halo con `phi=b(1+a·exp(−(λ−μ)²/2σ²))` "
+            "(Xie+20 §4.1, Ec.1) y mapea a (line/continuo), σ, μ y P=a·b·σ·√(2π). Test de Xie "
+            "Fig.3: a y σ **anticorrelados a P≈constante** ⇒ variación de LSF instrumental "
+            "(alineada con slicers), no un *ghost*. Diagnóstico de apoyo a G1."
+        ),
+        inputs="`cube_telcorr.fits` (realineado); geometría B3 (primaria/compañero)",
+        outputs=(
+            "`stages/stageS1_qc.json`, `stages/stageS1_halpha_map.fits`, `plots/s1_halpha/`; "
+            "integrado en E2 (`halpha_map_correlation` + Plot 3 del notebook E2)"
+        ),
+        downstream="Apoyo a la **decisión G1** (¿la variación Hα está alineada con slicers?)",
+        narrative_md=(
+            "## Qué hace S1 y cómo\n\n"
+            "Por spaxel del halo (misma selección por brillo que S0) ajusta el Hα con "
+            "`scipy.optimize.curve_fit` (semillas por momentos, bounds a∈[0,50], μ∈[6540,6590], "
+            "σ∈[0.5,8] Å); los fits sin línea detectada (gate de S/N) devuelven NaN limpio. "
+            "Reutiliza la métrica de estructura de S0 (`structure_metrics`/`stripe_profile`) "
+            "sobre los mapas a y σ, con **control transversal** — la misma disciplina que S0: "
+            "estructura real de slicer debe superar a su control transversal.\n\n"
+            "El núcleo (S1a) es target-agnostic y testeado (8 tests); S1b lo corre full-res "
+            "sobre el realineado e integra en E2 la correlación *zonas sucias de stripes* (mapa "
+            "de offset S0) vs mapas Hα."
+        ),
+        exec=dict(
+            kind="cli",
+            cmd=(
+                "python -m musepipe.qc.halpha_map \\\n"
+                "  --cube /mnt/2TB/MUSE_work/ROXs12b_realigned/cube_telcorr.fits \\\n"
+                "  --qc-output runs/ROXs12b_realigned/stages/stageS1_qc.json \\\n"
+                "  --map-output runs/ROXs12b_realigned/stages/stageS1_halpha_map.fits \\\n"
+                "  --plot-output runs/ROXs12b_realigned/plots/s1_halpha/s1_realigned.png \\\n"
+                "  --orientation vertical\n"
+                "python scripts/s1b_integrate_e2.py --run-dir runs/ROXs12b_realigned"
+            ),
+            cost="Coste: full-res, curve_fit por spaxel ~5 min; S1b re-lee y parchea E2.",
+        ),
+        qc="stages/stageS1_qc.json",
+        salient=[
+            "halpha_map.sigma_median_A", "halpha_map.a_structure_significance",
+            "halpha_map.a_transverse_significance", "halpha_map.sigma_structure_significance",
+            "halpha_map.sigma_transverse_significance", "halpha_map.corr_a_sigma",
+            "halpha_map.P_cov", "halpha_map.n_fit",
+        ],
+        evidence_md=(
+            "## Resultado (realineado, full-res)\n\n"
+            "n_fit=29203, σ_median=2.01 Å. **NO alineado con slicers:** a struct 6.7× vs "
+            "transversal 8.9×; σ struct 8.6× vs transversal 7.9× (estructura ≤ control ⇒ "
+            "isótropo/radial, núcleo-vs-halo). corr(a,σ)=−0.57 pero **P_cov=1.07** (P no "
+            "constante) ⇒ NO es el caso instrumental-LSF de Xie Fig.3. La correlación por "
+            "columna stripe↔σ (−0.91) es un confundido radial (control transversal −0.905). "
+            "Consistente con G1: el cubo combinado es ciego a stripes."
+        ),
+        evidence_code=(
+            "q = nb.load_qc('stages/stageS1_qc.json', RUN_ID)['halpha_map']\n"
+            "print(f\"n_fit={q['n_fit']}  sigma_median={q['sigma_median_A']:.3f} A\")\n"
+            "print(f\"a:     struct {q['a_structure_significance']:.1f}x  transv {q['a_transverse_significance']:.1f}x\")\n"
+            "print(f\"sigma: struct {q['sigma_structure_significance']:.1f}x  transv {q['sigma_transverse_significance']:.1f}x\")\n"
+            "print(f\"corr(a,sigma)={q['corr_a_sigma']:.2f}  P_cov={q['P_cov']:.2f} (Xie Fig.3 pide P~const)\")\n"
+            "aligned = lambda s,t: s>3 and s>2*t\n"
+            "print('a slicer-aligned:', aligned(q['a_structure_significance'], q['a_transverse_significance']),\n"
+            "      '| sigma slicer-aligned:', aligned(q['sigma_structure_significance'], q['sigma_transverse_significance']))"
+        ),
+        plots=[
+            dict(
+                md="## Mapas S1 (a, σ, P, y a-vs-σ)",
+                code=(
+                    "from IPython.display import Image, display\n"
+                    "p = nb.run_dir(RUN_ID) / 'plots' / 's1_halpha' / 's1_realigned.png'\n"
+                    "if p.exists(): display(Image(filename=str(p)))\n"
+                    "else: print('falta', p, '- corre la etapa (arriba).')"
+                ),
+            ),
+        ],
+        decisions=[
+            ("Núcleo S1a target-agnostic + 8 tests; S1b integra en E2 (aditivo) con control transversal.", "plan_wavesol_stripes_pasos_agente.md"),
+            ("a/σ NO alineados con slicers (radial); apoya el cierre G1 (sin stripes en el combinado).", "decision_g1_wavesol_2026-07-17.md"),
+        ],
+        checks=(
+            "q = nb.load_qc('stages/stageS1_qc.json', RUN_ID)['halpha_map']\n"
+            "print('sigma_median_A =', round(q['sigma_median_A'],3))\n"
+            "print('corr_a_sigma   =', round(q['corr_a_sigma'],3), '(P_cov', round(q['P_cov'],2),')')"
+        ),
+        conclusion_md=(
+            "## Conclusión (registrada, 2026-07-18)\n\n"
+            "Los mapas Hα a/σ del cubo combinado **no muestran estructura de slicer** (estructura "
+            "≤ control transversal) y **no** cumplen la firma instrumental-LSF de Xie Fig.3 "
+            "(P no constante). Es diagnóstico de apoyo al **cierre G1**: el combinado es ciego a "
+            "los stripes (confirmado por S0 por-exposición). Sin interpretación ghost-vs-"
+            "instrumental adicional (se resolvió por-exposición)."
         ),
     ),
 ]
