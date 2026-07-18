@@ -99,30 +99,50 @@ def _build_scipost_sof(exp: int) -> Path:
 
 
 def _wcs_ok(cube: Path) -> bool:
+    """Gate the SPECTRAL grid only (CRVAL3/CD3_3/CRPIX3/NAXIS3).
+
+    Per-exposure scipost centers each cube on its OWN exposure pointing, so the
+    spatial WCS (CRVAL1/2, NAXIS1/2) legitimately differs by the dither/pointing
+    (~1"); B1 aligns them for any later stacking. What must match for wavelength
+    / stripe work is the spectral axis, which is identical across all exposures.
+    The spatial offset vs the combined cube is reported for information.
+    """
+
     from astropy.io import fits
 
     with fits.open(cube) as h, fits.open(COMBINED_CUBE) as hc:
         hd = h["DATA"].header if "DATA" in h else h[1].header
         hdc = hc["DATA"].header if "DATA" in hc else hc[1].header
-        keys = ("CRVAL1", "CRVAL2", "CRVAL3", "CD3_3", "CRPIX3")
-        for k in keys:
+        ok = True
+        for k, atol in (("CRVAL3", 0.05), ("CD3_3", 1e-4), ("CRPIX3", 1e-6)):
             a, b = hd.get(k), hdc.get(k)
-            if a is None or b is None or abs(float(a) - float(b)) > 1e-6 * max(1.0, abs(float(b))):
-                print(f"    WCS mismatch {k}: {a} vs {b}", flush=True)
-                return False
-    return True
+            if a is None or b is None or abs(float(a) - float(b)) > atol:
+                print(f"    spectral WCS mismatch {k}: {a} vs {b}", flush=True)
+                ok = False
+        if int(hd.get("NAXIS3", 0)) != int(hdc.get("NAXIS3", 0)):
+            print(f"    NAXIS3 mismatch: {hd.get('NAXIS3')} vs {hdc.get('NAXIS3')}", flush=True)
+            ok = False
+        dra = (float(hd.get("CRVAL1", 0)) - float(hdc.get("CRVAL1", 0))) * 3600.0
+        ddec = (float(hd.get("CRVAL2", 0)) - float(hdc.get("CRVAL2", 0))) * 3600.0
+        print(f"    spatial offset vs combined: dRA={dra:+.2f}\" dDEC={ddec:+.2f}\" "
+              f"(size {hd.get('NAXIS1')}x{hd.get('NAXIS2')}) — expected per-exposure",
+              flush=True)
+    return ok
 
 
 def step_scipost(exps: list[int]) -> None:
     for i in exps:
-        sof = _build_scipost_sof(i)
         out = PEREXP / f"exp{i}"
-        _run_esorex("muse_scipost", sof, out, ["--save=cube,skymodel"])
         cube = out / "DATACUBE_FINAL.fits"
+        # resumable: skip an exposure already produced and valid
+        if cube.exists() and list(out.glob("SKY_SPECTRUM*.fits")) and _wcs_ok(cube):
+            print(f"    exp{i} already done (cube+SKY_SPECTRUM+spectral WCS OK) — skipping", flush=True)
+            continue
+        sof = _build_scipost_sof(i)
+        _run_esorex("muse_scipost", sof, out, ["--save=cube,skymodel"])
         _gate(cube.exists(), f"exp{i} DATACUBE_FINAL written")
-        sky = list(out.glob("SKY_SPECTRUM*.fits"))
-        _gate(bool(sky), f"exp{i} SKY_SPECTRUM written")
-        _gate(_wcs_ok(cube), f"exp{i} WCS matches combined cube")
+        _gate(bool(list(out.glob("SKY_SPECTRUM*.fits"))), f"exp{i} SKY_SPECTRUM written")
+        _gate(_wcs_ok(cube), f"exp{i} spectral WCS matches combined cube")
 
 
 def main(argv=None) -> int:
