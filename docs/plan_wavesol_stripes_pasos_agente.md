@@ -197,7 +197,16 @@ stripes vs mapas Hα" (claves nuevas `halpha_map_correlation`); figura al inform
 > constante ⇒ tampoco el caso instrumental de Xie Fig.3). Consistente con G1. Sin interpretar
 > ghost-vs-instrumental (por-exposición/humano).
 
-### PASO S6a 🟡 · Descomposición de ruido (modelo FIJADO)
+### PASO S6a ✅ · Descomposición de ruido (modelo FIJADO) (HECHO 2026-07-18, rama `wavesol-s0b`)
+> `musepipe/qc/noise_decomposition.py` (+ 5 tests): σ_ap(λ,r_B) por fotometría de apertura en
+> anillo (reutiliza `ring_positions` de E5), F*(λ) del primario, fit σ²=(c·F^α)²+σ_bg² en log.
+> DESVIACIÓN del brief: el fit usa el continuo LIMPIO ANCHO (5100–8800, excluyendo láser/telúricas/
+> Hα) en vez de solo 6510–6825 — esa ventana estrecha da F* con rango ~2× y α degenerado; el rango
+> ancho (F* ×18.7) recupera el término fotónico (como Xie Fig.8). **Resultado (realineado, psffit):**
+> α=0.78, corr(logF,logS)=+0.75 (photon_limited), c=0.043, σ_bg=166; **Hα a r_B=72px = 2.50× el
+> límite fotónico** (n_fit=711). El QC añade `regime` y `corr_logF_logS` para detectar el régimen
+> degenerado. QC `stages/stageS6_noise_decomposition_qc.json`, fig `plots/s6_noise/`. Diagnóstico
+> (no recalcula E3).
 - **Objetivo**: "estamos a X× del límite fotónico en Hα a la separación de B"
   (lenguaje estándar de Xie §5 para el paper).
 - **Modelo (no cambiar)**: en imágenes residuales post-sustracción a múltiples λ
