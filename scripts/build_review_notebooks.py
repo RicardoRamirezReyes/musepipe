@@ -2611,7 +2611,9 @@ STAGES: list[dict] = [
         downstream="E3, F1",
         exec=dict(kind="script", target="stage_h02_artifacts.sh", cost="Ligero."),
         qc="stages/stage_h02_qc.json",
-        salient=["overall", "overall_raw", "t2.status", "t5.status", "overall_interpretation"],
+        salient=["overall", "overall_raw", "t2.status", "t5.status", "overall_interpretation",
+                 "halpha_map_correlation.corr_stripe_scatter_vs_halpha_sigma",
+                 "halpha_map_correlation.halpha_sigma_slicer_aligned"],
         narrative_md=(
             "## Qué hace E2 y cómo se reinterpreta\n\n"
             "E2 corre una **batería FIJA de 5 tests de artefactos** sobre el resultado de E1 (siempre "
@@ -2716,8 +2718,41 @@ STAGES: list[dict] = [
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
+            dict(
+                md=(
+                    "## Plot 3 — S1b: zonas sucias de stripes vs mapas Hα (Xie+20 §4.1)\n\n"
+                    "Correlación por columna entre la perturbación de la solución de onda (scatter "
+                    "del mapa de offset S0) y el ancho σ del Hα (mapa S1). La clave es el **control "
+                    "transversal**: si la correlación en la dirección transversal es casi igual, la "
+                    "correlación es un **confundido radial** (núcleo brillante vs halo débil), NO una "
+                    "firma de slicer. `halpha_*_slicer_aligned` aplica el mismo criterio que el gate "
+                    "G1 (estructura > 3× y > 2× su control transversal)."
+                ),
+                code=(
+                    "try:\n"
+                    "    from IPython.display import Image, display\n"
+                    "    q = nb.load_qc('stages/stage_h02_qc.json', RUN_ID)\n"
+                    "    hmc = q.get('halpha_map_correlation')\n"
+                    "    if not hmc:\n"
+                    "        print('S1b no integrado en este run: falta halpha_map_correlation.')\n"
+                    "        print('-> corre: python scripts/s1b_integrate_e2.py --run-dir', nb.run_dir(RUN_ID))\n"
+                    "    else:\n"
+                    "        print(f\"corr(stripe scatter, Hα σ)      = {hmc['corr_stripe_scatter_vs_halpha_sigma']:.3f}\")\n"
+                    "        print(f\"  control transversal            = {hmc['corr_stripe_scatter_vs_halpha_sigma_transverse']:.3f}  (≈ igual ⇒ confundido radial)\")\n"
+                    "        print(f\"a  estructura {hmc['halpha_a_structure_significance']:.1f}× (transv {hmc['halpha_a_transverse_significance']:.1f}×) -> slicer_aligned={hmc['halpha_a_slicer_aligned']}\")\n"
+                    "        print(f\"σ  estructura {hmc['halpha_sigma_structure_significance']:.1f}× (transv {hmc['halpha_sigma_transverse_significance']:.1f}×) -> slicer_aligned={hmc['halpha_sigma_slicer_aligned']}\")\n"
+                    "        print(f\"corr(a,σ) = {hmc['halpha_corr_a_sigma']:.2f}, P_cov = {hmc['halpha_P_cov']:.2f}  (Xie Fig.3 pide P≈const)\")\n"
+                    "        fig = (q.get('figures') or {}).get('s1_stripe_halpha')\n"
+                    "        from pathlib import Path as _P\n"
+                    "        if fig and _P(fig).exists():\n"
+                    "            display(Image(filename=str(fig)))\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo mostrar S1b:', type(e).__name__, e)"
+                ),
+            ),
         ],
         decisions=[
+            ("**S1b (wavesol/stripes):** los mapas Hα a/σ NO están alineados con slicers (estructura ≤ control transversal ⇒ radial, núcleo vs halo); la fuerte correlación por columna stripe↔σ es un confundido radial (transversal ≈ igual). Consistente con G1 (cubo combinado ciego a stripes). Sin interpretar ghost-vs-instrumental (humano/por-exposición).", "decision_g1_wavesol_2026-07-17.md"),
             ("**T2 reinterpretado para no-detección** (spec §2): el máximo global NO tiene forma de PSF (chi2_ratio 1.007, elongación 1.54) → *apoya* la no-detección. `overall_raw=fails` → `overall=survives`. Limitación aceptada en F1.", None),
             ("**T5 placebos PASS**: buscar en λ off-line no fabrica detecciones (max_fap 0.029, ninguno <0.01) → método limpio.", None),
             ("T1/T3/T4 `unavailable` por la exposición única (sin stripe QC, sin split, sin variantes de knobs).", None),

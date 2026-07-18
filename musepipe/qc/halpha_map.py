@@ -266,6 +266,57 @@ def halpha_structure_metrics(
     }
 
 
+def stripe_halpha_correlation(
+    offset_map_ch: np.ndarray,
+    a_map: np.ndarray,
+    sigma_map_A: np.ndarray,
+    mu_map_A: np.ndarray,
+    orientation: str = "vertical",
+    *,
+    min_count: int = 5,
+) -> dict[str, object]:
+    """Per-column correlation between the S0 wavesol stripe signal and the S1
+    Halpha maps (paso S1b integration into E2).
+
+    "Dirty stripe zones" are taken from the S0 offset map on the SAME grid: the
+    per-column robust scatter of the offset is the local wavelength-solution
+    disturbance. Xie's logic is that instrumental LSF variation (stripes) would
+    make the Halpha width vary spatially IN STEP with that disturbance, so the
+    key number is ``corr(stripe scatter, Halpha sigma)``. Also reports whether
+    the Halpha centroid tracks the per-column offset. Reports numbers only — no
+    interpretation (S1b/human).
+    """
+
+    from musepipe.qc.wavesol_map import stripe_profile
+
+    off = stripe_profile(np.asarray(offset_map_ch, dtype=np.float64), orientation)
+    a_p = stripe_profile(np.asarray(a_map, dtype=np.float64), orientation)
+    s_p = stripe_profile(np.asarray(sigma_map_A, dtype=np.float64), orientation)
+    m_p = stripe_profile(np.asarray(mu_map_A, dtype=np.float64), orientation)
+
+    def _corr(x, y, count):
+        ok = np.isfinite(x) & np.isfinite(y) & (count >= int(min_count))
+        if int(ok.sum()) < 3 or np.std(x[ok]) == 0 or np.std(y[ok]) == 0:
+            return float("nan"), int(ok.sum())
+        return float(np.corrcoef(x[ok], y[ok])[0, 1]), int(ok.sum())
+
+    corr_sigma, n_cols = _corr(off["scatter"], s_p["profile"],
+                               np.minimum(off["count"], s_p["count"]))
+    corr_a, _ = _corr(off["scatter"], a_p["profile"],
+                      np.minimum(off["count"], a_p["count"]))
+    corr_mu, _ = _corr(off["profile"], m_p["profile"],
+                       np.minimum(off["count"], m_p["count"]))
+
+    return {
+        "orientation": orientation,
+        "n_columns": n_cols,
+        "stripe_indicator": "per-column robust scatter of the S0 wavesol offset map (channels)",
+        "corr_stripe_scatter_vs_halpha_sigma": corr_sigma,
+        "corr_stripe_scatter_vs_halpha_a": corr_a,
+        "corr_stripe_offset_vs_halpha_mu": corr_mu,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # CLI (paso S1b runs this over the realigned cube; core stays paso S1a).
 # --------------------------------------------------------------------------- #

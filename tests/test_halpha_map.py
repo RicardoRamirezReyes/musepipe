@@ -11,6 +11,7 @@ from musepipe.qc.halpha_map import (
     halpha_structure_metrics,
     main,
     phi_model,
+    stripe_halpha_correlation,
 )
 
 
@@ -86,6 +87,33 @@ class TestMap(unittest.TestCase):
             self.assertIn(key, m)
         # injected anti-correlation must show up as a strong negative corr
         self.assertLess(m["corr_a_sigma"], -0.5)
+
+
+class TestStripeCorrelation(unittest.TestCase):
+    def test_detects_column_aligned_correlation(self):
+        # offset-map column scatter grows with column; Halpha sigma also grows
+        # with column -> strong positive corr(stripe scatter, sigma).
+        ny, nx = 30, 20
+        rng = np.random.default_rng(2)
+        offset = np.empty((ny, nx))
+        sigma = np.empty((ny, nx))
+        for ix in range(nx):
+            offset[:, ix] = rng.normal(0.0, 0.02 + 0.1 * ix / nx, ny)
+            sigma[:, ix] = 2.0 + 1.5 * ix / nx
+        a_map = np.full((ny, nx), 0.5)
+        mu_map = np.full((ny, nx), 6562.8)
+        c = stripe_halpha_correlation(offset, a_map, sigma, mu_map, "vertical")
+        self.assertGreater(c["corr_stripe_scatter_vs_halpha_sigma"], 0.8)
+        self.assertGreaterEqual(c["n_columns"], nx - 2)
+
+    def test_independent_maps_uncorrelated(self):
+        rng = np.random.default_rng(9)
+        offset = rng.normal(0.0, 0.05, (30, 20))
+        sigma = rng.normal(2.4, 0.3, (30, 20))
+        a_map = rng.normal(0.5, 0.1, (30, 20))
+        mu_map = np.full((30, 20), 6562.8)
+        c = stripe_halpha_correlation(offset, a_map, sigma, mu_map, "vertical")
+        self.assertLess(abs(c["corr_stripe_scatter_vs_halpha_sigma"]), 0.6)
 
 
 class TestCLI(unittest.TestCase):

@@ -163,7 +163,11 @@ recuperan shifts inyectados de 0.2–0.35 canales con atol 0.05).
 - **Gate**: presentar al usuario → DECISIÓN G1 (humana) antes de cualquier paso
   de Fase 2.
 
-### PASO S1a 🟡 · Núcleo mapas Hα de la primaria (Xie Ec. 1)
+### PASO S1a ✅ · Núcleo mapas Hα de la primaria (Xie Ec. 1) (HECHO 2026-07-18, rama `wavesol-s0b`)
+> `musepipe/qc/halpha_map.py`: fit phi=b(1+a·exp(...)) por spaxel (6480–6650), mapas a/σ/μ/P,
+> clean-NaN por gate de line-SNR, reutiliza `structure_metrics` de wavesol_map, `corr(a,σ)` y
+> `P_cov` sin interpretar; CLI + plots + FITS. 8 tests.
+
 - **Objetivo**: mapas de line-to-continuum (a), anchura (σ) y potencia integrada
   (P) del Hα de la primaria por spaxel — ¿varía la LSF alineada con slicers?
 - **Procedimiento**: nuevo `musepipe/qc/halpha_map.py`. Por spaxel del halo
@@ -181,9 +185,17 @@ recuperan shifts inyectados de 0.2–0.35 canales con atol 0.05).
   con P constante ⇒ LSF variable (instrumental), no ghost.
 - **No hacer**: no interpretar (eso es S1b/humano); no tocar la LSF de E1.
 
-### PASO S1b 🟢 · Ejecutar S1a + integrar en E2
+### PASO S1b ✅ · Ejecutar S1a + integrar en E2 (HECHO 2026-07-18, rama `wavesol-s0b`)
 Correr sobre realigned; añadir al QC de E2 la correlación "zonas sucias de
 stripes vs mapas Hα" (claves nuevas `halpha_map_correlation`); figura al informe.
+> S1 full-res sobre realineado (303 s, n_fit=29203, σ_median=2.01 Å).
+> `scripts/s1b_integrate_e2.py` parchea `stage_h02_qc.json` (aditivo) con
+> `halpha_map_correlation` + figura `plots/s1_halpha/s1b_stripe_vs_halpha.png` (registrada en
+> E2 `figures`), y el notebook E2 gana un Plot 3. **Resultado:** a/σ NO alineados con slicers
+> (estructura ≤ control transversal ⇒ radial); corr por columna stripe↔σ = −0.91 pero el
+> control transversal = −0.905 ⇒ **confundido radial**, no firma de slicer; P_cov≈1.07 (no
+> constante ⇒ tampoco el caso instrumental de Xie Fig.3). Consistente con G1. Sin interpretar
+> ghost-vs-instrumental (por-exposición/humano).
 
 ### PASO S6a 🟡 · Descomposición de ruido (modelo FIJADO)
 - **Objetivo**: "estamos a X× del límite fotónico en Hα a la separación de B"
