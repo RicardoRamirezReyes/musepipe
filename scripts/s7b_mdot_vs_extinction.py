@@ -46,9 +46,17 @@ def _ladder_row(av, f_obs, phys):
     lha_lsun = lha / L_SUN_ERG_S
     lacc = lacc_lsun_from_lha(lha_lsun, phys["lacc_lha_a"], phys["lacc_lha_b"])
     mdot = mdot_msun_yr_from_lacc(lacc, phys["companion_mass_msun"], phys["companion_radius_rsun"])
-    return {"a_v": av, "a_halpha": a_halpha, "ext_factor": ext,
-            "f_lim_dereddened": f_dered, "l_halpha_lsun": lha_lsun,
-            "l_acc_lsun": lacc, "mdot_msun_yr": mdot}
+    row = {"a_v": av, "a_halpha": a_halpha, "ext_factor": ext,
+           "f_lim_dereddened": f_dered, "l_halpha_lsun": lha_lsun,
+           "l_acc_lsun": lacc, "mdot_msun_yr": mdot}
+    # R1: parallel planetary-shock relation (Aoyama+21) on the same L_Halpha.
+    aoyama = phys.get("lacc_aoyama21")
+    if aoyama:
+        lacc_a = lacc_lsun_from_lha(lha_lsun, aoyama["a"], aoyama["b"])
+        mdot_a = mdot_msun_yr_from_lacc(lacc_a, phys["companion_mass_msun"], phys["companion_radius_rsun"])
+        row["l_acc_aoyama21_lsun"] = lacc_a
+        row["mdot_aoyama21_msun_yr"] = mdot_a
+    return row
 
 
 def _write_figure(rows, adopted_av, out_path):

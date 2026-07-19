@@ -6,9 +6,24 @@ cultura: como los `spec_*_codex_*.md` del repo (alcance deliberadamente
 pequeño, gates de equivalencia, QC extendido sin renombrar claves, runs
 históricos intocables, rama git por paso).
 
+> **ACTUALIZACIÓN 2026-07-18 (re-auditoría tras el cierre del Track S).**
+> El Track S (S0–S8) está EJECUTADO Y MERGEADO (PR #1, `0ad9da1`); árbitro:
+> `docs/decision_g1_wavesol_2026-07-17.md` (G1 cerrado, sin stripes, deriva
+> ~0.04 Å) y bitácora `docs/wavesol_execution_log.md`. La re-auditoría de las
+> metodologías de Xie+20 y Hashimoto+20 contra el estado post-merge dejó un
+> **Lote R (pasos R1–R5, sección al final)** con lo que sigue faltando:
+> relación L_acc planetaria (R1, el único sustantivo), caveat de variabilidad
+> (R2), censo de ghosts (R3), STAT_EMP para el M5 rojo (R4) y censo frame-QC
+> (R5). El Track A sigue pendiente completo (A1a/A1b, A2a/A2b, A3 — verificado
+> 2026-07-18: los 4 open_issues de `stage00r_qc.json` intactos y sin
+> `stage00s/stage00t` en el run realineado). Los briefs S0–S8 de abajo se
+> conservan como registro; NO re-ejecutarlos.
+
 **Leyenda de nivel**: 🟢 = ejecutable por agente menos potente con este brief ·
 🟡 = ejecutable, pero requiere revisión humana del resultado · 🔴 = complejo,
-requiere agente fuerte o sesión dedicada · ✅ = HECHO (2026-07-17, sesión fuerte).
+requiere agente fuerte o sesión dedicada · ✅ = HECHO (con fecha y resultado en
+el propio paso) · ⛔ = CERRADO SIN EJECUTAR (por decisión G1; brief conservado
+por si se reabre).
 
 **Reglas globales para TODOS los pasos** (no repetidas en cada brief):
 1. Rama git propia `wavesol-<paso>`; suite completa verde antes de terminar
@@ -247,13 +262,18 @@ cita Aoyama&Ikoma19/Hashimoto+20. Report realineado regenerado (aparece en
 
 ---
 
-## Track S · Fase 2 — SOLO tras G1 aprobado (humano)
+## Track S · Fase 2 — estado final
 
-> **ESTADO: NO disparada.** G1 se cerró 2026-07-17 como sistemático acotado (temporal); la
-> Fase 2 no se ejecuta. **Confirmación diferida:** si estos cubos por exposición se regeneran
-> alguna vez (S2b/S2c), correr **S0 por exposición + S3** como verificación obligatoria del
-> cierre G1 (con la rotación deshecha, los stripes deben verse si existen; separa temporal vs
-> per-slice). Ver `docs/decision_g1_wavesol_2026-07-17.md`.
+> **ESTADO (corregido 2026-07-18): PARCIALMENTE EJECUTADA como confirmación diferida de G1.**
+> G1 se cerró 2026-07-17 como sistemático acotado (temporal) y la Fase 2 "de mejora" (S4/S5/G2)
+> NO se disparó. Sin embargo, el usuario disparó la **confirmación diferida**: S2b/S2c
+> regeneraron los 7 cubos por exposición (2026-07-18, ~130 min) y sobre ellos corrieron
+> **S0-por-exposición** (0/7 con estructura de slicer ⇒ stripes descartados empíricamente,
+> commit `1ce11a0`) y **S3a/S3b** (deriva temporal ~0.04 Å std, gate agregado PASS, commit
+> `3d6c984`) ⇒ **cierre G1 CONFIRMADO y cuantificado**. S4a/S4b/S5a/S5b quedan **⛔ CERRADOS
+> SIN EJECUTAR** (sin stripes ni deriva no compran mejora medible); sus briefs se conservan
+> por si una decisión humana futura los reabre. Ver `docs/decision_g1_wavesol_2026-07-17.md`
+> y `docs/wavesol_execution_log.md`.
 
 ### PASO S2a ✅ · Inventario + plan de regeneración (HECHO 2026-07-18 inline; tabla retroactiva 2026-07-19)
 > El inventario se hizo inline el 2026-07-18 (SOF supervivientes, productos podados, params de
@@ -270,37 +290,49 @@ DATACUBE por exposición NO — podados**). Producto: tabla `regeneration_plan.c
 `~/Descargas/MUSE_DATA/Rox12` (193 FITS, verificado presente; incluye masters
 M.MUSE del archivo que NO deben entrar como raw — el orquestador ya los excluye).
 
-### PASO S2b 🟡 · Regenerar bias/flat/scibasic
-Extender `scratchpad/run_cascade.py` (patrón existente: un recipe por vez,
-`--products-json`, cwd=output-dir, ILLUM nearest-in-time, OBJECT/STD separados)
-para re-correr `muse_bias` (~33 m) + `muse_flat` (~52 m, produce TRACE_TABLE) +
-`muse_scibasic` de los 7 OBJECT (~24 m). Gate: 168 PIXTABLE_OBJECT como la
-corrida original. Total S2b+S2c ≈ 3 h de esorex.
+### PASO S2b ✅ · Regenerar bias/flat/scibasic (HECHO 2026-07-18)
+> Ejecutado vía `scripts/regen_perexp_cubes.py` (el `run_cascade.py` del scratchpad se había
+> perdido; reconstruido y COMMITEADO, `1a44d3a`). 102 min medidos: bias 31.1 m (24
+> MASTER_BIAS) + flat 47.3 m (24 MASTER_FLAT+TRACE) + scibasic 23.7 m. Gate PASS: 168
+> PIXTABLE_OBJECT como la corrida original.
 
-### PASO S2c 🟡 · scipost ×7 por exposición
-Por exposición i=1..7: `muse_scipost` con los 24 PIXTABLE de esa exposición,
-`OFFSET_LIST.fits` manual del plan B (para que las 7 salidas compartan grid WCS),
-**save=cube,skymodel** (⇒ DATACUBE_FINAL + SKY_SPECTRUM por exposición — el
-SKY_SPECTRUM es imprescindible para S3a). Salida:
-`/mnt/2TB/MUSE_work/ROXs12b_perexp/expN/` (~25 GB). Gate por exposición: shape
-espectral idéntica, WCS idéntico al cubo combinado (mismos CRVAL/CD).
+Brief original: extender el orquestador (un recipe por vez, `--products-json`,
+cwd=output-dir, ILLUM nearest-in-time, OBJECT/STD separados) para re-correr
+`muse_bias` + `muse_flat` (produce TRACE_TABLE) + `muse_scibasic` de los 7 OBJECT.
 
-### PASO S3a 🟢 · Offsets absolutos por exposición (airglow)
-CLI existente `python -m musepipe.qc.cube_qc m1m2-sky --sky-spectrum
-expN/SKY_SPECTRUM_0001.fits` en loop ⇒ tabla
-`tables/perexp_m1_offsets.csv` (exposición, offset_A, scatter, n_lines).
-Contexto: M1 combinado = +0.074 Å; aquí interesa el SPREAD entre exposiciones.
+### PASO S2c ✅ · scipost ×7 por exposición (HECHO 2026-07-18)
+> Ejecutado: 27.8 min (7× scipost de 3.7–4.6 min), SOF = `muse_scipost_exp{i}.sof` +
+> OFFSET_LIST manual, `--save=cube,skymodel`. **7 cubos (2.7 GB c/u) + SKY_SPECTRUM en
+> `/mnt/2TB/MUSE_work/ROXs12b_perexp/exp{1..7}/`.** Desviación documentada: el gate WCS
+> se relajó a solo-ESPECTRAL (CRVAL3/CD3_3/NAXIS3 idénticos) — espacialmente cada cubo
+> queda centrado en su propio pointing (~0.6" aparte), esperado en cubos por-exposición.
 
-### PASO S3b 🟡 · Offsets relativos por xcorr (B1+B2 con N=7)
-Nuevo run `ROXs12b_perexp` (config copiada de realigned, input = los 7 cubos):
-correr stage01 (B1, stack común) y stage02 (B2) — la maquinaria YA soporta N
-cubos (fue diseñada para esto; con el realigned recibía N=1). Salida natural:
-`stage02_xcorr_shifts.npy` (por cubo × grupo de stripes) + stripe_metric.
-**Gate de consistencia**: shifts B2 (relativos) vs S3a (absolutos, restada la
-media) coinciden dentro de la suma en cuadratura de sus errores; si no,
-PARAR y reportar (posible sistemática del estimador).
+### PASO S0-perexp ✅ · Confirmación diferida G1 sobre los 7 cubos (HECHO 2026-07-18)
+> Paso añadido por la decisión G1 (no estaba en el plan original): `scripts/s0_perexp.py`
+> corre `wavesol_map` en cada cubo por-exposición (con la rotación de campo deshecha, un
+> stripe de slicer YA NO se promedia acimutalmente y debería aparecer). **Resultado: 0/7
+> exposiciones con estructura de slicer (stripe_sig ≈ transv ≈ 1× en todas) ⇒ stripes
+> DESCARTADOS empíricamente** (a diferencia de Hashimoto 5/6). Tabla
+> `tables/s0_perexp_summary.csv`; commit `1ce11a0`; addendum en la decisión G1.
 
-### PASO S4a 🟡 · Combinación propia (algoritmo FIJADO — implementar tal cual)
+### PASO S3a ✅ · Offsets absolutos por exposición — airglow (HECHO 2026-07-18)
+> Ejecutado (`scripts/s3_perexp_offsets.py`, CLI `m1m2-sky` por SKY_SPECTRUM): offsets
+> +0.033…+0.143 Å (exp4 atípico, peor S/N), media +0.062 ≈ combinado (+0.074), **spread
+> 0.039 Å std** ⇒ deriva temporal despreciable. Tabla `tables/perexp_m1_offsets.csv`.
+
+### PASO S3b ✅ (con desviación) · Offsets relativos por xcorr (HECHO 2026-07-18)
+> Ejecutado CON DESVIACIÓN documentada (bitácora §desviaciones): NO se corrió el B1/B2
+> completo por-stripe-group (desproporcionado tras descartar stripes en S0-perexp); se hizo
+> xcorr estelar a nivel de campo entero vía `wavesol_map`. Spread 0.038 Å std. **Gate
+> S3a↔S3b AGREGADO: PASS** (ambos ~0.04 Å); el matching por-exposición fino queda limitado
+> por ruido (5/7, señal ~ precisión), sin sesgo. Commit `3d6c984`.
+
+Brief original (por si se reabre): run `ROXs12b_perexp` con stage01+stage02 (la
+maquinaria soporta N cubos), `stage02_xcorr_shifts.npy` por cubo × grupo.
+
+### PASO S4a ⛔ · Combinación propia — CERRADO SIN EJECUTAR (G1: sin stripes ni deriva)
+> Algoritmo FIJADO; se conserva por si una decisión humana futura lo reabre. La pieza de
+> valor independiente (STAT_EMP, punto 5) se rescató como **PASO R4** del Lote R.
 Nuevo `musepipe/stages/stage02b_combine.py` (+ tests sintéticos):
 1. Entrada: los 7 cubos del stack B1 con sus shifts de consenso S3
    (promedio de S3a/S3b si consistentes).
@@ -323,30 +355,171 @@ Nuevo `musepipe/stages/stage02b_combine.py` (+ tests sintéticos):
    combinado recupera el espectro de referencia (atol), el frame malo se
    descarta, STAT_EMP ≈ varianza teórica.
 
-### PASO S4b 🟢 · Telúrica sobre el combinado
-Aplicar `TELLURIC_TRANS.fits` existente (DATA/T, STAT/T², helpers de
-`telluric.py`) ⇒ `cube_telcorr_v2.fits`. Gate: V1–V5 de A3 (mismos checks).
+### PASO S4b ⛔ · Telúrica sobre el combinado — CERRADO SIN EJECUTAR (depende de S4a)
 
-### PASO S5a 🟢 · A4 sobre v2
-CLIs existentes de `cube_qc` (M1–M5 + m3-flux con growth curve) + stripe
-metric sobre v2. Comparativa v1 vs v2 en tabla. Esperable si había smearing:
-M2 LSF más estrecha; M5 mejor con STAT_EMP.
+### PASO S5a ⛔ · A4 sobre v2 — CERRADO SIN EJECUTAR (no hay cubo v2)
 
-### PASO S5b 🟡→🔴 · Re-run B→F comparativo + G2
-Run nuevo `ROXs12b_realigned_v2` con la automatización existente del realigned;
-deltas D1/E1/E3/F1 en tabla única. **DECISIÓN G2 (humana)**: adoptar v2 como
-canónico o documentar mejora nula.
+### PASO S5b ⛔ · Re-run B→F comparativo + G2 — CERRADO SIN EJECUTAR (no hay cubo v2)
 
-### PASO S8 🟢 · Cierre
-Notebooks de revisión nuevos/extendidos (S0, S1, B2 con N=7 si Fase 2 corrió),
-bitácora, informe, actualización de memoria del proyecto, F1 refresh.
+### PASO S8 ✅ · Cierre (HECHO 2026-07-19)
+> G1 marcado `closed`/`confirmed_closed` en QC y en el encabezado de la decisión; notebooks
+> `S0_wavesol_map.ipynb` (conclusión confirmada) y NUEVO `S1_halpha_map.ipynb`; bitácora
+> `docs/wavesol_execution_log.md`; F1 refrescado (overall yellow, sin cambio — caveat
+> A-block); memoria actualizada. Suite 561. Merge a `main`: PR #1 (`0ad9da1`).
+
+---
+
+## Lote R — re-auditoría 2026-07-18 (pasos NUEVOS, post-cierre del Track S)
+
+Brechas restantes tras comparar Xie+20 y Hashimoto+20 contra el estado
+post-merge (PR #1). R1 es el único sustantivo (cambia el número del paper);
+R2/R3 son texto/documentación; R4/R5 explotan los 7 cubos por-exposición que
+ahora existen en `/mnt/2TB/MUSE_work/ROXs12b_perexp/exp{1..7}/`.
+
+### PASO R1 ✅ · Relación L_acc–L_Hα PLANETARIA (Aoyama+21) junto a la estelar (HECHO 2026-07-18, rama `wavesol-r1`)
+> **Cross-check PASADO**: coefs (a,b)=(0.95,1.61), σ=0.30 dex verificados contra el full-text de
+> Aoyama+21 (arXiv:2108.01277 vía ar5iv: "log L_acc = 0.95 log L_Hα + 1.61", RMS 0.11 dex, σ rec.
+> 0.30 dex, validez L_acc≤1e-4 L☉); Marleau&Aoyama23 EXCLUYE Hα (solo n>8), así que la fuente de Hα
+> es Aoyama+21. `species` no instalado ⇒ cross-check contra la fuente primaria. **Implementado**:
+> config `g3_lacc_relations.halpha_aoyama21`; E3 `limit_conversion_chain` gana params alt →
+> claves `l_acc_aoyama21_lsun`/`mdot_aoyama21_msun_yr`/`*_5sigma`/`*_err_dex` (aditivas, NaN si no
+> hay relación); QC `physical_inputs.lacc_aoyama21_relation` + `limits[].mdot_aoyama21`; S7b table
+> gana columnas `l_acc_aoyama21_lsun`/`mdot_aoyama21_msun_yr`; `report.py` sección "Accretion
+> Relation" (`ACCRETION_RELATION_NOTE`). **Resultado (realineado, psffit/combined):** headline
+> Alcalá **8.194e-13 M☉/yr INTACTO** (0 dígitos cambiados); Aoyama+21 planetario **8.64e-12 M☉/yr,
+> ×10.5 más DÉBIL** (relación más plana ⇒ L_acc mayor). Tests: 2 nuevos en `test_h03_chain.py`
+> (ratio analítico 10^((a1-a2)logL+(b1-b2)) + presencia en stage). Suite 562. E3/S7b/G3/report
+> re-corridos; overall yellow sin cambio. **Pendiente revisión humana del texto del informe.**
+
+Brief original:
+- **Objetivo**: reportar el límite de Ṁ con AMBAS calibraciones — Alcalá+2017
+  (estelar, la actual) y Aoyama et al. 2021 (choque planetario) — porque en
+  nuestro régimen (L_Hα ≲ 1e−6 L☉) difieren 1–4 dex en L_acc y ROXs 12 B es
+  planetario/BD. Hoy E3/G3 usan SOLO Alcalá (verificado en
+  `stage_h03_qc.json`/`stage_g3_qc.json`: `lacc_lha_relation = "Alcala et al.
+  2017 Halpha"`), aunque el informe ya cita el marco Aoyama&Ikoma.
+- **Coeficientes (VERIFICADOS 2026-07-18 contra Marleau & Aoyama 2023, RNAAS,
+  arXiv:2303.00011, Fig. 1 y §3; NO re-derivar)**: para Hα,
+  `log10(L_acc/L☉) = 0.95·log10(L_Hα/L☉) + 1.61`, scatter σ = 0.3 dex
+  (errorbar de Ao21). Cita: Aoyama, Marleau, Ikoma & Mordasini 2021, ApJL 917,
+  L30. **Cross-check obligatorio del agente** (sin acceso al paper): el toolkit
+  `species` (Stolker et al. 2020; tutorial "Emission line",
+  species.readthedocs.io) implementa estos mismos fits — verificar (a, b) de
+  Hα contra `species` antes de tocar config; si difieren de (0.95, 1.61),
+  PARAR y reportar.
+- **Procedimiento**:
+  1. Config del run realigned: añadir a `g3_lacc_relations` la entrada
+     `halpha_aoyama21` con `{a: 0.95, b: 1.61, scatter_dex: 0.3, citation:
+     "Aoyama et al. 2021, ApJL 917, L30 (planetary shock)", validity_range:
+     "planetary-mass accretors; preshock n0~1e9-1e14 cm-3, v0<~200 km/s"}`.
+     El código de G3 ya itera el dict (`stage_g3_accretion.py`) — NO tocar la
+     relación Alcalá existente ni su posición de "headline".
+  2. E3 (`stage_h03_limits.py`): añadir claves paralelas
+     `mdot_lim_aoyama21_*` calculadas con (0.95, 1.61) sobre el MISMO
+     `f_lim_dereddened` — sin cambiar las claves existentes.
+  3. Extender la tabla S7b `tables/mdot_limit_vs_extinction.csv` con columnas
+     por relación (Alcalá / Aoyama+21) — el grid de A_V se mantiene.
+  4. `report.py`: ampliar `LINE_DIAGNOSTICS_NOTE` (o nota nueva
+     `ACCRETION_RELATION_NOTE`) explicando la dualidad: la relación planetaria
+     da L_acc MAYOR para el mismo L_Hα ⇒ límite de Ṁ MÁS DÉBIL; el paper
+     reporta ambos (patrón estándar post-Hashimoto). Citar también Marleau &
+     Aoyama 2023 (RNAAS) como fuente de la extensión/validez.
+  5. Re-correr E3/G3/F1 del realigned (etapas baratas, minutos).
+- **Tests**: unitario del cálculo dual en E3 (mismo L_Hα ⇒ ratio de límites
+  = 10^((1.13−0.95)·logL_Hα + (1.74−1.61)) — verificar signo/magnitud con un
+  caso numérico fijado); tests existentes de G3/report intactos.
+- **Gate**: el límite Alcalá actual NO cambia ni un dígito (solo se añade);
+  revisión humana del texto del informe.
+- **No hacer**: no añadir relaciones para otras líneas (Hβ etc. quedan fuera);
+  no cambiar el headline sin decisión humana.
+
+### PASO R2 🟢 · Caveat de variabilidad de acreción (una época)
+- **Objetivo**: frase obligatoria de conclusiones: la acreción es variable en
+  el tiempo (Cody & Hillenbrand 2014; Hashimoto+20 §5.4 la piden para
+  multi-época); una NO-detección de una sola época no excluye acreción
+  episódica ni media a otro nivel.
+- **Procedimiento**: constante nueva `VARIABILITY_CAVEAT_NOTE` en
+  `musepipe/report.py` (mismo patrón que `LINE_DIAGNOSTICS_NOTE`: prosa fija +
+  citas), insertada en la sección de límites/conclusiones de la plantilla;
+  mencionar que el dataset es 1 época (2022-09-01, 7 exposiciones en 87 min) y
+  que el límite de Ṁ aplica a ESA época. Regenerar report del realigned.
+- **Tests**: los de determinismo/hash del report (actualizar hash esperado).
+- **No hacer**: no tocar QC ni números; es solo texto.
+
+### PASO R3 🟢 · Censo de ghosts instrumentales (Xie+20 Apéndice A)
+- **Objetivo**: párrafo de blindaje en E2: verificar y documentar que en la
+  posición de B no hay line ghosts (strips sobre-brillantes de IFU/slice,
+  Weilbacher et al. 2015) ni blob ghost (mancha con fringing espectral azul,
+  Xie+20 App. A).
+- **Procedimiento**: script corto (puede vivir en `scripts/`) que sobre el
+  cubo realineado: (1) imagen blanca + banda Hα (6540–6590) + banda azul
+  (4800–5500); (2) en cada una, perfil de filas/columnas por la posición de B
+  (y=152, x=72 en el crop; trasladar al uncropped) buscando strip
+  sobre-brillante > 3σ del anillo local; (3) espectro en caja 3×3 en B buscando
+  fringing periódico azul (FFT simple del continuo 4800–5500 normalizado:
+  ningún pico > 5× la mediana del espectro de potencia). Añadir al QC de E2
+  clave `ghost_census: {line_ghost_strip: none|detected, blob_fringing:
+  none|detected, method, thresholds}` + 1 figura.
+- **Tests**: sintético con strip inyectado ⇒ `detected`; limpio ⇒ `none`.
+- **No hacer**: no corregir nada (si detecta algo, PARAR y reportar — sería
+  hallazgo nuevo).
+
+### PASO R4 🟡 · STAT_EMP — varianza empírica inter-exposición (ataca el M5 rojo)
+- **Objetivo**: producir la única estimación de varianza libre de la
+  covarianza de resampleo del DRS: por vóxel, la dispersión ENTRE las 7
+  exposiciones ya regeneradas (mismo grid por OFFSET_LIST).
+- **Procedimiento**: script/CLI nuevo `python -m musepipe.qc.stat_emp
+  --cubes /mnt/2TB/MUSE_work/ROXs12b_perexp/exp*/DATACUBE_FINAL.fits
+  --output .../STAT_EMP.fits`:
+  1. Cargar los 7 DATA (verificar WCS idéntico: mismos CRVAL/CD/NAXIS — gate).
+  2. Por vóxel: n = nº de exposiciones finitas; si n ≥ 4:
+     `var_emp = varianza muestral entre exposiciones / n` (varianza DE LA
+     MEDIA); si n < 4: NaN. Guardar como FITS float32 (misma cabecera WCS).
+  3. Comparación con el STAT del cubo combinado DRS: mapa e histograma de
+     `ratio = var_emp / var_DRS` por canal (mediana por canal + global).
+     Esperado según A4 M5: ratio ~4–6 (la DRS SUBESTIMA); confirmar con número.
+  4. QC `stat_emp_qc.json`: `{n_exposures, ratio_median_global,
+     ratio_p16_p84, per_channel_table, gate_wcs: pass}`.
+- **Salida clave para el paper**: el ratio medido convierte la limitación
+  aceptada M5 de "~4–6× (estimado)" a "X.X× (medido empíricamente)" — citar en
+  la justificación de por qué D2/E1 usan ruido empírico de controles.
+- **Tests**: sintético de 5 cubos con varianza conocida ⇒ var_emp recupera
+  σ²/n (atol 5%); cubos con WCS distinto ⇒ gate falla limpio.
+- **No hacer**: NO sustituir el STAT del cubo canónico ni re-correr B→F con
+  STAT_EMP (eso sería una decisión G2-like, humana); esto es medición/QC.
+- **Nota**: ojo con la media vs mediana — las 7 exposiciones tienen el mismo
+  apuntado nominal post-OFFSET_LIST pero seeing/transparencia distintos; la
+  varianza muestral incluye esa variación real de PSF/fotometría además del
+  ruido; documentar como límite superior del ruido por vóxel.
+
+### PASO R5 🟢 · Censo frame-QC de las 7 exposiciones (patrón Hashimoto 2/6)
+- **Objetivo**: una línea de métodos para el paper: "las 7 exposiciones son
+  utilizables; 0 descartadas" — con números, no por fe (Hashimoto descartó 2/6
+  y el referee puede preguntar por las nuestras).
+- **Procedimiento**: script corto sobre los 7 cubos por-exposición: por
+  exposición, medir (a) FWHM del core de la primaria en banda 8000–9000 Å
+  (ajuste 2D sencillo o momento; existe maquinaria de PSF en C1 — reutilizar
+  el helper más simple, no Psfao); (b) fondo mediano en anillo exterior;
+  (c) amplitud de stripes (ya medida en S0-perexp — REUSAR
+  `tables/s0_perexp_summary.csv`, no recalcular). Criterios del brief S4a:
+  descartable si FWHM > 1.5× mediana o fondo > 2× mediana. Tabla
+  `tables/perexp_frame_qc.csv` + clave en QC de la bitácora/F1.
+- **Tests**: ninguno nuevo si reutiliza helpers testeados; smoke sobre
+  sintético si añade código a `musepipe/`.
+- **No hacer**: no descartar nada de facto — si alguna exposición viola el
+  criterio, PARAR y reportar (sería insumo para reabrir S4, decisión humana).
 
 ---
 
 ## Orden sugerido de despacho al agente
 
-Lote 1 (paralelo, sin dependencias): A1b, A3, S7a, S7b, S7c.
-Lote 2: S0b → S0c (formal) y S1a → S1b; A2a.
-Checkpoint humano: G1 (con S0c) + decisión A2b.
-Lote 3 (si G1 aprueba): S2a → S2b → S2c → S3a/S3b → S4a → S4b → S5a → S5b(G2).
-Siempre al final: S6a (independiente, cualquier momento), S8.
+**Histórico (Track S, EJECUTADO):** Lote 1 (A1b, A3, S7a–c — solo se ejecutó
+S7a–c), Lote 2 (S0b/S0c, S1a/S1b), G1, Lote 3 parcial (S2, S0-perexp, S3, S6a),
+S8. Ver bitácora.
+
+**Vigente (2026-07-18):**
+- Lote R (paralelo, sin dependencias entre sí): R1, R2, R3, R5. R4 después de
+  R5 (usa la misma carga de cubos).
+- Track A pendiente (paralelo al Lote R): A1b, A3 primero; A2a después;
+  checkpoint humano A2b; A1a (molecfit) en sesión dedicada 🔴.
+- Al cerrar el lote: F1 refresh + actualización de bitácora y memoria.

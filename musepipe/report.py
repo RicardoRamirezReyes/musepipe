@@ -37,6 +37,9 @@ REPORT_TEMPLATE = """# MUSE Run Report
 ## Line Diagnostics
 {line_diagnostics}
 
+## Accretion Relation
+{accretion_relation}
+
 ## Accepted Limitations
 {accepted_limitations}
 
@@ -60,6 +63,25 @@ LINE_DIAGNOSTICS_NOTE = (
     "luminosity scales with the assumed extinction: a larger A_Halpha relaxes the Mdot limit "
     "(about x8 from A_V=0 to A_Halpha=2 for this dataset). The adopted A_V (Rizzuto et al. 2015) "
     "is used for the headline limit; the ladder brackets the systematic."
+)
+
+
+# R1 note (fixed prose): the Halpha accretion limit is reported under TWO
+# L_acc-L_line calibrations, because in the planetary/BD regime probed here the
+# stellar (Alcala+2017) and planetary-shock (Aoyama+2021) relations diverge.
+ACCRETION_RELATION_NOTE = (
+    "The Halpha-derived accretion-luminosity limit is reported under TWO calibrations of the "
+    "L_acc-L_Halpha relation. (1) The HEADLINE limit uses the empirical stellar/brown-dwarf "
+    "relation of Alcala et al. (2017), consistent with the rest of this pipeline. (2) A parallel "
+    "limit uses the theoretical planetary accretion-shock relation of Aoyama et al. (2021, "
+    "ApJL 917, L30; extended by Marleau & Aoyama 2023, RNAAS 7, 28), which is more appropriate "
+    "for a planetary/brown-dwarf accretor such as ROXs 12 B. In our regime (L_Halpha well below "
+    "1e-6 Lsun) the planetary relation has a shallower slope and gives a LARGER L_acc for the same "
+    "L_Halpha, hence a WEAKER (higher) Mdot upper limit. Reporting both is the standard post-"
+    "Hashimoto (2020) practice; the values appear as `mdot_msun_yr` (Alcala) and "
+    "`mdot_aoyama21_msun_yr` (Aoyama+21) in stage_h03_qc.json and "
+    "`tables/mdot_limit_vs_extinction.csv`. The planetary relation is valid for L_acc <= 1e-4 Lsun; "
+    "the Alcala relation remains the adopted headline pending a companion-class decision."
 )
 
 
@@ -825,6 +847,7 @@ def render_report_markdown(summary):
         figure_list=_markdown_table(figure_rows, ["figure", "status", "source"]),
         table_list=_markdown_table(table_rows, ["table", "path"]),
         line_diagnostics=LINE_DIAGNOSTICS_NOTE,
+        accretion_relation=ACCRETION_RELATION_NOTE,
         accepted_limitations=accepted_md,
         historical_context=historical,
         reproduction=reproduction,
