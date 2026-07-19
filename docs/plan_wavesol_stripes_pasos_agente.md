@@ -453,7 +453,23 @@ Brief original:
 - **Tests**: los de determinismo/hash del report (actualizar hash esperado).
 - **No hacer**: no tocar QC ni números; es solo texto.
 
-### PASO R3 🟢 · Censo de ghosts instrumentales (Xie+20 Apéndice A)
+### PASO R3 ✅ · Censo de ghosts instrumentales (Xie+20 Apéndice A) (HECHO 2026-07-18, rama `wavesol-r3`)
+> Núcleo en `musepipe/qc/ghost_census.py` (patrón S0a/S6a: I/O-free + CLI) + 9 tests. Corre sobre
+> el cubo `stage02_xcorr_cube_stack.fits` (el frame que localizó stage01c; B en pos_yx medida
+> [155.60, 75.79], NO el [72,152] legacy). **DOS desviaciones documentadas del brief:**
+> (1) **Resta del halo radial de la primaria** antes del test de tira: el método naïve (mediana de
+> fila/columna vs anillo local) dio un falso positivo de **col=+9.2σ en las 3 bandas** porque la
+> COLUMNA de B (x≈76) cruza y≈85 donde está la primaria (a 8.6px) y capta su halo AO — el mismo
+> confound radial de S1b. Con `subtract_radial_profile` (mediana azimutal por anillo) el exceso
+> colapsa a **max 0.6σ** ⇒ un ghost de slicer (línea a dirección fija) sobreviviría, el halo
+> simétrico no. (2) **Fringing**: el criterio "pico>5×mediana" del brief tiene piso de ruido
+> blanco ~1.4·ln(M)≈8 (mide 8.9 en limpio) ⇒ añadida condición robusta a M: fracción de varianza
+> del modo dominante >0.15 (mide 0.021). **Resultado: `line_ghost_strip=none`, `blob_fringing=none`
+> ⇒ B libre de ghosts.** QC standalone `stageR3_ghost_census_qc.json` + parche ADITIVO a
+> `stage_h02_qc.json` (`ghost_census`) + figura `plots/r3_ghost/`. Suite 571. Sin corregir nada
+> (no había nada que corregir).
+
+Brief original:
 - **Objetivo**: párrafo de blindaje en E2: verificar y documentar que en la
   posición de B no hay line ghosts (strips sobre-brillantes de IFU/slice,
   Weilbacher et al. 2015) ni blob ghost (mancha con fringing espectral azul,
