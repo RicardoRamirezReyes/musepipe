@@ -43,7 +43,7 @@ por si se reabre).
 | Diagnóstico preliminar sobre cubos reales | ✅ corrido en scratchpad 2026-07-17 (binning 2×2, ambos cubos). SIN estructura alineada con slicers: realigned amp columna 72 mÅ a 1.2× ruido (transversal 1.4×), ADP 67 mÅ a 0.9× (transversal 1.0×); núcleo r<1": med |off| = 64 mÅ (realigned) / 62 mÅ (ADP) ≈ M1 global (+74 mÅ). El p95 global (~4 Å) es ruido de spaxels débiles ⇒ corte por error añadido al brief S0b. Evidencia preliminar apunta a G1 = fase2_descartable (decisión humana pendiente con el S0c formal) |
 | Diseño del algoritmo de combinación propia (S4a) | ✅ FIJADO en el brief S4a (la implementación queda mecánica) |
 | Modelo de descomposición de ruido (S6) | ✅ FIJADO en el brief S6a |
-| Debug de molecfit (A1a) | 🔴 pendiente — interactivo, sesión dedicada con agente fuerte |
+| Debug de molecfit (A1a) | ✅ HECHO 2026-07-19 — converge (flujo normalizado + banda A O₂); corrobora STD_TELLURIC (|ΔT| 0.8 % px en banda B) |
 
 ---
 
@@ -67,7 +67,20 @@ por si se reabre).
   `"resolution": "justified_std_telluric", "doc": "docs/a3_telluric_justification.md"`.
 - **No hacer**: no re-correr esorex; no tocar el cubo.
 
-### PASO A1a 🔴 · Intento molecfit (timebox, OPCIONAL si A1b aprobado)
+### PASO A1a ✅ · Intento molecfit (HECHO 2026-07-19, scratch; corrobora A1b)
+> **molecfit CONVERGE.** Causa raíz real de la no-convergencia previa: el espectro 1D se pasó
+> **sin normalizar** (flujo mediano ~58000, continuo atascado en 1.0, `bestnorm 1e12`) con solo
+> la **banda B de O₂** débil (5.6 % absorción) ⇒ O₂ sin leverage, χ² congelado (el GDAS ausente
+> era secundario). Fix: normalizar el flujo + añadir la **banda A de O₂ (7590–7690 Å, 30 %
+> absorción)**. Resultado: `status=2`, `rel_mol_col_O2=0.966±0.016`, `ppmv_O2≈205000` (≈20.5 %,
+> físico), `rms_rel_to_err 85.8→5.09`. **T(λ) molecfit vs STD_TELLURIC: coinciden al ~4.5 %**
+> (integrado) / 0.8 % (píxel) en la banda B junto a Hα y al ~5.5 % en la banda A; Hα intacta en
+> ambos. **Corroboración independiente de A1b**; A1b sigue siendo el cierre del paper. Registrado
+> en `stage00r_qc.json → a1a_molecfit_crosscheck`, `docs/a3_telluric_justification.md §6`, gráfico
+> `runs/ROXs12b_raw/plots/stage00t_a1a_molecfit_vs_std.png`. (calctrans full-range no producido:
+> quirk de mapping de la build, no afecta la conclusión.)
+
+### PASO A1a-orig 🔴 · Intento molecfit (timebox, OPCIONAL si A1b aprobado)
 Sesión dedicada con agente fuerte: iterar config de `molecfit_model`
 (WAVE_INCLUDE, kernel, continuum, columnas del espectro 1D) con timebox de una
 sesión. Si converge, comparar T(λ) contra STD_TELLURIC y decidir; si no,
