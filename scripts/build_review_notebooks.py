@@ -371,7 +371,7 @@ STAGES: list[dict] = [
         decisions=[
             ("**Alineación por plan B (OFFSET_LIST manual)**, no `exp_align` — daba offsets espurios de hasta 3.305\" (cross-match de speckles NFM); el manual desde el centroide de la primaria da máx 0.62\". El cubo realineado ≡ ADP a través del bloque B.", None),
             ("Provenance QC = **AMARILLO**: V1/V3/V4 pasan; V2/V5/V6 = `unavailable` (lagunas documentadas, no fallos). Ver tabla de verificaciones arriba.", None),
-            ("**Estado A-block (actualizado 2026-07-10):** los 6 blockers duros están **CERRADOS** → F1 realineado = `yellow`, **0 bloqueantes**. Quedan 4 `open_issues` NO bloqueantes (V2/V5/V6, agrupación de calibraciones BIAS, molecfit no convergió→STD_TELLURIC). El paquete ya **no bloquea por A**; la validez para paper es juicio científico con esos caveats declarados. **Supera la directiva absoluta del 2026-07-07.**", None),
+            ("**Estado A-block (actualizado 2026-07-19):** los 6 blockers duros están **CERRADOS** → F1 realineado = `yellow`, **0 bloqueantes**. Los `open_issues` restantes (V2/V5/V6) quedan documentados. **Track A cerrado:** agrupación BIAS aceptada (A2b, impacto negligible) y telúrica justificada (A1b) + **molecfit converge y corrobora STD_TELLURIC (A1a, 2026-07-19)**. El paquete ya **no bloquea por A**; la validez para paper es juicio científico con esos caveats declarados. **Supera la directiva absoluta del 2026-07-07.**", None),
         ],
         checks="print('open_issues A1 (no bloqueantes):')\nfor i, s in enumerate(qc.get('open_issues', []), 1):\n    print(f'  {i}. {s}')",
         conclusion_md=(
@@ -569,11 +569,18 @@ STAGES: list[dict] = [
             "- **molecfit** — ajuste de un modelo físico de la atmósfera (lo preferido).\n"
             "- **STD_TELLURIC** — la transmisión *observada* en la estrella estándar, escalada a la "
             "masa de aire de la ciencia por Beer–Lambert: `T_sci(λ) = T_std(λ)^(X_sci/X_std)`.\n\n"
-            "**Aquí molecfit FALLÓ:** el perfil atmosférico **GDAS** para la fecha/coordenada no "
-            "estaba disponible → el χ² quedó **congelado** (no mejora entre iteraciones) → "
-            "transmisión→0, inutilizable. Es un problema de **configuración** (GDAS ausente en el "
-            "`telluriccorr` instalado), no contaminación estelar. Por eso se usó STD_TELLURIC "
-            "escalado — el respaldo habitual en MUSE.\n\n"
+            "**Método adoptado = STD_TELLURIC** (nativo del DRS MUSE; ver `a3_telluric_justification.md`).\n\n"
+            "**Sobre molecfit (actualizado A1a, 2026-07-19):** el primer intento (2026-07-06) NO convergió "
+            "(χ² congelado, transmisión→0). El reintento dedicado **A1a** halló la causa raíz real: **no era "
+            "el GDAS** (secundario; se usó el perfil MIPAS estándar) sino que el espectro 1D se pasó **sin "
+            "normalizar** (flujo mediano ~58000, continuo atascado en 1.0) y con **una sola ventana débil** "
+            "(la banda B de O₂, 5.6% de absorción), dejando a O₂ **sin apalancamiento**. Al **normalizar el "
+            "flujo** e incluir la **banda A de O₂ (7590–7690 Å, 30% de absorción)**, molecfit **converge** "
+            "(`rel_col_O2=0.966±0.016`, `ppmv_O2≈205000` ≈20.5%, físico) y su transmisión **corrobora** "
+            "STD_TELLURIC al **0.8%/píxel** en la banda B junto a Hα (tras alinear el marco vacío→aire de "
+            "molecfit). Es decir: STD_TELLURIC no fue un atajo por fallo de molecfit — es el método del DRS, "
+            "ahora con un **contraste independiente** que lo valida. Registrado en "
+            "`a1a_molecfit_crosscheck` (stage00r_qc.json) y `a3_telluric_justification.md §6`.\n\n"
             "**Ventanas protegidas (`T ≡ 1`, la corrección NO se aplica):**\n"
             "- **6540–6590 Å** = Hα del compañero (diagnóstico de acreción).\n"
             "- **5780–6050 Å** = láser AO de NFM.\n\n"
@@ -606,8 +613,16 @@ STAGES: list[dict] = [
             "print(f\"  fuera de bandas sin cambio: {ver['v2_outside_bands_unchanged']}\")\n"
             "print(f\"  Halpha intacta: {ver['v3_halpha_untouched']}   transmisión física [0,1]: {ver['v4_transmission_physical']}\")\n"
             "print()\n"
-            "print('molecfit (por qué no):')\n"
-            "print(' ', (qt.get('open_issues') or ['—'])[0])"
+            "print('molecfit (A1a, 2026-07-19):')\n"
+            "try:\n"
+            "    qr = nb.load_qc('stages/stage00r_qc.json', 'ROXs12b_realigned')\n"
+            "    cc = qr['a1a_molecfit_crosscheck']\n"
+            "    mf = cc['model_fit']; tcB = cc['transmission_comparison_vs_std_telluric']['O2_B_band_6864_6960A']\n"
+            "    print(f\"  converge: mpfit status={mf['mpfit_status']}, rel_col_O2={mf['rel_mol_col_O2']}+-{mf['rel_mol_col_O2_unc']}, ppmv_O2={mf['ppmv_O2']:.0f}\")\n"
+            "    print(f\"  vs STD_TELLURIC en banda B (junto a Halpha): |dT|/px={tcB['mean_abs_dT_per_pixel']}, razon absorcion={tcB['integrated_absorption_ratio_molecfit_over_std']}\")\n"
+            "    print('  =>', cc['conclusion'][:110], '...')\n"
+            "except Exception as e:\n"
+            "    print('  (A1a crosscheck no disponible:', type(e).__name__, e, ')')"
         ),
         plot_md=(
             "## De dónde sale la corrección: la transmisión aplicada\n\n"
@@ -656,7 +671,7 @@ STAGES: list[dict] = [
             "        print('Necesita el kernel MUSE (astropy) y TELLURIC_TRANS.fits en disco.')"
         ),
         decisions=[
-            ("**STD_TELLURIC + escala por airmass**, NO molecfit (no convergió por perfil GDAS ausente). Método de respaldo habitual en MUSE.", "a3_telluric_justification.md"),
+            ("**STD_TELLURIC + escala por airmass** (método nativo del DRS MUSE). El reintento A1a hizo **converger** molecfit (causa raíz previa: flujo sin normalizar + banda débil, no el GDAS) y su transmisión **corrobora** STD_TELLURIC al 0.8%/px en la banda B junto a Hα.", "a3_telluric_justification.md"),
             ("Etapa **condicional**: `verdict=needed` por umbral (profundidad máx 6.76% > 3%) + checkpoint humano **aprobado**.", None),
         ],
         checks=None,
@@ -670,8 +685,11 @@ STAGES: list[dict] = [
             "(exp. 1.065); aplicado → `cube_telcorr.fits`; transmisión en `TELLURIC_TRANS.fits`.\n"
             "- **Evidencia:** O₂ B 6.76% → 0.6%; continuo fuera de bandas sin cambio; Hα intacta "
             "(ventana protegida); STAT escala como T².\n"
-            "- **molecfit no convergió** (perfil GDAS ausente → χ² congelado): problema de "
-            "configuración documentado; residuo O₂ ~0.6% presupuestado para D2.\n"
+            "- **molecfit (A1a, 2026-07-19): CONVERGE y corrobora STD_TELLURIC.** La no-convergencia previa "
+            "no era por GDAS sino por flujo sin normalizar + banda B débil (O₂ sin apalancamiento). "
+            "Normalizando el flujo + banda A de O₂ → `rel_col_O2=0.966±0.016`, y T(λ) coincide con "
+            "STD_TELLURIC al 0.8%/px en la banda B junto a Hα → contraste independiente. Residuo O₂ ~0.6% "
+            "presupuestado para D2. Ver `a1a_molecfit_crosscheck` + `a3_telluric_justification.md §6`.\n"
             "- **El realineado no emitió su propio `stage00t_qc.json`** (usa el método/transmisión "
             "del crudo). Pendiente: regenerar un QC telúrico propio si se quiere métrica pre/post.\n"
             "- **Impacto en Hα = nulo** (ventana protegida) → el límite de acreción no depende de "
