@@ -515,7 +515,17 @@ Brief original:
   varianza muestral incluye esa variación real de PSF/fotometría además del
   ruido; documentar como límite superior del ruido por vóxel.
 
-### PASO R5 🟢 · Censo frame-QC de las 7 exposiciones (patrón Hashimoto 2/6)
+### PASO R5 ✅ · Censo frame-QC de las 7 exposiciones (patrón Hashimoto 2/6) (HECHO 2026-07-18, rama `wavesol-r5`)
+> Núcleo en `musepipe/qc/frame_qc.py` (I/O-free + CLI, reusa `band_image` de ghost_census) + 6
+> tests. Por exposición: (a) FWHM del core por momentos ponderados en 8000–9000 Å tras restar el
+> fondo de anillo (helper simple, no Psfao); (b) fondo mediano en anillo exterior; (c) stripe_sig
+> **reusado de `s0_perexp_summary.csv`** (no recalculado). Criterio S4a (FWHM>1.5×med o fondo>2×med),
+> SIN descartar de facto. **Resultado: 7/7 utilizables, 0 flaggeadas** — FWHM 11.0–12.8px (mediana
+> 11.69, max 1.09×), fondo 33.8–49.9 (max 1.33×), stripe_sig 0.82–1.36. Tabla
+> `tables/perexp_frame_qc.csv` + QC `stages/stageR5_frame_qc.json`. Suite 577. (Nota: la FWHM por
+> momentos infla el core por el halo AO; lo que importa es la consistencia relativa entre frames.)
+
+Brief original:
 - **Objetivo**: una línea de métodos para el paper: "las 7 exposiciones son
   utilizables; 0 descartadas" — con números, no por fe (Hashimoto descartó 2/6
   y el referee puede preguntar por las nuestras).
