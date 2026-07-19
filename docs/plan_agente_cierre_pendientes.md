@@ -1,5 +1,14 @@
 # Plan de ejecución para agente — cierre de pendientes (A1 primero)
 
+> **⚠️ ESTADO 2026-07-19 — DOCUMENTO SUPERADO (histórico).** El bloqueador #0 (desalineación
+> de la re-reducción propia) se RESOLVIÓ el 2026-07-08 con el plan B (offsets manuales); el run
+> científico canónico es ahora `ROXs12b_realigned` (NO el ADP). El bloque A quedó CERRADO el
+> 2026-07-19 (telúrica/BIAS/alineación resueltas o aceptadas, F1 = 0 bloqueantes) y la directiva
+> D0 se considera satisfecha. Las frases de abajo que afirman "ningún resultado es válido para el
+> paper" y "B–F corre provisionalmente sobre el ADP" ya NO reflejan el estado actual. Se conserva
+> como registro histórico del punto de partida. Estado vigente: memoria `a-block-paper-blockers` y
+> `reports/20260719/`.
+
 > **Audiencia:** un agente ejecutor SIN contexto previo de este proyecto. Sigue los pasos
 > literalmente, en orden. Cada paquete de trabajo (WP) tiene criterios de aceptación
 > ("Hecho cuando…") y condiciones de parada ("PARA y reporta si…"). No improvises fuera
