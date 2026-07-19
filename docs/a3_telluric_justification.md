@@ -1,12 +1,14 @@
 # A3 — Justificación de la corrección telúrica por STD_TELLURIC (para el paper)
 
-> Documento de justificación metodológica. molecfit no convergió (problema de
-> configuración conocido, ver §3); la corrección telúrica se aplicó con el espectro de
-> transmisión de la estrella estándar (STD_TELLURIC) escalado por masa de aire. Cada
-> cifra citada lleva al lado la ruta del QC de la que se tomó.
+> Documento de justificación metodológica. La corrección telúrica se aplicó con el espectro
+> de transmisión de la estrella estándar (STD_TELLURIC) escalado por masa de aire. En el
+> intento original molecfit no convergió (§3); el reintento dedicado A1a (§6, 2026-07-19)
+> halló la causa raíz real (flujo sin normalizar + banda débil, no el GDAS), hizo **converger**
+> molecfit y **corroboró** STD_TELLURIC (|ΔT| 0.8 % por píxel en la banda B junto a Hα). Cada cifra citada lleva al lado la ruta del
+> QC de la que se tomó.
 >
-> Escrito: 2026-07-10. Fuente principal:
-> `runs/ROXs12b_raw/stages/stage00t_qc.json`.
+> Escrito: 2026-07-10; verificación A1a añadida 2026-07-19. Fuente principal:
+> `runs/ROXs12b_raw/stages/stage00t_qc.json`, `.../stage00r_qc.json → a1a_molecfit_crosscheck`.
 
 ---
 
@@ -85,6 +87,14 @@ Esto es un **problema de configuración** (perfil GDAS no disponible localmente 
 `telluriccorr` 4.3.3 instalado), no contaminación estelar ni un defecto del método
 telúrico. Registrado en `stage00t_qc.json` → `open_issues[0]`.
 
+> **Actualización (A1a, 2026-07-19).** El reintento dedicado (§6) identificó que la causa
+> raíz del χ² congelado **no era el GDAS** (secundario; se usó el perfil MIPAS estándar como
+> respaldo), sino que el espectro 1D se pasó **sin normalizar** (flujo mediano ~58000, continuo
+> atascado en 1.0, `bestnorm 1e12`) y con **una única ventana débil** (la banda B de O₂, ~5.6 %
+> de absorción media), dejando al parámetro de O₂ **sin leverage**. Al normalizar el flujo e
+> incluir la banda A de O₂ (7590–7690 Å, 30 % de absorción media), molecfit **converge** y
+> **corrobora** STD_TELLURIC (§6).
+
 ## 4. Limitaciones
 
 1. **Regiones interpoladas / dependencia de la estándar.** La corrección hereda la SNR y
@@ -135,3 +145,60 @@ cada uno con un bloque `provenance` que registra `derived_from`, la razón, y el
 cubo realineado (`9fff16b7…`, `cube_telcorr.fits`). El open_issue telúrico de
 `stage00r_qc.json` quedó anotado con `a3_telluric_resolution = {resolution:
 "justified_std_telluric", doc: este archivo}`.
+
+## 6. Verificación A1a — molecfit converge y corrobora STD_TELLURIC (2026-07-19)
+
+El paso opcional **A1a** (sesión dedicada, timebox) reintentó molecfit para cerrar el
+open_issue "no convergió" con un contraste independiente del método adoptado.
+
+**Diagnóstico de la falla previa (2026-07-06).** El `BEST_FIT_PARAMETERS.fits` del intento
+original mostraba `positive_weights=77`, `rms_rel_to_err=85.8`, `uncertainty(rel_mol_col_O2)=0`
+y χ² **idéntico** entre iteraciones: el flujo se pasó **sin normalizar** (mediana ~58000) con el
+continuo atascado en 1.0 (`bestnorm 1e12`), y la única ventana era la **banda B de O₂** débil
+(5.6 % de absorción media). El desajuste de continuo dominaba el χ² y O₂ quedaba **sin leverage**.
+
+**Correcciones aplicadas.**
+1. Normalización del espectro 1D por su continuo (mediana móvil) → flujo O(1).
+2. `WAVE_INCLUDE` con la **banda A de O₂ (7590–7690 Å)** — 73 % de profundidad máxima, 30 % de
+   absorción media, el rasgo telúrico con mayor leverage — más la **banda B (6864–6960 Å)**
+   que ancla el ajuste junto a Hα.
+3. Ajuste de O₂ (H₂O congelado; noche seca).
+
+**Resultado del ajuste** (`molecfit_model`, telluriccorr 4.3.3; scratch, no toca el árbol del run):
+
+| Métrica | Intento previo | A1a |
+|---|---|---|
+| Estado mpfit | congelado | **status=2 (converge)** |
+| `rel_mol_col_O2` | 1.0 (fijo) | **0.966 ± 0.016** |
+| `ppmv_O2` | — | **204760 ± 3325** (≈20.5 %, físico) |
+| `rms_rel_to_err` | 85.8 | **5.09** |
+
+**Comparación de la transmisión T(λ) vs STD_TELLURIC** (transmisión del mejor modelo,
+`MOLECFIT_DATA.mtrans`, vs `TELLURIC_TRANS.fits` aplicado en A3):
+
+| Banda | molecfit T̄ | STD_TELLURIC T̄ | \|ΔT\| medio | razón absorción integrada (mol/STD) |
+|---|---|---|---|---|
+| **O₂ banda B (6864–6960 Å, junto a Hα)** | 0.930 | 0.927 | **0.008** | **0.955** |
+| O₂ banda A (7590–7690 Å) | 0.704 | 0.720 | 0.021 | 1.055 |
+
+> **Marco de longitud de onda (aire vs vacío).** molecfit reporta `MOLECFIT_DATA.lambda` en
+> **vacío**, mientras la ciencia y STD_TELLURIC están en **aire** (nativo de MUSE). La superposición
+> cruda mostraba un desfase aparente de +1.3 Å (4750 Å) → +2.6 Å (9300 Å) que coincide con la
+> dispersión aire→vacío de Edlén a <0.01 Å — **no es un desacuerdo físico**. Las cifras de la tabla
+> son tras convertir la λ de molecfit vacío→aire; con ello el |ΔT| por píxel en la banda B baja a 0.8 %.
+
+En Hα (6540–6590 Å) no hay líneas telúricas: STD_TELLURIC es exactamente 1.0 en todo
+6590–6860 Å y en Hα, y molecfit (misma atmósfera) es igualmente ≈1 — ambos dejan Hα intacta.
+Gráfico: `runs/ROXs12b_raw/plots/stage00t_a1a_molecfit_vs_std.png`.
+
+**Conclusión.** Con el flujo normalizado y una banda telúrica fuerte, molecfit **converge** y su
+transmisión de O₂ **coincide con STD_TELLURIC al ~4.5 %** (integrado) / 0.8 % (por píxel) en la
+banda B adyacente a Hα y al ~6 % en la banda A. Esto es una **corroboración independiente** de
+la corrección A3 STD_TELLURIC. **A1b (STD_TELLURIC justificado) sigue siendo el cierre del
+paper**; A1a convierte el antiguo caveat "molecfit no convergió" en un contraste positivo.
+Registrado en `stage00r_qc.json` → `a1a_molecfit_crosscheck`.
+
+*Nota operativa:* `molecfit_calctrans` (transmisión de rango completo) no se produjo — esta build
+rechaza `MAPPING_ATMOSPHERIC` para un SCIENCE de una sola BINTABLE (perfil atmosférico NULL pese
+a mapping válido), un quirk de la receta/versión, no un problema físico. La comparación a nivel de
+ventana (arriba) es suficiente para el contraste.
