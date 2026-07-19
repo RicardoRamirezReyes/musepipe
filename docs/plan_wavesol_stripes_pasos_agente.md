@@ -487,7 +487,27 @@ Brief original:
 - **No hacer**: no corregir nada (si detecta algo, PARAR y reportar — sería
   hallazgo nuevo).
 
-### PASO R4 🟡 · STAT_EMP — varianza empírica inter-exposición (ataca el M5 rojo)
+### PASO R4 ✅ · STAT_EMP — varianza empírica inter-exposición (ataca el M5 rojo) (HECHO 2026-07-18, rama `wavesol-r5`)
+> Núcleo en `musepipe/qc/stat_emp.py` (I/O-free + CLI chunked por canal, memmap) + 7 tests.
+> **HALLAZGO/DESVIACIÓN clave (con guía humana): los 7 cubos NO están en grid vóxel-común.** El
+> premisa del brief ("mismo grid por OFFSET_LIST") era falsa: NAXIS1/2 difieren (316×306 vs
+> 308×313), dither ~20-26px. Verificado: los cubos FINALES son todos **North-up** (CD sin
+> rotación, eje-x=−180° idéntico); la rotación del derotador (ABSROT −16→+3°) la absorbió scipost
+> al resamplear cada uno North-up. CRVAL sí difiere ~0.6" (mi allclose inicial lo ocultó) ⇒
+> separación = **pura traslación**. ⇒ alineo por **shift ENTERO** (sin interpolación → no añade
+> covarianza; residual sub-px ≤0.4px ⇒ límite superior). La rotación distinta por exposición
+> orienta distinto la covarianza de resampleo ⇒ exposiciones cuasi-independientes ⇒ STAT_EMP
+> captura justo lo que el STAT subestima. Gate WCS relajado a sub-canal en CRVAL3 (los cubos
+> difieren mÅ = la deriva λ de S3; grid CD3_3/NAXIS3 idénticos). **Resultado:** ratio = s²_emp/
+> mean(STAT_i). **Vóxel típico (fondo): mediana ×2.9 (bias-corregida ×3.3, ceñido 2.82-3.18);
+> ponderado por flujo ×8.6 (límite superior, inflado por variabilidad de seeing/transparencia
+> de la fuente).** El M5 "~4-6× estimado" queda **acotado empíricamente [~3×, ~8.6×]**. STAT_EMP.fits
+> (285×290×3681, `/mnt/2TB/.../STAT_EMP.fits`), `stageR4_stat_emp_qc.json`,
+> `tables/stat_emp_ratio_by_channel.csv`, figura `plots/r4_stat_emp/`. **Nota M5 en `report.py`
+> (ACCEPTED_LIMITATIONS) actualizada** de "~4-6× estimado" a los valores medidos. Suite 584. NO
+> sustituye el STAT canónico ni re-corre B→F (medición/QC).
+
+Brief original:
 - **Objetivo**: producir la única estimación de varianza libre de la
   covarianza de resampleo del DRS: por vóxel, la dispersión ENTRE las 7
   exposiciones ya regeneradas (mismo grid por OFFSET_LIST).

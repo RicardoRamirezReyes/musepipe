@@ -113,9 +113,14 @@ VARIABILITY_CAVEAT_NOTE = (
 ACCEPTED_LIMITATIONS = {
     "A4_cube_qc": {
         "m5_stat.status": (
-            "M5 STAT variance underestimated ~4-6x by MUSE cube resampling covariance (inherent to "
-            "drizzle-style resampling, not a reduction error); mitigated by using empirical "
-            "control-based noise throughout X01-X11 (plan B). Not a fixable defect."
+            "M5 STAT variance underestimated by MUSE cube resampling covariance (inherent to "
+            "drizzle-style resampling, not a reduction error). MEASURED empirically (R4/STAT_EMP, "
+            "inter-exposure scatter of the 7 regenerated per-exposure cubes; "
+            "stageR4_stat_emp_qc.json): the DRS STAT underestimates the per-voxel variance by "
+            "x2.9 at the typical background voxel (x3.3 bias-corrected), up to x8.6 flux-weighted "
+            "(an upper limit, inflated by source seeing/transparency variation) -- consistent with "
+            "the ~4-6x expectation. Mitigated by using empirical control-based noise throughout "
+            "X01-X11 (plan B). Not a fixable defect."
         ),
     },
     "E2_artifacts": {
