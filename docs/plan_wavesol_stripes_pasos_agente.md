@@ -49,7 +49,14 @@ por si se reabre).
 
 ## Track A — cierres A-block
 
-### PASO A1b 🟢 · Justificación STD_TELLURIC (documental)
+### PASO A1b ✅ · Justificación STD_TELLURIC (documental) (HECHO 2026-07-18, rama `track-a-a1b-a3`, commit 6634532)
+> `docs/a3_telluric_justification.md` completado: citas verificadas por web — Weilbacher+20 (A&A 641
+> A28: la telúrica de la estándar es el método NATIVO del DRS) y Hashimoto+20 (PDS 70b, análogo MUSE
+> más cercano: pipeline estándar vía EsoReflex, flujo in-pipeline, SIN molecfit, solo enmascaró
+> regiones) ⇒ nuestro STD_TELLURIC explícito con ventana Hα protegida es al menos tan riguroso.
+> `stage00r_qc.json` anotado con `a3_telluric_resolution = {resolution: justified_std_telluric, doc}`.
+
+### PASO A1b-orig 🟢 · Justificación STD_TELLURIC (documental)
 - **Objetivo**: cerrar el open_issue "molecfit no convergió" con una justificación
   formal del método aplicado, publicable en la sección de métodos.
 - **Entradas**: `docs/a3_telluric_justification.md` (esqueleto),
@@ -66,7 +73,15 @@ Sesión dedicada con agente fuerte: iterar config de `molecfit_model`
 sesión. Si converge, comparar T(λ) contra STD_TELLURIC y decidir; si no,
 A1b queda como cierre definitivo.
 
-### PASO A2a 🟡 · Master BIAS por noche (evidencia)
+### PASO A2a ✅ · Master BIAS por noche (evidencia) (HECHO 2026-07-18, rama `track-a-a1b-a3`, commit 30554ce)
+> `scripts/a2a_bias_by_night.py`: 44 BIAS en **4 noches** (no 3), master por noche vía esorex en
+> scratch (master en uso intocado), comparado por IFU×cuadrante (QC keywords LEVEL/RON) vs el global.
+> **Criterio NO se cumple formalmente**: el nivel deriva noche a noche coherentemente (noche científica
+> 2022-09-01 a −3.84 ADU uniformes del global; 08-28 a +3.3; 08-31/09-03 <1 ADU); RON mayormente <5%
+> con outliers de IFU. Tabla `runs/ROXs12b_raw/tables/bias_by_night_comparison.csv` + `bias_grouping_check`
+> en stage00r_qc.json.
+
+### PASO A2a-orig 🟡 · Master BIAS por noche (evidencia)
 - **Objetivo**: comprobar si combinar las 44 BIAS de varias noches en un master
   único sesga el nivel/RON.
 - **Procedimiento**: agrupar las BIAS raw por noche (header `MJD-OBS`, 3 noches);
@@ -79,11 +94,26 @@ A1b queda como cierre definitivo.
   ⇒ agrupación global aceptable.
 - **No hacer**: no re-correr la cascada; no reemplazar el master en uso.
 
-### PASO A2b 🔴-lite · Decisión de agrupación (humana)
+### PASO A2b ✅ · Decisión de agrupación (humana) (DECIDIDO 2026-07-18: ACEPTAR)
+> **Decisión humana: ACEPTAR la agrupación global** (documentar). Análisis de impacto cuantificado
+> (bias_grouping_check.impact_analysis en stage00r_qc.json): el offset de bias es espectralmente PLANO
+> ⇒ **efecto CERO exacto en el límite de LÍNEA Hα** (E1 resta el continuo running-median 80 Å antes del
+> matched filter, el pedestal se cancela) y <2% del ruido en el continuo (3.84 ADU→10.5 u de cubo = 1.8%
+> del ruido 590; residual post-cielo 0.29%). El master global (44 frames) además tiene menos read-noise
+> que uno por-noche. Regrupar = re-cascada completa sin ganancia medible. `a2b_decision` +
+> `bias_grouping_resolution` en stage00r_qc.json; F1 yellow/0 red.
+
+### PASO A2b-orig 🔴-lite · Decisión de agrupación (humana)
 Con la tabla de A2a: aceptar (documentar en QC como limitación verificada) o
 reagrupar (lo que dispararía re-cascada — decisión de costo del usuario).
 
-### PASO A3 🟢 · Trazabilidad QC A2/A3 en el run realineado
+### PASO A3 ✅ · Trazabilidad QC A2/A3 en el run realineado (HECHO 2026-07-18, rama `track-a-a1b-a3`, commit 6634532)
+> Escritos `runs/ROXs12b_realigned/stages/stage00s_qc.json` (A2) y `stage00t_qc.json` (A3) DERIVADOS de
+> los reales de `ROXs12b_raw` (mismos números, sin renombrar claves) + bloque `provenance` (derived_from,
+> reason, sha256 del cubo realineado). **F1: A2 pasó de "conditional QC missing" a yellow; A3 de "not_run"
+> a yellow**; overall yellow, 0 red.
+
+### PASO A3-orig 🟢 · Trazabilidad QC A2/A3 en el run realineado
 - **Objetivo**: que F1 deje de marcar A2 "conditional QC missing" y A3 "not_run".
 - **Procedimiento**: escribir `runs/ROXs12b_realigned/stages/stage00s_qc.json` y
   `stage00t_qc.json` DERIVADOS de los reales de `ROXs12b_raw` (mismos números),
