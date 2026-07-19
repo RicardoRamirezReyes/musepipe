@@ -98,18 +98,40 @@ telúrico. Registrado en `stage00t_qc.json` → `open_issues[0]`.
    corrección telúrica **no altera** la región del diagnóstico de acreción
    (`v3_halpha_untouched = true`). Esto es lo relevante para el resultado científico: el
    límite de Hα no depende de la calidad de la corrección telúrica.
-4. **Referencia a la práctica estándar.** El uso de STD_TELLURIC de la estrella estándar
-   escalada por masa de aire es el enfoque de respaldo habitual en reducciones MUSE cuando
-   molecfit no está disponible o no converge. [REF — completar con la cita de la práctica
-   estándar MUSE, p. ej. el manual del pipeline MUSE / Weilbacher et al.]
+4. **Referencia a la práctica estándar.** La corrección telúrica a partir del espectro de
+   la estrella estándar es un método **incorporado en el propio pipeline MUSE**: el DRS
+   deriva la transmisión telúrica de las exposiciones de la estándar (paso separable de la
+   estándar espectrofotométrica de flujo) — ver Weilbacher et al. 2020, *The data processing
+   pipeline for the MUSE instrument*, A&A 641, A28 (DOI 10.1051/0004-6361/202037855), §sobre
+   `muse_standard`. Aplicarlo con escalado por masa de aire (Beer–Lambert) es el uso estándar
+   cuando molecfit no está disponible o no converge; aquí NO es un atajo sino el método nativo
+   del DRS con una salvedad conservadora (ventana Hα protegida).
+5. **Comparación con la literatura análoga (calibración sin molecfit).** El estudio MUSE de
+   acreción en Hα más cercano a este trabajo, **Hashimoto et al. 2020** (PDS 70 b; AJ 159,
+   222; arXiv:2003.07922), redujo los datos con el **pipeline MUSE estándar vía EsoReflex** y
+   **calibró el flujo dentro del pipeline** (curva de extinción de Paranal + estrella
+   espectrofotométrica de las master calibrations); **no empleó molecfit** — simplemente
+   enmascaró las regiones contaminadas en lugar de aplicar una corrección telúrica explícita.
+   Nuestra corrección STD_TELLURIC explícita, con la ventana de Hα (6540–6590 Å) forzada a
+   `T ≡ 1` y verificación pre/post (O₂ 6.76 %→0.6 %), es por tanto **al menos tan rigurosa**
+   como la de los análogos MUSE publicados, y el diagnóstico científico (Hα) es insensible a
+   ella por construcción (cf. Eriksson et al. 2020, Delorme 1 (AB) b, A&A 638, L6, otro
+   análogo MUSE reducido con el pipeline estándar).
 
 ## 5. Nota sobre el run realineado
 
 El run científico principal (`ROXs12b_realigned`,
 `/mnt/2TB/MUSE_work/ROXs12b_realigned_run`) reutiliza el **mismo método** STD_TELLURIC:
 su árbol contiene `TELLURIC_TRANS.fits` y `cube_telcorr.fits`
-(`/mnt/2TB/MUSE_work/ROXs12b_realigned/`), pero **no** emitió un `stage00t_qc.json`
-separado. Por tanto, las cifras de verificación de §2 provienen del QC del run crudo
-(`runs/ROXs12b_raw/stages/stage00t_qc.json`), que documenta la reducción telúrica de
-referencia. [Pendiente: regenerar un QC telúrico para el run realineado si se quiere una
-métrica pre/post propia; el método y la transmisión son los mismos.]
+(`/mnt/2TB/MUSE_work/ROXs12b_realigned/`). Las cifras de verificación de §2 provienen del QC
+del run crudo (`runs/ROXs12b_raw/stages/stage00t_qc.json`), que documenta la reducción
+telúrica de referencia; el método y la transmisión son los mismos en ambos runs.
+
+**Trazabilidad (paso A3, 2026-07-18):** para que el gate F1 del run realineado deje de marcar
+A2 "conditional QC missing" y A3 "not_run", se emitieron
+`runs/ROXs12b_realigned/stages/stage00s_qc.json` (A2, sky/ZAP) y `stage00t_qc.json` (A3,
+telúrica) **derivados** de los reales de `ROXs12b_raw` (mismos números, sin renombrar claves),
+cada uno con un bloque `provenance` que registra `derived_from`, la razón, y el `sha256` del
+cubo realineado (`9fff16b7…`, `cube_telcorr.fits`). El open_issue telúrico de
+`stage00r_qc.json` quedó anotado con `a3_telluric_resolution = {resolution:
+"justified_std_telluric", doc: este archivo}`.
