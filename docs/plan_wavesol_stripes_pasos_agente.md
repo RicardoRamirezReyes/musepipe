@@ -433,7 +433,14 @@ Brief original:
 - **No hacer**: no añadir relaciones para otras líneas (Hβ etc. quedan fuera);
   no cambiar el headline sin decisión humana.
 
-### PASO R2 🟢 · Caveat de variabilidad de acreción (una época)
+### PASO R2 ✅ · Caveat de variabilidad de acreción (una época) (HECHO 2026-07-18, rama `wavesol-r2`)
+> `VARIABILITY_CAVEAT_NOTE` en `report.py` (prosa fija, patrón LINE_DIAGNOSTICS_NOTE) + sección
+> nueva "Variability Caveat" en la plantilla. Época verificada contra la decisión G1: **2022-09-01,
+> MJD 59823.025–59823.086, 7 exposiciones ~87 min**; cita Cody & Hillenbrand 2014 + Hashimoto+20
+> §5.4 (multi-época). Solo texto: sin tocar QC ni números. Report realineado regenerado; report
+> tests (determinismo/hash recalculado) verdes. Suite 562.
+
+Brief original:
 - **Objetivo**: frase obligatoria de conclusiones: la acreción es variable en
   el tiempo (Cody & Hillenbrand 2014; Hashimoto+20 §5.4 la piden para
   multi-época); una NO-detección de una sola época no excluye acreción

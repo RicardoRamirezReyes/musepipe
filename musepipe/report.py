@@ -40,6 +40,9 @@ REPORT_TEMPLATE = """# MUSE Run Report
 ## Accretion Relation
 {accretion_relation}
 
+## Variability Caveat
+{variability_caveat}
+
 ## Accepted Limitations
 {accepted_limitations}
 
@@ -82,6 +85,22 @@ ACCRETION_RELATION_NOTE = (
     "`mdot_aoyama21_msun_yr` (Aoyama+21) in stage_h03_qc.json and "
     "`tables/mdot_limit_vs_extinction.csv`. The planetary relation is valid for L_acc <= 1e-4 Lsun; "
     "the Alcala relation remains the adopted headline pending a companion-class decision."
+)
+
+
+# R2 note (fixed prose): accretion is time-variable, and this dataset is a single
+# epoch, so the non-detection / Mdot limit applies only to that epoch.
+VARIABILITY_CAVEAT_NOTE = (
+    "This result is a SINGLE-EPOCH measurement. All science frames were taken on one night "
+    "(2022-09-01; MJD 59823.025-59823.086), a set of 7 exposures spanning about 87 minutes. "
+    "Accretion onto young sub-stellar and planetary-mass objects is known to be variable on "
+    "timescales from hours to years (e.g. Cody & Hillenbrand 2014; multi-epoch monitoring "
+    "advocated by Hashimoto et al. 2020, sec 5.4). A non-detection at this epoch therefore does "
+    "NOT exclude accretion at other times: the companion could be accreting episodically, or "
+    "accreting steadily at a level that this ~87-minute window happened to sample below the "
+    "detection threshold. The reported Halpha flux and Mdot upper limits should be read as "
+    "constraints on the accretion state DURING THIS EPOCH, not as a time-averaged or permanent "
+    "upper bound. Confirming or tightening the limit requires multi-epoch observations."
 )
 
 
@@ -848,6 +867,7 @@ def render_report_markdown(summary):
         table_list=_markdown_table(table_rows, ["table", "path"]),
         line_diagnostics=LINE_DIAGNOSTICS_NOTE,
         accretion_relation=ACCRETION_RELATION_NOTE,
+        variability_caveat=VARIABILITY_CAVEAT_NOTE,
         accepted_limitations=accepted_md,
         historical_context=historical,
         reproduction=reproduction,
