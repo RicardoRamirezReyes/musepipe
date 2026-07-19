@@ -27,6 +27,11 @@ del combinado es **ruido de S/N**, no un sistemático de λ. Ninguna re-reducci�
 | 07-18 | S7a/b/c | nota ILLUM (Xie §3.1); tabla Ṁ vs A_V (×8 de A_V=0 a A_Hα=2); nota Hβ/Hα en el informe | 0e408e1 |
 | 07-19 | S2a | plan de regeneración retroactivo (tiempos medidos) | (docs) |
 | 07-19 | S8 | cierre: G1 marcado `closed`, notebooks S0/S1, bitácora, F1 refresh, memoria | (este) |
+| 07-18 | **R1** | límite Ṁ dual: Alcalá (headline, ×0 cambio) + **Aoyama+21 planetario ×10.5 más débil**; coefs cross-check vs arXiv:2108.01277 | 0c155cd |
+| 07-18 | R2 | caveat de variabilidad (1 época 2022-09-01, 7 exp ~87 min) en el informe (Cody&Hillenbrand14, Hashimoto+20 §5.4) | ef04d9b |
+| 07-18 | R3 | censo de ghosts en B: **line_ghost=none, fringing=none** (tras restar halo radial AO; el naïve daba +9σ falso) | d8247f0 |
+| 07-18 | R5 | frame-QC de las 7 exp: **7/7 utilizables, 0 descartadas** (FWHM 11-13px, fondo 33-50) | 45a1861 |
+| 07-18 | **R4** | STAT_EMP inter-exposición: DRS subestima la varianza **×2.9 (fondo, bias-corr ×3.3) a ×8.6 (ponderado)** ⇒ M5 acotado | 98a805a |
 
 ## Desviaciones documentadas (honestidad)
 
@@ -58,3 +63,49 @@ del combinado es **ruido de S/N**, no un sistemático de λ. Ninguna re-reducci�
   `tables/{s0_perexp_summary,perexp_m1_offsets,mdot_limit_vs_extinction}.csv`,
   `/mnt/2TB/MUSE_work/ROXs12b_perexp/exp{1..7}/`.
 - Registro de decisión: `docs/decision_g1_wavesol_2026-07-17.md` (CERRADO).
+
+## Lote R — re-auditoría 2026-07-18 (post-merge PR #1)
+
+Cinco brechas restantes tras comparar Xie+20 / Hashimoto+20 contra el estado
+post-cierre. Todas ejecutadas (ramas `wavesol-r1`..`r5`, suite 584 verde).
+Detalle por paso en `docs/plan_wavesol_stripes_pasos_agente.md` (sección Lote R).
+
+- **R1** (sustantivo, cambia el número del paper): límite de Ṁ bajo DOS
+  calibraciones — Alcalá+2017 (estelar, headline, INTACTO 8.19e-13) y **Aoyama+21
+  planetario 8.64e-12 (×10.5 más débil)**. Coefs (0.95, 1.61) cross-checkeados
+  contra el full-text de arXiv:2108.01277 (species no instalado). Claves E3
+  `mdot_aoyama21_*` aditivas, columnas S7b, sección "Accretion Relation" en el
+  informe.
+- **R2**: caveat de variabilidad (1 época) en el informe.
+- **R3**: censo de ghosts en B ⇒ **limpio**. `ghost_census.py` + 9 tests.
+- **R4** (ataca M5): STAT_EMP inter-exposición. El DRS subestima la varianza
+  por-vóxel **×2.9 (fondo) a ×8.6 (ponderado)** ⇒ M5 "~4-6× estimado" **medido y
+  acotado**. Nota M5 del informe actualizada.
+- **R5**: frame-QC ⇒ **7/7 utilizables, 0 descartadas**.
+
+### Desviaciones documentadas del Lote R
+
+6. **R3 (2 desviaciones)**: (a) resta del halo radial AO de la primaria antes del
+   test de tira — el método naïve fila/columna daba +9σ falso (la columna de B
+   cruza la primaria); (b) fringing detectado por fracción-de-varianza del modo
+   dominante (>0.15), no por "pico>5×mediana" (piso de ruido blanco ~1.4·ln M ≈ 8).
+7. **R4 (crítica)**: los 7 `DATACUBE_FINAL` **NO están en grid vóxel-común**
+   (NAXIS distintos, dither ~20-26px), contra la premisa del brief. Verificado que
+   son North-up (scipost absorbió ABSROT); separación = pura traslación ⇒ alineo
+   por **shift entero** (sin interpolación → sin nueva covarianza; ≤0.4px residual
+   ⇒ límite superior). Gate WCS relajado a sub-canal en CRVAL3 (deriva λ de S3).
+   Dos estadísticos: mediana por-canal (vóxel típico) y pooled (ponderado, límite
+   superior).
+
+### Productos del Lote R
+
+- Código: `musepipe/qc/{ghost_census,frame_qc,stat_emp}.py` (+ tests
+  `test_{ghost_census,frame_qc,stat_emp}.py`, +22); ampliaciones en
+  `stage_h03_limits.py` (dual Aoyama), `report.py` (3 notas + nota M5 medida),
+  `scripts/s7b_mdot_vs_extinction.py`.
+- QC/tablas/figuras (no versionados, tras el symlink del run):
+  `stageR3_ghost_census_qc.json`, `stageR4_stat_emp_qc.json`,
+  `stageR5_frame_qc.json`, `tables/{perexp_frame_qc,stat_emp_ratio_by_channel}.csv`,
+  `plots/{r3_ghost,r4_stat_emp}/`, y `STAT_EMP.fits` (285×290×3681) en
+  `/mnt/2TB/MUSE_work/ROXs12b_perexp/`.
+- Config: `g3_lacc_relations.halpha_aoyama21` en el run realineado.

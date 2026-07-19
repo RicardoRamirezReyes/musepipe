@@ -48,6 +48,10 @@ def h03_physical_config(run_id, root):
         "h03_template_width_factors": [1.0, 2.0],
         "h03_matched_sigma_by_method": {"psffit": {"1": 2.0e-17, "2": 3.0e-17}},
         "h03_separation_arcsec": 1.7,
+        "g3_lacc_relations": {
+            "halpha_aoyama21": {"a": 0.95, "b": 1.61, "scatter_dex": 0.3,
+                                "citation": "Aoyama et al. 2021", "validity_range": "planetary"}
+        },
     }
 
 
@@ -84,6 +88,36 @@ class H03ChainTests(unittest.TestCase):
         self.assertAlmostEqual(result["l_acc_lsun"], lacc_lsun)
         self.assertAlmostEqual(result["mdot_msun_yr"], mdot)
         self.assertAlmostEqual(result["mdot_err_dex"], 0.3)
+
+    def test_aoyama21_alt_relation_absent_and_present(self):
+        base = dict(
+            z_threshold=3.0, z_5sigma_extrap=5.0, matched_sigma=2.0e-17,
+            throughput=0.5, throughput_err=0.0, distance_pc=10.0, distance_err_pc=0.0,
+            av=0.0, av_err=0.0, a_halpha_over_av=1.0, lacc_lha_slope=1.13,
+            lacc_lha_intercept=1.74, relation_scatter_dex=0.3, mass_msun=1.0, radius_rsun=1.0,
+        )
+        # Absent -> aoyama keys present but NaN, headline untouched.
+        without = limit_conversion_chain(**base)
+        self.assertTrue(math.isnan(without["mdot_aoyama21_msun_yr"]))
+        self.assertTrue(math.isnan(without["l_acc_aoyama21_lsun"]))
+
+        # Present -> parallel keys; the ratio of Mdot limits follows the analytic
+        # 10^((a1-a2) logL_Halpha + (b1-b2)) with (a1,b1)=(1.13,1.74) Alcala and
+        # (a2,b2)=(0.95,1.61) Aoyama+21. Alcala must be MORE restrictive here.
+        with_alt = limit_conversion_chain(
+            **base, alt_lacc_slope=0.95, alt_lacc_intercept=1.61, alt_scatter_dex=0.3
+        )
+        self.assertEqual(with_alt["mdot_msun_yr"], without["mdot_msun_yr"])  # headline unchanged
+        log_lha = math.log10(with_alt["l_halpha_lsun"])
+        expected_ratio = 10.0 ** ((1.13 - 0.95) * log_lha + (1.74 - 1.61))
+        actual_ratio = with_alt["mdot_msun_yr"] / with_alt["mdot_aoyama21_msun_yr"]
+        self.assertAlmostEqual(actual_ratio, expected_ratio, places=6)
+        # L_Halpha << 1e-6 Lsun here -> Alcala limit is the tighter (smaller) one.
+        self.assertLess(with_alt["mdot_msun_yr"], with_alt["mdot_aoyama21_msun_yr"])
+        self.assertAlmostEqual(
+            with_alt["mdot_aoyama21_err_dex"],
+            math.sqrt((0.95 * (0.0)) ** 2 + 0.3 ** 2), places=6,
+        )
 
     def test_stage_h03_writes_upper_limit_table_qc_and_context_plot(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,6 +166,14 @@ class H03ChainTests(unittest.TestCase):
             self.assertEqual(written["qc"]["prerequisites"]["e4_v1"], "pass")
             self.assertEqual(written["qc"]["canonical_method"], "psffit")
             self.assertTrue(any(row["row_kind"] == "combined_final" for row in product.rows))
+            # R1: parallel Aoyama+21 accretion limit is computed and surfaced.
+            combined = next(r for r in product.rows if r["row_kind"] == "combined_final")
+            self.assertIsNotNone(combined["mdot_aoyama21_msun_yr"])
+            self.assertNotEqual(combined["mdot_aoyama21_msun_yr"], combined["mdot_msun_yr"])
+            self.assertIsNotNone(
+                written["qc"]["physical_inputs"]["lacc_aoyama21_relation"]
+            )
+            self.assertTrue(all("mdot_aoyama21" in lim for lim in written["qc"]["limits"]))
 
 
 if __name__ == "__main__":

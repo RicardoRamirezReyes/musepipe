@@ -78,6 +78,11 @@ TABLE_FIELDS = [
     "mdot_msun_yr",
     "mdot_5sigma_msun_yr",
     "mdot_err_dex",
+    "l_acc_aoyama21_lsun",
+    "l_acc_aoyama21_5sigma_lsun",
+    "mdot_aoyama21_msun_yr",
+    "mdot_aoyama21_5sigma_msun_yr",
+    "mdot_aoyama21_err_dex",
     "relation_scatter_dex",
     "intermethod_scatter_pct",
 ]
@@ -533,6 +538,25 @@ def _extinction_ratio_from_config(cfg):
     raise RuntimeError("H03 currently supports explicit h03_a_halpha_over_av or CCM extinction law.")
 
 
+def _aoyama21_relation_from_config(cfg):
+    """R1: optional planetary-shock L_acc-L_Halpha relation (Aoyama et al. 2021),
+    read from cfg['g3_lacc_relations']['halpha_aoyama21']. Returns None if absent."""
+    relations = cfg.get("g3_lacc_relations")
+    rel = relations.get("halpha_aoyama21") if isinstance(relations, dict) else None
+    if not isinstance(rel, dict):
+        return None
+    try:
+        return {
+            "a": float(rel["a"]),
+            "b": float(rel["b"]),
+            "scatter_dex": float(rel.get("scatter_dex", 0.30)),
+            "citation": str(rel.get("citation", "Aoyama et al. 2021, ApJL 917, L30")),
+            "validity_range": rel.get("validity_range", ""),
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid g3_lacc_relations.halpha_aoyama21 entry: {exc}") from exc
+
+
 def physical_inputs_from_config(cfg):
     distance_pc = _required_float(cfg, ("h03_distance_pc", "distance_pc"), "distance")
     distance_err_pc = _required_float(cfg, ("h03_distance_err_pc", "distance_err_pc"), "distance error")
@@ -608,6 +632,7 @@ def physical_inputs_from_config(cfg):
         "companion_radius_rsun": radius_rsun,
         "mass_source": mass_source,
         "radius_source": radius_source,
+        "lacc_aoyama21": _aoyama21_relation_from_config(cfg),
     }
 
 
@@ -648,6 +673,9 @@ def limit_conversion_chain(
     relation_scatter_dex,
     mass_msun,
     radius_rsun,
+    alt_lacc_slope=None,
+    alt_lacc_intercept=None,
+    alt_scatter_dex=None,
 ):
     f_stat = float(z_threshold) * float(matched_sigma)
     f_stat_5sigma = float(z_5sigma_extrap) * float(matched_sigma)
@@ -673,6 +701,17 @@ def limit_conversion_chain(
     lha_frac = 0.0 if lha == 0 else abs(lha_err / lha)
     measurement_dex = lha_frac / math.log(10.0)
     mdot_err_dex = math.sqrt((float(lacc_lha_slope) * measurement_dex) ** 2 + float(relation_scatter_dex) ** 2)
+    # R1: parallel accretion limit under a second L_acc-L_line relation (Aoyama+21
+    # planetary shock) on the SAME dereddened L_Halpha. Additive; NaN when absent.
+    if alt_lacc_slope is not None and alt_lacc_intercept is not None:
+        lacc_alt = lacc_lsun_from_lha(lha_lsun, alt_lacc_slope, alt_lacc_intercept)
+        lacc_alt_5sigma = lacc_lsun_from_lha(lha_5sigma_lsun, alt_lacc_slope, alt_lacc_intercept)
+        mdot_alt = mdot_msun_yr_from_lacc(lacc_alt, mass_msun, radius_rsun)
+        mdot_alt_5sigma = mdot_msun_yr_from_lacc(lacc_alt_5sigma, mass_msun, radius_rsun)
+        alt_scatter = float(relation_scatter_dex if alt_scatter_dex is None else alt_scatter_dex)
+        mdot_alt_err_dex = math.sqrt((float(alt_lacc_slope) * measurement_dex) ** 2 + alt_scatter ** 2)
+    else:
+        lacc_alt = lacc_alt_5sigma = mdot_alt = mdot_alt_5sigma = mdot_alt_err_dex = np.nan
     return {
         "f_stat_99": f_stat,
         "f_stat_5sigma_extrap": f_stat_5sigma,
@@ -692,6 +731,11 @@ def limit_conversion_chain(
         "mdot_msun_yr": mdot,
         "mdot_5sigma_msun_yr": mdot_5sigma,
         "mdot_err_dex": mdot_err_dex,
+        "l_acc_aoyama21_lsun": lacc_alt,
+        "l_acc_aoyama21_5sigma_lsun": lacc_alt_5sigma,
+        "mdot_aoyama21_msun_yr": mdot_alt,
+        "mdot_aoyama21_5sigma_msun_yr": mdot_alt_5sigma,
+        "mdot_aoyama21_err_dex": mdot_alt_err_dex,
     }
 
 
@@ -857,6 +901,9 @@ def _row_from_limits(
         relation_scatter_dex=physical["relation_scatter_dex"],
         mass_msun=physical["companion_mass_msun"],
         radius_rsun=physical["companion_radius_rsun"],
+        alt_lacc_slope=(physical.get("lacc_aoyama21") or {}).get("a"),
+        alt_lacc_intercept=(physical.get("lacc_aoyama21") or {}).get("b"),
+        alt_scatter_dex=(physical.get("lacc_aoyama21") or {}).get("scatter_dex"),
     )
     row = {
         "row_kind": row_kind,
@@ -1005,6 +1052,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
             "lacc_lha_relation": physical["lacc_lha_relation"],
             "lacc_lha_citation": physical["lacc_lha_citation"],
             "relation_scatter_dex": physical["relation_scatter_dex"],
+            "lacc_aoyama21_relation": physical.get("lacc_aoyama21"),
             "companion_mass_msun": physical["companion_mass_msun"],
             "mass_source": physical["mass_source"],
             "companion_radius_rsun": physical["companion_radius_rsun"],
@@ -1024,6 +1072,8 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                 "f_lim_dereddened": row["f_lim_dereddened"],
                 "l_halpha": row["l_halpha_erg_s"],
                 "mdot": row["mdot_msun_yr"],
+                "mdot_aoyama21": row["mdot_aoyama21_msun_yr"],
+                "l_acc_aoyama21_lsun": row["l_acc_aoyama21_lsun"],
             }
             for row in rows
         ],

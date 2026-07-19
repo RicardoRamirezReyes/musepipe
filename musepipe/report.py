@@ -37,6 +37,12 @@ REPORT_TEMPLATE = """# MUSE Run Report
 ## Line Diagnostics
 {line_diagnostics}
 
+## Accretion Relation
+{accretion_relation}
+
+## Variability Caveat
+{variability_caveat}
+
 ## Accepted Limitations
 {accepted_limitations}
 
@@ -63,6 +69,41 @@ LINE_DIAGNOSTICS_NOTE = (
 )
 
 
+# R1 note (fixed prose): the Halpha accretion limit is reported under TWO
+# L_acc-L_line calibrations, because in the planetary/BD regime probed here the
+# stellar (Alcala+2017) and planetary-shock (Aoyama+2021) relations diverge.
+ACCRETION_RELATION_NOTE = (
+    "The Halpha-derived accretion-luminosity limit is reported under TWO calibrations of the "
+    "L_acc-L_Halpha relation. (1) The HEADLINE limit uses the empirical stellar/brown-dwarf "
+    "relation of Alcala et al. (2017), consistent with the rest of this pipeline. (2) A parallel "
+    "limit uses the theoretical planetary accretion-shock relation of Aoyama et al. (2021, "
+    "ApJL 917, L30; extended by Marleau & Aoyama 2023, RNAAS 7, 28), which is more appropriate "
+    "for a planetary/brown-dwarf accretor such as ROXs 12 B. In our regime (L_Halpha well below "
+    "1e-6 Lsun) the planetary relation has a shallower slope and gives a LARGER L_acc for the same "
+    "L_Halpha, hence a WEAKER (higher) Mdot upper limit. Reporting both is the standard post-"
+    "Hashimoto (2020) practice; the values appear as `mdot_msun_yr` (Alcala) and "
+    "`mdot_aoyama21_msun_yr` (Aoyama+21) in stage_h03_qc.json and "
+    "`tables/mdot_limit_vs_extinction.csv`. The planetary relation is valid for L_acc <= 1e-4 Lsun; "
+    "the Alcala relation remains the adopted headline pending a companion-class decision."
+)
+
+
+# R2 note (fixed prose): accretion is time-variable, and this dataset is a single
+# epoch, so the non-detection / Mdot limit applies only to that epoch.
+VARIABILITY_CAVEAT_NOTE = (
+    "This result is a SINGLE-EPOCH measurement. All science frames were taken on one night "
+    "(2022-09-01; MJD 59823.025-59823.086), a set of 7 exposures spanning about 87 minutes. "
+    "Accretion onto young sub-stellar and planetary-mass objects is known to be variable on "
+    "timescales from hours to years (e.g. Cody & Hillenbrand 2014; multi-epoch monitoring "
+    "advocated by Hashimoto et al. 2020, sec 5.4). A non-detection at this epoch therefore does "
+    "NOT exclude accretion at other times: the companion could be accreting episodically, or "
+    "accreting steadily at a level that this ~87-minute window happened to sample below the "
+    "detection threshold. The reported Halpha flux and Mdot upper limits should be read as "
+    "constraints on the accretion state DURING THIS EPOCH, not as a time-averaged or permanent "
+    "upper bound. Confirming or tightening the limit requires multi-epoch observations."
+)
+
+
 # Gate policy (frozen, auditable): specific red checks that are DOWNGRADED to a
 # yellow "accepted limitation" instead of blocking the package. Each entry is a
 # stage id -> {exact _walk_statuses path -> justification}. Matching is per-path
@@ -72,9 +113,14 @@ LINE_DIAGNOSTICS_NOTE = (
 ACCEPTED_LIMITATIONS = {
     "A4_cube_qc": {
         "m5_stat.status": (
-            "M5 STAT variance underestimated ~4-6x by MUSE cube resampling covariance (inherent to "
-            "drizzle-style resampling, not a reduction error); mitigated by using empirical "
-            "control-based noise throughout X01-X11 (plan B). Not a fixable defect."
+            "M5 STAT variance underestimated by MUSE cube resampling covariance (inherent to "
+            "drizzle-style resampling, not a reduction error). MEASURED empirically (R4/STAT_EMP, "
+            "inter-exposure scatter of the 7 regenerated per-exposure cubes; "
+            "stageR4_stat_emp_qc.json): the DRS STAT underestimates the per-voxel variance by "
+            "x2.9 at the typical background voxel (x3.3 bias-corrected), up to x8.6 flux-weighted "
+            "(an upper limit, inflated by source seeing/transparency variation) -- consistent with "
+            "the ~4-6x expectation. Mitigated by using empirical control-based noise throughout "
+            "X01-X11 (plan B). Not a fixable defect."
         ),
     },
     "E2_artifacts": {
@@ -825,6 +871,8 @@ def render_report_markdown(summary):
         figure_list=_markdown_table(figure_rows, ["figure", "status", "source"]),
         table_list=_markdown_table(table_rows, ["table", "path"]),
         line_diagnostics=LINE_DIAGNOSTICS_NOTE,
+        accretion_relation=ACCRETION_RELATION_NOTE,
+        variability_caveat=VARIABILITY_CAVEAT_NOTE,
         accepted_limitations=accepted_md,
         historical_context=historical,
         reproduction=reproduction,
