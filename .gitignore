@@ -37,11 +37,11 @@ package-lock.json
 esorex.log
 
 # LaTeX auxiliary outputs; keep source/PDF decisions explicit
-reports/*.aux
-reports/*.log
-reports/*.out
-reports/*.toc
-reports/*.synctex.gz
+reports/**/*.aux
+reports/**/*.log
+reports/**/*.out
+reports/**/*.toc
+reports/**/*.synctex.gz
 
 # Paper draft: shared via Overleaf, not in this repo (yet)
 paper/
@@ -49,4 +49,4 @@ paper/
 # Internal meeting slides: not part of the published pipeline
 roxs12_reunion.pptx
 roxs12_meeting_en.pptx
-reports/estado_proyecto_ROXs12B_2026-07-08.pptx
+reports/**/*.pptx

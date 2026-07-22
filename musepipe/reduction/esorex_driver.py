@@ -44,6 +44,7 @@ class RawRecord:
     tag: str
     dpr_type: str
     dpr_catg: str
+    pro_catg: str
     date_obs: str
     ins_mode: str
     binning: str
@@ -56,6 +57,7 @@ class RawRecord:
             "tag": self.tag,
             "dpr_type": self.dpr_type,
             "dpr_catg": self.dpr_catg,
+            "pro_catg": self.pro_catg,
             "date_obs": self.date_obs,
             "ins_mode": self.ins_mode,
             "binning": self.binning,
@@ -223,6 +225,12 @@ def normalize_muse_tag(header: fits.Header) -> str:
         "PIXTABLE_OBJECT",
         "PIXTABLE_STD",
         "STD_RESPONSE",
+        "STD_TELLURIC",
+        "PIXTABLE_REDUCED",
+        "IMAGE_FOV",
+        "OFFSET_LIST",
+        "DATACUBE_FINAL",
+        "SKY_SPECTRUM",
     )
     for tag in product_tags:
         if tag in combined:
@@ -256,6 +264,7 @@ def classify_fits(path: str | Path, *, checksum: bool = True) -> RawRecord:
         tag = normalize_muse_tag(header)
         dpr_type = _header_value(header, "HIERARCH ESO DPR TYPE", "DPR TYPE")
         dpr_catg = _header_value(header, "HIERARCH ESO DPR CATG", "DPR CATG")
+        pro_catg = _header_value(header, "HIERARCH ESO PRO CATG", "PRO CATG")
         date_obs = _header_value(header, "DATE-OBS", "MJD-OBS")
         ins_mode = _header_value(header, "HIERARCH ESO INS MODE", "INS MODE")
         exptime = _header_float(header, "EXPTIME", "HIERARCH ESO DET SEQ1 DIT")
@@ -266,6 +275,7 @@ def classify_fits(path: str | Path, *, checksum: bool = True) -> RawRecord:
         tag=tag,
         dpr_type=dpr_type,
         dpr_catg=dpr_catg,
+        pro_catg=pro_catg,
         date_obs=date_obs,
         ins_mode=ins_mode,
         binning=binning,
@@ -291,6 +301,7 @@ def write_inventory_csv(records: Sequence[RawRecord], path: str | Path) -> None:
         "tag",
         "dpr_type",
         "dpr_catg",
+        "pro_catg",
         "date_obs",
         "ins_mode",
         "binning",
@@ -315,6 +326,7 @@ def read_inventory_csv(path: str | Path) -> list[RawRecord]:
                     tag=row["tag"],
                     dpr_type=row.get("dpr_type", ""),
                     dpr_catg=row.get("dpr_catg", ""),
+                    pro_catg=row.get("pro_catg", ""),
                     date_obs=row.get("date_obs", ""),
                     ins_mode=row.get("ins_mode", ""),
                     binning=row.get("binning", ""),

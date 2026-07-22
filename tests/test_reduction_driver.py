@@ -108,6 +108,14 @@ class ReductionDriverTests(unittest.TestCase):
             self.assertEqual(tags.count("FLAT"), 1)
             self.assertTrue(all(record.ins_mode == "WFM-AO" for record in records))
 
+    def test_inventory_preserves_pro_category(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            master = Path(tmp) / "master_bias.fits"
+            _write_header_fits(master, "", "", extra={"HIERARCH ESO PRO CATG": "MASTER_BIAS"})
+            record = build_inventory([master], checksum=False)[0]
+            self.assertEqual(record.tag, "MASTER_BIAS")
+            self.assertEqual(record.pro_catg, "MASTER_BIAS")
+
     def test_build_recipe_plan_enforces_minimum_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = []
