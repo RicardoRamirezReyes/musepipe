@@ -41,7 +41,10 @@ class StreamCombineError(RuntimeError):
     """Raised when the per-exposure cubes cannot be combined safely."""
 
 
-DEFAULT_CROP_NPIX = 170
+# The combined cube is a working product, not the final science crop: B1
+# (stage01) re-centres and re-crops it to crop_npix and needs margin, so this
+# is deliberately wider than the 170 px science crop.
+DEFAULT_CROP_NPIX = 200
 DEFAULT_PAD = 12
 DEFAULT_CHUNK_CHANNELS = 128
 DEFAULT_COARSE_STRIDE = 25
