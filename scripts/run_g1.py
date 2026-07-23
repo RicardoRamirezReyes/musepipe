@@ -72,6 +72,38 @@ def _stat_err_frac(rows, method):
     return float(1.0 / snr) if np.isfinite(snr) and snr > 0 else 0.2
 
 
+def covariance_npz_payload(cov):
+    """Arrays written to ``g1_channel_covariance.npz``.
+
+    Emits BOTH the legacy per-block arrays (``block_z0``/``block_z1``/
+    ``n_eff_over_n``/...) AND the schema the G3 consumer expects: ``block_bounds``
+    (Nx2 [z0, z1] per block) and ``n_eff_over_n_by_block`` (read by
+    ``musepipe.models.observed.rebin_for_fit``), plus ``rho_by_block`` /
+    ``corr_length_by_block`` (validated by ``scripts/check_g3_real_inputs.py``).
+    Without ``block_bounds`` the legacy-only file makes G3 fail with
+    ``KeyError: 'block_bounds'``.
+    """
+    blocks = cov["blocks"]
+    z0 = np.array([b["z0"] for b in blocks])
+    z1 = np.array([b["z1"] for b in blocks])
+    corr_len = np.array([b["corr_length_channels"] for b in blocks])
+    neff = np.array([b["n_eff_over_n"] for b in blocks])
+    rho = np.array([b["rho"] for b in blocks])
+    return {
+        # legacy schema (kept for backward compatibility)
+        "block_z0": z0,
+        "block_z1": z1,
+        "corr_length_channels": corr_len,
+        "n_eff_over_n": neff,
+        "rho_stack": rho,
+        # schema consumed by G3 (observed.rebin_for_fit) + check_g3_real_inputs
+        "block_bounds": np.column_stack([z0, z1]),
+        "n_eff_over_n_by_block": neff,
+        "rho_by_block": rho,
+        "corr_length_by_block": corr_len,
+    }
+
+
 def build_g1(run_id, project_root=None):
     root = Path(project_root or Path.cwd()).resolve()
     run_dir = root / "runs" / run_id
@@ -82,6 +114,14 @@ def build_g1(run_id, project_root=None):
     # --- spectral covariance from the psffit controls (continuum-agnostic rows) ---
     z = np.load(stage_dir / "spec_psffit_controls.npz", allow_pickle=True)
     ctrl = np.asarray(z["control_spectra"], dtype=np.float64)
+    # G3 (observed.rebin_for_fit / _block_upper_waves, WP-G3R-6) requires the
+    # covariance block_bounds to index the GOOD-channel subspace: the last bound
+    # must equal n_good, not the full 3681. Restrict the controls to the stage04b
+    # good channels before blocking so block_bounds cover exactly n_good.
+    bad_mask_file = stage_dir / "stage04b_bad_wavelength_mask.npy"
+    if bad_mask_file.exists():
+        good = ~np.load(bad_mask_file).astype(bool)
+        ctrl = ctrl[:, good]
     cov = spectral_covariance_blocks(ctrl, block_size=200, max_lag=15)
     neff_blocks = [b["n_eff_over_n"] for b in cov["blocks"] if np.isfinite(b["n_eff_over_n"])]
     n_eff_med = float(np.median(neff_blocks)) if neff_blocks else float("nan")
@@ -99,14 +139,7 @@ def build_g1(run_id, project_root=None):
     corner = cont[0:60, 0:60]  # away from primary (~85,85) and companion (~155,76)
     spatial = spatial_inflation_by_box(corner, boxes=(1, 2, 3, 4, 5), n_samples=400, seed=0)
 
-    np.savez(
-        stage_dir / "g1_channel_covariance.npz",
-        block_z0=np.array([b["z0"] for b in cov["blocks"]]),
-        block_z1=np.array([b["z1"] for b in cov["blocks"]]),
-        corr_length_channels=np.array([b["corr_length_channels"] for b in cov["blocks"]]),
-        n_eff_over_n=np.array([b["n_eff_over_n"] for b in cov["blocks"]]),
-        rho_stack=np.array([b["rho"] for b in cov["blocks"]]),
-    )
+    np.savez(stage_dir / "g1_channel_covariance.npz", **covariance_npz_payload(cov))
 
     # --- per-method bias budget + verdict from the E4 throughput table ---
     rows = list(csv.DictReader(open(tables_dir / "injection_throughput_by_method.csv")))

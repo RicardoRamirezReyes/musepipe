@@ -65,7 +65,7 @@ def _load_spectrum(run_dir):
     return wave, flux
 
 
-def build_g0(run_id, project_root=None, legacy_run="ROXs12b_B_adp", pytest_after=None):
+def build_g0(run_id, project_root=None, legacy_run="ROXs12b_B_adp", pytest_after=None, no_legacy=False):
     root = Path(project_root or Path.cwd()).resolve()
     run_dir = root / "runs" / run_id
     stage_dir = run_dir / "stages"
@@ -109,20 +109,42 @@ def build_g0(run_id, project_root=None, legacy_run="ROXs12b_B_adp", pytest_after
     hash_chain_ok = hc.get("status") == "pass"
 
     # Legacy comparison vs the ADP substitute spectrum (provenance sanity check).
-    new_wave, new_flux = _load_spectrum(run_dir)
-    leg_wave, leg_flux = _load_spectrum(root / "runs" / legacy_run)
-    bands = [(lo, hi) for _, lo, hi in LEGACY_BANDS]
-    leg_rows = legacy_comparison(new_wave, new_flux, leg_wave, leg_flux, bands, sigma_threshold=2.0)
-    with open(tables_dir / "g0_legacy_comparison.csv", "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["band", "band_lo_A", "band_hi_A", "flux_new", "flux_legacy", "ratio_new_over_legacy", "flagged"])
-        for (name, lo, hi), r in zip(LEGACY_BANDS, leg_rows):
-            w.writerow([name, lo, hi, r["flux_new"], r["flux_legacy"], r["ratio_new_over_legacy"], r["flagged"]])
-    n_flagged = int(sum(1 for r in leg_rows if r["flagged"]))
+    # Targets without an archival ADP (e.g. ROXs 42B b; A4 V4/V5 unavailable) run
+    # with no_legacy=True: the comparison is recorded as unavailable, not applicable
+    # (a cross-target comparison would flag every band meaninglessly).
+    if no_legacy or not legacy_run:
+        n_flagged = None
+        legacy_block = {
+            "table": None,
+            "n_bands": len(LEGACY_BANDS),
+            "n_flagged": None,
+            "legacy_run": None,
+            "status": "unavailable",
+            "reason": "No archival ADP for this target (A4 V4/V5 unavailable); legacy provenance comparison not applicable.",
+        }
+        legacy_issue = {"issue": "Legacy provenance comparison unavailable (no archival ADP for this target).", "priority": "minor"}
+    else:
+        new_wave, new_flux = _load_spectrum(run_dir)
+        leg_wave, leg_flux = _load_spectrum(root / "runs" / legacy_run)
+        bands = [(lo, hi) for _, lo, hi in LEGACY_BANDS]
+        leg_rows = legacy_comparison(new_wave, new_flux, leg_wave, leg_flux, bands, sigma_threshold=2.0)
+        with open(tables_dir / "g0_legacy_comparison.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["band", "band_lo_A", "band_hi_A", "flux_new", "flux_legacy", "ratio_new_over_legacy", "flagged"])
+            for (name, lo, hi), r in zip(LEGACY_BANDS, leg_rows):
+                w.writerow([name, lo, hi, r["flux_new"], r["flux_legacy"], r["ratio_new_over_legacy"], r["flagged"]])
+        n_flagged = int(sum(1 for r in leg_rows if r["flagged"]))
+        legacy_block = {
+            "table": "tables/g0_legacy_comparison.csv",
+            "n_bands": len(LEGACY_BANDS),
+            "n_flagged": n_flagged,
+            "legacy_run": legacy_run,
+        }
+        legacy_issue = {"issue": f"Legacy comparison: {n_flagged}/{len(LEGACY_BANDS)} bands flagged vs {legacy_run} (band-integrated flux; psffit continuum can be negative, so ratios are documentary).", "priority": "minor"}
 
     open_issues = [
         {"issue": "Run reproduced retroactively via scripts/run_g0.py + run_g1.py over an existing stage-* run (not a fresh phase-g0 branch); G0 fulfilled in substance.", "priority": "major"},
-        {"issue": f"Legacy comparison: {n_flagged}/{len(LEGACY_BANDS)} bands flagged vs {legacy_run} (band-integrated flux; psffit continuum can be negative, so ratios are documentary).", "priority": "minor"},
+        legacy_issue,
         {"issue": "A4 M5 STAT red -> empirical noise used across X01-X11 (repo plan B).", "priority": "major"},
         {"issue": f"F1 overall_status={rs.get('overall_status')}; provisional until A-block closed.", "priority": "blocking"},
     ]
@@ -143,12 +165,7 @@ def build_g0(run_id, project_root=None, legacy_run="ROXs12b_B_adp", pytest_after
     )
 
     # G0 §5.3 legacy comparison summary + §4 hash-chain block (as in the ADP QC).
-    qc["legacy_comparison"] = {
-        "table": "tables/g0_legacy_comparison.csv",
-        "n_bands": len(LEGACY_BANDS),
-        "n_flagged": n_flagged,
-        "legacy_run": legacy_run,
-    }
+    qc["legacy_comparison"] = legacy_block
     links = []
     for chk in hc.get("checks", []):
         links.append({"stage": chk.get("stage"), "input_sha": chk.get("actual"), "output_sha": chk.get("expected")})
@@ -163,8 +180,12 @@ def main(argv=None):
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--project-root", default=None)
     ap.add_argument("--legacy-run", default="ROXs12b_B_adp")
+    ap.add_argument("--no-legacy", action="store_true",
+                    help="Record the legacy provenance comparison as unavailable "
+                         "(targets without an archival ADP, e.g. ROXs 42B b).")
     args = ap.parse_args(argv)
-    qc = build_g0(args.run_id, project_root=args.project_root, legacy_run=args.legacy_run)
+    qc = build_g0(args.run_id, project_root=args.project_root,
+                  legacy_run=args.legacy_run, no_legacy=args.no_legacy)
     print("hash_chain_ok:", qc["hash_chain_ok"], "| stat:", qc["stat_verdict"]["status"],
           "| legacy flagged:", qc["legacy_comparison"]["n_flagged"], "/", qc["legacy_comparison"]["n_bands"])
 
