@@ -4583,17 +4583,43 @@ STAGES: list[dict] = [
 
 
 def main(argv: list[str]) -> None:
-    want = {a.upper() for a in argv}
-    NB_DIR.mkdir(exist_ok=True)
+    # Flags opcionales para generar un set AISLADO por objeto (p.ej. ROXs 42B b)
+    # sin tocar los notebooks de ROXs 12 b:
+    #   --run-id ID    fija el run que auditan TODOS los notebooks (override).
+    #   --out-dir DIR  carpeta de salida (relativa a la raíz del repo o absoluta).
+    # El resto de argumentos posicionales siguen filtrando por id de etapa.
+    run_override_all: str | None = None
+    out_dir = NB_DIR
+    rest: list[str] = []
+    it = iter(argv)
+    for a in it:
+        if a == "--run-id":
+            run_override_all = next(it)
+        elif a.startswith("--run-id="):
+            run_override_all = a.split("=", 1)[1]
+        elif a == "--out-dir":
+            d = Path(next(it))
+            out_dir = d if d.is_absolute() else (ROOT / d)
+        elif a.startswith("--out-dir="):
+            d = Path(a.split("=", 1)[1])
+            out_dir = d if d.is_absolute() else (ROOT / d)
+        else:
+            rest.append(a)
+
+    want = {a.upper() for a in rest}
+    out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for s in STAGES:
         if want and s["id"].upper() not in want:
             continue
+        if run_override_all is not None:
+            s = {**s, "run_override": run_override_all}
         nb = notebook(build_cells(s))
-        out = NB_DIR / f"{s['slug']}.ipynb"
+        out = out_dir / f"{s['slug']}.ipynb"
         out.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
         written.append(out.name)
-    print(f"Generados {len(written)} notebooks en {NB_DIR}/:")
+    tag = f" (run={run_override_all})" if run_override_all else ""
+    print(f"Generados {len(written)} notebooks en {out_dir}/{tag}:")
     for name in written:
         print("  ", name)
 

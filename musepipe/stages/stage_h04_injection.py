@@ -18,7 +18,7 @@ from ..injection import InjectionSource, create_run_clone, inject, tree_sha256
 from ..io import read_json, read_wavelength_axis, write_csv, write_json
 from ..paths import RunPaths
 from ..spectral import continuum_running_median as _CONTINUUM_RUNMED
-from .stage_h01_detect import HALPHA_REST_A, matched_filter_point
+from .stage_h01_detect import BAD_DETECTION_FLAGS, HALPHA_REST_A, matched_filter_point
 from .stage_x10_compare import METHOD_ORDER
 
 
@@ -430,7 +430,12 @@ def measure_recovery_with_h01_estimator(result, *, line_center_A, line_fwhm_A, c
         & np.isfinite(flux)
         & np.isfinite(product["flux_err"])
         & (np.asarray(product["flux_err"]) > 0)
-        & (np.asarray(product["flags"], dtype=np.int32) == 0)
+        # Match stage_h01's detection mask (BAD_DETECTION_FLAGS = bad-window |
+        # skyline), NOT `flags == 0`. FLAG_CLIPPED/FLAG_INTERPOLATED are not
+        # disqualifying in E1; the optimal extractors set FLAG_CLIPPED on most
+        # channels for a messy (e.g. binary-primary) halo, so `flags == 0` would
+        # wrongly reject every channel and yield null throughput.
+        & ((np.asarray(product["flags"], dtype=np.int32) & BAD_DETECTION_FLAGS) == 0)
     )
     if product["continuum"] is not None:
         flux = flux - np.asarray(product["continuum"], dtype=np.float64)

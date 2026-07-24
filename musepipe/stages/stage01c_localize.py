@@ -452,6 +452,28 @@ def _snr_map(filtered, primary_yx, *, ring_width_px=8.0):
     return out
 
 
+def _merge_sub_fwhm_peaks(coords, snr, merge_radius_px):
+    """Collapse local maxima closer than one FWHM into their strongest member.
+
+    A bright PSF over a speckly halo (e.g. an unresolved-binary primary) produces
+    several 3x3 local maxima within a resolution element. Those are one source,
+    not several: two peaks closer than a FWHM are not angularly resolved. Peaks
+    are grouped greedily from the strongest; each group keeps its dominant pixel.
+    Genuinely separate sources (> one FWHM apart) survive as distinct groups, so
+    a real ambiguity still raises downstream.
+    """
+
+    ordered = sorted(coords, key=lambda yx: float(snr[yx[0], yx[1]]), reverse=True)
+    representatives = []
+    for candidate in ordered:
+        if all(
+            math.hypot(candidate[0] - rep[0], candidate[1] - rep[1]) > float(merge_radius_px)
+            for rep in representatives
+        ):
+            representatives.append(candidate)
+    return representatives
+
+
 def detect_restricted_source(
     image,
     predicted_yx,
@@ -462,6 +484,7 @@ def detect_restricted_source(
     centroid_stamp_half_size=4,
     primary_yx=None,
     band_used_A=(None, None),
+    peak_merge_radius_px=None,
 ):
     img = np.asarray(image, dtype=np.float64)
     sigma = max(float(fwhm_px) / 2.355, 0.5)
@@ -474,10 +497,14 @@ def detect_restricted_source(
     local_max = snr == maximum_filter(np.nan_to_num(snr, nan=-np.inf), size=3)
     candidates = region & local_max & (snr >= float(snr_min))
     coords = list(zip(*np.where(candidates)))
+    merge_radius = float(peak_merge_radius_px) if peak_merge_radius_px is not None else float(fwhm_px)
+    if len(coords) > 1:
+        coords = _merge_sub_fwhm_peaks(coords, snr, merge_radius)
     if len(coords) > 1:
         coords = sorted(coords, key=lambda yx: float(snr[yx[0], yx[1]]), reverse=True)
         raise AmbiguousDetectionError(
-            f"{len(coords)} significant peaks inside the search region; strongest={coords[:3]}"
+            f"{len(coords)} significant peaks separated by more than {merge_radius:.1f} px "
+            f"(1 FWHM) inside the search region; strongest={coords[:3]}"
         )
     if len(coords) == 0:
         peak = np.unravel_index(np.nanargmax(np.where(region, snr, np.nan)), snr.shape)
@@ -550,6 +577,7 @@ def locate_companion(cube_zyx, wavelengths, primary, cfg, pixel_scale, north_ang
                 centroid_stamp_half_size=int(cfg.get("stage01c_centroid_stamp_half_size", 4)),
                 primary_yx=primary["pos_yx"],
                 band_used_A=band,
+                peak_merge_radius_px=cfg.get("stage01c_peak_merge_radius_px"),
             ), predicted
         except SourceNotDetectedError as exc:
             last_error = exc
