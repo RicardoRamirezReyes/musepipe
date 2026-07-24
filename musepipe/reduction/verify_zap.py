@@ -69,6 +69,10 @@ def verify_rms_reduction_skylines(
     )
 
 
+#: etiquetas con las que las fuentes marcan al acompañante en las llamadas
+COMPANION_SOURCE_LABELS = {"companion", "object", "target", "secondary", "b"}
+
+
 def _relative_change_pct(pre_spec: np.ndarray, post_spec: np.ndarray, mask: np.ndarray) -> float:
     valid = mask & np.isfinite(pre_spec) & np.isfinite(post_spec) & (pre_spec != 0)
     if not valid.any():
@@ -103,7 +107,9 @@ def verify_source_continuum_intact(
         post_spec = extract_aperture_spectrum(post, yx, aperture_radius_px)
         change = _relative_change_pct(pre_spec, post_spec, cont_mask)
         changes[name] = change
-        if name.lower() in {"companion", "object", "roxs12b"}:
+        # Etiquetas de rol, no nombres de objeto: un literal con el nombre del
+        # primer target hacía que otros objetos no entraran nunca por esta rama.
+        if name.lower() in COMPANION_SOURCE_LABELS:
             diff = post_spec[cont_mask] - pre_spec[cont_mask]
             sigma = robust_sigma(diff)
             med = float(np.nanmedian(diff))

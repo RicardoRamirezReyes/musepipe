@@ -51,8 +51,11 @@ from musepipe.qc.wavesol_map import (  # noqa: E402
 from musepipe.stats import robust_sigma  # noqa: E402
 from musepipe.stripes import _xcorr_shift_pixels  # noqa: E402
 
-PEREXP = Path("/mnt/2TB/MUSE_work/ROXs12b_perexp")
-OUT_CSV = ROOT / "runs" / "ROXs12b_realigned" / "tables" / "perexp_m1_offsets.csv"
+# Rutas por objeto: se resuelven en main() desde --run-id y el config del run.
+# Antes eran constantes de módulo fijadas al primer objeto reducido, de modo que
+# cualquier otro target las heredaba en silencio (plan multi-objeto, WP-P3w).
+PEREXP = None
+OUT_CSV = None
 COMBINED_M1_A = 0.074  # realigned combined reference (A4/M1, topocentric)
 N_EXP = 7
 
@@ -122,11 +125,27 @@ def run_s3b(cube_paths):
     return [{"rel_shift_A": s - mean, "err_A": e} for (s, e) in out]
 
 
+def _resolve_paths(run_id: str) -> None:
+    """Fija las rutas por objeto desde el run y su config."""
+    global PEREXP, OUT_CSV
+    sys.path.insert(0, str(ROOT))
+    from musepipe.config import run_workdir_setting
+
+    perexp = run_workdir_setting(run_id, "perexp_dir", project_root=ROOT)
+    if not perexp:
+        raise SystemExit(f"runs/{run_id}/config/config.json no declara 'perexp_dir'.")
+    PEREXP = Path(perexp)
+    OUT_CSV = ROOT / "runs" / run_id / "tables" / "perexp_m1_offsets.csv"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="S3a+S3b per-exposure wavelength offsets.")
+    ap.add_argument("--run-id", required=True,
+                    help="Run del objeto (de su config sale perexp_dir).")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--skip-s3b", action="store_true", help="airglow S3a only")
     args = ap.parse_args(argv)
+    _resolve_paths(args.run_id)
 
     rows = [_run_one(i, args.force) for i in range(1, N_EXP + 1)]
     offs = np.array([r["offset_A"] for r in rows if r["offset_A"] is not None], dtype=float)

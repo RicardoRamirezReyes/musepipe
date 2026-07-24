@@ -36,12 +36,10 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-RR = ROOT / "runs" / "ROXs12b_raw" / "raw_reduction"
-SOF = RR / "sof"
-PROD = RR / "products"
-OFFSET_LIST = PROD / "muse_offset_manual" / "OFFSET_LIST.fits"
-COMBINED_CUBE = PROD / "muse_scipost_aligned" / "DATACUBE_FINAL.fits"
-PEREXP = Path("/mnt/2TB/MUSE_work/ROXs12b_perexp")
+# Rutas por objeto: se resuelven en main() desde --run-id y el config del run.
+# Antes eran constantes de módulo fijadas al primer objeto reducido, de modo que
+# cualquier otro target las heredaba en silencio (plan multi-objeto, WP-P3w).
+RR = SOF = PROD = OFFSET_LIST = COMBINED_CUBE = PEREXP = None
 ESOREX = "esorex"
 N_EXP = 7
 
@@ -145,12 +143,34 @@ def step_scipost(exps: list[int]) -> None:
         _gate(_wcs_ok(cube), f"exp{i} spectral WCS matches combined cube")
 
 
+def _resolve_paths(raw_run_id: str, run_id: str) -> None:
+    """Fija las rutas por objeto: árbol de reducción del run raw + destino perexp."""
+    global RR, SOF, PROD, OFFSET_LIST, COMBINED_CUBE, PEREXP
+    sys.path.insert(0, str(ROOT))
+    from musepipe.config import run_workdir_setting
+
+    RR = ROOT / "runs" / raw_run_id / "raw_reduction"
+    SOF = RR / "sof"
+    PROD = RR / "products"
+    OFFSET_LIST = PROD / "muse_offset_manual" / "OFFSET_LIST.fits"
+    COMBINED_CUBE = PROD / "muse_scipost_aligned" / "DATACUBE_FINAL.fits"
+    perexp = run_workdir_setting(run_id, "perexp_dir", project_root=ROOT)
+    if not perexp:
+        raise SystemExit(f"runs/{run_id}/config/config.json no declara 'perexp_dir'.")
+    PEREXP = Path(perexp)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Regenerate the 7 per-exposure cubes (S2b+S2c).")
+    ap.add_argument("--run-id", required=True,
+                    help="Run del objeto (de su config sale perexp_dir).")
+    ap.add_argument("--raw-run-id", required=True,
+                    help="Run con el árbol raw_reduction (SOFs y productos esorex).")
     ap.add_argument("--step", default="all",
                     choices=["all", "bias", "flat", "scibasic", "scipost"])
     ap.add_argument("--exp", type=int, default=None, help="Single exposure for --step scipost (1..7).")
     args = ap.parse_args(argv)
+    _resolve_paths(args.raw_run_id, args.run_id)
 
     if not shutil.which(ESOREX):
         return int(bool(print(f"ERROR: esorex not on PATH", file=sys.stderr)) or 2)

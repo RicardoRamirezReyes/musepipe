@@ -65,14 +65,17 @@ La cadena histórica de objetos lejanos (04b→06→07→07b→08→08c) y la ca
 
 ## Notebooks de revisión (A1 → G5)
 
-`notebooks/` contiene **un notebook por spec** de la cadena canónica
+`notebooks/` contiene **un set por objeto** (`notebooks/ROXs12b/`,
+`notebooks/ROXs42Bb/`), con un notebook por spec de la cadena canónica
 (`A1_raw_reduction.ipynb` … `G5_final_synthesis.ipynb`), interfaces delgadas
-sobre `musepipe/` + `scripts/`. Por defecto **auditan** el QC del run
-`ROXs12b_realigned`; con `RUN=True` re-ejecutan el comando canónico de la etapa.
-**Reemplazan** a los notebooks históricos de la raíz (`00_*`…`Far_*`), que no
-reflejan las correcciones recientes. Índice y orden en
+sobre `musepipe/` + `scripts/`. Cada set audita la cadena de su objeto (declarada
+en la clave `chain` de `runs/<run>/config/config.json`); las etapas de reducción
+se pueden lanzar desde el propio notebook. Índice y uso en
 [`notebooks/README.md`](notebooks/README.md). Se regeneran con
-`python scripts/build_review_notebooks.py`.
+`python scripts/build_review_notebooks.py --target <objeto>` (`--check` valida que
+cada QC resuelve). Añadir un objeto = crear su run+config y su
+`targets/<slug>.json`, sin tocar código. Ver
+[`docs/plan_multiobjeto_notebooks_2026-07-24.md`](docs/plan_multiobjeto_notebooks_2026-07-24.md).
 
 ## Seleccionar un run
 

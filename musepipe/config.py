@@ -84,6 +84,33 @@ def get_run_id(
     )
 
 
+def run_workdir_setting(
+    run_id: str,
+    key: str,
+    *,
+    project_root: str | Path | None = None,
+) -> Any:
+    """Lee una ruta de trabajo por-objeto del config del run.
+
+    Claves esperadas: ``perexp_dir`` (directorio de cubos por exposición),
+    ``perexp_cubes`` (lista explícita), ``s0_summary``. Viven en el config del
+    run porque son propias del objeto: como constantes de módulo apuntaban al
+    primer objeto reducido y cualquier otro las heredaba en silencio.
+
+    Devuelve ``None`` si la clave no está declarada; el llamador decide si eso
+    es un error (normalmente sí, con un mensaje que diga qué añadir).
+    """
+    root = project_root_path(project_root)
+    config_json = root / "runs" / str(run_id) / "config" / "config.json"
+    if not config_json.exists():
+        return None
+    try:
+        payload = load_config_payload(config_json)
+    except ConfigError:
+        return None
+    return payload.get("config", {}).get(key)
+
+
 def load_config_payload(config_json: str | Path) -> dict[str, Any]:
     """Read and minimally validate a config JSON payload."""
 
@@ -177,6 +204,8 @@ def available_run_ids(project_root: str | Path | None = None) -> list[str]:
 __all__ = [
     "ACTIVE_RUN_FILENAME",
     "RUN_ID_ENV_VAR",
+    "run_workdir_setting",
+    "resolve_stage_io",
     "ConfigError",
     "RunConfig",
     "available_run_ids",
@@ -186,3 +215,39 @@ __all__ = [
     "project_root_path",
     "validate_run_config",
 ]
+
+
+def resolve_stage_io(
+    run_id: str,
+    stage_tag: str,
+    *,
+    project_root: str | Path | None = None,
+    plot_subdir: str | None = None,
+) -> dict[str, str]:
+    """Rutas canónicas de entrada/salida de una etapa de diagnóstico.
+
+    Permite que las etapas ``kind="cli"`` (S0/S1) acepten ``--run-id`` en vez de
+    llevar el cubo y las cuatro rutas de salida incrustadas. Con las rutas fijas,
+    ejecutarlas desde el set de notebooks de otro objeto sobrescribía el QC del
+    primero (hallazgo H2 del plan multi-objeto).
+
+    ``stage_tag`` es el prefijo del producto, p.ej. ``stageS0``.
+    """
+    root = project_root_path(project_root)
+    run_dir = root / "runs" / str(run_id)
+    payload = {}
+    config_json = run_dir / "config" / "config.json"
+    if config_json.exists():
+        try:
+            payload = load_config_payload(config_json).get("config", {})
+        except ConfigError:
+            payload = {}
+    cubes = payload.get("cube_files") or []
+    cube = str(cubes[0]) if cubes else ""
+    plots = run_dir / "plots" / (plot_subdir or stage_tag.lower())
+    return {
+        "cube": cube,
+        "qc_output": str(run_dir / "stages" / f"{stage_tag}_qc.json"),
+        "map_output": str(run_dir / "stages" / f"{stage_tag}_offset_map.fits"),
+        "plot_output": str(plots / f"{stage_tag.lower()}.png"),
+    }

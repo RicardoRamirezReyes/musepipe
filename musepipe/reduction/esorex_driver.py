@@ -27,7 +27,6 @@ from typing import Callable, Iterable, Mapping, Sequence
 from astropy.io import fits
 
 
-RUN_ID = "ROXs12b_raw"
 STAGE_NAME = "00r_raw_reduction"
 MUSE_RECIPE_PREFIX = "muse_"
 
@@ -571,7 +570,7 @@ def total_ram_gb() -> float | None:
 def ensure_a1_run_tree(
     project_root: str | Path,
     *,
-    run_id: str = RUN_ID,
+    run_id: str,
     raw_data_dir: str | Path,
     adp_reference: str | Path | None = None,
     environment: Mapping[str, object] | None = None,
@@ -625,7 +624,7 @@ def ensure_a1_run_tree(
 
 def stage00r_qc_skeleton(
     *,
-    run_id: str = RUN_ID,
+    run_id: str,
     environment: Mapping[str, object],
     adp_reference: str | Path | None,
     raw_inventory_csv: str | Path,
@@ -845,7 +844,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     phase0_parser = subparsers.add_parser("phase0", help="Check environment and create run tree.")
     phase0_parser.add_argument("--project-root", default=".")
-    phase0_parser.add_argument("--run-id", default=RUN_ID)
+    phase0_parser.add_argument("--run-id", required=True)
     phase0_parser.add_argument("--raw-data-dir", required=True)
     phase0_parser.add_argument("--adp-reference")
     phase0_parser.add_argument("--esorex", default="esorex")

@@ -24,7 +24,6 @@ from ..stats import robust_sigma
 from .verify import circular_aperture_mask, whitelight_image
 
 
-RUN_ID = "ROXs12b_raw"
 STAGE_NAME = "00s_sky_zap"
 
 NALGS_RANGE = (5780.0, 6050.0)
@@ -552,11 +551,17 @@ def run_zap_process(
 def stage00s_qc_skeleton(
     input_info: InputCubeInfo,
     *,
+    run_id: str,
     environment: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    """Esqueleto del QC de A2.
+
+    `run_id` es obligatorio: antes se tomaba de una constante de módulo fijada a
+    ROXs12b_raw, así que el QC de CUALQUIER run se etiquetaba con ese run_id.
+    """
     return {
         "stage": STAGE_NAME,
-        "run_id": RUN_ID,
+        "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
         "environment": dict(environment or {}),
         "input": {
@@ -646,7 +651,7 @@ def decision_phase(args: argparse.Namespace) -> int:
     write_mask_fits(source_mask, mask_path)
     write_mask_preview(image, source_mask, preview_path, positions=source_regions)
 
-    qc = stage00s_qc_skeleton(input_info)
+    qc = stage00s_qc_skeleton(input_info, run_id=args.run_id)
     qc["decision"].update(
         {
             "R_skyline_over_continuum": decision.r_skyline_over_continuum,
@@ -686,6 +691,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     decision_parser = subparsers.add_parser("decision", help="Measure whether ZAP is needed.")
+    decision_parser.add_argument("--run-id", required=True,
+                                 help="Run al que pertenece este QC (se escribe en stage00s_qc.json).")
     decision_parser.add_argument("--input-cube", required=True)
     decision_parser.add_argument("--provenance", choices=["raw_reduction", "adp"], required=True)
     decision_parser.add_argument("--a1-qc")

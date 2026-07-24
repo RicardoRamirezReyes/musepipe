@@ -84,6 +84,36 @@ def test_exec_entries_match_real_entry_points(builder):
                 assert callable(getattr(mod, "main", None)), (
                     f"{s['id']}: {target} no define main()"
                 )
+        elif kind == "launch":
+            # Etapas de reducción: el comando lo arma `_nbcommon.launch_command`
+            # desde las plantillas del registro. Se comprueba que cada plantilla
+            # apunta a un ejecutable que existe de verdad.
+            from musepipe import stage_registry as reg
+
+            stage = reg.by_id(s["id"])
+            assert stage is not None and stage.launch, (
+                f"{s['id']}: exec.kind=launch pero el registro no trae plantillas"
+            )
+            for profile, template in stage.launch.items():
+                tokens = template.split()
+                if tokens[0] == "bash":
+                    path = ROOT / tokens[1]
+                    assert path.exists(), f"{s['id']}/{profile}: falta {tokens[1]}"
+                    assert '"$@"' in path.read_text(), (
+                        f"{s['id']}/{profile}: {tokens[1]} no reenvía argumentos"
+                    )
+                elif "-m" in tokens:
+                    target = tokens[tokens.index("-m") + 1]
+                    mod = importlib.import_module(target)
+                    assert callable(getattr(mod, "main", None)), (
+                        f"{s['id']}/{profile}: {target} no define main()"
+                    )
+                else:
+                    path = ROOT / tokens[1]
+                    assert path.exists(), f"{s['id']}/{profile}: falta {tokens[1]}"
+                assert "--run-id {run_id}" in template, (
+                    f"{s['id']}/{profile}: la plantilla no pasa --run-id"
+                )
         else:
             raise AssertionError(f"{s['id']}: exec.kind desconocido {kind!r}")
 

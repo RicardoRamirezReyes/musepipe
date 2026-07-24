@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -206,16 +207,28 @@ class ReductionDriverTests(unittest.TestCase):
         self.assertEqual(len(parsed["elevated"]), 1)
 
     def test_ensure_a1_run_tree_creates_config_and_stage_qc(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = ensure_a1_run_tree(
-                tmp,
-                raw_data_dir=Path(tmp) / "raw_data",
-                adp_reference=None,
-                environment={"esorex": "test"},
-            )
-            self.assertTrue(paths["config_json"].exists())
-            self.assertTrue(paths["stage_qc"].exists())
-            self.assertTrue(str(paths["stage_qc"]).endswith("runs/ROXs12b_raw/stages/stage00r_qc.json"))
+        """El árbol y el QC se crean bajo el run PEDIDO, sea cual sea el objeto.
+
+        `run_id` es obligatorio desde 2026-07-24: antes tenía por defecto la
+        constante de módulo `ROXs12b_raw`, así que un objeto nuevo escribía su
+        QC etiquetado con el run del primero.
+        """
+        for run_id in ("ROXs12b_raw", "ROXs42Bb_raw"):
+            with self.subTest(run_id=run_id), tempfile.TemporaryDirectory() as tmp:
+                paths = ensure_a1_run_tree(
+                    tmp,
+                    run_id=run_id,
+                    raw_data_dir=Path(tmp) / "raw_data",
+                    adp_reference=None,
+                    environment={"esorex": "test"},
+                )
+                self.assertTrue(paths["config_json"].exists())
+                self.assertTrue(paths["stage_qc"].exists())
+                self.assertTrue(
+                    str(paths["stage_qc"]).endswith(f"runs/{run_id}/stages/stage00r_qc.json")
+                )
+                qc = json.loads(paths["stage_qc"].read_text())
+                self.assertEqual(qc["run_id"], run_id)
 
 
 if __name__ == "__main__":

@@ -193,7 +193,7 @@ recuperan shifts inyectados de 0.2–0.35 canales con atol 0.05).
 > 0.76× vs 0.76×): **sin estructura de slicer, realineado≈ADP**, pero p95>0.1 Å ⇒ gate
 > auto-recomienda `fase2_justificada` SOLO por magnitud. QC/mapas/plots en
 > `runs/ROXs12b_realigned/stages/stageS0[_adp]_*` y `plots/s0_wavesol/`; notebook
-> `notebooks/S0_wavesol_map.ipynb`.
+> `notebooks/ROXs12b/S0_wavesol_map.ipynb`.
 > **GATE G1 DECIDIDO 2026-07-17 (humano):** cerrar como sistemático acotado, interpretación
 > TEMPORAL; **Fase 2 NO disparada**; confirmación DIFERIDA (correr S0 por exposición + S3
 > cuando existan los 7 cubos). Anula la recomendación automática. Clave: el cubo combinado es
@@ -206,7 +206,7 @@ recuperan shifts inyectados de 0.2–0.35 canales con atol 0.05).
   `/mnt/2TB/MUSE_work/ROXs12b_realigned/cube_telcorr.fits` y (b) el ADP
   `Data/ROX12b/20220829/ADP.2022-09-12T17_17_39.371.fits`, a resolución
   completa, QC a `runs/ROXs12b_realigned/stages/stageS0_qc.json` (y tabla/plots
-  del run); notebook de revisión nuevo `notebooks/S0_wavesol_map.ipynb` vía
+  del run); notebook de revisión nuevo `notebooks/ROXs12b/S0_wavesol_map.ipynb` vía
   `scripts/build_review_notebooks.py` (mismo patrón que los 25 existentes);
   sección "checklist G1" con los umbrales del plan y la recomendación automática.
 - **Referencia**: el diagnóstico preliminar 2026-07-17 (binning 2×2, scratchpad)

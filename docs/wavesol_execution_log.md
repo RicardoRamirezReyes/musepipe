@@ -56,8 +56,8 @@ del combinado es **ruido de S/N**, no un sistemático de λ. Ninguna re-reducci�
 
 - Código: `musepipe/qc/wavesol_map.py`, `halpha_map.py`, `noise_decomposition.py`;
   `scripts/{regen_perexp_cubes,s0_perexp,s3_perexp_offsets,s1b_integrate_e2,s7b_mdot_vs_extinction}.py`.
-- Notebooks: `notebooks/S0_wavesol_map.ipynb`, `notebooks/S1_halpha_map.ipynb`,
-  `notebooks/E2_artifacts.ipynb` (Plot 3).
+- Notebooks: `notebooks/ROXs12b/S0_wavesol_map.ipynb`, `notebooks/ROXs12b/S1_halpha_map.ipynb`,
+  `notebooks/ROXs12b/E2_artifacts.ipynb` (Plot 3).
 - QC/tablas/figuras/cubos por-exposición: en `/mnt/2TB` (detrás del symlink del
   run; no versionados) — `runs/ROXs12b_realigned/stages/stageS0..S6*`,
   `tables/{s0_perexp_summary,perexp_m1_offsets,mdot_limit_vs_extinction}.csv`,

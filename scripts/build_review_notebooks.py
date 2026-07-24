@@ -15,6 +15,7 @@ Regenerar es idempotente: sobrescribe los .ipynb de `notebooks/`.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -22,6 +23,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NB_DIR = ROOT / "notebooks"
 DEFAULT_RUN = "ROXs12b_realigned"
+
+
+def _object_slug(run_id: str) -> str:
+    """Objeto de un run (para la subcarpeta `notebooks/<obj>/`).
+
+    Prefiere `chain.target` del config; si no, el prefijo del nombre del run.
+    """
+    config_json = ROOT / "runs" / run_id / "config" / "config.json"
+    if config_json.exists():
+        try:
+            payload = json.loads(config_json.read_text(encoding="utf-8"))
+            chain = payload.get("chain")
+            if isinstance(chain, dict) and chain.get("target"):
+                return str(chain["target"])
+            target = payload.get("config", {}).get("target_name")
+            if target:
+                return str(target)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return run_id.split("_", 1)[0]
 
 
 # --------------------------------------------------------------------------
@@ -71,7 +92,8 @@ def canonical_cmd(exec_spec: dict) -> str:
     if kind == "script":
         return f"bash scripts/{exec_spec['target']} --run-id $RUN"
     if kind == "module_main":
-        return f"python -m {exec_spec['target']} --run-id $RUN"
+        # algunas etapas necesitan flags extra: si declaran `cmd`, manda ese
+        return exec_spec.get("cmd") or f"python -m {exec_spec['target']} --run-id $RUN"
     if kind == "module_run":
         mod, fn = exec_spec["target"], exec_spec["fn"]
         return f"python -c \"from {mod} import {fn}; {fn}('$RUN')\""
@@ -82,9 +104,43 @@ def canonical_cmd(exec_spec: dict) -> str:
     return ""  # audit
 
 
+def runs_referenced(cmd: str) -> list[str]:
+    """Run ids que aparecen como ruta literal en un comando `kind="cli"`.
+
+    Estas etapas no aceptan `--run-id`: sus rutas de entrada y de SALIDA están
+    fijadas al run para el que se escribió el comando. Detectarlas permite
+    bloquear la ejecución desde el set de notebooks de otro objeto, que
+    sobrescribiría productos ajenos (hallazgo H2, Fase 0 del plan
+    `docs/plan_multiobjeto_notebooks_2026-07-24.md`).
+    """
+    found = re.findall(r"(?:runs|MUSE_work)/([A-Za-z0-9_]+)/", cmd)
+    return sorted(set(found))
+
+
 # --------------------------------------------------------------------------
 # Plantilla común
 # --------------------------------------------------------------------------
+def audit_code(body: str) -> dict:
+    """Celda de auditoría: tolera que la etapa no se haya ejecutado en este objeto.
+
+    Cualquier celda que llame a `nb.load_qc(` directamente (checks, plots,
+    evidencia extra) abortaría el notebook en un objeto donde esa etapa está
+    pendiente. Se envuelve solo el `FileNotFoundError`: un `KeyError` sobre un QC
+    que SÍ existe es un fallo real y debe seguir siendo ruidoso.
+    """
+    triggers = ("nb.load_qc(", "PEREXP_DIR", "run_workdir_setting(")
+    if not any(t in body for t in triggers) or body.lstrip().startswith("try:"):
+        return code(body)
+    indented = "\n".join(
+        ("    " + line if line.strip() else line) for line in body.splitlines()
+    )
+    return code(
+        "try:\n" + indented + "\n"
+        "except FileNotFoundError as e:\n"
+        "    print('[etapa pendiente para este objeto]', e)"
+    )
+
+
 def build_cells(s: dict) -> list[dict]:
     cells: list[dict] = []
     spec_link = f"[`docs/{s['spec']}`](../docs/{s['spec']})" if s.get("spec") else "—"
@@ -107,14 +163,22 @@ def build_cells(s: dict) -> list[dict]:
 
     # 2. Cómo ejecutar de forma independiente
     cmd = canonical_cmd(s["exec"])
-    if s["exec"]["kind"] == "audit":
+    if s["exec"]["kind"] == "launch":
         howto = (
             "## Cómo ejecutar de forma independiente\n\n"
-            "> ⚠️ **Etapa no re-ejecutable desde raw en este repo.** En la poda WP-10 se "
-            "borraron los intermedios regenerables (`muse_scibasic`, `muse_scipost`, …). "
-            "Se conservaron los productos finales y todo el QC. Este notebook **audita** el "
-            "producto/QC existente y documenta el comando histórico.\n\n"
-            f"Comando histórico (referencia, requiere los raw + `esorex`):\n\n"
+            "Etapa de **reducción**: la celda de abajo resuelve el comando real para **este "
+            "objeto** a partir de su `chain.reduction_profile` y de su config, y puede lanzarlo. "
+            "Son trabajos largos (ver coste), así que se lanzan en segundo plano con el log a la "
+            "vista; el notebook no se bloquea.\n\n"
+            "Si algún dato no está declarado en el config del run, la celda lo dice y **no lanza** "
+            "en vez de inventarse una ruta.\n\n"
+            f"Comando histórico de referencia:\n\n"
+            f"```bash\nconda activate MUSE\n{s['exec'].get('hist_cmd','(ver spec)')}\n```\n"
+        )
+    elif s["exec"]["kind"] == "audit":
+        howto = (
+            "## Cómo ejecutar de forma independiente\n\n"
+            "> ⚠️ **Etapa de solo auditoría.**\n\n"
             f"```bash\nconda activate MUSE\n{s['exec'].get('hist_cmd','(ver spec)')}\n```\n"
         )
     elif s["exec"]["kind"] == "cli":
@@ -153,32 +217,102 @@ def build_cells(s: dict) -> list[dict]:
     # 3. Setup común
     cells.append(code(
         "import os, sys\n"
-        "# Añade notebooks/ (para _nbcommon) y la RAÍZ del repo (para importar musepipe),\n"
-        "# funcione el cwd en notebooks/ o en la raíz del repo.\n"
-        "_here = os.getcwd()\n"
-        "if os.path.basename(_here) != 'notebooks' and os.path.isdir(os.path.join(_here, 'notebooks')):\n"
-        "    _here = os.path.join(_here, 'notebooks')\n"
-        "for _p in (_here, os.path.dirname(_here)):\n"
+        "# Localiza la raíz del repo ascendiendo hasta encontrar `musepipe/` (robusto a\n"
+        "# la profundidad: funciona con el cwd en notebooks/<obj>/, en notebooks/ o en la\n"
+        "# raíz). Añade la raíz (para `import musepipe`) y notebooks/ (para `_nbcommon`).\n"
+        "_d = os.getcwd()\n"
+        "while _d != os.path.dirname(_d):\n"
+        "    if os.path.isdir(os.path.join(_d, 'musepipe')) and os.path.isdir(os.path.join(_d, 'notebooks')):\n"
+        "        break\n"
+        "    _d = os.path.dirname(_d)\n"
+        "_root = _d\n"
+        "for _p in (_root, os.path.join(_root, 'notebooks')):\n"
         "    if _p not in sys.path:\n"
         "        sys.path.insert(0, _p)\n"
         "import _nbcommon as nb\n"
-        "_root = str(nb.project_root())\n"
-        "if _root not in sys.path:\n"
-        "    sys.path.insert(0, _root)   # asegura 'import musepipe'\n"
-        f"RUN_ID = nb.resolve_run_id({s['run_override']!r})\n"
+        f"RUN_ID = nb.resolve_run_id({(s['run_override'] or DEFAULT_RUN)!r})\n"
         "print('run  =', RUN_ID)\n"
         "print('root =', _root)\n"
-        "print('dir  =', nb.run_dir(RUN_ID))"
+        "print('dir  =', nb.run_dir(RUN_ID))\n"
+        # Procedencia: de qué run sale el QC de ESTA etapa. Nunca debe resolverse
+        # una ruta en silencio (decisión 1 del plan multi-objeto).
+        + (f"print('QC   =', nb.provenance_line({s['qc']!r}, RUN_ID))\n" if s.get("qc") else "")
     ))
 
+    # 3b. Mapa completo de la cadena — solo en el primer notebook (A1), que hace
+    # de panel de control del objeto.
+    if s["id"] == "A1":
+        cells.append(md(
+            "## Mapa de la cadena de este objeto\n\n"
+            "Qué etapas están ejecutadas, en **qué run** vive el QC de cada una y con qué fecha. "
+            "El reparto entre runs se declara en `chain` dentro de "
+            "`runs/<run>/config/config.json` (clave `stage_runs`); una etapa marcada "
+            "`no ejecutada` no es un error, es trabajo pendiente para este objeto. "
+            "Un `!` (CROSS-OBJECT) sí es un problema: se estaría leyendo otro objeto.\n\n"
+            "Ver `docs/plan_multiobjeto_notebooks_2026-07-24.md`."
+        ))
+        cells.append(code("nb.show_chain(RUN_ID)"))
+
     # 4. Ejecutar o auditar (guardada)
-    if s["exec"]["kind"] == "audit":
-        cells.append(md("## Auditar\n\nEtapa de solo-auditoría: se carga el producto/QC más abajo."))
-    else:
-        run_line = f"get_ipython().system({cmd.replace('$RUN', '{RUN_ID}')!r})".replace("{RUN_ID}", "' + RUN_ID + '")
+    if s["exec"]["kind"] == "launch":
         cells.append(md("## Ejecutar o auditar"))
         cells.append(code(
+            f"cmd, target_run, missing = nb.launch_command({s['id']!r}, RUN_ID)\n"
+            "print('run que ejecuta esta etapa:', target_run)\n"
+            "print('comando resuelto para este objeto:')\n"
+            "print('   ', cmd or '(sin plantilla)')\n"
+            "if missing:\n"
+            "    print()\n"
+            "    print('NO se puede lanzar: faltan datos en el config del run.')\n"
+            "    print('   sin resolver:', ', '.join(missing))\n"
+            "    print(f'   declara esas claves en runs/{target_run}/config/config.json')\n"
+            "\n"
+            "RUN = False   # -> True para LANZAR (trabajo largo: revisa el coste arriba)\n"
+            "\n"
+            "if RUN and not missing:\n"
+            "    import subprocess, time\n"
+            "    from pathlib import Path\n"
+            f"    log = Path(nb.run_dir(target_run)) / 'logs' / f'{s['id'].lower()}_launch.log'\n"
+            "    log.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    with open(log, 'w') as fh:\n"
+            "        proc = subprocess.Popen(cmd, shell=True, cwd=str(nb.project_root()),\n"
+            "                                stdout=fh, stderr=subprocess.STDOUT)\n"
+            "    print(f'lanzado en segundo plano (pid {proc.pid}); log -> {log}')\n"
+            "    print('sigue el progreso con:  !tail -f', log)\n"
+            "elif RUN:\n"
+            "    print"
+            "('RUN=True pero hay datos sin resolver: no se lanza nada.')\n"
+            "else:\n"
+            "    print()\n"
+            "    print('Modo auditoría (RUN=False): abajo se carga el QC existente.')"
+        ))
+    elif s["exec"]["kind"] == "audit":
+        cells.append(md("## Auditar\n\nEtapa de solo-auditoría: se carga el producto/QC más abajo."))
+    else:
+        cells.append(md("## Ejecutar o auditar"))
+        # Etapas `kind="cli"`: el comando lleva rutas de run FIJAS (no acepta
+        # --run-id), así que `.replace('$RUN', RUN_ID)` no sustituye nada. Ejecutarlo
+        # desde el set de otro objeto sobrescribiría el QC de aquel. Guard hasta E4.
+        guard = ""
+        if s["exec"]["kind"] == "cli":
+            cmd_runs = runs_referenced(cmd)
+            if cmd_runs:
+                guard = (
+                    "# GUARD (hallazgo H2, pendiente WP-E4): esta etapa no acepta `--run-id`;\n"
+                    "# su comando lleva rutas de run FIJAS, de entrada y de SALIDA. Ejecutarlo\n"
+                    "# con otro run activo sobrescribiría productos de OTRO objeto.\n"
+                    f"_CMD_RUNS = {cmd_runs!r}\n"
+                    "if RUN and RUN_ID not in _CMD_RUNS:\n"
+                    "    raise RuntimeError(\n"
+                    "        f'BLOQUEADO: el comando de esta etapa tiene rutas fijas a {_CMD_RUNS} '\n"
+                    "        f'pero el run activo es {RUN_ID!r}. Ejecutarlo leería y sobrescribiría '\n"
+                    "        'productos de otro objeto. Pendiente de parametrizar: WP-E4 de '\n"
+                    "        'docs/plan_multiobjeto_notebooks_2026-07-24.md.'\n"
+                    "    )\n\n"
+                )
+        cells.append(code(
             "RUN = False   # -> True para RE-EJECUTAR esta etapa (regenera su QC)\n\n"
+            + guard +
             "if RUN:\n"
             f"    cmd = {cmd!r}.replace('$RUN', RUN_ID)\n"
             "    print('ejecutando:', cmd)\n"
@@ -192,22 +326,14 @@ def build_cells(s: dict) -> list[dict]:
     if s.get("qc"):
         salient = s.get("salient", [])
         cells.append(md("## QC / resultados"))
-        if s.get("qc_optional"):
-            cells.append(code(
-                "try:\n"
-                f"    qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
-                f"    nb.show(qc, keys={salient!r}, title={s['id']!r})\n"
-                "except FileNotFoundError as e:\n"
-                "    qc = None\n"
-                "    print('QC aún no existe para este run:', e)\n"
-                "    print('-> Ejecuta la etapa (celda RUN=True de arriba, o el comando de')\n"
-                "    print('   \"Cómo ejecutar de forma independiente\") y re-corre esta celda.')"
-            ))
-        else:
-            cells.append(code(
-                f"qc = nb.load_qc({s['qc']!r}, RUN_ID)\n"
-                f"nb.show(qc, keys={salient!r}, title={s['id']!r})"
-            ))
+        # `load_qc_optional` en TODAS las etapas: un objeto nuevo tiene etapas sin
+        # ejecutar, y un notebook debe poder correrse de principio a fin dejando
+        # el hueco visible en vez de abortar en la primera ausencia. `nb.show`
+        # imprime el aviso cuando qc es None.
+        cells.append(code(
+            f"qc = nb.load_qc_optional({s['qc']!r}, RUN_ID)\n"
+            f"nb.show(qc, keys={salient!r}, title={s['id']!r})"
+        ))
     elif not (s.get("evidence_md") or s.get("evidence_code")):
         cells.append(md(
             "## QC / resultados\n\n"
@@ -220,7 +346,20 @@ def build_cells(s: dict) -> list[dict]:
         cells.append(md(s["evidence_md"]))
     if s.get("evidence_code"):
         body = s["evidence_code"]
-        if s.get("qc_optional"):
+        if s.get("qc"):
+            # Dos modos de fallo distintos, dos mensajes distintos:
+            #  - `qc is None`  -> la etapa no se ejecutó en este objeto (hueco).
+            #  - forma inesperada -> el QC existe pero con otro esquema (H4).
+            indented = "\n".join(
+                ("        " + line if line.strip() else line) for line in body.splitlines()
+            )
+            body = (
+                "if qc is None:\n"
+                "    print('(evidencia omitida: la etapa no se ha ejecutado para esta cadena)')\n"
+                "else:\n"
+                f"    with nb.evidence_guard({s['id']!r}, {s['qc']!r}):\n" + indented
+            )
+        elif s.get("qc_optional"):
             indented = "\n".join("    " + line for line in body.splitlines())
             body = (
                 "try:\n" + indented + "\n"
@@ -233,14 +372,14 @@ def build_cells(s: dict) -> list[dict]:
     if s.get("plot_md"):
         cells.append(md(s["plot_md"]))
     if s.get("plot_code"):
-        cells.append(code(s["plot_code"]))
+        cells.append(audit_code(s["plot_code"]))
 
     # 5d. Varios plots (lista de {md, code})
     for _p in s.get("plots", []):
         if _p.get("md"):
             cells.append(md(_p["md"]))
         if _p.get("code"):
-            cells.append(code(_p["code"]))
+            cells.append(audit_code(_p["code"]))
 
     # 6. Decisiones
     dec_lines = ["## Decisiones y notas"]
@@ -260,7 +399,7 @@ def build_cells(s: dict) -> list[dict]:
                 "except FileNotFoundError as e:\n"
                 "    print('QC aún no existe para este run:', e)"
             )
-        cells.append(code(body))
+        cells.append(audit_code(body))
 
     # 8. Conclusión fechada (opcional)
     if s.get("conclusion_md"):
@@ -280,7 +419,7 @@ STAGES: list[dict] = [
         what="Reduce los raw MUSE con esorex y alinea las exposiciones hasta `cube_telcorr.fits`.",
         inputs="Raw MUSE + calibraciones", outputs="`cube_telcorr.fits`, `stages/stage00r_qc.json`",
         downstream="Todo el bloque B",
-        exec=dict(kind="audit", hist_cmd="bash scripts/reduce_raw.sh"),
+        exec=dict(kind="launch", hist_cmd="bash scripts/reduce_raw.sh"),
         runtime_md=(
             "## Coste de ejecución (esorex)\n\n"
             "> ⏱️ **Referencia real** medida en esta máquina (esorex 3.13.10 / MUSE 2.10.16, "
@@ -353,20 +492,38 @@ STAGES: list[dict] = [
             "físicos). Por eso el semáforo A1 = **yellow**. La celda de abajo los imprime en vivo."
         ),
         evidence_code=(
+            # A1 tiene DOS variantes de QC según la vía de reducción (registro:
+            # qc_schema_variant). En `monolithic` cada verificación es un dict
+            # {ok, status, message}; en `cascade` es un escalar (bool/None). La
+            # celda sirve a las dos en vez de asumir la del primer objeto (F4).
             "q = nb.load_qc('stages/stage00r_qc.json', RUN_ID)\n"
+            "profile = nb.chain_of(RUN_ID).get('reduction_profile', '(no declarado)')\n"
             "labels = {\n"
-            "    'v1_stat_present':      'V1 · STAT presente y sano',\n"
-            "    'v2_std_residual_rms':  'V2 · Residuo del estándar (respuesta de flujo)',\n"
-            "    'v3_wcs_ok':            'V3 · WCS / eje espectral',\n"
-            "    'v4_adp_whitelight_corr':'V4 · Correlación luz-blanca vs ADP',\n"
+            "    'v1_stat_present':       'V1 · STAT presente y sano',\n"
+            "    'v2_std_residual':       'V2 · Residuo del estándar (respuesta de flujo)',\n"
+            "    'v3_wcs_ok':             'V3 · WCS / eje espectral',\n"
+            "    'v4_adp_whitelight':     'V4 · Correlación luz-blanca vs ADP',\n"
             "    'v5_adp_star_spec_ratio':'V5 · Razón de espectro estelar vs ADP',\n"
-            "    'v6_sky_mask_clean':    'V6 · Máscara de cielo limpia',\n"
+            "    'v6_sky_mask_clean':     'V6 · Máscara de cielo limpia',\n"
             "}\n"
             "ver = q.get('verification', {})\n"
-            "for k, lab in labels.items():\n"
-            "    v = ver.get(k, {})\n"
-            "    res = 'ok' if v.get('ok') else v.get('status', '?')\n"
-            "    print(f'{lab}\\n   -> {res}\\n   {v.get(\"message\", \"\")}\\n')"
+            "print(f'perfil de reducción: {profile}   ({len(ver)} verificaciones en el QC)')\n"
+            "print()\n"
+            "for prefix, lab in labels.items():\n"
+            "    # los nombres difieren por sufijo entre variantes (p.ej. _rms)\n"
+            "    key = next((k for k in ver if k.startswith(prefix)), None)\n"
+            "    if key is None:\n"
+            "        print(f'{lab}\\n   -> ausente en esta variante de QC\\n')\n"
+            "        continue\n"
+            "    v = ver[key]\n"
+            "    if isinstance(v, dict):\n"
+            "        res = 'ok' if v.get('ok') else v.get('status', '?')\n"
+            "        msg = v.get('message', '')\n"
+            "    elif v is None:\n"
+            "        res, msg = 'unavailable', 'sin medir en esta reducción'\n"
+            "    else:\n"
+            "        res, msg = ('ok' if v else 'no'), ''\n"
+            "    print(f'{lab}\\n   -> {res}\\n   {msg}\\n')"
         ),
         decisions=[
             ("**Alineación por plan B (OFFSET_LIST manual)**, no `exp_align` — daba offsets espurios de hasta 3.305\" (cross-match de speckles NFM); el manual desde el centroide de la primaria da máx 0.62\". El cubo realineado ≡ ADP a través del bloque B.", None),
@@ -395,7 +552,7 @@ STAGES: list[dict] = [
         what="Decide y aplica (o descarta) la sustracción de cielo con ZAP.",
         inputs="Cubo reducido", outputs="Cubo con cielo tratado (sin QC separado en este run)",
         downstream="A3, A4",
-        exec=dict(kind="audit", hist_cmd="bash scripts/sky_zap.sh"),
+        exec=dict(kind="launch", hist_cmd="bash scripts/sky_zap.sh"),
         qc=None,
         narrative_md=(
             "## Qué es ZAP y por qué se necesita\n\n"
@@ -557,7 +714,7 @@ STAGES: list[dict] = [
         what="Corrige absorción telúrica para producir `cube_telcorr.fits`.",
         inputs="Cubo (post-cielo)", outputs="`cube_telcorr.fits`",
         downstream="A4, B1",
-        exec=dict(kind="audit", hist_cmd="bash scripts/telluric.sh"),
+        exec=dict(kind="launch", hist_cmd="bash scripts/telluric.sh"),
         qc=None,
         narrative_md=(
             "## Qué es la corrección telúrica y por qué STD_TELLURIC (no molecfit)\n\n"
@@ -595,34 +752,39 @@ STAGES: list[dict] = [
             "(`ROXs12b_raw`), que documenta la reducción telúrica de referencia."
         ),
         evidence_code=(
-            "TELL_REF_RUN = 'ROXs12b_raw'   # QC de referencia: este run no emitió stage00t_qc.json\n"
-            "qt = nb.load_qc('stages/stage00t_qc.json', TELL_REF_RUN)\n"
-            "print(f'QC telúrico mostrado: run {TELL_REF_RUN!r} (run activo del notebook: {RUN_ID!r})')\n"
+            # El QC telúrico se resuelve por la CADENA del objeto (chain.stage_runs['A3']),
+            # no por un literal: antes traía 'ROXs12b_raw' fijo y el notebook de
+            # cualquier otro objeto mostraba, en silencio, la telúrica del primero (H1).
+            "qt = nb.load_qc_optional('stages/stage00t_qc.json', RUN_ID)\n"
             "print()\n"
-            "d, fit, ver = qt['decision'], qt['fit'], qt['verification']\n"
-            "print('Decisión:', d['verdict'], '| aplicado:', d['telluric_applied'],\n"
-            "      '| checkpoint:', d['user_checkpoint'], '| umbral:', d['threshold_pct'], '%')\n"
-            "print('Método:', d['method'])\n"
+            "if qt is None:\n"
+            "    print('A3 no emitió stage00t_qc.json en esta cadena: nada que auditar aquí.')\n"
+            "    print(\"Declara el run que lo contiene en chain.stage_runs['A3'], o ejecuta la etapa.\")\n"
+            "else:\n"
+            "    d, fit, ver = qt['decision'], qt['fit'], qt['verification']\n"
+            "    print('Decisión:', d['verdict'], '| aplicado:', d['telluric_applied'],\n"
+            "          '| checkpoint:', d['user_checkpoint'], '| umbral:', d['threshold_pct'], '%')\n"
+            "    print('Método:', d['method'])\n"
+            "    print()\n"
+            "    print(f\"Escala airmass: X_std={fit['airmass_std']} -> X_sci={fit['airmass_sci']}\"\n"
+            "          f\"  ({fit['scaling']} = {fit['airmass_sci']/fit['airmass_std']:.3f})\")\n"
+            "    print()\n"
+            "    print('Profundidad de banda pre -> post:')\n"
+            "    pp = ver['v1_o2_depth_pre_post_pct']\n"
+            "    print(f'  O2 B (~6870 A): {pp[0]}% -> {pp[1]}%')\n"
+            "    print(f\"  fuera de bandas sin cambio: {ver['v2_outside_bands_unchanged']}\")\n"
+            "    print(f\"  Halpha intacta: {ver['v3_halpha_untouched']}   transmisión física [0,1]: {ver['v4_transmission_physical']}\")\n"
             "print()\n"
-            "print(f\"Escala airmass: X_std={fit['airmass_std']} -> X_sci={fit['airmass_sci']}\"\n"
-            "      f\"  ({fit['scaling']} = {fit['airmass_sci']/fit['airmass_std']:.3f})\")\n"
-            "print()\n"
-            "print('Profundidad de banda pre -> post:')\n"
-            "pp = ver['v1_o2_depth_pre_post_pct']\n"
-            "print(f'  O2 B (~6870 A): {pp[0]}% -> {pp[1]}%')\n"
-            "print(f\"  fuera de bandas sin cambio: {ver['v2_outside_bands_unchanged']}\")\n"
-            "print(f\"  Halpha intacta: {ver['v3_halpha_untouched']}   transmisión física [0,1]: {ver['v4_transmission_physical']}\")\n"
-            "print()\n"
-            "print('molecfit (A1a, 2026-07-19):')\n"
+            "print('molecfit (crosscheck A1a, si el A1 de esta cadena lo trae):')\n"
             "try:\n"
-            "    qr = nb.load_qc('stages/stage00r_qc.json', 'ROXs12b_realigned')\n"
+            "    qr = nb.load_qc('stages/stage00r_qc.json', RUN_ID)\n"
             "    cc = qr['a1a_molecfit_crosscheck']\n"
             "    mf = cc['model_fit']; tcB = cc['transmission_comparison_vs_std_telluric']['O2_B_band_6864_6960A']\n"
             "    print(f\"  converge: mpfit status={mf['mpfit_status']}, rel_col_O2={mf['rel_mol_col_O2']}+-{mf['rel_mol_col_O2_unc']}, ppmv_O2={mf['ppmv_O2']:.0f}\")\n"
             "    print(f\"  vs STD_TELLURIC en banda B (junto a Halpha): |dT|/px={tcB['mean_abs_dT_per_pixel']}, razon absorcion={tcB['integrated_absorption_ratio_molecfit_over_std']}\")\n"
             "    print('  =>', cc['conclusion'][:110], '...')\n"
-            "except Exception as e:\n"
-            "    print('  (A1a crosscheck no disponible:', type(e).__name__, e, ')')"
+            "except (FileNotFoundError, KeyError) as e:\n"
+            "    print('  (no disponible para esta cadena:', type(e).__name__, e, ')')"
         ),
         plot_md=(
             "## De dónde sale la corrección: la transmisión aplicada\n\n"
@@ -645,7 +807,8 @@ STAGES: list[dict] = [
             "        cube_path = qc.get('input_cube') or qc.get('cube', {}).get('file')\n"
             "        trans_path = os.path.join(os.path.dirname(cube_path), 'TELLURIC_TRANS.fits')\n"
             "        if not os.path.exists(trans_path):\n"
-            "            trans_path = str(nb.project_root() / 'runs' / 'ROXs12b_raw' / 'raw_reduction' / 'TELLURIC_TRANS.fits')\n"
+            "            # Fallback dentro del PROPIO objeto: nunca el run de otro target.\n"
+            "            trans_path = str(nb.run_dir(RUN_ID) / 'raw_reduction' / 'TELLURIC_TRANS.fits')\n"
             "        print('FITS usado:', trans_path)\n\n"
             "        h = fits.open(trans_path); t = h[1].data\n"
             "        wave = np.asarray(t['wave_A'], dtype=float)\n"
@@ -702,7 +865,7 @@ STAGES: list[dict] = [
         what="Métricas de calidad del cubo: solución en λ (M1/M2), flujo absoluto (M3), STAT (M5).",
         inputs="`cube_telcorr.fits`, SKY_SPECTRUM, Gaia DR3", outputs="`stages/stage00q_qc.json`",
         downstream="D2/E1 (usan σ empírico), E3 (flujo)",
-        exec=dict(kind="audit",
+        exec=dict(kind="launch",
                   hist_cmd=("# M1/M2 (LSF) desde el airglow cacheado:\n"
                             "python -m musepipe.qc.cube_qc m1m2-sky --sky-spectrum <SKY_SPECTRUM...> --qc-output <...>\n"
                             "# M3 (flujo absoluto vs Gaia RP, con growth-curve + truncación):\n"
@@ -2629,7 +2792,7 @@ STAGES: list[dict] = [
         downstream="E3, F1",
         exec=dict(kind="script", target="stage_h02_artifacts.sh", cost="Ligero."),
         qc="stages/stage_h02_qc.json",
-        salient=["overall", "overall_raw", "t2.status", "t5.status", "overall_interpretation",
+        salient=["overall", "overall_raw", "t2.status", "t5.status",
                  "halpha_map_correlation.corr_stripe_scatter_vs_halpha_sigma",
                  "halpha_map_correlation.halpha_sigma_slicer_aligned"],
         narrative_md=(
@@ -2668,7 +2831,13 @@ STAGES: list[dict] = [
             "print(f\"T5 placebos: {q['t5']['status']}  (max_fap={q['t5']['placebo_max_fap_global']:.3f}, any_above={q['t5']['any_above_threshold']})\")\n"
             "print()\n"
             "print(f\"overall_raw = {q['overall_raw']}  ->  overall = {q['overall']}\")\n"
-            "print('interpretación:', q['overall_interpretation'])"
+            # `overall_interpretation` NO la emite ningún productor (verificado
+            # 2026-07-24): la celda la leía por error. Se deriva de las claves reales.
+            "if q['overall_raw'] != q['overall']:\n"
+            "    print(f\"interpretación: el veredicto crudo ({q['overall_raw']}) se revisa a \"\n"
+            "          f\"{q['overall']} por los tests que sí aplican; ver t1..t5 arriba.\")\n"
+            "else:\n"
+            "    print(f\"interpretación: veredicto consistente ({q['overall']}).\")"
         ),
         plots=[
             dict(
@@ -2834,9 +3003,18 @@ STAGES: list[dict] = [
             "print(f\"\\nfísica: d={pin['distance_pc']}pc, A_V={pin['av']}, A_Hα={pin['a_halpha_over_av']*pin['av']:.2f}, \"\n"
             "      f\"masa={pin['companion_mass_msun']:.4f} M☉, radio={pin['companion_radius_rsun']} R☉\")\n"
             "print(f\"relación: {pin['lacc_lha_relation']} (scatter {pin['relation_scatter_dex']} dex)\")\n"
-            "n = q['limit_definition_note']\n"
-            "print(f\"\\ndefinición E3: {n['definition']}\")\n"
-            "print(f\"vs G3:         {n['other_definition']}\")"
+            # `limit_definition_note` NO la emite ningún productor (verificado
+            # 2026-07-24). La diferencia de definición E3-vs-G3 está en
+            # docs/mdot_limit_definition_note.md, y aquí se muestra lo que el QC
+            # sí trae: el límite dual Alcala / Aoyama+21 que añadió R1.
+            "print('\\ndefinición: E3 usa Gumbel 99% SIN el factor R_in 1.25 '\n"
+            "      '(G3 usa 5 sigma CON el factor) -> docs/mdot_limit_definition_note.md')\n"
+            "alt = lim[q['canonical_method']].get('mdot_aoyama21')\n"
+            "if alt:\n"
+            "    print(f\"\\nrelación dual (R1): Alcala+17 {lim[q['canonical_method']]['mdot']:.2e}\"\n"
+            "          f\"  |  Aoyama+21 {alt:.2e} M☉/yr\")\n"
+            "else:\n"
+            "    print('\\n(sin límite Aoyama+21 en este QC: relación alternativa no configurada)')"
         ),
         plots=[
             dict(
@@ -4166,20 +4344,10 @@ STAGES: list[dict] = [
             "perfil de stripe, no en el transversal."
         ),
         exec=dict(
-            kind="cli",
+            kind="module_main",
+            target="musepipe.qc.wavesol_map",
             cmd=(
-                "python -m musepipe.qc.wavesol_map \\\n"
-                "  --cube /mnt/2TB/MUSE_work/ROXs12b_realigned/cube_telcorr.fits \\\n"
-                "  --qc-output runs/ROXs12b_realigned/stages/stageS0_qc.json \\\n"
-                "  --map-output runs/ROXs12b_realigned/stages/stageS0_offset_map.fits \\\n"
-                "  --plot-output runs/ROXs12b_realigned/plots/s0_wavesol/s0_realigned.png \\\n"
-                "  --orientation vertical\n"
-                "python -m musepipe.qc.wavesol_map \\\n"
-                "  --cube ../Data/ROX12b/20220829/ADP.2022-09-12T17_17_39.371.fits \\\n"
-                "  --qc-output runs/ROXs12b_realigned/stages/stageS0_adp_qc.json \\\n"
-                "  --map-output runs/ROXs12b_realigned/stages/stageS0_adp_offset_map.fits \\\n"
-                "  --plot-output runs/ROXs12b_realigned/plots/s0_wavesol/s0_adp.png \\\n"
-                "  --orientation vertical"
+                "python -m musepipe.qc.wavesol_map --run-id $RUN --orientation vertical"
             ),
             cost="Coste: full-res 330×338, normalización vectorizada; ~minutos por cubo.",
         ),
@@ -4267,7 +4435,11 @@ STAGES: list[dict] = [
                     "from astropy.io import fits\n"
                     "import musepipe.qc.wavesol_map as wsm\n"
                     "rd = nb.run_dir(RUN_ID)\n"
-                    "PEREXP_DIR = '/mnt/2TB/MUSE_work/ROXs12b_perexp'   # 7 cubos por exposición (S2)\n"
+                    "# Directorio de cubos por exposición: del config del run, no fijo (WP-E4b).\n"
+                    "import sys as _sys; _sys.path.insert(0, str(nb.project_root()))\n"
+                    "from musepipe.config import run_workdir_setting\n"
+                    "PEREXP_DIR = run_workdir_setting(RUN_ID, 'perexp_dir', project_root=nb.project_root())\n"
+
                     "# CASES: (label, qc_path, map_path)  — per-exp absolutos; combinado/ADP en el run\n"
                     "CASES = [(f'exp{i}', f'{PEREXP_DIR}/exp{i}/stageS0_qc.json',\n"
                     "          f'{PEREXP_DIR}/exp{i}/stageS0_offset_map.fits') for i in range(1, 8)]\n"
@@ -4332,7 +4504,10 @@ STAGES: list[dict] = [
                     "from astropy.io import fits\n"
                     "import musepipe.qc.wavesol_map as wsm\n"
                     "rd = nb.run_dir(RUN_ID); HALF = 50\n"
-                    "PEREXP_DIR = '/mnt/2TB/MUSE_work/ROXs12b_perexp'\n"
+                    "import sys as _sys; _sys.path.insert(0, str(nb.project_root()))\n"
+                    "from musepipe.config import run_workdir_setting\n"
+                    "PEREXP_DIR = run_workdir_setting(RUN_ID, 'perexp_dir', project_root=nb.project_root())\n"
+
                     "CASES = [(f'exp{i}', f'{PEREXP_DIR}/exp{i}/stageS0_qc.json',\n"
                     "          f'{PEREXP_DIR}/exp{i}/stageS0_offset_map.fits') for i in range(1, 8)]\n"
                     "CASES += [('combinado', str(rd/'stages'/'stageS0_qc.json'), str(rd/'stages'/'stageS0_offset_map.fits')),\n"
@@ -4512,15 +4687,11 @@ STAGES: list[dict] = [
             "de offset S0) vs mapas Hα."
         ),
         exec=dict(
-            kind="cli",
+            kind="module_main",
+            target="musepipe.qc.halpha_map",
             cmd=(
-                "python -m musepipe.qc.halpha_map \\\n"
-                "  --cube /mnt/2TB/MUSE_work/ROXs12b_realigned/cube_telcorr.fits \\\n"
-                "  --qc-output runs/ROXs12b_realigned/stages/stageS1_qc.json \\\n"
-                "  --map-output runs/ROXs12b_realigned/stages/stageS1_halpha_map.fits \\\n"
-                "  --plot-output runs/ROXs12b_realigned/plots/s1_halpha/s1_realigned.png \\\n"
-                "  --orientation vertical\n"
-                "python scripts/s1b_integrate_e2.py --run-dir runs/ROXs12b_realigned"
+                "python -m musepipe.qc.halpha_map --run-id $RUN --orientation vertical\n"
+                "python scripts/s1b_integrate_e2.py --run-dir runs/$RUN"
             ),
             cost="Coste: full-res, curve_fit por spaxel ~5 min; S1b re-lee y parchea E2.",
         ),
@@ -4582,14 +4753,120 @@ STAGES: list[dict] = [
 ]
 
 
+def validate_against_registry() -> None:
+    """Aborta si `STAGES` diverge de `musepipe.stage_registry` (fuente única).
+
+    El registro es la autoridad de la parte machine-readable (id, slug, ruta de
+    QC, opcionalidad, tipo de punto de entrada); aquí vive solo la prosa. Si
+    alguien mueve un QC en un sitio y no en el otro, la generación falla en vez
+    de emitir notebooks que apuntan a la nada.
+    """
+    sys.path.insert(0, str(ROOT))
+    from musepipe import stage_registry as reg
+
+    problems: list[str] = []
+    ids_here = {s["id"] for s in STAGES}
+    ids_reg = set(reg.stage_ids())
+    for missing in sorted(ids_reg - ids_here):
+        problems.append(f"{missing}: en el registro pero no en STAGES")
+    for extra in sorted(ids_here - ids_reg):
+        problems.append(f"{extra}: en STAGES pero no en el registro")
+
+    for s in STAGES:
+        r = reg.by_id(s["id"])
+        if r is None:
+            continue
+        for field, here, there in (
+            ("slug", s["slug"], r.slug),
+            ("qc", s.get("qc"), r.qc),
+            ("qc_optional", bool(s.get("qc_optional", False)), r.qc_optional),
+            ("exec_kind", s["exec"]["kind"], r.exec_kind),
+        ):
+            if here != there:
+                problems.append(f"{s['id']}.{field}: STAGES={here!r} registro={there!r}")
+
+    if problems:
+        raise SystemExit(
+            "build_review_notebooks: STAGES diverge de musepipe/stage_registry.py:\n  "
+            + "\n  ".join(problems)
+        )
+
+
+def check_qc_resolution(out_dir: Path, run_id: str) -> list[str]:
+    """Resuelve cada `nb.load_qc(...)` de los notebooks generados.
+
+    Distingue tres desenlaces, como la línea base de resolución de la Fase 0:
+      * resuelve en la cadena del objeto  -> OK
+      * no resuelve en ningún run del objeto -> etapa PENDIENTE (se reporta, no falla:
+        las celdas la degradan a aviso vía `load_qc_optional`/`audit_code`)
+      * resuelve a un run de OTRO objeto -> CROSS-OBJECT (falla: es contaminación, H1)
+
+    Devuelve solo los CROSS-OBJECT (los que deben hacer `--check` salir ≠0).
+    Los pendientes se imprimen aquí como información.
+    """
+    import ast
+
+    sys.path.insert(0, str(NB_DIR))
+    sys.path.insert(0, str(ROOT))
+    import importlib
+    nb = importlib.import_module("_nbcommon")
+    nb.resolve_run_id(run_id)
+
+    problems: list[str] = []
+    pending: set[str] = set()
+    for path in sorted(out_dir.glob("*.ipynb")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        seen: set[str] = set()
+        for cell in payload.get("cells", []):
+            if cell.get("cell_type") != "code":
+                continue
+            src = "".join(cell.get("source", []))
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("load_qc", "load_qc_optional", "qc_path")):
+                    continue
+                if not node.args or not isinstance(node.args[0], ast.Constant):
+                    continue
+                rel = node.args[0].value
+                if rel in seen:
+                    continue
+                seen.add(rel)
+                try:
+                    _p, where, _why = nb.resolve_qc(rel, run_id)
+                except FileNotFoundError:
+                    pending.add(f"{path.name}: {rel}")
+                    continue
+                if nb._is_cross_object(where, run_id):
+                    problems.append(f"{path.name}: {rel} resuelve a {where} (OTRO objeto)")
+    if pending:
+        print(f"\n--check: {len(pending)} etapa(s) pendiente(s) para este objeto "
+              "(se degradan a aviso, no son errores):")
+        for line in sorted(pending):
+            print("  ", line)
+    return problems
+
+
 def main(argv: list[str]) -> None:
+    validate_against_registry()
     # Flags opcionales para generar un set AISLADO por objeto (p.ej. ROXs 42B b)
     # sin tocar los notebooks de ROXs 12 b:
     #   --run-id ID    fija el run que auditan TODOS los notebooks (override).
     #   --out-dir DIR  carpeta de salida (relativa a la raíz del repo o absoluta).
     # El resto de argumentos posicionales siguen filtrando por id de etapa.
+    #   --target OBJ   genera el set del objeto: run = default_run de su cadena,
+    #                  salida = notebooks/<OBJ>/.  Forma de alto nivel.
+    #   --run-id ID / --out-dir DIR  formas de bajo nivel (siguen valiendo).
+    #   --check        tras generar, resuelve cada load_qc y sale ≠0 si alguna
+    #                  ruta no resuelve y la etapa no está legítimamente pendiente.
     run_override_all: str | None = None
-    out_dir = NB_DIR
+    out_dir: Path | None = None
+    target: str | None = None
+    do_check = False
     rest: list[str] = []
     it = iter(argv)
     for a in it:
@@ -4597,14 +4874,39 @@ def main(argv: list[str]) -> None:
             run_override_all = next(it)
         elif a.startswith("--run-id="):
             run_override_all = a.split("=", 1)[1]
+        elif a == "--target":
+            target = next(it)
+        elif a.startswith("--target="):
+            target = a.split("=", 1)[1]
         elif a == "--out-dir":
             d = Path(next(it))
             out_dir = d if d.is_absolute() else (ROOT / d)
         elif a.startswith("--out-dir="):
             d = Path(a.split("=", 1)[1])
             out_dir = d if d.is_absolute() else (ROOT / d)
+        elif a == "--check":
+            do_check = True
         else:
             rest.append(a)
+
+    # --target: deduce run y carpeta desde la cadena del objeto.
+    if target is not None:
+        default_run = f"{target}_realigned"
+        config_json = ROOT / "runs" / default_run / "config" / "config.json"
+        if config_json.exists():
+            try:
+                chain = json.loads(config_json.read_text(encoding="utf-8")).get("chain", {})
+                default_run = chain.get("default_run", default_run)
+            except (OSError, json.JSONDecodeError):
+                pass
+        run_override_all = run_override_all or default_run
+        if out_dir is None:
+            out_dir = NB_DIR / target
+
+    # Sin --target ni --out-dir: la salida va a notebooks/<objeto>/, no a la raíz.
+    if out_dir is None:
+        obj = _object_slug(run_override_all or DEFAULT_RUN)
+        out_dir = NB_DIR / obj
 
     want = {a.upper() for a in rest}
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -4622,6 +4924,16 @@ def main(argv: list[str]) -> None:
     print(f"Generados {len(written)} notebooks en {out_dir}/{tag}:")
     for name in written:
         print("  ", name)
+
+    if do_check:
+        problems = check_qc_resolution(out_dir, run_override_all or DEFAULT_RUN)
+        if problems:
+            print(f"\n--check: {len(problems)} ruta(s) de QC no resuelven y NO son etapas "
+                  "pendientes legítimas:")
+            for line in problems:
+                print("  ", line)
+            raise SystemExit(1)
+        print("\n--check: OK — cada load_qc resuelve o corresponde a una etapa pendiente.")
 
 
 if __name__ == "__main__":

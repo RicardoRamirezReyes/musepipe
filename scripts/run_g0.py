@@ -65,7 +65,7 @@ def _load_spectrum(run_dir):
     return wave, flux
 
 
-def build_g0(run_id, project_root=None, legacy_run="ROXs12b_B_adp", pytest_after=None, no_legacy=False):
+def build_g0(run_id, project_root=None, legacy_run=None, pytest_after=None, no_legacy=False):
     root = Path(project_root or Path.cwd()).resolve()
     run_dir = root / "runs" / run_id
     stage_dir = run_dir / "stages"
@@ -179,7 +179,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="G0 real-cube-execution QC runner.")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--project-root", default=None)
-    ap.add_argument("--legacy-run", default="ROXs12b_B_adp")
+    ap.add_argument("--legacy-run", default=None,
+                    help="Run de referencia para la comparación legacy. Sin él la comparación se registra como no disponible; antes traía un default fijo al primer objeto, que era el equivocado para cualquier otro target.")
     ap.add_argument("--no-legacy", action="store_true",
                     help="Record the legacy provenance comparison as unavailable "
                          "(targets without an archival ADP, e.g. ROXs 42B b).")

@@ -1,0 +1,11 @@
+{
+  "slug": "ROXs12b",
+  "display_name": "ROXs 12 B",
+  "aliases": ["ROXs12b", "ROX12b", "ROXs 12B", "ROXs12"],
+  "companion_class": "planetary/brown-dwarf",
+  "references": {
+    "distance": "Gaia DR2/DR3",
+    "membership": "rho Oph"
+  },
+  "note": "Primer objeto de la cadena. display_name se usa en la prosa de los informes."
+}
