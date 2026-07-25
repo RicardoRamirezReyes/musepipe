@@ -174,6 +174,24 @@ def run_target(run_id: str, *, infer: bool = True) -> str | None:
     return run_id if infer else None
 
 
+def display_name(run_id: str | None = None) -> str:
+    """Nombre legible del objeto de un run (`targets/<slug>.json` -> `display_name`).
+
+    Para títulos y prosa: 'ROXs 42B b' en vez del slug 'ROXs42Bb'. Si el objeto no
+    tiene ficha en `targets/`, devuelve el slug tal cual (nunca inventa un nombre,
+    y nunca cae al del primer objeto).
+    """
+    slug = run_target(_effective_run(run_id))
+    if not slug:
+        return str(run_id or "")
+    path = project_root() / "targets" / f"{slug}.json"
+    try:
+        with open(path) as fh:
+            return str(json.load(fh).get("display_name") or slug)
+    except (OSError, json.JSONDecodeError):
+        return slug
+
+
 def _run_object_prefix(run_id: str) -> str:
     """Objeto según la convención de nombres de runs: `<objeto>_<variante>`."""
     return _normalize(run_id.split("_", 1)[0])

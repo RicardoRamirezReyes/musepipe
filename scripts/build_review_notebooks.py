@@ -46,6 +46,189 @@ def _object_slug(run_id: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Valores del QC dentro de la narrativa (marcadores `{{qc:...}}`)
+# --------------------------------------------------------------------------
+# La prosa de cada notebook llevaba los números del PRIMER objeto escritos a
+# mano (p.ej. "LSF 2.383 Å @Hα"), así que el set de cualquier otro objeto
+# heredaba cifras ajenas. Un marcador se resuelve, al generar, contra el QC del
+# objeto que se está generando:
+#
+#     {{qc:stages/stage00q_qc.json:m2_lsf.lsf_fwhm_at_halpha_A:.3f}}
+#
+# Formato opcional tras el segundo `:`. Si la etapa no ha corrido para el
+# objeto, o la clave es `null`, el marcador se resuelve a `n/d` en vez de
+# inventarse un número. La resolución usa la cadena (`chain.stage_runs`) vía
+# `notebooks/_nbcommon.py`, igual que los notebooks en tiempo de ejecución.
+#
+# La ruta admite selección dentro de listas de dicts, `clave[col=valor]`, y el
+# valor puede referirse a otra clave del mismo QC con `@`:
+#
+#     {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}}
+#
+# Para las tablas CSV de un run hay tres marcadores más (mismo `n/d` si faltan):
+#
+#     {{csv:tables/t.csv:method=psffit:matched_z:.2f}}   valor de una fila
+#     {{csvrange:tables/t.csv:global_empirical_fap:.2f}} "mín–máx" de la columna
+#     {{csvtop:tables/t.csv:matched_z:method}}           fila que maximiza una columna
+#
+# Y `{{target}}` = nombre legible del objeto (`targets/<slug>.json`), para que la
+# prosa no lleve escrito el nombre del primer objeto reducido.
+_QC_MARK = re.compile(r"\{\{qc:([^:{}]+):([^:{}]+?)(?::([^{}]*))?\}\}")
+_CSV_MARK = re.compile(r"\{\{csv:([^:{}]+):([^:{}=]+)=([^:{}]*):([^:{}]+?)(?::([^{}]*))?\}\}")
+_CSV_RANGE_MARK = re.compile(r"\{\{csvrange:([^:{}]+):([^:{}]+?)(?::([^{}]*))?\}\}")
+_CSV_TOP_MARK = re.compile(r"\{\{csvtop:([^:{}]+):([^:{}]+):([^:{}]+?)(?::([^{}]*))?\}\}")
+_QC_CACHE: dict[tuple[str, str], dict | None] = {}
+_CSV_CACHE: dict[tuple[str, str], list[dict] | None] = {}
+
+
+def _nbcommon():
+    """`notebooks/_nbcommon.py` (stdlib puro), o None si no se puede importar."""
+    import importlib
+    for p in (str(NB_DIR), str(ROOT)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    try:
+        return importlib.import_module("_nbcommon")
+    except ImportError:
+        return None
+
+
+def _qc_payload(relpath: str, run_id: str) -> dict | None:
+    key = (relpath, run_id)
+    if key not in _QC_CACHE:
+        mod = _nbcommon()
+        payload = None
+        if mod is not None:
+            try:
+                # Fija el run activo: así `resolve_qc` avisa si el QC saliera de
+                # otro objeto, igual que en el notebook.
+                mod.resolve_run_id(run_id)
+                path, _run, _why = mod.resolve_qc(relpath, run_id)
+                payload = json.loads(Path(path).read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                payload = None
+        _QC_CACHE[key] = payload
+    return _QC_CACHE[key]
+
+
+def _csv_rows(relpath: str, run_id: str) -> list[dict] | None:
+    """Filas de una tabla CSV del run (o None si no existe)."""
+    key = (relpath, run_id)
+    if key not in _CSV_CACHE:
+        import csv
+        mod = _nbcommon()
+        rows = None
+        if mod is not None:
+            try:
+                mod.resolve_run_id(run_id)
+                path = mod.run_dir(run_id) / relpath
+                with open(path, newline="", encoding="utf-8") as fh:
+                    rows = list(csv.DictReader(fh))
+            except (OSError, ValueError, csv.Error):
+                rows = None
+        _CSV_CACHE[key] = rows
+    return _CSV_CACHE[key]
+
+
+def _as_number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+_SELECTOR = re.compile(r"^([^\[\]]+)\[([^=\[\]]+)=([^\[\]]*)\]$")
+
+
+def _dotted(payload, dotted: str):
+    """Camino punteado, con selección `clave[col=valor]` dentro de listas.
+
+    El valor de la selección puede ser `@otra.clave`, que se resuelve contra el
+    payload completo (p.ej. el método canónico declarado por el propio QC).
+    """
+    node = payload
+    for part in dotted.split("."):
+        sel = _SELECTOR.match(part)
+        if sel:
+            name, col, want = sel.groups()
+            if not isinstance(node, dict) or name not in node:
+                return None
+            if want.startswith("@"):
+                want = _dotted(payload, want[1:])
+            node = next((r for r in node[name]
+                         if isinstance(r, dict) and r.get(col) == want), None)
+            if node is None:
+                return None
+            continue
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _formatted(value, spec: str | None) -> str:
+    if value is None:
+        return "n/d"
+    try:
+        return format(value, spec) if spec else str(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def resolve_qc_marks(text: str, run_id: str) -> str:
+    """Sustituye los marcadores `{{qc:...}}` / `{{csv*:...}}` por los datos de `run_id`."""
+
+    def qc_repl(m: re.Match) -> str:
+        return _formatted(_dotted(_qc_payload(m.group(1), run_id) or {}, m.group(2)),
+                          m.group(3))
+
+    def csv_repl(m: re.Match) -> str:
+        rel, col_key, want, col, spec = m.groups()
+        row = next((r for r in (_csv_rows(rel, run_id) or []) if r.get(col_key) == want), None)
+        if row is None or col not in row:
+            return "n/d"
+        value = _as_number(row[col])
+        return _formatted(row[col] if value is None else value, spec)
+
+    def csv_range_repl(m: re.Match) -> str:
+        rel, col, spec = m.groups()
+        values = [v for v in (_as_number(r.get(col)) for r in (_csv_rows(rel, run_id) or []))
+                  if v is not None]
+        if not values:
+            return "n/d"
+        return f"{_formatted(min(values), spec)}–{_formatted(max(values), spec)}"
+
+    def csv_top_repl(m: re.Match) -> str:
+        rel, rank_col, col, spec = m.groups()
+        rows = [r for r in (_csv_rows(rel, run_id) or []) if _as_number(r.get(rank_col)) is not None]
+        if not rows or col not in rows[0]:
+            return "n/d"
+        row = max(rows, key=lambda r: _as_number(r[rank_col]))
+        value = _as_number(row[col])
+        return _formatted(row[col] if value is None else value, spec)
+
+    text = _QC_MARK.sub(qc_repl, text)
+    text = _CSV_MARK.sub(csv_repl, text)
+    text = _CSV_RANGE_MARK.sub(csv_range_repl, text)
+    text = _CSV_TOP_MARK.sub(csv_top_repl, text)
+    if "{{target}}" in text:
+        text = text.replace("{{target}}", _target_display_name(run_id))
+    return text
+
+
+def _target_display_name(run_id: str) -> str:
+    """Nombre legible del objeto del run (misma fuente que `_nbcommon.display_name`)."""
+    mod = _nbcommon()
+    if mod is None:
+        return run_id.split("_", 1)[0]
+    try:
+        mod.resolve_run_id(run_id)
+        return mod.display_name(run_id)
+    except (OSError, ValueError):
+        return run_id.split("_", 1)[0]
+
+
+# --------------------------------------------------------------------------
 # Construcción de celdas nbformat 4.5 (sin dependencias externas)
 # --------------------------------------------------------------------------
 def _id() -> str:
@@ -144,12 +327,16 @@ def audit_code(body: str) -> dict:
 def build_cells(s: dict) -> list[dict]:
     cells: list[dict] = []
     spec_link = f"[`docs/{s['spec']}`](../docs/{s['spec']})" if s.get("spec") else "—"
+    # Run del objeto que se está generando: `DEFAULT_RUN` es el del primer objeto
+    # y no debe aparecer en el set de ningún otro (ni en la cabecera ni en los
+    # comandos de ejemplo).
+    run_for_qc = s.get("run_override") or DEFAULT_RUN
 
     # 1. Encabezado / spec / rol
     cells.append(md(
         f"# {s['id']} · {s['title']}\n\n"
         f"**Spec:** {spec_link}  |  **Bloque:** {s['block']}  |  "
-        f"**Run por defecto:** `{DEFAULT_RUN}`\n\n"
+        f"**Run de este set:** `{run_for_qc}`\n\n"
         f"{s['what']}\n\n"
         f"| | |\n|---|---|\n"
         f"| **Entrada** | {s['inputs']} |\n"
@@ -199,7 +386,7 @@ def build_cells(s: dict) -> list[dict]:
             "## Cómo ejecutar de forma independiente\n\n"
             "```bash\n"
             "conda activate MUSE               # kernel/env con astropy + musepipe\n"
-            f"export RUN={DEFAULT_RUN}   # o ROXs12b_B_adp para comparar\n"
+            f"export RUN={run_for_qc}   # el run de este objeto\n"
             f"cd {ROOT.name}                    # raíz del repo\n"
             f"{cmd}\n"
             "```\n\n"
@@ -404,6 +591,15 @@ def build_cells(s: dict) -> list[dict]:
     # 8. Conclusión fechada (opcional)
     if s.get("conclusion_md"):
         cells.append(md(s["conclusion_md"]))
+
+    # 9. Resolución de los marcadores `{{qc:...}}` de la narrativa contra el QC
+    # del objeto que se está generando (ver `resolve_qc_marks`). Solo markdown:
+    # el código lee el QC en tiempo de ejecución y no lleva marcadores.
+    for cell in cells:
+        if cell["cell_type"] == "markdown":
+            source = "".join(cell["source"])
+            if "{{" in source:
+                cell["source"] = _src(resolve_qc_marks(source, run_for_qc))
 
     return cells
 
@@ -630,8 +826,9 @@ STAGES: list[dict] = [
             "- **Derecha:** la zona de cielo usada (azul) sobre la luz-blanca; el halo AO de la "
             "primaria queda excluido.\n\n"
             "> Necesita el kernel **MUSE** (astropy) y el cubo en disco. Usa una máscara de cielo "
-            "aproximada (percentil 30 de flujo), así que el R reproducido (~0.49) difiere levemente "
-            "del oficial 0.547 (máscara de A4); la conclusión `R ≤ 1.5` es idéntica."
+            "aproximada (percentil 30 de flujo), así que el R reproducido aquí difiere levemente del "
+            "oficial ({{qc:stages/stage00q_qc.json:m4_sky.R}}, máscara de A4); lo que importa es si "
+            "cae del mismo lado del umbral `R ≤ 1.5`."
         ),
         plot_code=(
             "MAKE_PLOT = True   # carga el cubo (~3.3 GB) vía astropy; requiere kernel MUSE\n"
@@ -693,19 +890,23 @@ STAGES: list[dict] = [
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**Decisión: ZAP NO aplicado — `zap_applied = False` (`not_needed`).**\n\n"
-            "- **Fecha del análisis:** 2026-07-09 (QC A4/M4 sobre el cubo realineado, commit "
-            "`700f009`); el cubo se redujo el 2026-07-08.\n"
-            "- **Datos:** cubo NFM-AO auto-reducido `cube_telcorr.fits` (OB 3444577, "
-            "Prog 109.23B7.002, **7 exposiciones** MUSE.2022-09-01T00:36–02:03) + `SKY_SPECTRUM` "
-            "cacheado (32 exposiciones) para caracterizar el airglow.\n"
-            "- **Evidencia:** `R = 0.547 ≤ 1.5` (umbral *no necesario*); el cubo restado de cielo "
-            "tiene **<8 skylines usables** (residual al nivel de ruido). En el campo diminuto NFM, "
-            "ZAP aportaría ~0 y arriesgaría absorber señal del compañero.\n"
-            "- **Estado M4 = yellow:** el residuo es bajo, pero la escasez de skylines hace la "
-            "métrica menos robusta que en WFM. No bloqueante.\n"
-            "- **Para el paper:** registrar como decisión con su métrica (R=0.547), **no** como "
-            "omisión. Nada es paper-válido hasta cerrar el A-block."
+            "**Decisión de este objeto: `zap_applied = "
+            "{{qc:stages/stage00s_qc.json:decision.zap_applied}}` "
+            "(`{{qc:stages/stage00s_qc.json:decision.verdict}}`), con "
+            "R = {{qc:stages/stage00s_qc.json:decision.R_skyline_over_continuum}} sobre la máscara de "
+            "A2.** `n/d` = A2 no ha corrido para esta cadena: la decisión de abajo aún no está "
+            "registrada para el objeto.\n\n"
+            "- **Datos:** cubo NFM-AO auto-reducido `cube_telcorr.fits` + `SKY_SPECTRUM` cacheado "
+            "para caracterizar el airglow (el detalle del OB y las exposiciones de **este** objeto "
+            "sale del QC de A1/A4; la celda de setup imprime de qué run vienen).\n"
+            "- **Evidencia:** `R = {{qc:stages/stage00q_qc.json:m4_sky.R}}` frente al umbral `1.5` "
+            "(estado M4 = **{{qc:stages/stage00q_qc.json:m4_sky.status}}**); el cubo restado de cielo "
+            "tiene pocas skylines usables (residual al nivel de ruido). En el campo diminuto NFM, ZAP "
+            "aportaría ~0 y arriesgaría absorber señal del compañero.\n"
+            "- **Salvedad de M4:** el residuo es bajo, pero la escasez de skylines hace la métrica "
+            "menos robusta que en WFM. No bloqueante.\n"
+            "- **Para el paper:** registrar como decisión con su métrica (R), **no** como omisión. "
+            "Nada es paper-válido hasta cerrar el A-block del objeto."
         ),
     ),
     dict(
@@ -877,20 +1078,34 @@ STAGES: list[dict] = [
             "## Qué mide A4: las 5 métricas de calidad del cubo (M1–M5)\n\n"
             "A4 no re-reduce: **verifica la calibración** del cubo con 5 métricas, cada una un "
             "aspecto distinto.\n\n"
+            "Los valores de la tabla son los de **este objeto**, resueltos de su "
+            "`stage00q_qc.json` al generar el notebook (`n/d` = métrica no medida todavía "
+            "para esta cadena).\n\n"
             "| Métrica | Qué mide | Resultado | Significado |\n|---|---|---|---|\n"
-            "| **M1** | Exactitud de la solución de λ (offset vs airglow) | **green** (0.074 Å) | los "
-            "λ del cubo están bien (~+3.4 km/s en Hα) |\n"
-            "| **M2** | LSF (ancho de la función de dispersión) | **yellow** (2.383 Å @Hα) | "
-            "resolución espectral real; el NFM es ~10% más angosto que el nominal → se usa la medida "
-            "en E1/E3/G2 |\n"
-            "| **M3** | Calibración de flujo absoluto (vs Gaia RP) | **green** (factor 0.973) | la "
-            "escala de flujo casa con Gaia a ~3% |\n"
-            "| **M4** | Residuo de cielo (la `R` de A2) | **yellow** (R 0.547) | cielo bien restado "
+            "| **M1** | Exactitud de la solución de λ (offset vs airglow) | "
+            "**{{qc:stages/stage00q_qc.json:m1_wavelength.status}}** "
+            "({{qc:stages/stage00q_qc.json:m1_wavelength.offset_median_A:.3f}} Å) | "
+            "residuo de la solución en λ del cubo |\n"
+            "| **M2** | LSF (ancho de la función de dispersión) | "
+            "**{{qc:stages/stage00q_qc.json:m2_lsf.status}}** "
+            "({{qc:stages/stage00q_qc.json:m2_lsf.lsf_fwhm_at_halpha_A:.3f}} Å @Hα) | "
+            "resolución espectral real, medida del airglow y comparada con la LSF publicada de "
+            "MUSE (Bacon+2017); es la medida la que se usa en E1/E3/G2 |\n"
+            "| **M3** | Calibración de flujo absoluto (vs Gaia RP) | "
+            "**{{qc:stages/stage00q_qc.json:m3_flux.status}}** "
+            "(factor {{qc:stages/stage00q_qc.json:m3_flux.flux_factor:.3f}}) | "
+            "cuánto se aparta la escala de flujo de la fotometría Gaia |\n"
+            "| **M4** | Residuo de cielo (la `R` de A2) | "
+            "**{{qc:stages/stage00q_qc.json:m4_sky.status}}** "
+            "(R {{qc:stages/stage00q_qc.json:m4_sky.R}}) | calidad de la sustracción de cielo "
             "(ver A2) |\n"
-            "| **M5** | Fiabilidad del STAT (varianza del cubo) | **red** (4.26×) | el STAT subestima "
-            "el ruido ~4× → σ **siempre** empírico |\n\n"
-            "Las dos decisiones grandes de A4: **M3 cerrado** (flujo validado vs Gaia) y **M5 rojo** "
-            "(STAT no sirve → regla *control = objeto*, [`docs/noise_model.md`](../docs/noise_model.md))."
+            "| **M5** | Fiabilidad del STAT (varianza del cubo) | "
+            "**{{qc:stages/stage00q_qc.json:m5_stat.status}}** "
+            "({{qc:stages/stage00q_qc.json:m5_stat.factor_spaxel_median}}×) | cuánto subestima el "
+            "STAT el ruido → si es alto, σ **siempre** empírico |\n\n"
+            "Las dos decisiones grandes de A4: **M3** (¿la escala de flujo es utilizable?) y "
+            "**M5** (¿sirve el STAT como σ, o rige la regla *control = objeto*, "
+            "[`docs/noise_model.md`](../docs/noise_model.md)?)."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -899,12 +1114,15 @@ STAGES: list[dict] = [
         evidence_code=(
             "q = nb.load_qc('stages/stage00q_qc.json', RUN_ID)\n"
             "m1, m2, m3, m4, m5 = (q['m1_wavelength'], q['m2_lsf'], q['m3_flux'], q['m4_sky'], q['m5_stat'])\n"
+            "def _f(v, fmt='.3f'):\n"
+            "    \"\"\"Formatea, o 'n/d' si la métrica no se midió en esta cadena.\"\"\"\n"
+            "    return format(v, fmt) if isinstance(v, (int, float)) else 'n/d'\n"
             "rows = [\n"
-            "    ('M1 λ-solution', m1.get('status'), f\"offset {m1.get('offset_median_A'):.3f} Å (±{m1.get('offset_err_A'):.3f}), {m1.get('n_lines')} líneas\"),\n"
-            "    ('M2 LSF',        m2.get('status'), f\"{m2.get('lsf_fwhm_at_halpha_A'):.3f} Å @Hα, dev vs nominal {m2.get('max_dev_vs_nominal_pct'):.1f}%\"),\n"
-            "    ('M3 flujo abs',  m3.get('status'), f\"factor {m3.get('flux_factor'):.3f} vs Gaia {m3.get('band')} (growth-curve r={m3.get('plateau_radius_px'):.0f})\"),\n"
+            "    ('M1 λ-solution', m1.get('status'), f\"offset {_f(m1.get('offset_median_A'))} Å (±{_f(m1.get('offset_err_A'))}), {m1.get('n_lines')} líneas\"),\n"
+            "    ('M2 LSF',        m2.get('status'), f\"{_f(m2.get('lsf_fwhm_at_halpha_A'))} Å @Hα, dev máx vs referencia {_f(m2.get('max_dev_vs_nominal_pct'), '.1f')}% [{m2.get('nominal_reference', 'referencia no declarada en el QC')}]\"),\n"
+            "    ('M3 flujo abs',  m3.get('status'), f\"factor {_f(m3.get('flux_factor'))} vs Gaia {m3.get('band')} (growth-curve r={_f(m3.get('plateau_radius_px'), '.0f')})\"),\n"
             "    ('M4 cielo',      m4.get('status'), f\"R = {m4.get('R')}\"),\n"
-            "    ('M5 STAT',       m5.get('status'), f\"factor spaxel {m5.get('factor_spaxel_median')}× (STAT subestima el ruido)\"),\n"
+            "    ('M5 STAT',       m5.get('status'), f\"factor spaxel {m5.get('factor_spaxel_median')}× (cuánto subestima el STAT el ruido)\"),\n"
             "]\n"
             "for name, st, detail in rows:\n"
             "    print(f'{name:15s} [{str(st):9s}] {detail}')"
@@ -912,11 +1130,22 @@ STAGES: list[dict] = [
         plots=[
             dict(
                 md=(
-                    "## Plot 1 — M2 LSF (medida vs nominal) y M3 growth-curve\n\n"
-                    "Ambos desde el QC (baratos, sin cubo). **Izq:** la LSF medida del airglow (azul) "
-                    "cae bajo el nominal (gris) → el NFM es más angosto; línea en Hα = 2.383 Å. "
+                    "## Plot 1 — M2 LSF (medida vs referencia publicada) y M3 growth-curve\n\n"
+                    "Ambos desde el QC (baratos, sin cubo).\n\n"
+                    "**Izq:** LSF medida del airglow (azul) frente a la **LSF de referencia de "
+                    "MUSE publicada**: FWHM(λ) = 5.866·10⁻⁸ λ² − 9.187·10⁻⁴ λ + 6.040 Å "
+                    "([Bacon et al. 2017, A&A 608, A1](https://doi.org/10.1051/0004-6361/201730833), "
+                    "Ec. 8 — mediana de la LSF medida en los cubos del MUSE UDF, dispersión 1–3%). "
+                    "Sustituye a la interpolación lineal en R (1770@4800 Å → 3590@9300 Å) que se "
+                    "usaba antes y que no procedía de ninguna publicación. Salvedad: la referencia "
+                    "es de WFM, así que sirve como **patrón de comparación**, no como la LSF de "
+                    "este cubo — aguas abajo (E1/E3/G2) se usa siempre la **medida**. Para este "
+                    "objeto: medida @Hα = "
+                    "{{qc:stages/stage00q_qc.json:m2_lsf.lsf_fwhm_at_halpha_A:.3f}} Å "
+                    "(referencia @Hα = 2.537 Å).\n\n"
                     "**Der:** el flujo en banda RP crece con el radio hasta el *plateau* (halo AO "
-                    "capturado) → `flux_factor = 0.973`."
+                    "capturado) → `flux_factor = "
+                    "{{qc:stages/stage00q_qc.json:m3_flux.flux_factor:.3f}}`."
                 ),
                 code=(
                     "try:\n"
@@ -925,18 +1154,50 @@ STAGES: list[dict] = [
                     "    q = nb.load_qc('stages/stage00q_qc.json', RUN_ID)\n"
                     "    m2 = q['m2_lsf']; tab = m2['table_A_fwhm']\n"
                     "    w = np.array([r['wave_A'] for r in tab]); f = np.array([r['fwhm_A'] for r in tab])\n"
-                    "    nomv = np.array([r['nominal_fwhm_A'] for r in tab])\n"
+                    "    # Curva de referencia: se RECALCULA con la función canónica en vez de leer\n"
+                    "    # `nominal_fwhm_A` del QC, porque un QC escrito antes del cambio de\n"
+                    "    # referencia llevaría todavía la curva antigua (interpolación en R).\n"
+                    "    try:\n"
+                    "        from musepipe.qc.cube_qc import nominal_muse_fwhm_A as ref_fn\n"
+                    "        from musepipe.qc.cube_qc import MUSE_LSF_REFERENCE as ref_cite\n"
+                    "        from musepipe.qc.cube_qc import MUSE_LSF_REFERENCE_SHORT as ref_short\n"
+                    "    except ImportError:\n"
+                    "        o = np.argsort(w); _nom = np.array([r['nominal_fwhm_A'] for r in tab])\n"
+                    "        ref_fn = lambda x: np.interp(np.asarray(x, float), w[o], _nom[o])\n"
+                    "        ref_cite = m2.get('nominal_reference', 'referencia guardada en el QC')\n"
+                    "        ref_short = 'QC'\n"
+                    "        print('(sin musepipe en este kernel: uso la referencia guardada en el QC)')\n"
+                    "    ref = np.asarray(ref_fn(w), dtype=float)\n"
+                    "    ref_ha = float(np.atleast_1d(ref_fn([6563.0]))[0])\n"
+                    "    dev = np.abs(f / ref - 1.0) * 100.0\n"
                     "    m3 = q['m3_flux']; gc = m3['growth_curve']\n"
                     "    gr = np.array([p['radius_px'] for p in gc]); gf = np.array([p['band_flux'] for p in gc])\n\n"
                     "    fig, (axL, axR) = plt.subplots(1, 2, figsize=(13, 4.2))\n"
                     "    axL.scatter(w, f, s=10, color='tab:blue', label='LSF medida (airglow)')\n"
-                    "    axL.scatter(w, nomv, s=8, color='0.6', label='nominal (código)')\n"
+                    "    wg = np.linspace(float(w.min()), float(w.max()), 300)\n"
+                    "    axL.plot(wg, ref_fn(wg), color='0.35', lw=1.6,\n"
+                    "             label=f'LSF de referencia ({ref_short})')\n"
                     "    axL.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
                     "    hal = m2.get('lsf_fwhm_at_halpha_A')\n"
                     "    if hal: axL.axhline(hal, color='tab:red', ls='--', lw=1)\n"
                     "    axL.set_xlabel('λ [Å]'); axL.set_ylabel('FWHM LSF [Å]')\n"
-                    "    axL.set_title(f\"M2 · LSF medida vs nominal ({m2['status']}) · @Hα={hal:.3f} Å\")\n"
-                    "    axL.legend(fontsize=8)\n"
+                    "    axL.set_title(f\"M2 · LSF medida vs referencia ({m2['status']})\\n\"\n"
+                    "                  f\"@Hα = {hal:.3f} Å vs {ref_ha:.3f} Å (ref) · dev máx {dev.max():.1f}%\",\n"
+                    "                  fontsize=10)\n"
+                    "    axL.text(0.02, 0.035, f'Referencia: {ref_cite}', transform=axL.transAxes,\n"
+                    "             fontsize=7, color='0.35',\n"
+                    "             bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.5))\n"
+                    "    axL.legend(fontsize=8, loc='upper right')\n"
+                    "    # Procedencia de la referencia: avisa si el QC en disco se escribió con otra.\n"
+                    "    stored_cite, stored_dev = m2.get('nominal_reference'), m2.get('max_dev_vs_nominal_pct')\n"
+                    "    if stored_cite != ref_cite:\n"
+                    "        print(f'AVISO: el QC en disco declara referencia {stored_cite!r} y este plot usa '\n"
+                    "              f'{ref_cite!r}.')\n"
+                    "        if isinstance(stored_dev, (int, float)):\n"
+                    "            print(f'       dev máx: {dev.max():.1f}% (recalculada aquí) vs '\n"
+                    "                  f'{stored_dev:.1f}% (guardada). El estado M2 del QC se calculó con la '\n"
+                    "                  'referencia antigua.')\n"
+                    "        print('       Re-ejecuta A4 (m1m2-sky) para regenerar el QC con la referencia actual.')\n"
                     "    axR.plot(gr, gf, 'o-', color='tab:green')\n"
                     "    axR.axvline(m3['plateau_radius_px'], color='0.5', ls='--',\n"
                     "                label=f\"plateau r={m3['plateau_radius_px']:.0f}px\")\n"
@@ -953,7 +1214,9 @@ STAGES: list[dict] = [
             dict(
                 md=(
                     "## Plot 2 — M5: por qué el STAT no sirve (covarianza del remuestreo)\n\n"
-                    "M5 mide que el STAT subestima el ruido **~4.26× por spaxel**. El QC solo guarda "
+                    "M5 mide cuánto subestima el STAT el ruido por spaxel "
+                    "(**{{qc:stages/stage00q_qc.json:m5_stat.factor_spaxel_median}}×** en este "
+                    "objeto). El QC solo guarda "
                     "esa mediana, así que ilustro el **mecanismo** con la inflación espacial de G1 "
                     "(almacenada): al sumar en cajas N×N la varianza real se infla frente a la suma "
                     "ingenua de STAT (que asume píxeles independientes, =1) hasta ~19× en 5×5. Es la "
@@ -979,7 +1242,10 @@ STAGES: list[dict] = [
                     "               label='STAT asume =1 (píxeles independientes)')\n"
                     "    ax.set_xlabel('caja de integración (N×N spaxels)')\n"
                     "    ax.set_ylabel('inflación varianza real / suma ingenua')\n"
-                    "    ax.set_title(f\"M5 [{m5['status']}]: STAT ~{m5['factor_spaxel_median']}× bajo por spaxel \"\n"
+                    "    fac = m5.get('factor_spaxel_median')\n"
+                    "    fac_txt = f\"STAT ~{fac}× bajo por spaxel\" if isinstance(fac, (int, float)) \\\n"
+                    "        else f\"M5 no medida en esta cadena ({m5.get('status')})\"\n"
+                    "    ax.set_title(f\"M5 [{m5['status']}]: {fac_txt} \"\n"
                     "                 f\"(+ covarianza del remuestreo en apertura)\")\n"
                     "    ax.legend(fontsize=8); fig.tight_layout()\n"
                     "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'a4_qc'; outdir.mkdir(parents=True, exist_ok=True)\n"
@@ -991,23 +1257,34 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**M3 CERRADO (GREEN)**: flujo absoluto validado vs Gaia DR3 RP, factor 0.973 (~3%) tras growth-curve + truncación de cola.", None),
-            ("**M5 STAT en ROJO (inherente)**: el STAT subestima el ruido ~4.26× por covarianza del remuestreo → σ SIEMPRE empírico, control=objeto. Limitación aceptada en F1.", "noise_model.md"),
-            ("**M2 LSF@Hα = 2.383 Å medido** del airglow (NFM más angosta que el nominal 2.6); usada en E1/E3/G2.", None),
+            ("**M3 [{{qc:stages/stage00q_qc.json:m3_flux.status}}]**: flujo absoluto contrastado con Gaia DR3 {{qc:stages/stage00q_qc.json:m3_flux.band}}, factor {{qc:stages/stage00q_qc.json:m3_flux.flux_factor:.3f}} tras growth-curve + truncación de cola.", None),
+            ("**M5 [{{qc:stages/stage00q_qc.json:m5_stat.status}}]**: factor de subestimación del STAT = {{qc:stages/stage00q_qc.json:m5_stat.factor_spaxel_median}}× por spaxel (covarianza del remuestreo: inherente, no un defecto del cubo) → σ SIEMPRE empírico, control=objeto. Limitación aceptada en F1.", "noise_model.md"),
+            ("**M2 LSF@Hα = {{qc:stages/stage00q_qc.json:m2_lsf.lsf_fwhm_at_halpha_A:.3f}} Å medido** del airglow, frente a los 2.537 Å de la referencia publicada (Bacon et al. 2017, A&A 608, A1, Ec. 8); en E1/E3/G2 se usa la MEDIDA, nunca la referencia.", None),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**A4: cubo caracterizado; 2 verdes (M1, M3), 2 amarillos (M2, M4), 1 rojo inherente (M5).**\n\n"
-            "- **Fecha:** M1/M2 del airglow SKY_SPECTRUM y M3 vs Gaia, 2026-07-09.\n"
-            "- **M1 green:** offset 0.074 Å (solución de λ sana).\n"
-            "- **M2 yellow:** LSF 2.383 Å @Hα (NFM más angosto que nominal 2.6); es la LSF usada en "
-            "E1/E3/G2.\n"
-            "- **M3 green:** flujo absoluto validado vs Gaia DR3 RP, factor 0.973 (~3%), con "
-            "growth-curve (halo AO) + truncación de cola.\n"
-            "- **M4 yellow:** cielo bien restado (R=0.547, ver A2).\n"
-            "- **M5 red (inherente, no defecto):** STAT subestima ~4.26× por la covarianza del "
-            "remuestreo → σ SIEMPRE empírico (control=objeto). Limitación aceptada en F1.\n"
+            "**A4: cubo caracterizado.** Estado por métrica para **este objeto** (resuelto del "
+            "`stage00q_qc.json` de su cadena al generar el notebook; `n/d` = aún no medida). La "
+            "procedencia exacta del QC la imprime la celda de setup.\n\n"
+            "- **M1 [{{qc:stages/stage00q_qc.json:m1_wavelength.status}}]:** offset "
+            "{{qc:stages/stage00q_qc.json:m1_wavelength.offset_median_A:.3f}} Å sobre "
+            "{{qc:stages/stage00q_qc.json:m1_wavelength.n_lines}} líneas de airglow "
+            "(solución de λ).\n"
+            "- **M2 [{{qc:stages/stage00q_qc.json:m2_lsf.status}}]:** LSF "
+            "{{qc:stages/stage00q_qc.json:m2_lsf.lsf_fwhm_at_halpha_A:.3f}} Å @Hα medida del "
+            "airglow (referencia publicada: 2.537 Å @Hα, Bacon+2017 Ec. 8); es la LSF **medida** la "
+            "que se usa en E1/E3/G2.\n"
+            "- **M3 [{{qc:stages/stage00q_qc.json:m3_flux.status}}]:** flujo absoluto vs Gaia DR3 "
+            "{{qc:stages/stage00q_qc.json:m3_flux.band}}, factor "
+            "{{qc:stages/stage00q_qc.json:m3_flux.flux_factor:.3f}}, con growth-curve (halo AO) + "
+            "truncación de cola.\n"
+            "- **M4 [{{qc:stages/stage00q_qc.json:m4_sky.status}}]:** residuo de cielo "
+            "R={{qc:stages/stage00q_qc.json:m4_sky.R}} (ver A2).\n"
+            "- **M5 [{{qc:stages/stage00q_qc.json:m5_stat.status}}]:** factor de subestimación del "
+            "STAT = {{qc:stages/stage00q_qc.json:m5_stat.factor_spaxel_median}}× por spaxel, por la "
+            "covarianza del remuestreo (inherente, no defecto) → σ SIEMPRE empírico "
+            "(control=objeto). Limitación aceptada en F1.\n"
             "- **Impacto:** M5 fija la regla de ruido de toda la cadena (D2/E1/E3); M3 sostiene el "
             "flujo absoluto de E3."
         ),
@@ -1222,7 +1499,7 @@ STAGES: list[dict] = [
     dict(
         id="B3", slug="B3_localize", title="Localización del compañero", block="B · Preparación",
         spec="spec_B3_codex_target_localization.md", run_override=None,
-        what="Localiza el compañero ROXs 12 B en el campo.",
+        what="Localiza el compañero de {{target}} en el campo.",
         inputs="Cubo alineado", outputs="`stages/stage01c_qc.json`",
         downstream="C1–C4 (posición de extracción)",
         exec=dict(kind="script", target="stage01c_localize.sh", cost="Ligero."),
@@ -2391,7 +2668,9 @@ STAGES: list[dict] = [
             "**D1 v3: `divergent_continuum` con 3 pares primarios limpios (psffit–sgf, psffit–lpm, "
             "sgf–lpm); canónico = psffit (decisión del usuario 2026-07-15).**\n\n"
             "- **Fecha:** cadena D1 v3 sobre el run realineado (2026-07-15).\n"
-            "- **Estadístico:** t control-centrado, 33 controles (df=32), corr_length 2.34 canales.\n"
+            "- **Estadístico:** t control-centrado, 33 controles (df=32), corr_length "
+            "{{qc:stages/stage_g1_qc.json:covariance.corr_length_channels_median:.2f}} canales "
+            "(de G1).\n"
             "- **Firma B6:** la familia espectral es ~consistente donde psffit diverge (t≈+14) → el "
             "residuo apunta al halo rojo del modelo espacial; salvedad de ŝ compartida entre sgf/lpm.\n"
             "- **Downstream:** D2 calibró los 6 métodos (comparador de continuo = lpm, errata D2 "
@@ -2414,8 +2693,12 @@ STAGES: list[dict] = [
             "corregida y en marco declarado, flujo en escala validada, continuo por dos vías, y un "
             "**error total con presupuesto de sistemáticos explícito**. **Aplica factores medidos "
             "aguas arriba** (trazables al QC que los midió) — no mide nada nuevo.\n\n"
-            "- **λ:** Δλ = −0.074 Å (de A4/M1), marco final **baricéntrico**.\n"
-            "- **Flujo:** escala = 1.0 (M3 factor 0.973 validado vs Gaia DR3, consistente con 1).\n"
+            "- **λ:** Δλ = −{{qc:stages/stage00q_qc.json:m1_wavelength.offset_median_A:.3f}} Å "
+            "(de A4/M1), marco final **baricéntrico**.\n"
+            "- **Flujo:** escala = 1.0 (M3 factor "
+            "{{qc:stages/stage00q_qc.json:m3_flux.flux_factor:.3f}} vs Gaia DR3, estado "
+            "**{{qc:stages/stage00q_qc.json:m3_flux.status}}**: se aplica escala 1.0 porque el factor "
+            "es consistente con 1 dentro de su error).\n"
             "- **Continuo:** running-median y polinomio; su diferencia es el término `sys_continuum`.\n"
             "- **Error:** `stat` (empírico, M5 rojo) + sistemáticos (flujo-cal, psf, cielo, telúrico, "
             "continuo). El total está **dominado por el stat**.\n\n"
@@ -2558,19 +2841,35 @@ STAGES: list[dict] = [
             "E1 busca **emisión de Hα** del compañero con un **matched filter** (plantilla de la línea "
             "esperada) y calibra la significancia con **controles** (FAP empírico). Es el **endpoint "
             "científico**.\n\n"
-            "Por método: busca en ±500 km/s alrededor de Hα (6562.8 Å, rv_sys −7) → un `z` del matched "
-            "filter. La **FAP** = fracción de los 33 máximos nulos (posiciones de control) que superan "
-            "el pico del objeto. **Criterio de detección:** `global_fap < 0.01` **Y** un par admisible "
-            "(psffit+aperture) **Y** rv dentro de la LSF.\n\n"
-            "**VEREDICTO = `non_detection`** (`no_method_passes_global_fap`): ningún método pasa. Los "
-            "picos del objeto (z 1.0–3.4) caen **dentro de sus distribuciones nulas** (FAP 0.62–0.97 "
-            "≫ 0.01). El pico de **psffit z=3.41** parece 'algo', pero sus nulos llegan a 8 (borde "
-            "ruidoso, ~10× ruido) → FAP 0.88; además `rv_consistent=False` (v=+128 vs esperado ~−7) y "
-            "FWHM 10 Å (demasiado ancho para Hα) → **ruido, no línea**.\n\n"
-            "**Inputs:** LSF 2.383 Å (medida en A4/M2), rv_sys −7 (estimación de literatura), 33 "
-            "controles → `min_resolvable_fap` ≈ 0.029 (aún >0.01; un FAP<1% estricto necesitaría ~99 "
-            "controles — salvedad).\n\n"
-            "**Resultado robusto: no hay señal de acreción en Hα de ROXs 12 B.**"
+            "Por método: busca en ±{{qc:stages/stage_h01_qc.json:line.search_half_width_kms:.0f}} km/s "
+            "alrededor de Hα ({{qc:stages/stage_h01_qc.json:line.rest_A}} Å, rv_sys "
+            "{{qc:stages/stage_h01_qc.json:line.rv_sys_kms:+.0f}}) → un `z` del matched filter. La "
+            "**FAP** = fracción de los "
+            "{{csvtop:tables/halpha_detection_by_method.csv:matched_z:n_controls:.0f}} máximos nulos "
+            "(posiciones de control) que superan el pico del objeto. **Criterio de detección:** "
+            "`global_fap < {{qc:stages/stage_h01_qc.json:criterion.global_fap_lt}}` **Y** un par "
+            "admisible (psffit+aperture) **Y** rv dentro de la LSF.\n\n"
+            "**VEREDICTO = `{{qc:stages/stage_h01_qc.json:verdict.verdict}}`** "
+            "(`{{qc:stages/stage_h01_qc.json:verdict.reason}}`). Valores de **este objeto**: los picos "
+            "van de z {{csvrange:tables/halpha_detection_by_method.csv:matched_z:.2f}} con FAP "
+            "{{csvrange:tables/halpha_detection_by_method.csv:global_empirical_fap:.2f}}. El pico más "
+            "alto es **{{csvtop:tables/halpha_detection_by_method.csv:matched_z:method}}** "
+            "(z={{csvtop:tables/halpha_detection_by_method.csv:matched_z:matched_z:.2f}}, "
+            "FAP={{csvtop:tables/halpha_detection_by_method.csv:matched_z:global_empirical_fap:.2f}}, "
+            "v={{csvtop:tables/halpha_detection_by_method.csv:matched_z:peak_velocity_kms:+.0f}} km/s, "
+            "rv_ok={{csvtop:tables/halpha_detection_by_method.csv:matched_z:rv_consistent}}, "
+            "FWHM={{csvtop:tables/halpha_detection_by_method.csv:matched_z:fwhm_A:.1f}} Å).\n\n"
+            "> **Cómo leer un pico alto:** un `z` grande no es señal por sí solo. Hay que exigirle las "
+            "tres cosas del criterio — FAP baja frente a SUS controles, rv consistente con el "
+            "sistémico, y anchura compatible con la LSF. Un pico con rv incoherente o mucho más ancho "
+            "que la LSF es ruido de borde, no una línea. La celda de evidencia y el Plot 1 dan las "
+            "tres por método.\n\n"
+            "**Inputs:** LSF {{qc:stages/stage_h01_qc.json:templates.lsf_fwhm_A}} Å, rv_sys "
+            "{{qc:stages/stage_h01_qc.json:line.rv_sys_kms:+.0f}} km/s (estimación de literatura), "
+            "{{csvtop:tables/halpha_detection_by_method.csv:matched_z:n_controls:.0f}} controles → "
+            "`min_resolvable_fap` ≈ "
+            "{{csvtop:tables/halpha_detection_by_method.csv:matched_z:minimum_resolvable_fap:.3f}} "
+            "(por encima del umbral: un FAP<1% estricto necesitaría ~99 controles — salvedad)."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -2596,11 +2895,14 @@ STAGES: list[dict] = [
         plots=[
             dict(
                 md=(
-                    "## Plot 1 — la no-detección: pico del objeto vs distribución nula\n\n"
-                    "Por método, los 33 **máximos nulos** (matched filter en posiciones de control, "
-                    "gris) y el **pico del objeto** (estrella). En todos, el pico del objeto queda "
-                    "**dentro de la nube nula** → FAP ≫ 0.01. psffit tiene z alto (3.41) pero sus "
-                    "nulos llegan a 8 (borde ruidoso) → FAP 0.88; rv inconsistente."
+                    "## Plot 1 — el pico del objeto frente a su distribución nula\n\n"
+                    "Por método, los **máximos nulos** (matched filter en las posiciones de control, "
+                    "gris) y el **pico del objeto** (estrella; roja si `rv_consistent=False`). La "
+                    "lectura es la posición del pico **dentro de su propia nube**: si queda inmerso en "
+                    "ella, la FAP es alta y no hay detección. Para este objeto el veredicto es "
+                    "`{{qc:stages/stage_h01_qc.json:verdict.verdict}}` con FAP "
+                    "{{csvrange:tables/halpha_detection_by_method.csv:global_empirical_fap:.2f}} frente "
+                    "al umbral {{qc:stages/stage_h01_qc.json:criterion.global_fap_lt}}."
                 ),
                 code=(
                     "try:\n"
@@ -2622,7 +2924,8 @@ STAGES: list[dict] = [
                     "        ax.text(i, obj + 0.35, f'z={obj:.2f}\\nFAP={fap:.2f}\\nrv_ok={rv}', ha='center', fontsize=7)\n"
                     "    ax.set_xticks(range(len(methods))); ax.set_xticklabels(methods, fontsize=9)\n"
                     "    ax.set_ylabel('z del matched filter (máximo en la ventana Hα)')\n"
-                    "    ax.set_title('E1 · no-detección: el pico del objeto queda dentro de la nube nula (FAP >> 0.01)')\n"
+                    "    v = nb.load_qc('stages/stage_h01_qc.json', RUN_ID)['verdict']\n"
+                    "    ax.set_title(f\"E1 · {v['verdict']} ({v['reason']}): pico del objeto vs su nube nula\")\n"
                     "    ax.legend(fontsize=8, loc='upper left'); fig.tight_layout()\n"
                     "    outdir = rd / 'plots' / 'e1_halpha'; outdir.mkdir(parents=True, exist_ok=True)\n"
                     "    fig.savefig(outdir / 'detection.png', dpi=110); print('figura ->', outdir / 'detection.png'); plt.show()\n"
@@ -2635,8 +2938,9 @@ STAGES: list[dict] = [
                     "## Plot 2 — la región de Hα en el espectro canónico\n\n"
                     "El espectro canónico (`spec_final_object.fits`) alrededor de Hα con la banda ±1σ "
                     "empírica (controles del método canónico de D2) y la posición esperada de Hα "
-                    "(rest_A del QC de E1, corrida por rv_sys). **No hay línea** por encima del ruido "
-                    "en la posición esperada."
+                    "(rest_A del QC de E1, corrida por rv_sys). Lo que hay que mirar: si asoma algo "
+                    "**por encima de la banda** justo en la posición esperada. Veredicto de E1 para "
+                    "este objeto: `{{qc:stages/stage_h01_qc.json:verdict.verdict}}`."
                 ),
                 code=(
                     "try:\n"
@@ -2669,23 +2973,32 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**VEREDICTO = `non_detection`** — ningún método supera el FAP global (0.62–0.97 ≫ 0.01); los picos caen dentro de la nube nula. **ENDPOINT CIENTÍFICO: no hay señal de acreción en Hα.**", None),
-            ("El pico psffit (z=3.41) es RV-inconsistente (v=+128) y demasiado ancho (10 Å) → ruido, no línea; su nube nula llega a z=8 (borde ~10× ruido).", None),
-            ("LSF = 2.383 Å (medida, A4/M2), 33 controles → min_resolvable_fap ≈ 0.029 (un FAP<1% estricto necesitaría ~99 controles).", None),
+            ("**VEREDICTO = `{{qc:stages/stage_h01_qc.json:verdict.verdict}}`** (`{{qc:stages/stage_h01_qc.json:verdict.reason}}`); métodos significativos: {{qc:stages/stage_h01_qc.json:verdict.significant_methods}}. FAP por método {{csvrange:tables/halpha_detection_by_method.csv:global_empirical_fap:.2f}} frente al umbral {{qc:stages/stage_h01_qc.json:criterion.global_fap_lt}}. **Es el endpoint científico de la cadena.**", None),
+            ("Un `z` alto no basta: el pico mayor de este objeto es {{csvtop:tables/halpha_detection_by_method.csv:matched_z:method}} (z={{csvtop:tables/halpha_detection_by_method.csv:matched_z:matched_z:.2f}}, FAP={{csvtop:tables/halpha_detection_by_method.csv:matched_z:global_empirical_fap:.2f}}, rv_ok={{csvtop:tables/halpha_detection_by_method.csv:matched_z:rv_consistent}}, FWHM={{csvtop:tables/halpha_detection_by_method.csv:matched_z:fwhm_A:.1f}} Å) — hay que juzgarlo por FAP + rv + anchura, no por z.", None),
+            ("LSF = {{qc:stages/stage_h01_qc.json:templates.lsf_fwhm_A}} Å, {{csvtop:tables/halpha_detection_by_method.csv:matched_z:n_controls:.0f}} controles → min_resolvable_fap ≈ {{csvtop:tables/halpha_detection_by_method.csv:matched_z:minimum_resolvable_fap:.3f}} (un FAP<1% estricto necesitaría ~99 controles).", None),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**E1: veredicto `non_detection` — no hay señal de acreción en Hα de ROXs 12 B.**\n\n"
-            "- **Fecha:** cadena D1 v2 realineado (2026-07-09), con LSF medida.\n"
-            "- **Todos los métodos:** FAP 0.62–0.97 ≫ 0.01; picos del objeto dentro de sus nubes "
-            "nulas.\n"
-            "- **psffit z=3.41** (el mayor) es rv-inconsistente (+128 km/s) y demasiado ancho (10 Å) "
-            "→ ruido.\n"
-            "- **Inputs:** LSF 2.383 Å medida, 33 controles (min_fap 0.029; ~99 para 1% estricto), "
-            "rv_sys −7 (literatura).\n"
-            "- **Downstream:** alimenta E3 (límite superior de Ṁ) y G2. Es el endpoint científico "
-            "del proyecto."
+            "**E1: veredicto `{{qc:stages/stage_h01_qc.json:verdict.verdict}}` "
+            "(`{{qc:stages/stage_h01_qc.json:verdict.reason}}`).** Cifras de este objeto, resueltas "
+            "de su `stage_h01_qc.json` y de `tables/halpha_detection_by_method.csv`.\n\n"
+            "- **Todos los métodos:** z "
+            "{{csvrange:tables/halpha_detection_by_method.csv:matched_z:.2f}}, FAP "
+            "{{csvrange:tables/halpha_detection_by_method.csv:global_empirical_fap:.2f}} frente al "
+            "umbral {{qc:stages/stage_h01_qc.json:criterion.global_fap_lt}}.\n"
+            "- **Pico mayor:** {{csvtop:tables/halpha_detection_by_method.csv:matched_z:method}} "
+            "(z={{csvtop:tables/halpha_detection_by_method.csv:matched_z:matched_z:.2f}}, "
+            "v={{csvtop:tables/halpha_detection_by_method.csv:matched_z:peak_velocity_kms:+.0f}} km/s, "
+            "rv_ok={{csvtop:tables/halpha_detection_by_method.csv:matched_z:rv_consistent}}, "
+            "FWHM={{csvtop:tables/halpha_detection_by_method.csv:matched_z:fwhm_A:.1f}} Å frente a una "
+            "LSF de {{qc:stages/stage_h01_qc.json:templates.lsf_fwhm_A}} Å).\n"
+            "- **Inputs:** LSF {{qc:stages/stage_h01_qc.json:templates.lsf_fwhm_A}} Å, "
+            "{{csvtop:tables/halpha_detection_by_method.csv:matched_z:n_controls:.0f}} controles "
+            "(min_fap {{csvtop:tables/halpha_detection_by_method.csv:matched_z:minimum_resolvable_fap:.3f}}; "
+            "~99 para 1% estricto), rv_sys "
+            "{{qc:stages/stage_h01_qc.json:line.rv_sys_kms:+.0f}} km/s (literatura).\n"
+            "- **Downstream:** alimenta E3 (límite superior de Ṁ) y G2."
         ),
     ),
     dict(
@@ -2973,19 +3286,31 @@ STAGES: list[dict] = [
             "Toma el umbral de flujo **Gumbel 99%** de los máximos de ruido de los controles "
             "(matched filter, `f_stat_99`) y lo pasa por la cadena física:\n\n"
             "```\nf_stat_99  ÷throughput→  f_obs  ×deredden→  f_dered  ×4πd²→  L_Hα  →Alcalá→  Ṁ\n```\n\n"
-            "**Ṁ (99%, canónico psffit) = 8.2×10⁻¹³ M☉/yr.** Insumos físicos (todos citados): "
-            "d=138.6 pc (Gaia), A_V=1.8 (Rizzuto+2015; A_Hα=0.818·A_V=1.47), CCM89 R_V=3.1, relación "
-            "L_acc–L_Hα de Alcalá+2017 (scatter 0.3 dex), masa 0.0167 M☉ (17.5 M_Jup, Bowler+2017), "
-            "radio 0.135 R☉.\n\n"
-            "**Dependencia del método = el throughput** (aperture 0.37, ls 0.19, psfsub/psffit 0.67): "
-            "menor throughput → señal peor recuperada → límite **peor** (más alto). **psffit es el "
-            "canónico citable** (robusto); psfsub da un límite más ajustado (1.3×10⁻¹³) pero su ruido "
-            "es ~10× menor en este borde (menos fiable). **Scatter inter-método 43.5%.**\n\n"
+            "**Ṁ (99%, canónico {{qc:stages/stage_h03_qc.json:canonical_method}}) = "
+            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** para "
+            "este objeto. Insumos físicos (todos citados en el QC): "
+            "d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}} pc, "
+            "A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}} "
+            "({{qc:stages/stage_h03_qc.json:physical_inputs.av_source}}), CCM89 R_V=3.1, relación "
+            "L_acc–L_Hα de {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}} "
+            "(scatter {{qc:stages/stage_h03_qc.json:physical_inputs.relation_scatter_dex}} dex), "
+            "masa {{qc:stages/stage_h03_qc.json:physical_inputs.companion_mass_msun}} M☉, "
+            "radio {{qc:stages/stage_h03_qc.json:physical_inputs.companion_radius_rsun}} R☉.\n\n"
+            "**Dependencia del método = el throughput:** menor throughput → señal peor recuperada → "
+            "límite **peor** (más alto). El canónico citable es "
+            "`{{qc:stages/stage_h03_qc.json:canonical_method}}` (throughput "
+            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}) por "
+            "robustez, no por dar el número más bajo: un método puede dar un límite más ajustado y ser "
+            "menos fiable si su ruido está subestimado en ese borde. **Scatter inter-método "
+            "{{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%** (la celda de evidencia y "
+            "el Plot 1 dan el valor de cada método).\n\n"
             "**Nota de definición** ([`docs/mdot_limit_definition_note.md`]"
             "(../docs/mdot_limit_definition_note.md)): E3 usa Gumbel 99% **sin** el factor R_in 1.25; "
-            "G3 usa 5σ **con** R_in → G3 da 1.3×10⁻¹². Misma cadena física; la diferencia es "
-            "**definicional** (ninguna declarada canónica aún). Knob clave `h03_flux_unit_cgs=1e-20` "
-            "(unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos."
+            "G3 usa 5σ **con** R_in → G3 da "
+            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (`n/d` = G3 no ha calculado acreción "
+            "para este objeto; ver su notebook). Misma cadena física; la diferencia "
+            "es **definicional** (ninguna declarada canónica aún). Knob clave "
+            "`h03_flux_unit_cgs=1e-20` (unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -3020,10 +3345,12 @@ STAGES: list[dict] = [
             dict(
                 md=(
                     "## Plot 1 — Ṁ por método (el throughput manda)\n\n"
-                    "El límite de Ṁ por método (escala log). **psffit (verde) = 8.2×10⁻¹³** es el "
-                    "canónico. Los métodos con menor throughput (aperture 0.37, ls 0.19) dan límites "
-                    "**peores**; psfsub (0.67) da uno más ajustado pero es menos robusto (scatter "
-                    "inter-método 43%)."
+                    "El límite de Ṁ por método (escala log); en verde el canónico "
+                    "(`{{qc:stages/stage_h03_qc.json:canonical_method}}` = "
+                    "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr). "
+                    "Cada barra lleva su throughput: los métodos que recuperan peor la señal dan "
+                    "límites **más altos**. Scatter inter-método "
+                    "{{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%."
                 ),
                 code=(
                     "try:\n"
@@ -3052,9 +3379,14 @@ STAGES: list[dict] = [
             dict(
                 md=(
                     "## Plot 2 — la cadena física: de la no-detección a Ṁ\n\n"
-                    "Los 5 pasos para el método canónico (psffit): del umbral de flujo Gumbel 99% "
-                    "(`f_stat_99`), dividir por el throughput, deredden (A_Hα=1.47), convertir a "
-                    "luminosidad (4πd²), y aplicar Alcalá 2017 → **Ṁ = 8.2×10⁻¹³ M☉/yr**."
+                    "Los 5 pasos para el método canónico "
+                    "(`{{qc:stages/stage_h03_qc.json:canonical_method}}`): del umbral de flujo Gumbel "
+                    "99% (`f_stat_99`), dividir por el throughput, deredden (A_V="
+                    "{{qc:stages/stage_h03_qc.json:physical_inputs.av}}), convertir a luminosidad "
+                    "(4πd², d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}} pc), y "
+                    "aplicar {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}} → "
+                    "**Ṁ = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
+                    "M☉/yr**. Cada caja muestra el valor real del QC de este objeto."
                 ),
                 code=(
                     "try:\n"
@@ -3085,25 +3417,32 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Ṁ(99%) = 8.2×10⁻¹³ M☉/yr** (psffit canónico; Gumbel 99%, L_Hα deredden, throughput 0.67, d=138.6pc, A_V=1.8, Alcalá+2017).", "mdot_limit_definition_note.md"),
-            ("Dependencia del método = throughput; **psffit canónico citable** (robusto), psfsub más ajustado (1.3e-13) pero menos fiable; scatter inter-método 43.5%.", None),
-            ("Difiere de G3 (1.3×10⁻¹²) solo por DEFINICIÓN (Gumbel99 sin R_in vs 5σ con R_in); cadena física idéntica. Ninguna elegida canónica aún.", None),
+            ("**Ṁ(99%) = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** (canónico {{qc:stages/stage_h03_qc.json:canonical_method}}; Gumbel 99%, L_Hα deredden, throughput {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}, d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}}pc, A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}, {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}).", "mdot_limit_definition_note.md"),
+            ("Dependencia del método = throughput; **`{{qc:stages/stage_h03_qc.json:canonical_method}}` canónico citable** por robustez, no por dar el límite más bajo; scatter inter-método {{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%.", None),
+            ("Difiere de G3 ({{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}) solo por DEFINICIÓN (Gumbel99 sin R_in vs 5σ con R_in); cadena física idéntica. Ninguna elegida canónica aún.", None),
             ("Knob `h03_flux_unit_cgs=1e-20` (unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos.", None),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**E3: Ṁ (99%, canónico psffit) = 8.2×10⁻¹³ M☉/yr.**\n\n"
-            "- **Fecha:** cadena realineado 2026-07-09 (con LSF medida y flujo validado vs Gaia).\n"
-            "- **Cadena:** Gumbel 99% → ÷throughput (0.67) → deredden (A_Hα 1.47) → ×4πd² (138.6pc) → "
-            "Alcalá 2017.\n"
-            "- **Método:** psffit canónico citable; psfsub más ajustado (1.3e-13) pero menos robusto; "
-            "scatter 43.5%.\n"
-            "- **vs G3:** 1.3×10⁻¹² por definición (5σ + R_in), no por física; ninguna canónica aún.\n"
-            "- **Caveats:** provisional hasta cerrar el A-block; el FAP 99% está por debajo de la "
-            "resolución de 33 controles.\n"
-            "- **Resultado científico:** la no-detección se traduce en **Ṁ ≲ 8×10⁻¹³ M☉/yr** — acreción "
-            "muy baja o ausente en ROXs 12 B."
+            "**E3: Ṁ (99%, canónico {{qc:stages/stage_h03_qc.json:canonical_method}}) = "
+            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** para "
+            "este objeto (todo resuelto de su `stage_h03_qc.json`).\n\n"
+            "- **Cadena:** Gumbel 99% → ÷throughput "
+            "({{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}) → "
+            "deredden (A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}) → ×4πd² "
+            "({{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}} pc) → "
+            "{{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}.\n"
+            "- **Método:** `{{qc:stages/stage_h03_qc.json:canonical_method}}` canónico citable por "
+            "robustez; scatter inter-método "
+            "{{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%.\n"
+            "- **vs G3:** {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} por definición "
+            "(5σ + R_in), no por física; ninguna canónica aún.\n"
+            "- **Caveats:** provisional hasta cerrar el A-block del objeto; el FAP 99% está por debajo "
+            "de la resolución de "
+            "{{csvtop:tables/halpha_detection_by_method.csv:matched_z:n_controls:.0f}} controles.\n"
+            "- **Resultado científico:** la no-detección de E1 se traduce en el límite superior de Ṁ "
+            "de arriba (acreción muy baja o ausente)."
         ),
     ),
     dict(
@@ -3540,11 +3879,16 @@ STAGES: list[dict] = [
             "**Verifica:**\n"
             "- **`hash_chain` = pass**: la proveniencia de los productos es trazable (el sha del cubo "
             "de entrada casa a lo largo de la cadena).\n"
-            "- **`stat_verdict` = red**: M5 STAT no usable (factor 4.26) — marcado, se usa ruido "
+            "- **`stat_verdict` = {{qc:stages/stage_g0_qc.json:stat_verdict.status}}**: STAT usable = "
+            "{{qc:stages/stage_g0_qc.json:stat_verdict.usable}} (factor "
+            "{{qc:stages/stage_g0_qc.json:stat_verdict.factor}}, de A4/M5) — marcado, se usa ruido "
             "empírico aguas abajo.\n"
             "- **`legacy_comparison`**: el run realineado vs el legacy ADP (flujo integrado por "
-            "banda), **3/9 bandas flagged**. Es **documentario** (las razones no son fiables donde el "
-            "continuo es negativo, p.ej. post-Hα).\n"
+            "banda), **{{qc:stages/stage_g0_qc.json:legacy_comparison.n_flagged}} de "
+            "{{qc:stages/stage_g0_qc.json:legacy_comparison.n_bands}} bandas flagged** (legacy: "
+            "`{{qc:stages/stage_g0_qc.json:legacy_comparison.legacy_run}}`; `n/d` = no hay ADP de "
+            "archivo para este objeto y la comparación no aplica). Es **documentario** (las razones no "
+            "son fiables donde el continuo es negativo, p.ej. post-Hα).\n"
             "- **`frozen_criteria_untouched` = True**: no se tocaron los criterios congelados del gate "
             "para pasar (sin trampas).\n\n"
             "**Deviación honesta** (open_issue): se reprodujo **retroactivamente** vía "
@@ -3584,6 +3928,10 @@ STAGES: list[dict] = [
             "    import pandas as pd\n"
             "    import matplotlib.pyplot as plt\n"
             "    rd = nb.run_dir(RUN_ID)\n"
+            "    lc = nb.load_qc('stages/stage_g0_qc.json', RUN_ID).get('legacy_comparison') or {}\n"
+            "    if not lc.get('table'):\n"
+            "        raise FileNotFoundError('sin comparación legacy para este objeto: '\n"
+            "                                + str(lc.get('reason') or 'no hay tabla declarada en el QC'))\n"
             "    d = pd.read_csv(rd / 'tables' / 'g0_legacy_comparison.csv')\n"
             "    x = np.arange(len(d))\n"
             "    fig, ax = plt.subplots(figsize=(10, 4.3))\n"
@@ -3602,18 +3950,22 @@ STAGES: list[dict] = [
         ),
         decisions=[
             ("G0 cerrado **retroactivamente** (`hash_chain_ok=True`, criterios congelados intactos); ejecución real-cube verificada.", "g0_execution_log.md"),
-            ("Comparación legacy = calibración de flujo distinta entre reducciones (esperado); 3/9 bandas flagged, documentario (continuo negativo).", None),
+            ("Comparación legacy = calibración de flujo distinta entre reducciones (esperado); {{qc:stages/stage_g0_qc.json:legacy_comparison.n_flagged}}/{{qc:stages/stage_g0_qc.json:legacy_comparison.n_bands}} bandas flagged, documentario (continuo negativo). `n/d` = sin ADP de archivo para este objeto.", None),
             ("M5 STAT red → ruido empírico aguas abajo (consistente con A4).", "noise_model.md"),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**G0: cadena real-cube ejecutada y verificada; `hash_chain_ok=True`, criterios "
-            "congelados intactos.**\n\n"
-            "- **Fecha:** cierre retroactivo 2026-07-08.\n"
-            "- **Proveniencia:** hash_chain pass (cubo realineado, entry_point `realigned_cube`).\n"
-            "- **STAT:** red (M5, factor 4.26) → ruido empírico.\n"
-            "- **Legacy:** 3/9 bandas flagged vs ADP, documentario (calibración de flujo distinta).\n"
+            "**G0: cadena real-cube ejecutada y verificada; `hash_chain_ok = "
+            "{{qc:stages/stage_g0_qc.json:hash_chain_ok}}`, criterios congelados intactos = "
+            "{{qc:stages/stage_g0_qc.json:frozen_criteria_untouched}}.**\n\n"
+            "- **Proveniencia:** hash_chain sobre el cubo declarado en el QC de este objeto.\n"
+            "- **STAT:** {{qc:stages/stage_g0_qc.json:stat_verdict.status}} (M5, factor "
+            "{{qc:stages/stage_g0_qc.json:stat_verdict.factor}}) → ruido empírico.\n"
+            "- **Legacy:** {{qc:stages/stage_g0_qc.json:legacy_comparison.n_flagged}} de "
+            "{{qc:stages/stage_g0_qc.json:legacy_comparison.n_bands}} bandas flagged vs "
+            "`{{qc:stages/stage_g0_qc.json:legacy_comparison.legacy_run}}`, documentario "
+            "(calibración de flujo distinta); `n/d` = sin ADP de archivo para este objeto.\n"
             "- **Deviación honesta:** reproducido retroactivamente vía `run_g0.py`, no en rama fresca "
             "— cumplido en sustancia.\n"
             "- **Downstream:** entrada a G1 (validación de extracción), G2–G5."
@@ -3633,11 +3985,15 @@ STAGES: list[dict] = [
             "G1 **valida los métodos de extracción**: cuantifica la **covarianza del ruido** "
             "(espectral + espacial), el **presupuesto de sesgo**, y emite un veredicto por método.\n\n"
             "**Covarianza (por qué el ruido debe ser empírico):**\n"
-            "- **Espectral:** longitud de correlación 2.34 canales, **n_eff/n = 0.428** — solo ~43% de "
-            "los canales cuentan como independientes; promediar en λ NO gana √N.\n"
+            "- **Espectral:** longitud de correlación "
+            "{{qc:stages/stage_g1_qc.json:covariance.corr_length_channels_median:.2f}} canales, "
+            "**n_eff/n = {{qc:stages/stage_g1_qc.json:covariance.n_eff_over_n_median:.3f}}** — solo esa "
+            "fracción de los canales cuenta como independiente; promediar en λ NO gana √N.\n"
             "- **Espacial:** sumar en una caja N×N infla la varianza frente a la suma ingenua √N: "
-            "**box3 ≈ 5.4×, box5 ≈ 18.7×**. Es la **covarianza del remuestreo** — el **mismo** "
-            "fenómeno detrás de M5 (STAT subestimado). G1 es donde se caracteriza del todo.\n\n"
+            "**box3 ≈ {{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.3:.1f}}×, "
+            "box5 ≈ {{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.5:.1f}}×**. Es la "
+            "**covarianza del remuestreo** — el **mismo** fenómeno detrás de M5 (STAT subestimado). "
+            "G1 es donde se caracteriza del todo.\n\n"
             "**Presupuesto de sesgo:** los dos métodos validados (psffit, optimal_psfsub) tienen "
             "~**33% de pérdida de throughput** (que E3 corrige dividiendo por el throughput); el "
             "término de PSF es ~0 (la perturbación de PSF es un no-op, la PSF está flux-normalizada).\n\n"
@@ -3675,8 +4031,12 @@ STAGES: list[dict] = [
                 md=(
                     "## Plot 1 — la covarianza del remuestreo (por qué σ es empírico)\n\n"
                     "Inflación de la varianza al sumar en cajas N×N frente a la suma ingenua √N "
-                    "(=1). box3 ≈ 5.4×, box5 ≈ 18.7× → un σ de apertura de √(Σ STAT) está mal por "
-                    "estos factores. Es el mismo mecanismo que M5. (Espectral: n_eff/n=0.43.)"
+                    "(=1). En este objeto: box3 ≈ "
+                    "{{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.3:.1f}}×, "
+                    "box5 ≈ {{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.5:.1f}}× "
+                    "→ un σ de apertura de √(Σ STAT) está mal por estos factores. Es el mismo "
+                    "mecanismo que M5. (Espectral: n_eff/n = "
+                    "{{qc:stages/stage_g1_qc.json:covariance.n_eff_over_n_median:.3f}}.)"
                 ),
                 code=(
                     "try:\n"
@@ -3735,7 +4095,7 @@ STAGES: list[dict] = [
         ],
         decisions=[
             ("psffit & optimal_psfsub = `validated_with_bias` (throughput loss ~−33%, corregido en E3); aperture & optimal_ls = `rejected` (insensibles en el borde). Es el par primario de D1.", "noise_model.md"),
-            ("Correlación espectral 2.34 ch, **n_eff/n=0.428**; inflación espacial box3≈5.4×, box5≈18.7× → **confirma M5** y justifica el ruido empírico.", None),
+            ("Correlación espectral {{qc:stages/stage_g1_qc.json:covariance.corr_length_channels_median:.2f}} ch, **n_eff/n={{qc:stages/stage_g1_qc.json:covariance.n_eff_over_n_median:.3f}}**; inflación espacial box3≈{{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.3:.1f}}×, box5≈{{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.5:.1f}}× → **confirma M5** y justifica el ruido empírico.", None),
             ("La covarianza de controles NO captura el sistemático de halo en la posición del compañero (eso es el B6 / presupuesto de inyección).", None),
         ],
         checks=None,
@@ -3743,11 +4103,14 @@ STAGES: list[dict] = [
             "## Conclusión (registrada)\n\n"
             "**G1: valida psffit & optimal_psfsub (el par primario de D1); rechaza aperture & "
             "optimal_ls.**\n\n"
-            "- **Fecha:** 2026-07-08 (provisional).\n"
-            "- **Covarianza espectral:** corr_length 2.34 ch, n_eff/n 0.428 (promediar en λ no gana "
+            "- **Covarianza espectral:** corr_length "
+            "{{qc:stages/stage_g1_qc.json:covariance.corr_length_channels_median:.2f}} ch, n_eff/n "
+            "{{qc:stages/stage_g1_qc.json:covariance.n_eff_over_n_median:.3f}} (promediar en λ no gana "
             "√N).\n"
-            "- **Covarianza espacial:** box3 5.4×, box5 18.7× → **confirma M5** (STAT subestimado), "
-            "justifica el σ empírico.\n"
+            "- **Covarianza espacial:** box3 "
+            "{{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.3:.1f}}×, box5 "
+            "{{qc:stages/stage_g1_qc.json:covariance.spatial_inflation_by_box.5:.1f}}× → **confirma "
+            "M5** (STAT subestimado), justifica el σ empírico.\n"
             "- **Sesgo:** ~−33% pérdida de throughput en los validados (corregido en E3); término de "
             "PSF ~0.\n"
             "- **Downstream:** los veredictos definen el par primario que D1 compara y los throughputs "
@@ -3766,19 +4129,31 @@ STAGES: list[dict] = [
         salient=["n_detected", "n_upper_limit", "n_not_measurable", "halpha_reconciliation_v3", "lsf_fwhm_A"],
         narrative_md=(
             "## Qué hace G2 y el resultado\n\n"
-            "G2 mide las líneas espectrales de forma **genérica** (cero lógica específica de Hα — un "
-            "catálogo de 24 líneas en config) sobre el espectro canónico final: continuo local, flujo "
+            "G2 mide las líneas espectrales de forma **genérica** (cero lógica específica de Hα — el "
+            "catálogo de líneas vive en config) sobre el espectro canónico final: continuo local, flujo "
             "(directo + ajuste gaussiana⊗LSF), EW, centroide, FWHM, asimetría, RV, status "
             "detect/límite, y errores por Monte Carlo.\n\n"
-            "**Catálogo:** 24 líneas — Balmer (Hα/Hβ), serie de Paschen, triplete de Ca II, He I, "
-            "[O I], [S II] (diagnósticos de acreción, cromosfera y outflow).\n\n"
-            "**Resultado: 0 detectadas, 0 marginales, 23 límites superiores, 1 no medible** — todas "
-            "|z| < 5σ. Consistente con la no-detección.\n\n"
-            "**Reconciliación de Hα (V3):** G2 Hα = `upper_limit`, E1 = `non_detection` → "
-            "**consistente**.\n\n"
-            "**Inputs:** LSF 2.383 Å (estimación de config; salvedad A4/M2), throughput 0.667 (de E4), "
-            "MC n=500, **covarianza no aplicada** (errores independientes — salvedad). Los 23 límites "
-            "alimentan G3 (inferencia física)."
+            "**Catálogo:** {{qc:stages/stage_g2_qc.json:catalog_n}} líneas en config — Balmer (Hα/Hβ), serie de "
+            "Paschen, triplete de Ca II, He I, [O I], [S II] (diagnósticos de acreción, cromosfera y "
+            "outflow).\n\n"
+            "**Resultado para este objeto** — detectadas: "
+            "**{{qc:stages/stage_g2_qc.json:n_detected}}** · marginales: "
+            "**{{qc:stages/stage_g2_qc.json:n_marginal}}** · límites superiores: "
+            "**{{qc:stages/stage_g2_qc.json:n_upper_limit}}** · no medibles: "
+            "**{{qc:stages/stage_g2_qc.json:n_not_measurable}}**.\n\n"
+            "**Reconciliación de Hα (V3):** G2 Hα = "
+            "`{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.g2_halpha_status}}` vs E1 = "
+            "`{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.h01_verdict}}` → consistente = "
+            "**{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.consistent}}** (`n/d` = la "
+            "reconciliación no está calculada en el QC de este objeto).\n\n"
+            "**Inputs:** LSF {{qc:stages/stage_g2_qc.json:lsf_fwhm_A}} Å "
+            "(`{{qc:stages/stage_g2_qc.json:lsf_source}}` — ojo a la procedencia: si dice `config`, no "
+            "es la medida de A4/M2), throughput "
+            "{{qc:stages/stage_g2_qc.json:throughput_applied:.3f}} (de E4), MC "
+            "n={{qc:stages/stage_g2_qc.json:mc.n}}, **covarianza = "
+            "`{{qc:stages/stage_g2_qc.json:covariance_used}}`** (mientras no sea un modelo real, el MC "
+            "trata los errores como independientes — salvedad). Los límites alimentan G3 (inferencia "
+            "física)."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -3868,20 +4243,25 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("0 líneas detectadas / 23 límites / 1 no medible (todas |z|<5σ) — consistente con la no-detección (V3: Hα upper_limit = E1 non_detection).", None),
-            ("Cero lógica específica de Hα: catálogo genérico de 24 líneas en config (Balmer, Paschen, Ca II, He I, [O I], [S II]).", None),
-            ("Salvedad: LSF de estimación de config (A4/M2 no disponible), covarianza no aplicada al MC (errores independientes).", None),
+            ("{{qc:stages/stage_g2_qc.json:n_detected}} detectadas / {{qc:stages/stage_g2_qc.json:n_upper_limit}} límites / {{qc:stages/stage_g2_qc.json:n_not_measurable}} no medible(s) — reconciliación V3 con E1: consistente={{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.consistent}} (G2 Hα `{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.g2_halpha_status}}` vs E1 `{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.h01_verdict}}`).", None),
+            ("Cero lógica específica de Hα: catálogo genérico de {{qc:stages/stage_g2_qc.json:catalog_n}} líneas en config (Balmer, Paschen, Ca II, He I, [O I], [S II]).", None),
+            ("Salvedades de este objeto: LSF `{{qc:stages/stage_g2_qc.json:lsf_source}}`; covarianza aplicada al MC = {{qc:stages/stage_g2_qc.json:covariance_used}}.", None),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**G2: 0 líneas detectadas, 23 límites superiores, 1 no medible (todas |z|<5σ).**\n\n"
-            "- **Fecha:** 2026-07-08 (provisional).\n"
-            "- **Genérico:** catálogo de 24 líneas (cero lógica específica de Hα) sobre "
-            "`spec_final_object` (psffit).\n"
-            "- **Reconciliación:** Hα `upper_limit` = E1 `non_detection` (consistente).\n"
-            "- **Salvedades:** LSF de estimación (A4/M2), covarianza no aplicada al MC.\n"
-            "- **Downstream:** los 23 límites alimentan G3 (inferencia física, L_acc→Ṁ)."
+            "**G2: {{qc:stages/stage_g2_qc.json:n_detected}} líneas detectadas, "
+            "{{qc:stages/stage_g2_qc.json:n_upper_limit}} límites superiores, "
+            "{{qc:stages/stage_g2_qc.json:n_not_measurable}} no medible(s)** en este objeto "
+            "(resuelto de su `stage_g2_qc.json`).\n\n"
+            "- **Genérico:** catálogo de {{qc:stages/stage_g2_qc.json:catalog_n}} líneas (cero lógica "
+            "específica de Hα) sobre `{{qc:stages/stage_g2_qc.json:input_spectrum.method}}`.\n"
+            "- **Reconciliación:** Hα `{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.g2_halpha_status}}` "
+            "vs E1 `{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.h01_verdict}}` → "
+            "consistente={{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.consistent}}.\n"
+            "- **Salvedades:** LSF `{{qc:stages/stage_g2_qc.json:lsf_source}}`; covarianza aplicada = "
+            "{{qc:stages/stage_g2_qc.json:covariance_used}}.\n"
+            "- **Downstream:** los límites alimentan G3 (inferencia física, L_acc→Ṁ)."
         ),
     ),
     dict(
@@ -3900,12 +4280,23 @@ STAGES: list[dict] = [
             "**luminosidad de acreción L_acc** y la **tasa Ṁ** (relación Hα de Alcalá 2017), y "
             "*ajustaría* plantillas/atmósferas/tracks para SpT/Teff/masa — pero eso está **diferido "
             "(pendiente de librerías externas)**.\n\n"
-            "**Acreción:** L_acc ≤ **4.1×10⁻⁶ L☉** (límite superior, de Hα — la única línea con "
-            "relación en config, regla *más restrictiva*); **Ṁ p50 = 1.3×10⁻¹² M☉/yr** (MC n=2000).\n\n"
+            "**Acreción en este objeto** (de su `stage_g3_qc.json`; `n/d` = G3 no ha calculado "
+            "acreción para el objeto — su QC puede ser la variante *G3-real* de tipado espectral, con "
+            "otro esquema):\n\n"
+            "| | |\n|---|---|\n"
+            "| **L_acc** | {{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉ "
+            "(`{{qc:stages/stage_g3_qc.json:combined_accretion.kind}}`, de "
+            "`{{qc:stages/stage_g3_qc.json:combined_accretion.from_line}}`, regla "
+            "`{{qc:stages/stage_g3_qc.json:combined_accretion.rule}}`) |\n"
+            "| **Ṁ p50** | {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr (MC "
+            "n={{qc:stages/stage_g3_qc.json:mc.n}}) |\n\n"
             "**Diferencia con E3 (definicional):** G3 usa **5σ** del flujo de Hα de G2 **con** el "
             "factor de truncamiento de disco R_in=1.25; E3 usa Gumbel 99% **sin** R_in. Misma cadena "
-            "física (Alcalá 2017); el desfase ~1.6× (1.3e-12 vs 8.2e-13) es de **definición**. "
-            "Canónica **sin decidir** (usuario diferido, [`docs/mdot_limit_definition_note.md`]"
+            "física; el desfase entre "
+            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (G3) y "
+            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} (E3) es de "
+            "**definición**, no de física. Canónica **sin decidir** (usuario diferido, "
+            "[`docs/mdot_limit_definition_note.md`]"
             "(../docs/mdot_limit_definition_note.md)).\n\n"
             "**Diferido → `not_constrained`:** atmósfera (BT-Settl), tracks (BHAC15/ATMO2020), "
             "plantillas (Luhman/Bonnefoy) — SpT/Teff/masa necesitan datos externos. **Por eso la "
@@ -3931,9 +4322,12 @@ STAGES: list[dict] = [
             dict(
                 md=(
                     "## Plot 1 — E3 vs G3: la misma física, dos definiciones\n\n"
-                    "Los dos límites de Ṁ: **E3 = 8.2×10⁻¹³** (Gumbel 99%, sin R_in) y **G3 = "
-                    "1.3×10⁻¹²** (5σ, con el factor R_in 1.25). El desfase ~1.6× es puramente "
-                    "**definicional** — misma cadena física (Alcalá 2017). Canónica sin decidir."
+                    "Los dos límites de Ṁ de **este objeto**: E3 = "
+                    "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
+                    "(Gumbel 99%, sin R_in) y G3 = "
+                    "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (5σ, con el factor R_in "
+                    "1.25). El desfase es puramente **definicional** — misma cadena física. Canónica "
+                    "sin decidir."
                 ),
                 code=(
                     "try:\n"
@@ -3941,7 +4335,11 @@ STAGES: list[dict] = [
                     "    q = nb.load_qc('stages/stage_g3_qc.json', RUN_ID)\n"
                     "    e3 = nb.load_qc('stages/stage_h03_qc.json', RUN_ID)\n"
                     "    e3_mdot = {L['method']: L['mdot'] for L in e3['limits']}[e3['canonical_method']]\n"
-                    "    g3_mdot = q['mdot_p50_msun_yr']\n"
+                    "    g3_mdot = q.get('mdot_p50_msun_yr')\n"
+                    "    if g3_mdot is None:\n"
+                    "        raise KeyError('el QC de G3 de este objeto no trae acreción '\n"
+                    "                       \"('mdot_p50_msun_yr'): puede ser la variante G3-real de \"\n"
+                    "                       'tipado espectral. Sin par E3/G3 que comparar.')\n"
                     "    fig, ax = plt.subplots(figsize=(6.5, 4.3))\n"
                     "    bars = ax.bar(['E3\\n(Gumbel 99%,\\nsin R_in)', 'G3\\n(5σ,\\ncon R_in 1.25)'], [e3_mdot, g3_mdot],\n"
                     "                  color=['tab:blue', 'tab:green'])\n"
@@ -3988,17 +4386,21 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Ṁ p50 ≈ 1.3×10⁻¹² M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 (8.2e-13) solo por DEFINICIÓN; canónica sin decidir.", "mdot_limit_definition_note.md"),
-            ("L_acc ≤ 4.1×10⁻⁶ L☉ de Hα (única línea con relación, regla más restrictiva).", None),
+            ("**Ṁ p50 = {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 ({{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}}) solo por DEFINICIÓN; canónica sin decidir.", "mdot_limit_definition_note.md"),
+            ("L_acc {{qc:stages/stage_g3_qc.json:combined_accretion.kind}} = {{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉ de `{{qc:stages/stage_g3_qc.json:combined_accretion.from_line}}` (regla `{{qc:stages/stage_g3_qc.json:combined_accretion.rule}}`).", None),
             ("Plantilla/atmósfera/tracks = `not_constrained` (pending_libraries: BT-Settl/BHAC15/Luhman-Bonnefoy diferidas) → G4 ambigua.", None),
         ],
         checks=None,
         conclusion_md=(
             "## Conclusión (registrada)\n\n"
-            "**G3: L_acc ≤ 4.1×10⁻⁶ L☉, Ṁ p50 = 1.3×10⁻¹² M☉/yr (5σ + R_in).**\n\n"
-            "- **Fecha:** 2026-07-08 (provisional).\n"
-            "- **vs E3:** 8.2×10⁻¹³ (Gumbel99, sin R_in) → ~1.6× por definición, no por física; "
-            "canónica sin decidir.\n"
+            "**G3 (este objeto): L_acc = "
+            "{{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉ "
+            "(`{{qc:stages/stage_g3_qc.json:combined_accretion.kind}}`), Ṁ p50 = "
+            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr (5σ + R_in).** `n/d` = la "
+            "acreción no está calculada en el QC de este objeto.\n\n"
+            "- **vs E3:** {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
+            "(Gumbel99, sin R_in) → la diferencia es de definición, no de física; canónica sin "
+            "decidir.\n"
             "- **Tipado espectral diferido:** atmósfera/tracks/plantillas `not_constrained` (falta de "
             "librerías externas).\n"
             "- **Consecuencia:** sin SpT/Teff/masa espectroscópicos, la clasificación de G4 queda "
@@ -4172,12 +4574,18 @@ STAGES: list[dict] = [
             "(`characterization.md`, `assumptions_and_limitations.md`) y **9 figuras**.\n\n"
             "**Verifica (los V-checks):**\n"
             "- **V1 trazabilidad:** hashes de QC de las fases G0–G4 (cadena completa).\n"
-            "- **V2 consistencia:** Hα G2 `upper_limit` = H01 `non_detection` (consistente); "
-            "clasificación `ambiguous`.\n"
+            "- **V2 consistencia:** Hα de G2 frente al veredicto de E1 "
+            "(`{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.g2_halpha_status}}` vs "
+            "`{{qc:stages/stage_g2_qc.json:halpha_reconciliation_v3.h01_verdict}}`); robustez de la "
+            "clasificación: `{{qc:stages/stage_g4_classification.json:final_class.robustness}}`.\n"
             "- **V4 determinismo:** hashes de los 10 archivos (dos builds → idénticos, reproducible).\n"
             "- **V6 F1 intacto:** `run_summary_extended` (F1 no se toca, es aditivo).\n\n"
-            "**Resultado consolidado:** clase = `substellar_companion` / `ambiguous`; "
-            "L_acc ≤ 4.1×10⁻⁶ L☉; Ṁ ≲ 8×10⁻¹³ (E3) — 1.3×10⁻¹² (G3).\n\n"
+            "**Resultado consolidado ({{target}}):** clase = "
+            "`{{qc:stages/stage_g4_classification.json:final_class.label}}` / "
+            "`{{qc:stages/stage_g4_classification.json:final_class.robustness}}`; L_acc ≤ "
+            "{{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉; Ṁ ≲ "
+            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} (E3) — "
+            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (G3).\n\n"
             "**El G-block queda CERRADO (provisional):** el paquete está armado, es determinista y "
             "trazable, pero **hereda el bloqueo del A-block** (alineación, M3, M5) + el **tipado "
             "espectral diferido de G3** → G4 ambigua. Nada es paper-final hasta cerrar el A-block."
@@ -4237,7 +4645,8 @@ STAGES: list[dict] = [
                     "        f\"   masa       {m_mjup:.1f} M_Jup    (Bowler+2017, hot-start)\",\n"
                     "    ]\n"
                     "    fig, ax = plt.subplots(figsize=(8.5, 5)); ax.axis('off')\n"
-                    "    ax.text(0.5, 0.98, 'G5 · Síntesis ROXs 12 B (provisional)', ha='center', va='top', fontsize=13, weight='bold')\n"
+                    "    ax.text(0.5, 0.98, f'G5 · Síntesis {nb.display_name(RUN_ID)} (provisional)',\n"
+                    "            ha='center', va='top', fontsize=13, weight='bold')\n"
                     "    ax.text(0.05, 0.86, '\\n'.join(lines), va='top', ha='left', fontsize=10, family='monospace')\n"
                     "    ax.text(0.5, 0.03, 'PROVISIONAL: caveats A-block (V2/V5/V6) + tipado espectral (G3) diferido -> subtipo ambiguo',\n"
                     "            ha='center', fontsize=8, color='tab:red')\n"
@@ -4291,10 +4700,13 @@ STAGES: list[dict] = [
             "## Conclusión (registrada) — cierre del proyecto\n\n"
             "**G5: paquete de caracterización armado; determinista, trazable, F1 intacto; "
             "PROVISIONAL.**\n\n"
-            "- **Fecha:** 2026-07-08 (G-block cerrado provisionalmente).\n"
-            "- **Resultado consolidado:** ROXs 12 B es un **compañero subestelar real ligado** "
-            "(clasificación `ambiguous`: planeta/BD/M sin resolver); **sin señal de acreción en Hα** → "
-            "**Ṁ ≲ 8×10⁻¹³ M☉/yr** (E3) / 1.3×10⁻¹² (G3).\n"
+            "- **Resultado consolidado:** el compañero de **{{target}}** queda clasificado como "
+            "`{{qc:stages/stage_g4_classification.json:final_class.label}}` con robustez "
+            "`{{qc:stages/stage_g4_classification.json:final_class.robustness}}` "
+            "({{qc:stages/stage_g4_classification.json:final_class.n_independent_supports}} apoyos "
+            "independientes); E1 = `{{qc:stages/stage_h01_qc.json:verdict.verdict}}` en Hα → "
+            "**Ṁ ≲ {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** "
+            "(E3) / {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (G3).\n"
             "- **Integridad:** consistencia V2, trazabilidad G0–G4, determinismo (10 hashes), F1 "
             "intacto (V6).\n"
             "- **Bloqueo heredado (al cierre, 2026-07-08):** A-block abierto (alineación, M3, M5) + "
@@ -4400,7 +4812,10 @@ STAGES: list[dict] = [
                     "| Criterio | Umbral | Dispara Fase 2 si |\n|---|---|---|\n"
                     "| p95 \\|offset\\| (spaxels `err<0.1 Å`) | 0.1 Å | **>** 0.1 Å |\n"
                     "| Estructura alineada con slicers | 3× ruido | **>** 3× **y** > 2× el control transversal |\n\n"
-                    "**Argumentos del caso `fase2_descartable` (documentados aunque la decisión sea seguir):**\n\n"
+                    "**Argumentos del caso `fase2_descartable`** — registro de la decisión tomada "
+                    "para **ROXs 12 b** el 2026-07-17, con las cifras que se tenían entonces; se "
+                    "reproduce literal por trazabilidad y **no** describe a otro objeto (para el tuyo, "
+                    "los valores vivos están en su A4 y en el QC de S0):\n\n"
                     "1. La métrica espacial de S0 **no ve un offset común a todas las exposiciones** "
                     "(deriva temporal uniforme): ese modo no aparece como estructura espacial, solo "
                     "**ensancharía la LSF combinada**.\n"
@@ -4623,6 +5038,9 @@ STAGES: list[dict] = [
         ),
         conclusion_md=(
             "## Conclusión (registrada, 2026-07-17) — G1 DECIDIDO\n\n"
+            "> Registro de la decisión tomada para **ROXs 12 b** (cifras de esa fecha, literales "
+            "por trazabilidad). Si estás en el set de otro objeto, esta conclusión **no** es la "
+            "suya: la de tu objeto sale de su propio `stageS0_qc.json`, arriba.\n\n"
             "**S0 (full-res, 330×338):** sin estructura de slicer (`stripe_sig` ≤ control "
             "transversal) y **realineado ≈ ADP**, pero p95\\|off\\| ≈ 0.32 Å (>0.1 Å), scatter "
             "por spaxel creciente con el radio.\n\n"
