@@ -61,7 +61,7 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | C1 | PSF cromática (Moffat/Psfao) | `musepipe/stages/stage_e01_psf.py` (+`stage_e01_psfao.py`) | `scripts/stage_e01_psf.sh` | `stage_e01_qc.json`, `psf_model.json` |
 | 04b | Fondo local (superficie) | `musepipe/stages/stage04b_local_surface.py` | — | `stage04b_qc.json` |
 | C2 | Extracción por apertura | `musepipe/stages/stage_x01_aperture.py` | `scripts/stage_x01_aperture.sh` | `spec_aperture_qc.json` |
-| C3 | Extracción óptima | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
+| C3 | Extracción óptima — **2 variantes**: `optimal_ls` y `optimal_psfsub` | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
 | C4 | Ajuste de PSF (psffit) | `musepipe/stages/stage_x03_psffit.py` | `scripts/stage_x03_psffit.sh` | `spec_psffit_qc.json` |
 | C5 | Sustracción de halo SGF | `musepipe/stages/stage_x04_sgf.py` (+`halosub_stage.py`) | — | `spec_sgf_qc.json` |
 | C6 | Sustracción de halo LPM | `musepipe/stages/stage_x05_lpm.py` (+`halosub_stage.py`) | — | `spec_lpm_qc.json` |
@@ -89,6 +89,14 @@ tabla (QC de cada etapa, `qc_aliases` por perfil de reducción, `exec_kind` y
 comando de lanzamiento); los notebooks y `scripts/build_review_notebooks.py`
 validan contra él. B2 escribe `stage02_xcorr_qc.json` (el `stage02_qc.json` de
 los runs antiguos es el de la etapa previa).
+
+**Cinco etapas de extracción, seis métodos.** C2–C6 son cinco etapas, pero C3
+emite **dos** variantes como productos separados —`optimal_ls` (fondo = la
+superficie local de 04b, comparable 1:1 con C2) y `optimal_psfsub` (fondo = el
+modelo de PSF de la primaria, de C1)— así que la cadena compara seis métodos:
+`aperture`, `optimal_ls`, `optimal_psfsub`, `psffit`, `sgf` y `lpm`. Ese es el
+`METHOD_ORDER` que usan D1, D2, E4 y G1, y la comparación `ls` vs `psfsub` es un
+diagnóstico del modelo de halo, no una redundancia.
 
 Además del canónico `spec_final_object.fits`, **D2 entrega los espectros
 definitivos**: los seis métodos calibrados (`spec_calibrated_<método>_object.fits`)

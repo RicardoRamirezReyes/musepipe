@@ -56,8 +56,10 @@ the highest version, e.g. `spec_D1_v3_*`) and a JSON QC product under
 
 - **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5)
 - **B1–B3** load/align/crop → xcorr stripes → companion localization
-- **C1, 04b, C2–C6** chromatic PSF → local-surface background → five extraction methods
-  (aperture, optimal, psffit, SGF, LPM)
+- **C1, 04b, C2–C6** chromatic PSF → local-surface background → **five stages but six
+  extraction methods**: C3 emits two variants as separate products, so `METHOD_ORDER` is
+  `aperture`, `optimal_ls` (background = 04b local surface), `optimal_psfsub` (background =
+  C1's primary PSF model), `psffit`, `sgf`, `lpm`
 - **D1–D2** inter-method comparison → spectral calibration. D2 is where the
   **definitive spectra** are delivered: the six companion methods plus the primary
   (`spec_calibrated_psffit_star.fits`), all with `BUNIT` and an error budget, plus

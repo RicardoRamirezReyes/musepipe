@@ -75,7 +75,7 @@ reportan como pendientes, no como error. Regenerar es idempotente.
 | 8 | [C1_chromatic_psf](ROXs12b/C1_chromatic_psf.ipynb) | PSF cromática (Moffat/Psfao) | sí | Moffat vs Psfao; r0 (Fried) vs λ |
 | 9 | [C_04b_local_surface](ROXs12b/C_04b_local_surface.ipynb) | Fondo local (superficie) | sí | before/after del fondo local |
 | 10 | [C2_aperture](ROXs12b/C2_aperture.ipynb) | Extracción por apertura | sí | espectro + banda de ruido; apcorr cromática |
-| 11 | [C3_optimal](ROXs12b/C3_optimal.ipynb) | Extracción óptima | sí | ls vs psfsub (sobre-sustracción) |
+| 11 | [C3_optimal](ROXs12b/C3_optimal.ipynb) | Extracción óptima — **2 variantes → 2 métodos** | sí | ls vs psfsub (sobre-sustracción) |
 | 12 | [C4_psffit](ROXs12b/C4_psffit.ipynb) | Ajuste de PSF (psffit) | sí | cubo residual; espectro canónico |
 | 12b | [C5_sgf](ROXs12b/C5_sgf.ipynb) | Sustracción de halo SGF (Julo+25) | sí (pendiente 1ª ejec.) | residual + espectro; predictor Ec. 1 |
 | 12c | [C6_lpm](ROXs12b/C6_lpm.ipynb) | Sustracción de halo LPM (Julo+25) | sí (pendiente 1ª ejec.) | mapas de coeficientes; SGF vs LPM en Hα |

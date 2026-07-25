@@ -2113,10 +2113,16 @@ STAGES: list[dict] = [
         ),
     ),
     dict(
-        id="C3", slug="C3_optimal", title="Extracción óptima", block="C · Extracción",
+        id="C3", slug="C3_optimal", title="Extracción óptima (2 variantes → 2 métodos)",
+        block="C · Extracción",
         spec="spec_C3_codex_optimal_extraction.md", run_override=None,
-        what="Extracción óptima (Horne) ponderada por la PSF.",
-        inputs="Cubo + PSF (C1)", outputs="`stages/spec_optimal_qc.json`",
+        what=("Extracción óptima (Horne) ponderada por la PSF, en **dos variantes obligatorias** "
+              "que se diferencian solo en el fondo que se resta antes: `optimal_ls` (superficie "
+              "local de 04b, comparable 1:1 con C2) y `optimal_psfsub` (modelo de PSF de la "
+              "primaria, de C1). Son **2 de los 6 métodos** de la cadena: 5 etapas, 6 métodos."),
+        inputs="Cubo + PSF (C1)",
+        outputs=("`stages/spec_optimal_qc.json`, `spec_optimal_object.fits` (ls), "
+                 "`spec_optimal_psfsub_object.fits`"),
         downstream="D1, E1",
         exec=dict(kind="script", target="stage_x02_optimal.sh", cost="Moderado."),
         qc="stages/spec_optimal_qc.json",
@@ -2147,10 +2153,16 @@ STAGES: list[dict] = [
             "(`f = Σ M·P·D/V / Σ M·P²/V`). Al bajar el peso de los píxeles ruidosos, **gana S/N** "
             "frente a la apertura (aquí ~**6.9× mediana**). La fórmula es cerrada; el valor está en "
             "implementarla exacta (tests analíticos de flujo y varianza).\n\n"
-            "**Dos variantes del fondo:**\n"
-            "- **`optimal_ls`** — usa el residual de superficie local (04b) como fondo.\n"
+            "**Dos variantes del fondo** — mismo estimador, distinto fondo restado antes:\n"
+            "- **`optimal_ls`** — usa el residual de superficie local (04b) como fondo. Mismo fondo "
+            "que C2, así que la comparación con C2 aísla la ganancia del ponderado óptimo.\n"
             "- **`optimal_psfsub`** — ajusta y **resta la PSF de la primaria** primero, y luego "
-            "extrae ópticamente el compañero.\n\n"
+            "extrae ópticamente el compañero. Anticipa el fondo que usará C4, así que `ls` vs "
+            "`psfsub` es un **diagnóstico del modelo de halo** para D1, no una redundancia.\n\n"
+            "> **De dónde salen los 6 métodos.** C2–C6 son **cinco etapas**, pero C3 emite estas "
+            "**dos** variantes como productos separados, así que la cadena compara **seis** "
+            "métodos: `aperture`, `optimal_ls`, `optimal_psfsub`, `psffit`, `sgf` y `lpm` "
+            "(el `METHOD_ORDER` que usan D1, D2, E4 y G1).\n\n"
             "**Decisión:** G1 **valida `psfsub`** (`validated_with_bias`) y la usa como una de las dos "
             "citables (con psffit). **`ls` sobre-sustrae el continuo** (el pedestal de 04b) → sesgo de "
             "continuo **−373 % vs apertura**, `v3_continuum_bias` **falla**. Ambas comparten la forma "
