@@ -123,20 +123,28 @@ def resolve_bunit(cfg, *, stack_bunit=None, override_key=None) -> str:
        B1/B2 solo por la cabecera cuesta ~20 min;
     3. el override explicito de config (`override_key`), si existe;
     4. "" — desconocida; el producto lo dira en vez de fingir una unidad.
+
+    Gana el primer candidato que sea una unidad de flujo *interpretable*. El
+    cubo residual de stage04b se etiqueta `BUNIT='physical_like'`, que no es una
+    unidad sino una nota ("misma escala que el cubo, ya sin fondo"): si ganara
+    por ser el primero, el producto perderia la unidad real, que la sustraccion
+    de fondo no cambia. Si ninguno interpreta, se devuelve el primero no vacio
+    para no tirar informacion.
     """
-    if stack_bunit:
-        return str(stack_bunit)
+    candidates = [stack_bunit]
     cubes = (cfg or {}).get("cube_files") or []
     if cubes:
         try:
-            found = cube_bunit(cubes[0], ext=(cfg or {}).get("data_ext"))
+            candidates.append(cube_bunit(cubes[0], ext=(cfg or {}).get("data_ext")))
         except (OSError, ValueError):
-            found = ""
-        if found:
-            return found
+            pass
     if override_key:
-        return str((cfg or {}).get(override_key) or "")
-    return ""
+        candidates.append((cfg or {}).get(override_key))
+    present = [str(value) for value in candidates if value]
+    for value in present:
+        if bunit_to_cgs_scale(value) is not None:
+            return value
+    return present[0] if present else ""
 
 
 def bunit_to_cgs_scale(bunit) -> float | None:

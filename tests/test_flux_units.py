@@ -75,6 +75,17 @@ class ResolveBunitTests(unittest.TestCase):
                    "x01_bunit": "erg/s/cm**2/Angstrom"}
             self.assertEqual(resolve_bunit(cfg, override_key="x01_bunit"), "erg/s/cm**2/Angstrom")
 
+    def test_placeholder_label_does_not_beat_the_real_unit(self):
+        # stage04b etiqueta el cubo residual como 'physical_like': es una nota,
+        # no una unidad. Si ganara, el producto perderia la unidad real (la
+        # sustraccion de fondo no cambia las unidades del flujo).
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = {"cube_files": [str(_cube(Path(tmp) / "in.fits", bunit=MUSE_NATIVE_BUNIT))]}
+            self.assertEqual(resolve_bunit(cfg, stack_bunit="physical_like"), MUSE_NATIVE_BUNIT)
+
+    def test_uninterpretable_label_survives_when_there_is_nothing_better(self):
+        self.assertEqual(resolve_bunit({}, stack_bunit="physical_like"), "physical_like")
+
     def test_unknown_stays_empty(self):
         self.assertEqual(resolve_bunit({}, stack_bunit=None), "")
 
