@@ -677,7 +677,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("subcommand",
                         choices=list(DISPATCH) + ["verify"])
-    parser.add_argument("--run-id", default="ROXs12b_B_adp")
+    parser.add_argument("--run-id", required=True)
     parser.add_argument("--input-dir", default=None,
                         help="directory of prepared source files (manual sources)")
     parser.add_argument("--limit", type=int, default=None,

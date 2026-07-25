@@ -301,7 +301,7 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
         "normalization": {"norm_radius_px": norm_radius, "roundtrip_error": norm_err},
         "open_issues": [
             "PROVISIONAL: run on the ESO ADP while A1 exposure-alignment fix is pending "
-            "(runs/ROXs12b_raw/PAPER_BLOCKERS.md).",
+            "(ver PAPER_BLOCKERS.md del run raw de este objeto).",
             "Implements the maoppy Psfao path that stage_e01_psf.py leaves as a stub "
             "(form was hard-coded to Moffat). Moffat-vs-Psfao AIC comparison and the "
             "hybrid term are not re-implemented here; Psfao alone meets the <5% ring target "

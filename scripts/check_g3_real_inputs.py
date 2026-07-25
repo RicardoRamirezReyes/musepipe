@@ -178,7 +178,7 @@ def check_libraries(cfg: dict, project_root: Path):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", default="ROXs12b_B_adp")
+    parser.add_argument("--run-id", required=True)
     parser.add_argument("--libraries", action="store_true",
                         help="ademas verifica los manifiestos de las 5 familias externas")
     args = parser.parse_args(argv)

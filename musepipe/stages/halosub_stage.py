@@ -24,7 +24,7 @@ from ..halosub import (
     reference_spectrum,
     select_reference_spaxels,
 )
-from ..io import read_json, write_json
+from ..io import read_json, resolve_bunit, write_json
 from ..paths import RunPaths
 from .stage_x01_aperture import (
     _best_indices_from_stage04b,
@@ -134,7 +134,8 @@ def load_stage02_exposures(paths, cfg):
             raise RuntimeError(f"{path} must contain CUBES and WAVELENGTH HDUs.")
         cubes = hdul["CUBES"].data.astype(np.float64)
         wave = hdul["WAVELENGTH"].data.astype(np.float64)
-        bunit = str(hdul["CUBES"].header.get("BUNIT", ""))
+        bunit = resolve_bunit(cfg, stack_bunit=hdul["CUBES"].header.get("BUNIT")
+                              or hdul[0].header.get("BUNIT"))
     if cubes.ndim == 3:
         return [cubes], wave, path, bunit, [0]
     if cubes.ndim != 4:
@@ -239,7 +240,10 @@ def extract_halosub_product(residual_cube, wave, cfg, paths, *, method, open_iss
         psf_model=psf_model,
         aperture_correction=cfg.get(f"{prefix}_aperture_correction", "auto"),
         wframe=wframe,
-        bunit=cfg.get("cube_bunit", ""),
+        # El cargador ya resuelve la unidad, pero aqui se pasaba
+        # `cfg["cube_bunit"]`, que nadie define: los productos sgf/lpm salian
+        # con BUNIT vacio mientras el resto de metodos si la llevaban.
+        bunit=resolve_bunit(cfg, override_key="cube_bunit"),
         bad_windows_A=cfg.get(f"{prefix}_bad_windows_A", []),
         skyline_windows_A=cfg.get(f"{prefix}_skyline_windows_A", []),
         interpolated_windows_A=cfg.get(f"{prefix}_interpolated_windows_A", []),

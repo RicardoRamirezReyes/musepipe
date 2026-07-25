@@ -211,7 +211,8 @@ def aggregate_ratio(ratio_map: np.ndarray) -> dict:
 # CLI
 # --------------------------------------------------------------------------- #
 
-DEFAULT_CUBES = [f"/mnt/2TB/MUSE_work/ROXs12b_perexp/exp{i}/DATACUBE_FINAL.fits" for i in range(1, 8)]
+# Sin default por objeto: los cubos por exposición salen de `perexp_cubes` (o de
+# `perexp_dir`) en el config del run, o del flag --cubes.
 
 
 def _channel_wave(header, k):
@@ -363,9 +364,32 @@ def _write_figure(per_channel, global_stats, out_path: Path) -> None:
     fig.tight_layout(); fig.savefig(out_path, dpi=120); plt.close(fig)
 
 
+def _resolve_cubes(args) -> None:
+    """Completa --cubes desde el config del run (`perexp_cubes` o `perexp_dir`)."""
+    from musepipe.config import run_workdir_setting
+    from pathlib import Path as _P
+    _root = _P(__file__).resolve().parent.parent.parent
+
+    if args.cubes:
+        return
+    cubes = run_workdir_setting(args.run_id, "perexp_cubes", project_root=_root) if args.run_id else None
+    if not cubes:
+        perexp_dir = run_workdir_setting(args.run_id, "perexp_dir", project_root=_root) if args.run_id else None
+        if perexp_dir:
+            cubes = sorted(str(p) for p in Path(perexp_dir).glob("exp*/DATACUBE_FINAL.fits"))
+    if not cubes:
+        raise SystemExit(
+            "Falta --cubes: pásalos explícitamente o declara 'perexp_cubes' (o "
+            "'perexp_dir') en runs/<run>/config/config.json y pasa --run-id."
+        )
+    args.cubes = list(cubes)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="R4 empirical inter-exposure variance (STAT_EMP).")
-    p.add_argument("--cubes", nargs="+", default=DEFAULT_CUBES)
+    p.add_argument("--run-id", default=None,
+                   help="Run del que leer perexp_cubes/perexp_dir si no se pasa --cubes.")
+    p.add_argument("--cubes", nargs="+", default=None)
     p.add_argument("--output", default=None, help="STAT_EMP.fits path")
     p.add_argument("--qc-output", default=None)
     p.add_argument("--table-output", default=None)
@@ -375,6 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--write-fits", action="store_true", help="write the full STAT_EMP cube")
     p.set_defaults(func=run_phase)
     args = p.parse_args(argv)
+    _resolve_cubes(args)
     return int(args.func(args))
 
 

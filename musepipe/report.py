@@ -72,20 +72,26 @@ LINE_DIAGNOSTICS_NOTE = (
 # R1 note (fixed prose): the Halpha accretion limit is reported under TWO
 # L_acc-L_line calibrations, because in the planetary/BD regime probed here the
 # stellar (Alcala+2017) and planetary-shock (Aoyama+2021) relations diverge.
-ACCRETION_RELATION_NOTE = (
+def accretion_relation_note(target_display: str) -> str:
+    """Nota R1 parametrizada por objeto.
+
+    Antes era una constante con "ROXs 12 B" incrustado, así que el informe de
+    CUALQUIER objeto afirmaba hablar del primero (problema P4c).
+    """
+    return (
     "The Halpha-derived accretion-luminosity limit is reported under TWO calibrations of the "
     "L_acc-L_Halpha relation. (1) The HEADLINE limit uses the empirical stellar/brown-dwarf "
     "relation of Alcala et al. (2017), consistent with the rest of this pipeline. (2) A parallel "
     "limit uses the theoretical planetary accretion-shock relation of Aoyama et al. (2021, "
     "ApJL 917, L30; extended by Marleau & Aoyama 2023, RNAAS 7, 28), which is more appropriate "
-    "for a planetary/brown-dwarf accretor such as ROXs 12 B. In our regime (L_Halpha well below "
+    f"for a planetary/brown-dwarf accretor such as {target_display}. In our regime (L_Halpha well below "
     "1e-6 Lsun) the planetary relation has a shallower slope and gives a LARGER L_acc for the same "
     "L_Halpha, hence a WEAKER (higher) Mdot upper limit. Reporting both is the standard post-"
     "Hashimoto (2020) practice; the values appear as `mdot_msun_yr` (Alcala) and "
     "`mdot_aoyama21_msun_yr` (Aoyama+21) in stage_h03_qc.json and "
     "`tables/mdot_limit_vs_extinction.csv`. The planetary relation is valid for L_acc <= 1e-4 Lsun; "
     "the Alcala relation remains the adopted headline pending a companion-class decision."
-)
+    )
 
 
 # R2 note (fixed prose): accretion is time-variable, and this dataset is a single
@@ -835,6 +841,13 @@ def _executive_summary(summary):
     return "\n".join(lines)
 
 
+def _target_display(summary):
+    """Nombre legible del objeto del run que se está reportando."""
+    from .targets import run_display_name
+
+    return summary.get("target_display") or run_display_name(summary["run_id"])
+
+
 def render_report_markdown(summary):
     qc_rows = summary["stages"]
     figure_rows = [
@@ -871,7 +884,7 @@ def render_report_markdown(summary):
         figure_list=_markdown_table(figure_rows, ["figure", "status", "source"]),
         table_list=_markdown_table(table_rows, ["table", "path"]),
         line_diagnostics=LINE_DIAGNOSTICS_NOTE,
-        accretion_relation=ACCRETION_RELATION_NOTE,
+        accretion_relation=accretion_relation_note(_target_display(summary)),
         variability_caveat=VARIABILITY_CAVEAT_NOTE,
         accepted_limitations=accepted_md,
         historical_context=historical,

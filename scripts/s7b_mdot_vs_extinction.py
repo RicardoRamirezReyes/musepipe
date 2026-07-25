@@ -87,7 +87,7 @@ def _write_figure(rows, adopted_av, out_path):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="S7b Mdot vs extinction ladder.")
-    ap.add_argument("--run-id", default="ROXs12b_realigned")
+    ap.add_argument("--run-id", required=True)
     ap.add_argument("--av-grid", default=None, help="comma-separated A_V values")
     args = ap.parse_args(argv)
 

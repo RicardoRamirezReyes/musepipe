@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Auditable A1-prefix reduction grouped by observing night.
 
-The historical global ROXs42Bb prefix remains read-only. This command builds
-new per-night products from raw flats/arcs/science data while using the ESO
-archive MASTER_BIAS selected by the approved exception for this dataset.
+Runs marked ``legacy`` in their own ``config.json`` are refused (read-only).
+This command builds new per-night products from raw flats/arcs/science data,
+using whichever MASTER_BIAS the run's association resolves to.
 """
 from __future__ import annotations
 
@@ -260,10 +260,16 @@ def _work_lock(path: Path):
 
 
 def _verify_identity(run_id: str, raw_data_dir: Path, records: list[RawRecord]) -> None:
-    if run_id == "ROXs42Bb":
-        raise CascadeError("runs/ROXs42Bb is legacy and cannot be used by this cascade.")
     config_path = ROOT / "runs" / run_id / "config" / "config.json"
-    config = _load_json(config_path).get("config", {})
+    payload = _load_json(config_path)
+    # Runs congelados se marcan en su propio config, no por nombre: un literal
+    # aquí solo protege al objeto que se le ocurriera al autor.
+    if payload.get("legacy") or payload.get("meta", {}).get("legacy"):
+        raise CascadeError(
+            f"runs/{run_id} está marcado legacy en su config.json y no puede usarse "
+            "en esta cascada. Quita la marca si de verdad quieres reescribirlo."
+        )
+    config = payload.get("config", {})
     if config.get("run_id") != run_id:
         raise CascadeError(f"Config run_id mismatch in {config_path}")
     configured = Path(str(config.get("raw_data_dir", ""))).resolve()
@@ -322,7 +328,8 @@ def run_night(args: argparse.Namespace, night: str, records: list[RawRecord], as
             "run_id": args.run_id,
             "night": night,
             "raw_data_dir": str(Path(args.raw_data_dir).resolve()),
-            "baseline": {"work_dir": "/mnt/2TB/MUSE_work/ROXs42Bb_raw_reduction", "status": "reference_only"},
+            **({"baseline": {"work_dir": args.baseline_work_dir, "status": "reference_only"}}
+               if args.baseline_work_dir else {}),
             "association": association,
             "products": products,
             "recipes": [],
@@ -389,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--raw-data-dir", required=True)
     parser.add_argument("--work-dir", required=True)
+    parser.add_argument("--baseline-work-dir", default=None,
+                        help="Reducción de referencia previa, si la hay; se anota en el "
+                             "manifiesto de cada noche. Sin él no se anota nada.")
     parser.add_argument("--night", action="append", help="Observing night label; default: all groups.")
     parser.add_argument("--stop-after", choices=STEP_ORDER, default="standard")
     parser.add_argument("--esorex", default="esorex")

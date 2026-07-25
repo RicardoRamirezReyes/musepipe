@@ -25,12 +25,24 @@ from musepipe.reduction.sky_zap import (
     compute_sky_residual_metrics,
     wavelength_mask,
 )
+from musepipe.io import cube_bunit, resolve_bunit, resolve_flux_unit
 from musepipe.reduction.verify import circular_aperture_mask, extract_aperture_spectrum
 from musepipe.stats import robust_sigma
 
 
 C_KMS = 299792.458
 EXCLUDED_WINDOWS_A = ((5780.0, 6050.0),)
+
+#: LSF de referencia de MUSE: Bacon et al. 2017, A&A 608, A1 (MUSE HUDF Survey I),
+#: Ec. 8 — FWHM(λ) = 5.866e-8 λ² − 9.187e-4 λ + 6.040, con λ y FWHM en Å.
+#: Es la mediana de la LSF medida sobre los cubos UDF (dispersión 1–3%, ~0.05 Å).
+#: Sustituye a la interpolación lineal en R (1770@4800Å → 3590@9300Å) usada antes,
+#: que no procedía de ninguna publicación. Salvedad: es una referencia WFM; se usa
+#: como patrón de comparación, no como la LSF del cubo — aguas abajo (E1/E3/G2) se
+#: usa siempre la LSF *medida* del airglow.
+MUSE_LSF_POLY_BACON2017 = (5.866e-8, -9.187e-4, 6.040)
+MUSE_LSF_REFERENCE = "Bacon et al. 2017, A&A 608, A1, Eq. 8"
+MUSE_LSF_REFERENCE_SHORT = "Bacon+2017"
 
 
 @dataclass(frozen=True)
@@ -325,16 +337,22 @@ def measure_m1_m2_from_sky_spectrum(
 
 
 def nominal_muse_fwhm_A(wave_A: Sequence[float]) -> np.ndarray:
-    """Approximate nominal MUSE FWHM from R~1770 at 4800A to R~3590 at 9300A."""
+    """Reference MUSE LSF FWHM in A, from Bacon et al. 2017 (A&A 608, A1), Eq. 8.
+
+    ``FWHM(lambda) = 5.866e-8 lambda^2 - 9.187e-4 lambda + 6.040`` (lambda in A),
+    the median LSF measured on the MUSE UDF cubes. See ``MUSE_LSF_REFERENCE``.
+    """
 
     wave = np.asarray(wave_A, dtype=np.float64)
-    resolution = np.interp(wave, [4800.0, 9300.0], [1770.0, 3590.0])
-    return wave / resolution
+    return np.polyval(MUSE_LSF_POLY_BACON2017, wave)
 
 
 def measure_lsf(measurements: Sequence[LineMeasurement]) -> dict[str, object]:
     if len(measurements) < 2:
-        return {"table_A_fwhm": [], "poly2_coeffs": [], "max_dev_vs_nominal_pct": np.nan, "status": "unavailable"}
+        return {"table_A_fwhm": [], "poly2_coeffs": [], "max_dev_vs_nominal_pct": np.nan,
+                "nominal_reference": MUSE_LSF_REFERENCE,
+                "nominal_poly_coeffs": list(MUSE_LSF_POLY_BACON2017),
+                "status": "unavailable"}
     wave = np.asarray([m.centroid_A for m in measurements], dtype=np.float64)
     fwhm = np.asarray([m.fwhm_A for m in measurements], dtype=np.float64)
     degree = min(2, len(measurements) - 1)
@@ -355,6 +373,8 @@ def measure_lsf(measurements: Sequence[LineMeasurement]) -> dict[str, object]:
         ],
         "poly2_coeffs": coeffs,
         "max_dev_vs_nominal_pct": max_dev,
+        "nominal_reference": MUSE_LSF_REFERENCE,
+        "nominal_poly_coeffs": list(MUSE_LSF_POLY_BACON2017),
         "status": status,
     }
 
@@ -524,6 +544,7 @@ def compute_m3_flux(
     apply_truncation_correction=None,
     passband_dir=None,
     project_root=None,
+    bunit=None,
 ) -> dict[str, object]:
     """A4/M3: absolute flux-scale check of the PRIMARY vs its Gaia catalog flux.
 
@@ -534,6 +555,13 @@ def compute_m3_flux(
     config block and ``musepipe/qc/data/gaia_passbands/README.md``.
 
     Target-agnostic: all star-specific numbers come from ``config``.
+
+    ``bunit``: unidad del cubo que se esta midiendo. La comparacion con el
+    catalogo es en cgs, asi que sin unidad no hay factor: se resuelve con
+    ``musepipe.io.resolve_flux_unit`` (knob ``m3_flux_unit_cgs`` -> ``BUNIT`` del
+    cubo -> cubo de entrada del run) y, si no hay ninguna, M3 sale
+    ``unavailable`` en vez de suponer la nativa de MUSE — suponerla convertia un
+    cubo en otras unidades en un ``flux_factor`` mal por 1e20 sin decirlo.
     """
 
     passbands = config.get("m3_passbands")
@@ -586,7 +614,14 @@ def compute_m3_flux(
         spectrum = extract_aperture_spectrum(data, (float(primary_yx[0]), float(primary_yx[1])), float(aperture_radius_px))
         effective_radius = float(aperture_radius_px)
 
-    flux_unit_cgs = float(config.get("m3_flux_unit_cgs", 1.0e-20))
+    cube_unit = resolve_bunit(config, stack_bunit=bunit, override_key="m3_bunit")
+    try:
+        flux_unit_cgs, flux_unit_source = resolve_flux_unit(
+            config, bunit=cube_unit, key="m3_flux_unit_cgs"
+        )
+    except ValueError as exc:
+        return {"status": "unavailable", "reason": "flux_unit_unknown",
+                "detail": str(exc), "bunit": cube_unit, "variability_caveat": True}
     synthetic_native = synthetic_band_flux(wave_arr, spectrum, pb_wave, pb_resp)
 
     truncation_correction = 1.0
@@ -615,6 +650,10 @@ def compute_m3_flux(
         "truncation_correction": float(truncation_correction),
         "truncation_slope_flam_vs_lam": truncation_slope,
         "flux_unit_cgs": flux_unit_cgs,
+        # De donde salio la unidad, para que D2/E3/G3 puedan citarla o
+        # contrastarla con el BUNIT del producto (`io.flux_unit_conflict`).
+        "flux_unit_source": flux_unit_source,
+        "bunit": cube_unit,
         "muse_overlap_frac": overlap,
         "source": config.get("m3_passband_source"),
         "variability_caveat": True,
@@ -866,6 +905,9 @@ def m3_flux_phase(args: argparse.Namespace) -> int:
         aperture_correction=args.aperture_correction,
         apply_truncation_correction=args.truncation_correction or None,
         project_root=str(rc.paths.project_root),
+        # La unidad del cubo que M3 mide de verdad, que no tiene por que ser el
+        # `cube_files[0]` del config (A4 corre sobre el telurico, el ADP...).
+        bunit=cube_bunit(cube_path, ext=data_ext),
     )
     m3["cube_file"] = str(cube_path)
     qc_path = Path(args.qc_output)
@@ -983,6 +1025,9 @@ __all__ = [
     "expected_skyline_wave",
     "fit_wavelength_offsets",
     "M1_CLEAN_AIRGLOW",
+    "MUSE_LSF_POLY_BACON2017",
+    "MUSE_LSF_REFERENCE",
+    "MUSE_LSF_REFERENCE_SHORT",
     "compute_m3_flux",
     "detect_primary_yx",
     "flux_factor_from_reference",

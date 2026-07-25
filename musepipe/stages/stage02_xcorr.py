@@ -16,7 +16,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
-from ..io import write_json
+from ..io import cube_bunit, write_json
 from ..paths import RunPaths
 from ..stripes import (
     _build_stripe_geometry,
@@ -595,6 +595,14 @@ def write_stage02_products(product: Stage02Product, config, paths_dict):
     hdr["NZ"] = int(product.cubes.shape[1])
     hdr["NY"] = int(product.cubes.shape[2])
     hdr["NX"] = int(product.cubes.shape[3])
+    # Hereda la unidad de flujo del stack de stage01 (xcorr solo desplaza en
+    # lambda: no reescala el flujo). Sin esto se pierde aqui.
+    try:
+        bunit = cube_bunit(paths_dict["stage01_cube_fits"], ext=0)
+    except (OSError, ValueError, KeyError):
+        bunit = ""
+    if bunit:
+        hdr["BUNIT"] = bunit
     hdus = [
         fits.PrimaryHDU(header=hdr),
         fits.ImageHDU(data=product.cubes.astype(np.float32), name="CUBES"),

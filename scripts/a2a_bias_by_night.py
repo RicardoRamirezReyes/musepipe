@@ -30,11 +30,14 @@ import time
 from astropy.io import fits
 
 ROOT = Path(__file__).resolve().parent.parent
-GLOBAL_SOF = ROOT / "runs/ROXs12b_raw/raw_reduction/sof/muse_bias.sof"
-GLOBAL_MASTER_DIR = ROOT / "runs/ROXs12b_raw/raw_reduction/products/muse_bias"
+# Rutas por objeto: se resuelven en main() desde --run-id y el config del run.
+# Antes eran constantes de módulo fijadas al primer objeto reducido, de modo que
+# cualquier otro target las heredaba en silencio (plan multi-objeto, WP-P3w).
+GLOBAL_SOF = None
+GLOBAL_MASTER_DIR = None
 DEFAULT_WORK = Path("/mnt/2TB/MUSE_work/a2a_bias_by_night")
-TABLE_OUT = ROOT / "runs/ROXs12b_raw/tables/bias_by_night_comparison.csv"
-STAGE00R = ROOT / "runs/ROXs12b_realigned/stages/stage00r_qc.json"
+TABLE_OUT = None
+STAGE00R = None
 ESOREX = "esorex"
 N_IFU = 24
 QUADRANTS = (1, 2, 3, 4)
@@ -121,12 +124,26 @@ def compare(work: Path, nights: list[str]) -> tuple[list[dict], dict]:
     return rows, summary
 
 
+def _resolve_paths(raw_run_id: str) -> None:
+    """Fija las rutas del árbol de reducción del run raw indicado."""
+    global GLOBAL_SOF, GLOBAL_MASTER_DIR, TABLE_OUT
+    rr = ROOT / "runs" / raw_run_id / "raw_reduction"
+    global STAGE00R
+    GLOBAL_SOF = rr / "sof" / "muse_bias.sof"
+    GLOBAL_MASTER_DIR = rr / "products" / "muse_bias"
+    TABLE_OUT = ROOT / "runs" / raw_run_id / "tables" / "bias_by_night_comparison.csv"
+    STAGE00R = ROOT / "runs" / raw_run_id / "stages" / "stage00r_qc.json"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="A2a master BIAS by night vs global.")
+    ap.add_argument("--raw-run-id", required=True,
+                    help="Run con el árbol raw_reduction del que salen SOF y master BIAS global.")
     ap.add_argument("--work-dir", default=str(DEFAULT_WORK))
     ap.add_argument("--compare-only", action="store_true",
                     help="skip esorex, just compare existing per-night masters")
     args = ap.parse_args(argv)
+    _resolve_paths(args.raw_run_id)
     work = Path(args.work_dir)
 
     groups = group_sof_by_night()

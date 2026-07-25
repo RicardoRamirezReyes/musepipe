@@ -28,9 +28,12 @@ import sys
 from astropy.io import fits
 
 ROOT = Path(__file__).resolve().parent.parent
-PEREXP = Path("/mnt/2TB/MUSE_work/ROXs12b_perexp")
-COMBINED_QC = ROOT / "runs" / "ROXs12b_realigned" / "stages" / "stageS0_qc.json"
-SUMMARY_CSV = ROOT / "runs" / "ROXs12b_realigned" / "tables" / "s0_perexp_summary.csv"
+# Rutas por objeto: se resuelven en main() desde --run-id y el config del run.
+# Antes eran constantes de módulo fijadas al primer objeto reducido, de modo que
+# cualquier otro target las heredaba en silencio (plan multi-objeto, WP-P3w).
+PEREXP = None
+COMBINED_QC = None
+SUMMARY_CSV = None
 N_EXP = 7
 SIG_THRESHOLD = 3.0  # same as evaluate_gate_g1
 
@@ -156,11 +159,31 @@ def _write_summary_figure(rows) -> None:
     print(f"figure -> {out}")
 
 
+def _resolve_paths(run_id: str) -> None:
+    """Fija las rutas por objeto desde el run y su config."""
+    global PEREXP, COMBINED_QC, SUMMARY_CSV
+    sys.path.insert(0, str(ROOT))
+    from musepipe.config import run_workdir_setting
+
+    perexp = run_workdir_setting(run_id, "perexp_dir", project_root=ROOT)
+    if not perexp:
+        raise SystemExit(
+            f"runs/{run_id}/config/config.json no declara 'perexp_dir'; añádelo "
+            "(directorio con los cubos expN/DATACUBE_FINAL.fits)."
+        )
+    PEREXP = Path(perexp)
+    COMBINED_QC = ROOT / "runs" / run_id / "stages" / "stageS0_qc.json"
+    SUMMARY_CSV = ROOT / "runs" / run_id / "tables" / "s0_perexp_summary.csv"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="S0 per-exposure confirmation of the G1 closure.")
+    ap.add_argument("--run-id", required=True,
+                    help="Run del objeto (de su config sale perexp_dir).")
     ap.add_argument("--force", action="store_true", help="Re-run S0 even if a cube's QC exists.")
     ap.add_argument("--aggregate-only", action="store_true")
     args = ap.parse_args(argv)
+    _resolve_paths(args.run_id)
 
     if not args.aggregate_only:
         for i in range(1, N_EXP + 1):

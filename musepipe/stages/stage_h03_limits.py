@@ -13,7 +13,7 @@ import numpy as np
 
 from ..config import load_run_config
 from ..extraction.product import SpectrumProduct
-from ..io import read_json, write_csv, write_json
+from ..io import cube_bunit, flux_unit_cgs as _flux_unit_cgs, read_json, write_csv, write_json
 from ..paths import RunPaths
 from .stage_h01_detect import (
     DEFAULT_TEMPLATE_WIDTH_FACTORS,
@@ -169,6 +169,8 @@ def stage_h03_config_from_run(
 
 
 def _read_optional_json(path):
+    if path is None:
+        return None
     path = Path(path)
     if not path.exists():
         return None
@@ -797,6 +799,23 @@ def _product_path_for_method(paths, method):
     return paths.get(key)
 
 
+
+def resolve_flux_unit_cgs(cfg, paths, canonical_method):
+    """Escala a erg/s/cm2/A: knob, `BUNIT` del producto canonico, o el QC de M3.
+
+    La tercera fuente cubre los productos generados antes de que B1/B2
+    propagaran `BUNIT`: si A4/M3 midio el factor de flujo sobre ese mismo cubo,
+    la unidad que uso es la que sostiene la escala que D2 ya aplico.
+    """
+    bunit = None
+    product_path = _product_path_for_method(paths, canonical_method)
+    if product_path is not None and Path(product_path).exists():
+        try:
+            bunit = cube_bunit(product_path)
+        except (OSError, ValueError):
+            bunit = None
+    return _flux_unit_cgs(cfg, bunit=bunit, qc_m3=_read_optional_json(paths.get("stage00q_qc_json")))
+
 def _matched_sigma_from_product(paths, h01_qc, method, factor):
     product_path = _product_path_for_method(paths, method)
     if product_path is None or not Path(product_path).exists():
@@ -961,7 +980,10 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     fap_5sigma = float(cfg.get("h03_tail_fap_5sigma", ONE_SIDED_5SIGMA_FAP))
     rows = []
     open_issues = list(prerequisites.get("issues", []))
-    flux_unit_cgs = float(cfg.get("h03_flux_unit_cgs", 1.0))
+    # La escala fisica sale del knob si esta declarado y, si no, del BUNIT del
+    # propio producto canonico (ver `io.flux_unit_cgs`): el default silencioso
+    # de 1.0 daba L/Mdot 1e20 veces altos sin avisar.
+    flux_unit_cgs = resolve_flux_unit_cgs(cfg, paths, canonical_method)
     if flux_unit_cgs != 1.0:
         m3_factor = cfg.get("m3_flux_factor")
         if m3_factor is not None:

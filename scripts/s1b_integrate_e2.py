@@ -78,7 +78,7 @@ def _write_figure(offset_ch, sigma_map, corr, orientation, out_path: Path) -> No
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="S1b: integrate S1 Halpha maps into E2 QC.")
-    parser.add_argument("--run-dir", default="runs/ROXs12b_realigned")
+    parser.add_argument("--run-dir", required=True)
     parser.add_argument("--orientation", default="vertical", choices=["vertical", "horizontal"])
     args = parser.parse_args(argv)
 

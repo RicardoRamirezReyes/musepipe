@@ -147,8 +147,8 @@ def apply_discard_criteria(rows: list[dict], *,
 # CLI
 # --------------------------------------------------------------------------- #
 
-DEFAULT_PEREXP_DIR = Path("/mnt/2TB/MUSE_work/ROXs12b_perexp")
-DEFAULT_S0_SUMMARY = Path("runs/ROXs12b_realigned/tables/s0_perexp_summary.csv")
+# Sin defaults por objeto: las rutas de trabajo salen del config del run
+# (claves `perexp_dir` / `s0_summary`) o de los flags explícitos.
 
 
 def _load_cube(path: Path):
@@ -243,15 +243,36 @@ def run_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_workdirs(args) -> None:
+    """Completa perexp_dir/s0_summary desde el config del run."""
+    from musepipe.config import run_workdir_setting
+    from pathlib import Path as _P
+    _root = _P(__file__).resolve().parent.parent.parent
+
+    for attr, key in (("perexp_dir", "perexp_dir"), ("s0_summary", "s0_summary")):
+        if getattr(args, attr):
+            continue
+        value = run_workdir_setting(args.run_id, key, project_root=_root) if args.run_id else None
+        if not value:
+            raise SystemExit(
+                f"Falta --{attr.replace('_', '-')}: pásalo explícitamente o declara "
+                f"{key!r} en runs/<run>/config/config.json y pasa --run-id."
+            )
+        setattr(args, attr, str(value))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="R5 per-exposure frame-QC census.")
-    p.add_argument("--perexp-dir", default=str(DEFAULT_PEREXP_DIR))
-    p.add_argument("--s0-summary", default=str(DEFAULT_S0_SUMMARY))
+    p.add_argument("--run-id", default=None,
+                   help="Run del que leer perexp_dir/s0_summary si no se pasan explícitos.")
+    p.add_argument("--perexp-dir", default=None)
+    p.add_argument("--s0-summary", default=None)
     p.add_argument("--n-exp", type=int, default=7)
     p.add_argument("--table-output", default=None)
     p.add_argument("--qc-output", default=None)
     p.set_defaults(func=run_phase)
     args = p.parse_args(argv)
+    _resolve_workdirs(args)
     return int(args.func(args))
 
 

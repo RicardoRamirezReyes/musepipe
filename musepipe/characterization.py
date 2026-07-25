@@ -301,7 +301,7 @@ def _write_readme(path, summary, figures):
         "Two runs produce byte-identical files (determinism hash in the summary).\n",
         "## What would make this paper-valid\n",
         "1. Close the A-block: A1 `muse_exp_align` re-reduction, M3 absolute flux calibration, "
-        "M5 STAT (see `runs/ROXs12b_raw/PAPER_BLOCKERS.md`).",
+        f"M5 STAT (see `runs/{summary['run_id']}/PAPER_BLOCKERS.md` o el run raw del objeto).",
         "2. Run the real G3 fits (BT-Settl / BHAC15+ATMO2020 / Luhman–Bonnefoy) → SpT/Teff/mass "
         "resolve the G4 classification ambiguity.",
         "3. A 2nd astrometric epoch and a final background-density source strengthen G4.",

@@ -21,7 +21,6 @@ from .esorex_driver import parse_esorex_recipes
 from .verify import circular_aperture_mask, extract_aperture_spectrum
 
 
-RUN_ID = "ROXs12b_raw"
 STAGE_NAME = "00t_telluric"
 
 HALPHA_PROTECTED = (6540.0, 6590.0)
@@ -410,11 +409,13 @@ def verify_stat_scaled(
 def stage00t_qc_skeleton(
     input_info: TelluricInputInfo,
     *,
+    run_id: str,
     environment: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    """Esqueleto del QC de A3. `run_id` obligatorio (ver `stage00s_qc_skeleton`)."""
     return {
         "stage": STAGE_NAME,
-        "run_id": RUN_ID,
+        "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
         "environment": dict(environment or {}),
         "input": {"cube": str(input_info.cube), "sha256": input_info.sha256, "upstream": input_info.upstream},
@@ -465,7 +466,7 @@ def decision_phase(args: argparse.Namespace) -> int:
     wave, spec = _read_primary_spectrum(input_info.cube, (args.primary_y, args.primary_x), args.radius_px)
     depths = measure_telluric_depths(wave, spec)
     decision = decide_telluric(depths, science_needs_red_continuum=args.science_needs_red_continuum)
-    qc = stage00t_qc_skeleton(input_info)
+    qc = stage00t_qc_skeleton(input_info, run_id=args.run_id)
     qc["decision"].update(
         {
             "depth_pct_by_band": decision.depth_pct_by_band,
@@ -497,6 +498,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     env_parser.set_defaults(func=_env)
 
     decision_parser = subparsers.add_parser("decision", help="Measure whether telluric correction is needed.")
+    decision_parser.add_argument("--run-id", required=True,
+                                 help="Run al que pertenece este QC (se escribe en stage00t_qc.json).")
     decision_parser.add_argument("--input-cube", required=True)
     decision_parser.add_argument("--upstream", choices=["A2", "A1", "ADP"], required=True)
     decision_parser.add_argument("--qc")

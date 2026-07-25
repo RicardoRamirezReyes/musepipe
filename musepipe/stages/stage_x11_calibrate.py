@@ -12,7 +12,14 @@ import numpy as np
 from ..config import load_run_config
 from ..extraction.aperture import FLAG_BAD_WINDOW, FLAG_SKYLINE
 from ..extraction.product import SpectrumProduct
-from ..io import read_json, write_json
+from ..io import (
+    bunit_to_cgs_scale,
+    flux_unit_conflict,
+    flux_unit_from_m3_qc,
+    read_json,
+    resolve_flux_unit,
+    write_json,
+)
 from ..paths import RunPaths
 from ..reduction.sky_zap import SKYLINE_WINDOWS
 from ..reduction.telluric import TELLURIC_BANDS
@@ -41,6 +48,13 @@ class CalibrationCorrections:
     flux_scale: float = 1.0
     flux_scale_err_frac: float = 0.0
     flux_source: str = "stage00q_qc.m3_flux"
+    #: Calibracion absoluta DECLARADA y no plegada en `flux_err_total`: A4/M3 da
+    #: `flux_factor` sin barra de error, asi que `flux_scale_err_frac` (el termino
+    #: que si entra en el presupuesto) sale 0 y el desvio medido frente a Gaia se
+    #: quedaba invisible. Se conserva como |1 - flux_factor| en su propia columna
+    #: para poder citarlo sin mover el error de la ciencia congelada.
+    flux_declared_err_frac: float = 0.0
+    flux_declared_source: str = ""
     variability_caveat: bool = True
     psf_frac: float = 0.0
     psf_source: str = "stage_e01_qc.companion_ring_metric.residual_pct_median"
@@ -68,6 +82,8 @@ class StageX11Product:
     products: dict[str, SpectrumProduct]
     calibrated: dict[str, CalibratedProduct]
     qc: dict
+    #: primaria calibrada (None si C4 no dejo `spec_psffit_star.fits`)
+    star: CalibratedProduct | None = None
 
 
 def _finite_or_none(value):
@@ -116,10 +132,19 @@ def stage_x11_paths(run_id, project_root=None):
         "spec_calibrated_psffit_object": paths.stage_dir / "spec_calibrated_psffit_object.fits",
         "spec_calibrated_sgf_object": paths.stage_dir / "spec_calibrated_sgf_object.fits",
         "spec_calibrated_lpm_object": paths.stage_dir / "spec_calibrated_lpm_object.fits",
+        # Primaria: C4 la extrae junto al compañero pero nadie la calibraba, asi
+        # que quedaba sin correccion en lambda, sin escala de flujo y sin
+        # presupuesto de error (7 columnas frente a las 18 del compañero).
+        "spec_psffit_star": paths.stage_dir / "spec_psffit_star.fits",
+        "spec_calibrated_psffit_star": paths.stage_dir / "spec_calibrated_psffit_star.fits",
         "stage_x11_qc_json": paths.stage_dir / "stage_x11_qc.json",
         "stage_x11_error_budget_png": paths.plot_dir / "stage_x11_error_budget.png",
         "stage_x11_continuum_png": paths.plot_dir / "stage_x11_continuum.png",
         "stage_x11_multimethod_png": paths.plot_dir / "stage_x11_multimethod.png",
+        # Los espectros definitivos (6 metodos + primaria) como entregable, no
+        # como diagnostico: `stage_x11_multimethod.png` superpone los 6 crudos
+        # y sin unidad, que sirve para mirar de reojo pero no para presentar.
+        "stage_x11_spectra_png": paths.plot_dir / "stage_x11_spectra.png",
     }
 
 
@@ -231,7 +256,38 @@ def _flux_scale_from_m3(m3):
         else:
             if isinstance(m3.get("factor_by_band"), dict):
                 err_frac = _scatter_frac([float(v) for v in m3["factor_by_band"].values()])
-    return float(scale), float(max(err_frac, 0.0)), bool(m3.get("variability_caveat", True)), source, issues
+    declared_frac, declared_source = _declared_fluxcal_from_m3(m3, err_frac)
+    return (float(scale), float(max(err_frac, 0.0)), bool(m3.get("variability_caveat", True)),
+            source, issues, declared_frac, declared_source)
+
+
+def _declared_fluxcal_from_m3(m3, err_frac):
+    """El desvio de calibracion absoluta medido, para DECLARARLO sin aplicarlo.
+
+    M3 compara el flujo sintetico de la primaria con el catalogo de Gaia y deja
+    `flux_factor`, pero **sin barra de error**: `err_frac` sale 0 y el ~3% que
+    M3 acaba de medir no aparece en ningun sitio del presupuesto. Se toma
+    |1 - flux_factor| como la magnitud declarada de ese sistematico.
+
+    No se pliega en `flux_err_total` a proposito: hacerlo cambiaria el error del
+    compañero, que sostiene decisiones congeladas (E1/E3/G3). Nota: G3 ya asume
+    su propio 10% de calibracion absoluta (`g3_sys_fluxcal_frac`), asi que este
+    valor es una cota inferior de lo que el ajuste atmosferico ya se cree.
+    """
+    if err_frac > 0:
+        # Si M3 llega a publicar una barra de error, esa manda y ya va aplicada.
+        return 0.0, ""
+    factor = m3.get("flux_factor") if m3 else None
+    if factor is None:
+        return 0.0, ""
+    factor = float(factor)
+    if not np.isfinite(factor) or factor <= 0:
+        return 0.0, ""
+    return (
+        float(abs(1.0 - factor)),
+        f"|1 - stage00q_qc.m3_flux.flux_factor| = |1 - {factor:.3f}| ({m3.get('band', '?')} band, "
+        "vs Gaia DR3); declarado, NO sumado a flux_err_total",
+    )
 
 
 def _wavelength_from_m1(m1, *, allow_red=False):
@@ -306,7 +362,8 @@ def calibration_corrections_from_qc(qc00, qc_psf=None, qc_sky=None, qc_telluric=
     m3 = qc00.get("m3_flux", {})
     if str(m3.get("status", "unavailable")).lower() == "red" and not bool(cfg.get("x11_allow_red_flux", False)):
         raise RuntimeError("A4/M3 flux status is red; D2 must stop before applying flux scale.")
-    flux_scale, flux_err, variability, flux_source, flux_issues = _flux_scale_from_m3(m3)
+    (flux_scale, flux_err, variability, flux_source, flux_issues,
+     flux_declared, flux_declared_source) = _flux_scale_from_m3(m3)
     issues.extend(flux_issues)
     psf_frac, psf_issues = _psf_frac_from_qc(qc_psf)
     issues.extend(psf_issues)
@@ -326,6 +383,8 @@ def calibration_corrections_from_qc(qc00, qc_psf=None, qc_sky=None, qc_telluric=
         flux_scale=flux_scale,
         flux_scale_err_frac=flux_err,
         flux_source=flux_source,
+        flux_declared_err_frac=float(cfg.get("x11_fluxcal_declared_frac", flux_declared)),
+        flux_declared_source=flux_declared_source,
         variability_caveat=variability,
         psf_frac=float(cfg.get("x11_psf_frac", psf_frac)),
         sky_frac=float(cfg.get("x11_sky_frac", sky_frac)),
@@ -427,8 +486,9 @@ def _telluric_sys(wave, flux, corrections):
     return out
 
 
-def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluric, sys_continuum, corrections):
-    return [
+def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluric, sys_continuum,
+                       corrections, sys_fluxcal_declared=None):
+    rows = [
         {
             "term": "stat",
             "type": "per_channel",
@@ -470,6 +530,21 @@ def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluri
             "source": "D2 continuum runmed/poly difference",
         },
     ]
+    if corrections.flux_declared_err_frac > 0:
+        rows.append({
+            "term": "fluxcal_declared",
+            "type": "declared_not_applied",
+            "value": float(corrections.flux_declared_err_frac),
+            "median": (None if sys_fluxcal_declared is None
+                       else _finite_or_none(np.nanmedian(sys_fluxcal_declared))),
+            "source": corrections.flux_declared_source,
+            "note": (
+                "Columna `sys_fluxcal_declared`. NO entra en `flux_err_total`: plegarlo moveria el "
+                "error del compañero, que sostiene decisiones congeladas (E1/E3/G3). G3 ya asume su "
+                "propio 10% de calibracion absoluta (g3_sys_fluxcal_frac), mayor que este valor."
+            ),
+        })
+    return rows
 
 
 def calibrate_spectrum_product(
@@ -519,6 +594,9 @@ def calibrate_spectrum_product(
     flux_err_total = np.sqrt(
         flux_err_stat**2 + sys_fluxcal**2 + sys_psf**2 + sys_sky**2 + sys_telluric**2
     )
+    # DECLARADO y fuera de la suma: ver `_declared_fluxcal_from_m3`. Va despues
+    # de `flux_err_total` justamente para que se vea que no entra en el.
+    sys_fluxcal_declared = np.abs(flux) * float(corrections.flux_declared_err_frac)
 
     header = dict(product.header)
     header["SRCERRM"] = str(header.get("ERRMODE", "unknown"))
@@ -532,6 +610,8 @@ def calibrate_spectrum_product(
     header["FLXSCL"] = float(scale)
     header["FLXSRC"] = corrections.flux_source
     header["SYSFLX"] = float(corrections.flux_scale_err_frac)
+    header["SYSFLXD"] = float(corrections.flux_declared_err_frac)
+    header["SYSFLXDN"] = "sys_fluxcal_declared NOT in flux_err_total"
     header["ERRTOT"] = "stat+sys"
     header["CONTRUN"] = float(continuum_window_A)
     header["CONTPOL"] = int(continuum_poly_deg)
@@ -545,6 +625,7 @@ def calibrate_spectrum_product(
             "cont_poly": cont_poly,
             "sys_continuum": sys_continuum,
             "sys_fluxcal": sys_fluxcal,
+            "sys_fluxcal_declared": sys_fluxcal_declared,
             "sys_psf": sys_psf,
             "sys_sky": sys_sky,
             "sys_telluric": sys_telluric,
@@ -587,6 +668,7 @@ def calibrate_spectrum_product(
         sys_telluric,
         sys_continuum,
         corrections,
+        sys_fluxcal_declared=sys_fluxcal_declared,
     )
     return CalibratedProduct(
         method=method,
@@ -606,6 +688,86 @@ def _product_paths_from_config(cfg, paths):
         "sgf": Path(cfg.get("x11_spec_sgf_object", paths["spec_sgf_object"])),
         "lpm": Path(cfg.get("x11_spec_lpm_object", paths["spec_lpm_object"])),
     }
+
+
+def calibrate_star_product(cfg, paths, corrections):
+    """Calibra el espectro de la PRIMARIA con la misma cadena que el compañero.
+
+    Devuelve `(CalibratedProduct, resumen_qc)` o `(None, resumen_qc)` si C4 no
+    dejo el producto (p.ej. una cadena que no corrio psffit).
+
+    Los dos terminos de error quedan en columnas SEPARADAS, no fundidos:
+
+    * `flux_err_emp` — empirico de anillo. Es la dispersion del coeficiente de
+      la primaria entre los N ajustes psffit de control, colocados en un anillo
+      a la separacion del compañero alrededor de la estrella
+      (`extraction.psffit.control_psffit_spectra`). Mide cuanto se mueve el
+      flujo de la primaria segun donde se ponga la segunda componente: es un
+      sistematico del ajuste medido sobre el dato, no ruido de fotones.
+    * `flux_err_stat` + `sys_fluxcal` / `sys_psf` / `sys_sky` / `sys_telluric` /
+      `sys_continuum` — el presupuesto de sistematicos de D2, identico al del
+      compañero.
+    * `flux_err_total` — la suma en cuadratura de ambos bloques.
+
+    La primaria tiene S/N enorme, asi que su error NO esta dominado por el
+    termino estadistico sino por el presupuesto (calibracion absoluta de flujo
+    de A4/M3, PSF, telurico). Por eso importa poder mirarlos por separado.
+    """
+    path = Path(cfg.get("x11_spec_psffit_star", paths["spec_psffit_star"]))
+    if not path.exists():
+        return None, {"available": False, "reason": f"C4 no dejo {path.name} en este run"}
+    product = SpectrumProduct.read(path)
+    calibrated = calibrate_spectrum_product(
+        product,
+        corrections,
+        method="psffit",
+        canonical=False,
+        continuum_window_A=float(cfg.get("x11_continuum_window_A", 80.0)),
+        continuum_poly_deg=int(cfg.get("x11_continuum_poly_deg", 5)),
+        error_smooth_channels=int(cfg.get("x11_error_smooth_channels", 21)),
+    )
+    header = calibrated.product.header
+    header["SOURCE"] = "primary"
+    header["EMPSRC"] = "psffit control ring at the companion separation (C4)"
+    header["ERRSEP"] = "flux_err_emp (ring) and sys_* (budget) kept separate"
+
+    flux = np.asarray(calibrated.product.flux, dtype=np.float64)
+    extra = calibrated.product.extra_columns or {}
+    summary = {
+        "available": True,
+        "input": str(path),
+        "output": str(paths["spec_calibrated_psffit_star"]),
+        "n_channels": int(flux.size),
+        "median_snr_total": _finite_or_none(
+            _median_finite(np.abs(flux) / np.asarray(extra["flux_err_total"], dtype=np.float64))
+        ),
+        "median_snr_emp_only": _finite_or_none(
+            _median_finite(np.abs(flux) / np.asarray(calibrated.product.flux_err_emp, dtype=np.float64))
+        ),
+        "error_terms": {
+            "empirical_ring": "flux_err_emp",
+            "budget": ["flux_err_stat", "sys_fluxcal", "sys_psf", "sys_sky",
+                       "sys_telluric", "sys_continuum"],
+            "combined": "flux_err_total",
+            "declared_not_combined": ["sys_fluxcal_declared"],
+        },
+        "median_error_fraction": {
+            name: _finite_or_none(
+                _median_finite(np.asarray(extra[name], dtype=np.float64) / np.abs(flux))
+            )
+            for name in ("flux_err_stat", "sys_fluxcal", "sys_fluxcal_declared", "sys_psf",
+                         "sys_sky", "sys_telluric", "sys_continuum")
+        },
+        "median_empirical_fraction": _finite_or_none(
+            _median_finite(np.asarray(calibrated.product.flux_err_emp, dtype=np.float64) / np.abs(flux))
+        ),
+        "note": (
+            "La primaria es la fuente brillante: su error lo domina el presupuesto de "
+            "sistematicos, no el termino estadistico. El empirico de anillo se conserva "
+            "aparte porque mide otra cosa (estabilidad del ajuste), no ruido de fotones."
+        ),
+    }
+    return calibrated, summary
 
 
 def load_x11_products(product_paths):
@@ -910,6 +1072,11 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             "scale_err": float(corrections.flux_scale_err_frac),
             "source": corrections.flux_source,
             "variability_caveat": bool(corrections.variability_caveat),
+            # El desvio absoluto que M3 mide frente a Gaia, declarado aparte
+            # porque M3 no publica barra de error y `scale_err` sale 0.
+            "declared_err_frac": float(corrections.flux_declared_err_frac),
+            "declared_source": corrections.flux_declared_source,
+            "declared_applied": False,
         },
         "continuum": {
             **canonical.continuum_summary,
@@ -950,12 +1117,163 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             qc["open_issues"].append("Continuum systematic around Halpha exceeds 20 pct of local statistical error.")
     if qc["checks"]["v1_skylines"]["ok"] is False:
         qc["open_issues"].append("V1 skyline residuals exceed 0.05 A after wavelength correction.")
+    star_calibrated, star_summary = calibrate_star_product(cfg, paths, corrections)
+    qc["primary_star"] = star_summary
+    if not star_summary.get("available"):
+        qc["open_issues"].append(
+            "Primary-star spectrum not calibrated: " + str(star_summary.get("reason", "unknown"))
+        )
+    qc["spectra"] = _spectra_summary(canonical_method, calibrated, star_calibrated)
+    if not qc["spectra"]["unit_consistent"]:
+        qc["open_issues"].append(
+            "Los espectros calibrados no comparten una unidad declarada: "
+            f"{qc['spectra']['unit']} (ver musepipe.io.resolve_bunit y B1/B2)."
+        )
+    qc["flux"]["unit"] = _flux_unit_block(cfg, qc00, calibrated[canonical_method].product)
+    if qc["flux"]["unit"]["conflict"]:
+        qc["open_issues"].append(qc["flux"]["unit"]["conflict"])
     return StageX11Product(
         canonical_method=canonical_method,
         products=products,
         calibrated=calibrated,
         qc=_json_ready(qc),
+        star=star_calibrated,
     )
+
+
+def _flux_unit_block(cfg, qc00, product) -> dict:
+    """Las tres fuentes de la unidad de flujo, resueltas y contrastadas en D2.
+
+    D2 no convierte a cgs (aplica un factor adimensional), pero es la etapa que
+    publica los espectros definitivos: dejar aqui que escala van a resolver E3 y
+    G3, y de donde sale, evita que cada una lo deduzca por su cuenta.
+
+    El contraste importa mas que el valor: `flux_factor` se midio dividiendo por
+    la unidad de M3 y D2 lo aplica a un flujo expresado en el `BUNIT` del
+    producto. Si no son la misma, la escala absoluta sale mal por ese cociente y
+    nadie se enteraria (ver `io.flux_unit_conflict`).
+    """
+    bunit = str(product.header.get("BUNIT", "")) or None
+    block = {
+        "bunit": bunit,
+        "from_bunit": bunit_to_cgs_scale(bunit),
+        "from_m3_qc": flux_unit_from_m3_qc(qc00),
+        "conflict": flux_unit_conflict(bunit, qc00),
+        "note": (
+            "Escala a erg/s/cm2/A que resolveran E3/G3 (io.resolve_flux_unit): knob de config "
+            "-> BUNIT del producto -> `m3_flux.flux_unit_cgs`. D2 no la aplica."
+        ),
+    }
+    try:
+        block["cgs"], block["source"] = resolve_flux_unit(cfg, bunit=bunit, qc_m3=qc00)
+    except ValueError as exc:
+        block["cgs"], block["source"] = None, None
+        block["reason"] = str(exc)
+    return block
+
+
+#: Banda roja donde el compañero SE detecta. Las cifras de la tabla de espectros
+#: se dan aqui y no sobre toda la rejilla: en el azul su S/N < 1, asi que una
+#: mediana global mediria ruido y haria parecer inconsistentes a los 6 metodos.
+SPECTRA_RED_BAND_A = (7500.0, 9000.0)
+
+#: sgf destruye el continuo por construccion (Julo et al. 2025 Sect. 2.1): su
+#: nivel no es comparable con el de los demas, solo su linea.
+CONTINUUM_FREE_METHODS = ("sgf",)
+
+
+def _spectrum_row(name, role, cal, *, canonical=False, red_reference=None):
+    """Una fila de la tabla de espectros definitivos."""
+    product = cal.product
+    wave = np.asarray(product.wave_A, dtype=np.float64)
+    flux = np.asarray(product.flux, dtype=np.float64)
+    extra = product.extra_columns or {}
+    err = np.asarray(extra.get("flux_err_total", product.flux_err), dtype=np.float64)
+    red = (wave >= SPECTRA_RED_BAND_A[0]) & (wave <= SPECTRA_RED_BAND_A[1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        snr = np.abs(flux) / err
+    cont = np.asarray(
+        extra.get("cont_runmed_biasref", extra.get("cont_runmed", flux)), dtype=np.float64
+    )
+    red_cont = _median_finite(cont[red])
+    row = {
+        "name": str(name),
+        "role": str(role),
+        "canonical": bool(canonical),
+        "n_channels": int(flux.size),
+        "wave_min_A": float(np.nanmin(wave)) if wave.size else None,
+        "wave_max_A": float(np.nanmax(wave)) if wave.size else None,
+        "bunit": str(product.header.get("BUNIT", "")),
+        "flux_median": _finite_or_none(_median_finite(flux)),
+        "flux_err_total_median": _finite_or_none(_median_finite(err)),
+        "snr_median": _finite_or_none(_median_finite(snr)),
+        "red_band_A": list(SPECTRA_RED_BAND_A),
+        "red_flux_median": _finite_or_none(_median_finite(flux[red])),
+        "red_snr_median": _finite_or_none(_median_finite(snr[red])),
+        "red_continuum_median": _finite_or_none(red_cont),
+        "ratio_to_canonical_red": None,
+        "caveat": None,
+    }
+    if red_reference not in (None, 0.0) and np.isfinite(red_cont) and np.isfinite(red_reference):
+        row["ratio_to_canonical_red"] = _finite_or_none(red_cont / float(red_reference))
+    if name in CONTINUUM_FREE_METHODS:
+        row["caveat"] = (
+            "sgf filtra el continuo por construccion: su nivel (y su cociente al canonico) "
+            "no es comparable; su valor esta en la linea, no en el continuo."
+        )
+    elif np.isfinite(red_cont) and red_cont < -abs(row["flux_err_total_median"] or 0.0):
+        # Un cociente negativo desconcierta si no se dice de donde viene: es el
+        # residuo de halo AO cromatico sobre-sustraido, no un error de signo.
+        # Solo se avisa si el continuo negativo SUPERA el error total: un nivel
+        # compatible con cero (sgf/lpm filtran el continuo) no es sobre-sustraccion.
+        row["caveat"] = (
+            "continuo negativo en el rojo: sobre-sustraccion del halo AO cromatico "
+            "(docs/d2_red_continuum_diagnosis.md), emparejada en los controles. El cociente "
+            "al canonico sale negativo por eso."
+        )
+    return row
+
+
+def _spectra_summary(canonical_method, calibrated, star=None) -> dict:
+    """Tabla de los espectros definitivos: los 6 metodos + la primaria.
+
+    Los espectros calibrados son un resultado en si mismos, no solo la entrada
+    de E1: el compañero por los 6 metodos (misma rejilla, superponibles) y la
+    primaria, todos con unidad y error total. Esta seccion los deja listados en
+    el QC para que el notebook los presente sin recalcular nada.
+    """
+    canonical_row = _spectrum_row(
+        canonical_method, "companion", calibrated[canonical_method], canonical=True
+    )
+    reference = canonical_row["red_continuum_median"]
+    rows = [canonical_row]
+    for method in METHOD_ORDER:
+        if method == canonical_method:
+            continue
+        rows.append(
+            _spectrum_row(method, "companion", calibrated[method], red_reference=reference)
+        )
+    if star is not None:
+        rows.append(_spectrum_row("psffit_star", "primary", star))
+    waves = [np.asarray(cal.product.wave_A, dtype=np.float64) for cal in calibrated.values()]
+    same_grid = all(
+        w.size == waves[0].size and np.allclose(w, waves[0], rtol=0, atol=1e-6) for w in waves[1:]
+    )
+    units = {row["bunit"] for row in rows}
+    return {
+        "n_companion": sum(1 for row in rows if row["role"] == "companion"),
+        "n_primary": sum(1 for row in rows if row["role"] == "primary"),
+        "unit": sorted(units)[0] if len(units) == 1 else sorted(units),
+        "unit_consistent": len(units) == 1 and "" not in units,
+        "companions_share_grid": bool(same_grid),
+        "red_band_A": list(SPECTRA_RED_BAND_A),
+        "table": rows,
+        "note": (
+            "Medianas en la banda roja porque el compañero solo se detecta ahi. El cociente "
+            "al canonico usa el continuo referenciado a controles (cont_runmed_biasref) "
+            "cuando existe, que es la comparacion inter-metodo que gatea D1/v3."
+        ),
+    }
 
 
 def _calibrated_output_path(paths, method):
@@ -1005,11 +1323,145 @@ def _write_stage_x11_plots(product: StageX11Product, paths):
     ax.legend(fontsize=8)
     fig.savefig(paths["stage_x11_multimethod_png"], dpi=160)
     plt.close(fig)
-    return {
+
+    plots = {
         "continuum": str(paths["stage_x11_continuum_png"]),
         "error_budget": str(paths["stage_x11_error_budget_png"]),
         "multimethod": str(paths["stage_x11_multimethod_png"]),
     }
+    fig, _ = definitive_spectra_figure(paths["spec_final_object"].parent, plt=plt)
+    out = paths["stage_x11_spectra_png"]
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    plots["spectra"] = str(out)
+    return plots
+
+
+def _robust_limits(series, *, low=0.5, high=99.5, pad=0.15):
+    """Limites por percentil, para que un canal aislado no fije la escala."""
+    values = np.concatenate([np.asarray(s, dtype=np.float64).ravel() for s in series])
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return (-1.0, 1.0)
+    lo, hi = np.percentile(values, [low, high])
+    if hi <= lo:
+        lo, hi = float(np.nanmin(values)), float(np.nanmax(values))
+    if hi <= lo:
+        return (lo - 1.0, hi + 1.0)
+    margin = pad * (hi - lo)
+    return (float(lo - margin), float(hi + margin))
+
+
+def definitive_spectra_figure(stage_dir, *, canonical_method=None, plt=None, smooth_channels=15):
+    """Los espectros definitivos, presentables: los 6 metodos + la primaria.
+
+    Lee los productos calibrados de `stage_dir` (no re-ejecuta nada), asi que el
+    notebook D2 la dibuja igual que la etapa en vez de duplicar el codigo.
+    Devuelve `(fig, axes)`; quien llama decide si la guarda o la muestra.
+
+    Tres paneles con el mismo eje λ porque son tres escalas distintas: la
+    primaria es ~1e3-1e4 veces mas brillante que el compañero, y lo que se
+    compara entre metodos es el continuo, no el flujo canal a canal. El flujo
+    del compañero va suavizado para que se lean los 6 a la vez, sobre la banda
+    de error total del canonico (sin suavizar).
+    """
+    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
+        import matplotlib.pyplot as plt
+    stage_dir = Path(stage_dir)
+    products = {}
+    for method in METHOD_ORDER:
+        path = stage_dir / f"spec_calibrated_{method}_object.fits"
+        if path.exists():
+            products[method] = SpectrumProduct.read(path)
+    if not products:
+        raise FileNotFoundError(f"No hay productos calibrados de D2 en {stage_dir}")
+    star_path = stage_dir / "spec_calibrated_psffit_star.fits"
+    star = SpectrumProduct.read(star_path) if star_path.exists() else None
+    if canonical_method is None:
+        canonical_method = next(
+            (m for m, p in products.items() if bool(p.header.get("CANON", False))),
+            next(iter(products)),
+        )
+
+    def _err(product):
+        extra = product.extra_columns or {}
+        return np.asarray(extra.get("flux_err_total", product.flux_err), dtype=np.float64)
+
+    canonical = products[canonical_method]
+    unit = str(canonical.header.get("BUNIT", "")) or "sin unidad declarada"
+    nrows = 3 if star is not None else 2
+    heights = ([1.0] if star is not None else []) + [1.5, 1.0]
+    fig, axes = plt.subplots(
+        nrows, 1, figsize=(11, 3.1 * nrows), sharex=True,
+        gridspec_kw={"height_ratios": heights}, constrained_layout=True,
+    )
+    axes = list(np.atleast_1d(axes))
+    panels = iter(axes)
+
+    if star is not None:
+        ax = next(panels)
+        swave = np.asarray(star.wave_A, dtype=np.float64)
+        sflux = np.asarray(star.flux, dtype=np.float64)
+        serr = _err(star)
+        ax.fill_between(swave, sflux - serr, sflux + serr, color="tab:orange", alpha=0.30,
+                        lw=0, label="± error total (stat + sistematicos)")
+        ax.plot(swave, sflux, lw=0.7, color="k", label="primaria (psffit)")
+        ax.set_ylabel(f"flujo primaria\n[{unit}]", fontsize=8)
+        ax.legend(fontsize=7, loc="upper left")
+
+    ax = next(panels)
+    wave = np.asarray(canonical.wave_A, dtype=np.float64)
+    cerr = _err(canonical)
+    ax.fill_between(wave, -cerr, cerr, color="0.75", alpha=0.45, lw=0,
+                    label="± error total (canonico)")
+    drawn = []
+    for method, product in products.items():
+        is_canonical = method == canonical_method
+        smoothed = median_filter_1d(np.asarray(product.flux, dtype=np.float64), width=smooth_channels)
+        drawn.append(smoothed)
+        ax.plot(
+            np.asarray(product.wave_A, dtype=np.float64), smoothed,
+            lw=1.4 if is_canonical else 0.8, color="k" if is_canonical else None,
+            zorder=3 if is_canonical else 2,
+            label=f"{method} (canonico)" if is_canonical else method,
+        )
+    # Escala robusta: un solo canal en el borde del notch AO (~6000 A) es 20
+    # veces el continuo del compañero y aplastaria los 6 espectros.
+    ax.set_ylim(*_robust_limits(drawn + [cerr, -cerr]))
+    ax.axhline(0.0, color="0.6", lw=0.6)
+    ax.axvline(6562.8, color="tab:red", ls=":", lw=1.0)
+    ax.set_ylabel(f"flujo compañero\n[{unit}]", fontsize=8)
+    ax.set_title(f"compañero: flujo suavizado {smooth_channels} canales (Hα en rojo)", fontsize=9)
+    ax.legend(fontsize=7, ncol=4, loc="upper left")
+
+    ax = next(panels)
+    ax.axvspan(*SPECTRA_RED_BAND_A, color="tab:red", alpha=0.06, lw=0)
+    for method, product in products.items():
+        extra = product.extra_columns or {}
+        cont = extra.get("cont_runmed_biasref", extra.get("cont_runmed"))
+        if cont is None:
+            continue
+        ax.plot(
+            np.asarray(product.wave_A, dtype=np.float64),
+            np.asarray(cont, dtype=np.float64),
+            lw=1.4 if method == canonical_method else 0.9,
+            color="k" if method == canonical_method else None, label=method,
+        )
+    ax.axhline(0.0, color="0.6", lw=0.6)
+    ax.set_xlabel("λ [Å]")
+    ax.set_ylabel(f"continuo\n[{unit}]", fontsize=8)
+    ax.set_title(
+        "continuo referenciado a controles: la comparacion inter-metodo "
+        f"(banda sombreada {SPECTRA_RED_BAND_A[0]:.0f}-{SPECTRA_RED_BAND_A[1]:.0f} A = donde el "
+        "compañero se detecta)", fontsize=9,
+    )
+    ax.legend(fontsize=7, ncol=6, loc="upper left")
+    fig.suptitle(
+        f"D2 · espectros definitivos: {len(products)} metodos"
+        + (" + la primaria" if star is not None else ""),
+        fontsize=11,
+    )
+    return fig, axes
 
 
 def write_stage_x11_products(product: StageX11Product, config, paths):
@@ -1020,11 +1472,16 @@ def write_stage_x11_products(product: StageX11Product, config, paths):
         product.calibrated[method].product.write(out, overwrite=True)
         output_products[method] = str(out)
     product.calibrated[product.canonical_method].product.write(paths["spec_final_object"], overwrite=True)
+    star_out = None
+    if product.star is not None:
+        star_out = paths["spec_calibrated_psffit_star"]
+        product.star.product.write(star_out, overwrite=True)
     plots = _write_stage_x11_plots(product, paths)
     qc = dict(product.qc)
     qc["products"] = {
         "final_object": str(paths["spec_final_object"]),
         "calibrated_by_method": output_products,
+        "calibrated_star": None if star_out is None else str(star_out),
     }
     qc["plots"] = plots
     write_json(paths["stage_x11_qc_json"], _json_ready(qc))

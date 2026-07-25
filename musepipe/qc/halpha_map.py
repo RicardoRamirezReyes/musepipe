@@ -460,12 +460,45 @@ def run_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_io(args) -> None:
+    """Completa cubo y salidas desde --run-id; los flags explícitos mandan.
+
+    Antes estas rutas estaban incrustadas en el comando del notebook, así que
+    ejecutarlo desde el set de otro objeto sobrescribía el QC del primero.
+    """
+    from musepipe.config import resolve_stage_io
+
+    if not args.run_id:
+        missing = [n for n in ("cube", "qc_output") if not getattr(args, n)]
+        if missing:
+            raise SystemExit(
+                "Faltan " + ", ".join("--" + m.replace("_", "-") for m in missing)
+                + ": pásalos explícitamente o usa --run-id."
+            )
+        return
+    io = resolve_stage_io(args.run_id, 'stageS1', plot_subdir='s1_halpha')
+    if not args.cube:
+        if not io["cube"]:
+            raise SystemExit(
+                f"runs/{args.run_id}/config/config.json no declara 'cube_files'; "
+                "pasa --cube explícitamente."
+            )
+        args.cube = io["cube"]
+    for attr, key in (("qc_output", "qc_output"), ("map_output", "map_output"),
+                      ("plot_output", "plot_output")):
+        if not getattr(args, attr, None):
+            setattr(args, attr, io[key])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="S1 per-spaxel Halpha line-to-continuum map (wavesol/stripes plan)."
     )
-    parser.add_argument("--cube", required=True)
-    parser.add_argument("--qc-output", required=True)
+    parser.add_argument("--run-id", default=None,
+                        help="Deriva --cube y las salidas del run indicado "
+                             "(config.cube_files + runs/<run>/{stages,plots}).")
+    parser.add_argument("--cube", default=None)
+    parser.add_argument("--qc-output", default=None)
     parser.add_argument("--map-output", default=None)
     parser.add_argument("--plot-output", default=None)
     parser.add_argument("--orientation", default="vertical", choices=["vertical", "horizontal"])
@@ -480,6 +513,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.set_defaults(func=run_phase)
 
     args = parser.parse_args(argv)
+    _resolve_io(args)
     return int(args.func(args))
 
 
