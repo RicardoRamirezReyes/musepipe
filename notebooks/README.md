@@ -9,8 +9,17 @@ Un notebook por spec de la cadena canónica (A→B→C→D→E→F→G, +S). Son
 notebooks/
   _nbcommon.py            utilidades compartidas (solo stdlib)
   ROXs12b/    32 .ipynb   primer objeto
+    debug/                notebooks de análisis (constructor opcional)
   ROXs42Bb/   32 .ipynb   segundo objeto
+    debug/
 ```
+
+Los de `<objeto>/` **auditan** la cadena: llaman a `musepipe` y enseñan lo que
+decidió cada etapa. Los de `<objeto>/debug/` hacen lo contrario — rehacen el
+proceso **dentro del notebook**, con las funciones copiadas del código, para
+probar y ajustar sin tocar la cadena; los genera
+`scripts/build_debug_notebooks.py` y llevan una celda que compara su resultado
+con el producto real de la etapa. Ver el README raíz.
 
 Los dos sets son **idénticos en estructura**: ningún objeto es "el canónico".
 Cada set audita la cadena de SU objeto, declarada en la clave `chain` de

@@ -121,6 +121,27 @@ cada QC resuelve). Añadir un objeto = crear su run+config y su
 `targets/<slug>.json`, sin tocar código. Ver
 [`docs/plan_multiobjeto_notebooks_2026-07-24.md`](docs/plan_multiobjeto_notebooks_2026-07-24.md).
 
+### Notebooks de análisis (`debug/`)
+
+`scripts/build_debug_notebooks.py` es un constructor **opcional y aparte** que
+escribe en `notebooks/<Objeto>/debug/`. Los de revisión auditan la cadena
+(llaman a `musepipe`); estos hacen **el proceso dentro del notebook**, con las
+funciones numéricas **copiadas literalmente** del código, para poder probar,
+cambiar y ajustar **sin tocar la cadena general**.
+
+```bash
+python scripts/build_debug_notebooks.py --target ROXs12b        # todas las etapas cubiertas
+python scripts/build_debug_notebooks.py --target ROXs42Bb C2    # solo una
+```
+
+Copiar código es normalmente mala idea, así que cada notebook lleva dos
+defensas: una **celda de deriva**, que compara el fuente copiado con el que hoy
+tiene `musepipe` y avisa nombrando la función, y una **celda de comparación**
+contra el producto real de la etapa — con las perillas por defecto debe salir
+idéntico (lo verifica `tests/test_debug_notebooks.py` ejecutando el notebook), y
+en cuanto se cambia una perilla dice qué se movió y cuánto. Cubierto hasta ahora:
+**C2** (`C2_aperture_debug`).
+
 ## Seleccionar un run
 
 Si se pasa `run_id` a la API, ese valor es explicito. En caso contrario, el run
