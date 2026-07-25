@@ -1477,14 +1477,21 @@ def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=
     # Umbral lineal del symlog: el nivel del propio compañero, para que su
     # continuo NO quede aplastado contra el cero por el pedestal de halo.
     linthresh = float(np.nanpercentile(np.abs(ref_cont), 1)) or 1.0
+    # La referencia se dibuja con su MINIMO restado. Sin eso el pedestal la
+    # manda arriba del todo y solo se ve que "esta muy por encima"; con el
+    # minimo fuera, lo que queda en el eje es su FORMA, que es lo comparable
+    # con la del metodo. El offset es solo del dibujo: las cifras de la derecha
+    # usan la referencia entera, o dejarian de ser "% de lo que habia".
+    ref_offset = float(np.nanmin(ref_cont))
+    ref_shifted = ref_cont - ref_offset
     for i, method in enumerate(order):
         extra = products[method].extra_columns or {}
         cont = np.asarray(
             extra.get("cont_runmed", products[method].flux), dtype=np.float64
         )
         axl, axr = axes[i, 0], axes[i, 1]
-        axl.plot(wave, ref_cont, lw=1.0, color="0.55",
-                 label="sin sustraer" if i == 0 else None)
+        axl.plot(wave, ref_shifted, lw=1.0, color="0.55",
+                 label=f"sin sustraer − offset ({ref_offset:.0f})" if i == 0 else None)
         axl.plot(wave, cont, lw=1.2, color="k" if method == canonical_method else "tab:blue",
                  label="tras restar" if i == 0 else None)
         axl.set_yscale("symlog", linthresh=linthresh)
@@ -1500,8 +1507,9 @@ def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=
         axr.set_ylim(*_robust_limits([remaining_pct], low=2, high=98, pad=0.25))
         axr.set_ylabel("% que queda", fontsize=7)
     axes[0, 0].set_title(
-        "continuo: lo que hay en la apertura SIN restar (gris) vs lo que deja el método\n"
-        "(eje symlog: el pedestal de halo es varias veces el compañero)", fontsize=9,
+        "continuo − offset: lo que hay en la apertura SIN restar (gris) vs lo que deja el método\n"
+        f"(a la referencia se le resta su mínimo, {ref_offset:.0f}, para comparar formas; "
+        "eje symlog)", fontsize=9,
     )
     axes[0, 1].set_title(
         "lo que QUEDA, en % de lo que había\n"
