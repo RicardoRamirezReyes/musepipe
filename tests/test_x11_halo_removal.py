@@ -20,6 +20,7 @@ from musepipe.stages.stage_x11_calibrate import (
     UNSUBTRACTED_CUBE_NAME,
     halo_remaining_figure,
     halo_removal_figure,
+    photometry_map_figure,
     unsubtracted_aperture_reference,
 )
 from tests.test_calibrate_no_double import calibration_product
@@ -165,17 +166,46 @@ class HaloRemovalFigureTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_each_figure_is_one_full_width_panel_per_method_canonical_first(self):
+    def test_one_row_per_method_canonical_first_in_both_figures(self):
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        for figure in (halo_removal_figure, halo_remaining_figure):
+        # halo_removal lleva dos columnas (lo que deja el metodo | la misma
+        # resta en los controles); halo_remaining es de una sola.
+        for figure, shape in ((halo_removal_figure, (len(METHODS), 2)),
+                              (halo_remaining_figure, (len(METHODS),))):
             fig, axes = figure(self.stage_dir, plt=plt)
             self.assertIsNotNone(fig, figure.__name__)
-            self.assertEqual(axes.shape, (len(METHODS),), figure.__name__)
-            self.assertIn("psffit", axes[0].get_ylabel())
+            self.assertEqual(axes.shape, shape, figure.__name__)
+            first = axes[0, 0] if axes.ndim == 2 else axes[0]
+            self.assertIn("psffit", first.get_ylabel())
             plt.close(fig)
+
+    def test_the_control_panel_shows_each_control_before_and_after_the_subtraction(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        reference, _ = unsubtracted_aperture_reference(self.stage_dir)
+        fig, axes = halo_removal_figure(self.stage_dir, plt=plt, reference=reference)
+        n_controls = len(reference["controls"])
+        # Por fila: los 3 controles tal cual + los 3 tras la resta del metodo.
+        self.assertEqual(len(axes[0, 1].lines), 2 * n_controls + 1)  # +1 = la linea del cero
+        plt.close(fig)
+
+    def test_the_map_marks_the_four_apertures_and_the_primary(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = photometry_map_figure(self.stage_dir, plt=plt, channel_step=1)
+        self.assertIsNotNone(fig)
+        labels = {t.get_text() for t in ax.texts}
+        self.assertIn("compañero", labels)
+        self.assertIn("primaria", labels)
+        self.assertEqual(sum(1 for t in ax.texts if "perpendicular" in t.get_text()), 2)
+        plt.close(fig)
 
     def test_a_precomputed_reference_is_reused_instead_of_measured_again(self):
         import matplotlib

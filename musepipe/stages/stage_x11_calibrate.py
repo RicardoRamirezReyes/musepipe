@@ -1355,6 +1355,18 @@ UNSUBTRACTED_CUBE_NAME = "cube_input_local_object.fits"
 CONTROL_DELTA_PA_DEG = (("opuesto", 180.0), ("perpendicular +90", 90.0), ("perpendicular -90", -90.0))
 
 
+def _primary_yx(stage_dir):
+    """Posicion de la primaria segun B3, o None si el QC no esta."""
+    path = Path(stage_dir) / "stage01c_qc.json"
+    if not path.exists():
+        return None
+    try:
+        yx = read_json(path)["primary"]["pos_yx"]
+        return float(yx[0]), float(yx[1])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _aperture_flux_at(hdu, yx, aperture, *, half):
     """Flujo de apertura en `yx` leyendo solo su ventana (el cubo son ~400 MB)."""
     nz, ny, nx = hdu.data.shape
@@ -1493,6 +1505,85 @@ def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0, wit
     }, None
 
 
+def photometry_map_figure(stage_dir, *, plt=None, reference=None, channel_step=10, window_A=80.0):
+    """Donde se mide: imagen del cubo sin sustraer con las aperturas encima.
+
+    Flujo mediano a lo largo de λ (submuestreando 1 de cada `channel_step`
+    canales: el cubo son ~400 MB y para situar aperturas sobra), en escala
+    **logaritmica** — con escala lineal solo se ve el nucleo de la primaria y el
+    halo, que es de lo que trata toda esta etapa, queda invisible.
+
+    Encima, las cuatro cajas donde se hace la fotometria: la del compañero y las
+    tres de control, todas a la misma separacion de la primaria. La imagen deja
+    claro de un vistazo que las cuatro caen sobre el mismo halo.
+    """
+    from astropy.io import fits
+    from matplotlib.colors import LogNorm
+
+    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
+        import matplotlib.pyplot as plt
+    stage_dir = Path(stage_dir)
+    if reference is None:
+        reference, reason = unsubtracted_aperture_reference(stage_dir, window_A=window_A)
+        if reference is None:
+            return None, reason
+    cube_path = stage_dir / UNSUBTRACTED_CUBE_NAME
+    with fits.open(cube_path, memmap=True) as hdul:
+        hdu = next((h for h in hdul if getattr(h.data, "ndim", 0) == 3), None)
+        if hdu is None:
+            return None, f"{UNSUBTRACTED_CUBE_NAME} no contiene un cubo 3D"
+        image = np.nanmedian(np.asarray(hdu.data[::int(channel_step)], dtype=np.float32), axis=0)
+
+    positive = image[np.isfinite(image) & (image > 0)]
+    if positive.size == 0:
+        return None, "la imagen mediana no tiene flujo positivo que escalar"
+    # Se recorta por abajo al percentil 60 del flujo positivo: por debajo esta el
+    # fondo, y dejarlo dentro del rango de color se come la dinamica del halo.
+    vmin = float(np.percentile(positive, 60))
+    vmax = float(np.percentile(positive, 99.9))
+    fig, ax = plt.subplots(figsize=(7.5, 7.0), constrained_layout=True)
+    im = ax.imshow(image, origin="lower", cmap="magma",
+                   norm=LogNorm(vmin=max(vmin, vmax * 1e-4), vmax=vmax))
+    fig.colorbar(im, ax=ax, shrink=0.85, label="flujo mediano (escala log)")
+
+    size = int(str(reference["aperture"]).replace("box", "") or 3)
+    boxes = [("compañero", reference["position_yx"], "tab:cyan")]
+    boxes += [(f"{c['name']} (PA {c['pa_deg']:.0f}°)", c["position_yx"], "tab:green")
+              for c in reference.get("controls") or []]
+    # La primaria y el circulo de separacion: sin ellos hay que creerse que las
+    # cuatro cajas estan al mismo radio, y con ellos se ve.
+    primary = _primary_yx(stage_dir)
+    if primary is not None:
+        sep_px = float(np.hypot(reference["position_yx"][0] - primary[0],
+                                reference["position_yx"][1] - primary[1]))
+        ax.add_patch(plt.Circle((primary[1], primary[0]), sep_px, fill=False,
+                                edgecolor="w", lw=0.8, ls=":", alpha=0.6))
+        ax.plot(primary[1], primary[0], marker="+", ms=11, mew=1.6, color="w")
+        ax.annotate("primaria", (primary[1], primary[0]), textcoords="offset points",
+                    xytext=(0, 10), ha="center", fontsize=7, color="w")
+    ny, nx = image.shape
+    for label, (y, x), color in boxes:
+        # Circulo ademas de la caja: 3 px en un campo de ~170 no se encuentran.
+        ax.add_patch(plt.Rectangle(
+            (x - size / 2.0 - 0.5, y - size / 2.0 - 0.5), size, size,
+            fill=False, edgecolor=color, lw=1.6,
+        ))
+        ax.add_patch(plt.Circle((x, y), 7.0, fill=False, edgecolor=color, lw=0.8, alpha=0.7))
+        # La etiqueta se aparta del borde en vez de salirse del eje.
+        ha = "left" if x < 0.15 * nx else ("right" if x > 0.85 * nx else "center")
+        dy = -16 if y > 0.85 * ny else 11
+        ax.annotate(label, (x, y), textcoords="offset points", xytext=(0, dy),
+                    ha=ha, fontsize=7, color=color)
+    ax.set_xlabel("x [px]")
+    ax.set_ylabel("y [px]")
+    ax.set_title(
+        f"Dónde se mide · cubo sin sustraer, flujo mediano en λ (1 de cada {int(channel_step)} canales)\n"
+        f"cajas {reference['aperture']}: el compañero y los {len(boxes) - 1} controles, "
+        "todos a la misma separación de la primaria", fontsize=9,
+    )
+    return fig, ax
+
+
 def _halo_figure_inputs(stage_dir, reference, canonical_method, window_A):
     """Referencia + productos + orden de metodos, o `(None, motivo)`."""
     stage_dir = Path(stage_dir)
@@ -1522,24 +1613,24 @@ def _method_continuum(product):
 
 
 def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=80.0, reference=None):
-    """Que deja cada metodo frente a la apertura SIN sustraer (6 filas x 1).
+    """Que deja cada metodo, y que dejaria donde NO hay compañero (6 filas x 2).
 
-    Una fila por metodo, a ancho completo. En cada una:
+    Izquierda, por metodo: el continuo de la apertura simple sin sustraer con su
+    MINIMO restado (el offset) y, encima, lo que deja el metodo. Sin ese offset
+    el pedestal manda la referencia arriba del todo y solo se ve que "esta muy
+    por encima"; restado, lo que queda en el eje es su FORMA, comparable con la
+    del metodo.
 
-    - **gris**: el continuo de la apertura simple en la posicion del compañero
-      sobre el cubo sin sustraer, con su MINIMO restado (el offset). Sin ese
-      offset el pedestal la manda arriba del todo y solo se ve que "esta muy por
-      encima"; restado, lo que queda en el eje es su FORMA, comparable con la
-      del metodo.
-    - **tres curvas semitransparentes**: la misma medida repetida al otro lado
-      de la primaria y en los dos perpendiculares (`CONTROL_DELTA_PA_DEG`), con
-      **el mismo offset** para que sigan siendo comparables entre si. Son halo
-      puro: lo que separa al gris de ellas ES el compañero, y su dispersion mide
-      cuanto cambia el halo con el angulo a esa misma separacion.
-    - **la curva del metodo**: lo que queda tras restar.
+    Derecha, el control de la resta: las tres posiciones SIN compañero a la
+    misma separacion (`CONTROL_DELTA_PA_DEG`) y, en otro color, esas mismas tres
+    despues de aplicarles **la resta que el metodo hizo en el compañero**
+    (`control - (referencia - metodo)`). Ahi no hay fuente, asi que el resultado
+    deberia quedarse en cero: lo que se separe del cero es halo que el metodo no
+    quito, o que quito de mas, en ese angulo. Es el mismo argumento del gate v3
+    pero medido contra sitios sin compañero en vez de contra otro metodo.
 
-    Eje symlog porque el residuo cruza el cero. Devuelve `(fig, axes)` o
-    `(None, motivo)`.
+    Este panel NO lleva offset: su cero es fisico y moverlo lo estropearia. El
+    eje es symlog en los dos, porque los residuos cruzan el cero.
     """
     if plt is None:  # pragma: no cover - conveniencia para uso interactivo
         import matplotlib.pyplot as plt
@@ -1551,37 +1642,48 @@ def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=
     wave = reference["wave_A"]
     ref_cont = np.asarray(reference["continuum"], dtype=np.float64)
     controls = reference.get("controls") or []
-    # Un solo offset comun (el minimo del compañero) para el gris y para los
-    # tres controles: con uno por curva dejarian de ser comparables entre si.
     ref_offset = float(np.nanmin(ref_cont))
     linthresh = float(np.nanpercentile(np.abs(ref_cont - ref_offset), 25)) or 1.0
 
     fig, axes = plt.subplots(
-        len(order), 1, figsize=(13, 2.3 * len(order)), sharex=True, constrained_layout=True,
+        len(order), 2, figsize=(14, 2.3 * len(order)), sharex=True, constrained_layout=True,
     )
-    axes = np.atleast_1d(axes)
+    axes = np.atleast_2d(axes)
     for i, method in enumerate(order):
-        ax = axes[i]
-        for ctrl in controls:
-            ax.plot(wave, np.asarray(ctrl["continuum"], dtype=np.float64) - ref_offset,
-                    lw=0.9, alpha=0.35, color="tab:green",
-                    label=(f"{ctrl['name']} (PA {ctrl['pa_deg']:.0f}°)" if i == 0 else None))
-        ax.plot(wave, ref_cont - ref_offset, lw=1.1, color="0.45",
-                label=f"sin sustraer − offset ({ref_offset:.0f})" if i == 0 else None)
-        ax.plot(wave, _method_continuum(products[method]), lw=1.3,
-                color="k" if method == canonical_method else "tab:blue",
-                label="tras restar" if i == 0 else None)
-        ax.set_yscale("symlog", linthresh=linthresh)
-        ax.axhline(0.0, color="0.8", lw=0.6)
-        ax.set_ylabel(method + ("\n(canónico)" if method == canonical_method else ""), fontsize=9)
+        cont = _method_continuum(products[method])
+        axl, axr = axes[i, 0], axes[i, 1]
+        axl.plot(wave, ref_cont - ref_offset, lw=1.1, color="0.45",
+                 label=f"sin sustraer − offset ({ref_offset:.0f})" if i == 0 else None)
+        axl.plot(wave, cont, lw=1.3, color="k" if method == canonical_method else "tab:blue",
+                 label="lo que queda tras restar" if i == 0 else None)
+        axl.set_yscale("symlog", linthresh=linthresh)
+        axl.axhline(0.0, color="0.8", lw=0.6)
+        axl.set_ylabel(method + ("\n(canónico)" if method == canonical_method else ""), fontsize=9)
         if i == 0:
-            ax.legend(fontsize=7, ncol=3, loc="upper left")
-    axes[0].set_title(
-        "continuo − offset: lo que hay en la apertura SIN restar (gris) vs lo que deja el método\n"
-        "en verde, la misma medida en tres sitios sin compañero a la misma separación "
-        "(halo puro; mismo offset)", fontsize=10,
+            axl.legend(fontsize=7, loc="upper left")
+
+        # Lo que el metodo quito EN EL COMPAÑERO, aplicado a cada control.
+        removed = ref_cont - cont
+        for j, ctrl in enumerate(controls):
+            ctrl_cont = np.asarray(ctrl["continuum"], dtype=np.float64)
+            axr.plot(wave, ctrl_cont, lw=0.9, alpha=0.45, color="tab:green",
+                     label="control sin sustraer" if (i == 0 and j == 0) else None)
+            axr.plot(wave, ctrl_cont - removed, lw=1.0, alpha=0.75, color="tab:purple",
+                     label="control − (lo que el método quitó)" if (i == 0 and j == 0) else None)
+        axr.set_yscale("symlog", linthresh=linthresh)
+        axr.axhline(0.0, color="tab:red", lw=1.0, ls="--")
+        if i == 0:
+            axr.legend(fontsize=7, loc="upper left")
+    axes[0, 0].set_title(
+        "continuo − offset: lo que había en la apertura (gris) vs lo que deja el método", fontsize=10,
     )
-    axes[-1].set_xlabel("λ [Å]")
+    axes[0, 1].set_title(
+        "la misma resta, en tres sitios SIN compañero (mismo radio)\n"
+        "verde = tal cual · morado = tras la resta del método; ahí no hay fuente, "
+        "así que debería quedar en 0 (sin offset)", fontsize=10,
+    )
+    for ax in axes[-1, :]:
+        ax.set_xlabel("λ [Å]")
     fig.suptitle(
         f"D2 · los {len(order)} métodos contra la misma apertura sin sustraer "
         f"({reference['aperture']} en la posición de B3, apcorr {reference['apcorr_mode']})",
