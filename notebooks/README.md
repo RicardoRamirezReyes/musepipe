@@ -80,7 +80,7 @@ reportan como pendientes, no como error. Regenerar es idempotente.
 | 12b | [C5_sgf](ROXs12b/C5_sgf.ipynb) | Sustracción de halo SGF (Julo+25) | sí (pendiente 1ª ejec.) | residual + espectro; predictor Ec. 1 |
 | 12c | [C6_lpm](ROXs12b/C6_lpm.ipynb) | Sustracción de halo LPM (Julo+25) | sí (pendiente 1ª ejec.) | mapas de coeficientes; SGF vs LPM en Hα |
 | 13 | [D1_method_compare](ROXs12b/D1_method_compare.ipynb) | Comparación inter-método | sí | heatmap t-matrix; par primario |
-| 14 | [D2_calibrate](ROXs12b/D2_calibrate.ipynb) | Calibración espectral | sí | referenciación antes/después; presupuesto de error |
+| 14 | [D2_calibrate](ROXs12b/D2_calibrate.ipynb) | Calibración espectral | sí | referenciación antes/después; presupuesto de error; **los espectros definitivos** (6 métodos + primaria) |
 | 15 | [E1_halpha_detect](ROXs12b/E1_halpha_detect.ipynb) | Detección Hα | sí | pico vs distribución nula; región de Hα |
 | 15b | [E1b_fov_detection](ROXs12b/E1b_fov_detection.ipynb) | Detección ciega FoV (Julo+25) | sí (pendiente 1ª ejec.) | mapas z por método; gaussianidad por anillos |
 | 16 | [E2_artifacts](ROXs12b/E2_artifacts.ipynb) | Batería de artefactos | sí | T5 placebos; batería a golpe de vista |

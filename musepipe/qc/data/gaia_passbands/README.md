@@ -38,14 +38,28 @@ The run config carries `m3_*` keys: `m3_primary_gaia_*` (photometry),
 `m3_recommended_band`, `m3_flux_unit_cgs` (1e-20, MUSE native BUNIT),
 `m3_caveat`, `m3_status_note`.
 
+`m3_flux_unit_cgs` is the **declared** unit and wins when present, but it is no
+longer a silent default: since 2026-07-25 `compute_m3_flux` resolves the scale
+with `musepipe.io.resolve_flux_unit` (knob → the measured cube's `BUNIT` → the
+run's input cube) and returns `status: unavailable`,
+`reason: flux_unit_unknown` if none of them says. The comparison against the
+catalog is in cgs, so guessing the unit turns a cube in other units into a
+`flux_factor` wrong by 1e20 with a green flag. The QC records
+`flux_unit_cgs`, `flux_unit_source` and `bunit`.
+
 ## Caveats (read before using M3)
 
 1. **No Gaia band lies fully inside the MUSE range** (4749.5–9349.5 Å). Use **RP**
    (least truncated, 93.2% in-band) or apply the per-band `muse_overlap_frac`.
    G is 82.9% in-band, BP only 66.2%.
-2. **M3 orchestrator is not yet implemented** — `stage00q_qc_skeleton` still
-   hardcodes `m3_flux: unavailable`. The helper functions above consume these
-   config keys but nothing calls them into `stage00q_qc.json` yet.
+2. **M3 measures ONE band, without an error bar.** The orchestrator
+   (`compute_m3_flux` + the `python -m musepipe.qc.cube_qc m3-flux` CLI, which
+   patches `m3_flux` into `stage00q_qc.json`) landed in `20c96ae` (2026-07-09);
+   `stage00q_qc_skeleton` only seeds `unavailable` until it runs. It reports
+   `flux_factor` for `m3_recommended_band` alone, so there is no band-to-band
+   scatter to derive `scale_err_frac` from — which is why D2 declares the
+   absolute-calibration departure instead of folding it into `flux_err_total`
+   (`sys_fluxcal_declared`, spec D2 errata v1.2).
 3. M3 must run on a **total-flux PRIMARY spectrum from a flux-calibrated cube**
    (the psffit "star" amplitude is not total flux — a smoke test gave factor
    ≈0.51, indicative only).

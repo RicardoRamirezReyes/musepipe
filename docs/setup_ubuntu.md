@@ -103,8 +103,9 @@ ambos: A2/A4 y toda la cadena B–F no los usan.
 conda activate MUSE
 cd /ruta/MUSE-accretion-pipeline
 
-# 1. Suite de tests (52+; todos deben pasar)
-python -m unittest discover -s tests
+# 1. Suite de tests (699 al 2026-07-25; todos deben pasar). El runner es pytest.
+python -m pytest tests/ -q
+python -m pytest tests/ -q -m "not external_data"   # sin las que piden bibliotecas externas
 
 # 2. Compilación de módulos
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py

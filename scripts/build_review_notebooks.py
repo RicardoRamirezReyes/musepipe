@@ -560,6 +560,13 @@ def build_cells(s: dict) -> list[dict]:
             "embebido en la reducción / documentado en la nota de decisión de abajo."
         ))
 
+    # 5a-bis. Los chequeos del QC, traducidos a la pregunta FÍSICA que responden.
+    # `v3_continuum_stable`, `t5`, `rho_ab` significan algo dentro del codigo y
+    # nada para quien revisa: el nombre en clave se queda (hay que poder buscarlo
+    # en el QC) pero acompañado de que pregunta contesta y que implica fallar.
+    if s.get("checks_md"):
+        cells.append(md(s["checks_md"]))
+
     # 5b. Evidencia / explicación a medida (adicional; puede coexistir con el QC)
     if s.get("evidence_md"):
         cells.append(md(s["evidence_md"]))
@@ -1332,6 +1339,26 @@ STAGES: list[dict] = [
                   cost="Ligero (segundos)."),
         qc="stages/stage01_qc.json",
         salient=["centering_method", "spatial_shift_mode", "crop", "n_cubes", "covariance_factor_box3", "finite_fraction"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `centering_method` / `star_centers` | Cómo se localizó la primaria en cada cubo para "
+            "ponerlos todos en el mismo sitio. | Un centrado malo desplaza al compañero respecto de "
+            "la apertura que lo mide. |\n"
+            "| `spatial_shift_mode` | Si los cubos se desplazan por **píxeles enteros** o con "
+            "**submuestreo**. | Un desplazamiento fraccionario interpola, y la interpolación "
+            "**correlaciona píxeles vecinos**: ese es el origen físico de que el ruido de una "
+            "apertura no sea la suma en cuadratura de los píxeles. |\n"
+            "| `covariance_factor_box3` | Cuánto se subestima σ en una caja 3×3 si se supone que los "
+            "píxeles son independientes. | Es la traducción numérica de lo anterior y entra en todo "
+            "el modelo de ruido ([`docs/noise_model.md`](../../docs/noise_model.md)). |\n"
+            "| `finite_fraction` | Fracción de vóxeles con dato (no NaN) tras alinear y recortar. | "
+            "Los bordes pierden cobertura al desplazar; si cae mucho, el recorte se comió campo útil. |\n"
+            "| `crop` / `crop_bounds_per_cube` | La ventana espacial que se conserva. | Define el "
+            "campo donde existen controles al mismo radio que el compañero. |\n"
+            "| `equivalence` | Comparación contra el producto de referencia (histórico o ADP). | Es "
+            "la prueba de que re-alinear no cambió el dato, solo su rejilla. |\n"
+        ),
         narrative_md=(
             "## Qué hace B1 y por qué importa\n\n"
             "B1 **carga** el cubo reducido, lo **centra** en la estrella primaria y lo **recorta** a "
@@ -1439,6 +1466,26 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage02_xcorr.sh", cost="Ligero."),
         qc="stages/stage02_xcorr_qc.json",
         salient=["status", "reduction_factor", "dirty_channels", "finite_fraction", "mean_shift"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "«Franjas» (*stripes*) = estructura periódica alineada con los **slicers** del "
+            "espectrógrafo: cada slicer corta una tira del campo y la manda a una zona distinta del "
+            "detector, así que un defecto suyo aparece como bandas paralelas, no como ruido.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `mean_shift_per_cube_ch` | Desplazamiento en λ de cada cubo respecto de la referencia, "
+            "en canales, medido por correlación cruzada. | Si cada exposición está en un cero de λ "
+            "distinto, combinarlas ensancha las líneas y borra señal. |\n"
+            "| `stripe_metric` / `reduction_factor` | Amplitud de la estructura de franjas y cuánto "
+            "baja tras corregir. | Distingue un artefacto del instrumento de una estructura del "
+            "cielo. |\n"
+            "| `stripe_orientation` / `stripe_angle_deg` | En qué dirección van los slicers en este "
+            "cubo. | Los cubos norte-arriba no tienen los slicers verticales por defecto: buscar "
+            "franjas en la orientación equivocada da siempre «no hay». |\n"
+            "| `dirty_channels` | Canales marcados como contaminados. | Alimentan **T1 de E2**: si el "
+            "pico de Hα cayera en uno, sería sospechoso de artefacto. |\n"
+            "| `ref_index` / `ref_scores` | Qué cubo se tomó como referencia y con qué criterio. | "
+            "Todo el desplazamiento es *relativo* a él. |\n"
+        ),
         narrative_md=(
             "## Qué hace B2 y por qué\n\n"
             "B2 hace dos cosas sobre el cubo alineado: **correlación cruzada** entre exposiciones "
@@ -1537,6 +1584,26 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage01c_localize.sh", cost="Ligero."),
         qc="stages/stage01c_qc.json",
         salient=["companion.snr_detection", "sep_arcsec", "pa_deg", "band_used_A", "chromatic_centroid_needed"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `sep_arcsec` / `pa_deg` | Separación angular y **ángulo de posición** del compañero "
+            "respecto de la primaria (PA se mide desde el norte hacia el este). | Es la posición que "
+            "usan todas las etapas siguientes; los controles se colocan a **esta misma separación** "
+            "para que vean el mismo halo. |\n"
+            "| `sep_deviation_sigma` / `pa_deviation_sigma` | Cuánto se aparta lo medido de lo "
+            "esperado por la literatura, en σ. | Un desvío grande sería otra fuente, no el compañero "
+            "conocido. |\n"
+            "| `band_used_A` | La banda en la que se detecta. | El compañero es rojo: en el azul su "
+            "S/N < 1 y no hay nada que localizar. |\n"
+            "| `chromatic_centroid_needed` | Si la posición del compañero se mueve con λ. | La "
+            "refracción atmosférica residual desplaza la imagen con la longitud de onda; si es "
+            "apreciable, la apertura debe seguirlo o pierde flujo en un extremo del espectro. |\n"
+            "| `snr_detection` | S/N de la detección posicional (no de la línea). | Solo dice que la "
+            "fuente está ahí, no que emita Hα — eso es E1. |\n"
+            "| `legacy_check` | Contraste con la posición histórica. | Si difiere, C2 corre con ambas "
+            "y se reporta la diferencia: es información, no un fallo. |\n"
+        ),
         narrative_md=(
             "## Qué hace B3 y por qué\n\n"
             "B3 **mide** las posiciones de la primaria y del compañero en el cubo de trabajo y las "
@@ -1773,6 +1840,23 @@ STAGES: list[dict] = [
                   cost="Ligero–moderado."),
         qc="stages/stage04b_qc.json",
         salient=["method", "local_model_kind", "fit_radius_px", "target_yx", "bad_channel_count"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `local_model_kind` | La forma que se ajusta al fondo alrededor del compañero (plano, "
+            "cuadrática…). | El halo de la primaria varía suavemente a esa escala: se modela como "
+            "**superficie local**, no como un nivel constante. |\n"
+            "| `fit_radius_px` / `mask_radius_px` | Hasta dónde se ajusta el fondo y qué se excluye "
+            "del ajuste. | La máscara evita que el propio compañero entre en el fondo y se reste a sí "
+            "mismo; el radio de ajuste decide cuánta curvatura del halo se captura. |\n"
+            "| `local_fit_sigma_clip` | Rechazo iterativo de píxeles atípicos en ese ajuste. | Que un "
+            "cósmico o una fuente vecina no arrastre la superficie. |\n"
+            "| `bad_wavelength_ranges_A` / `bad_channel_count` | Canales donde el ajuste no es fiable "
+            "(hueco del láser AO, bordes). | Se marcan y viajan con el producto: los datos no se "
+            "tocan, los avisos sí. |\n"
+            "| `best4` / `worst2` | Los canales mejor y peor ajustados. | Sirven para mirar de un "
+            "vistazo si el modelo local falla en alguna zona concreta del espectro. |\n"
+        ),
         narrative_md=(
             "## Qué hace 04b y por qué\n\n"
             "04b resta una **superficie local** (un **plano**) ajustada al fondo en un **anillo** "
@@ -1888,6 +1972,24 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_x01_aperture.sh", cost="Ligero–moderado."),
         qc="stages/spec_aperture_qc.json",
         salient=["apertures", "errors.mode", "aperture_correction.median", "v4_apcorr_range_ok", "bad_window_channels"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "Los nombres `v2_…`/`v3_…`/`v4_…` son las verificaciones de la spec (§5) y viven así en "
+            "el QC; esto es la pregunta que contesta cada una.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v2_error_ratio_ok` | **¿La barra de error del espectro describe su dispersión real?** "
+            "Compara el error propagado del cubo con el medido en controles al mismo radio "
+            "(mediana de la razón dentro de [0.7, 1.4]). | Toda significancia posterior (E1, E3) "
+            "queda mal escalada: el σ no es el ruido. |\n"
+            "| `v3_roundtrip_ok` | **¿El fichero que escribimos se relee idéntico?** Integridad del "
+            "formato `SpectrumProduct` (write→read→validate). | No es física: es un producto "
+            "corrupto o una versión de formato incompatible. |\n"
+            "| `v4_apcorr_range_ok` | **¿Sabemos cuánta luz se queda fuera de la apertura?** La "
+            "corrección `apcorr(λ)` debe ser suave y estar en [1.0, ~1.6] para la caja 3×3, y el "
+            "espectro corregido de 3×3 y 5×5 debe coincidir: si la curva de crecimiento de C1 es "
+            "correcta, medir en caja chica o grande da lo mismo. | El flujo absoluto del compañero "
+            "queda sesgado **y con dependencia en λ** (la PSF se ensancha hacia el azul). |\n"
+        ),
         narrative_md=(
             "## Qué hace C2 y por qué\n\n"
             "C2 extrae el espectro del compañero por **apertura** (`box3` por defecto, `box5`) y define "
@@ -2019,6 +2121,25 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_x02_optimal.sh", cost="Moderado."),
         qc="stages/spec_optimal_qc.json",
         salient=["variants", "snr_gain_vs_aperture.median", "continuum_bias_vs_aperture_pct", "v3_continuum_bias_ok", "fwhm_pm10pct"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_snr_gain_ok` | **¿Pesar por la PSF gana algo frente a sumar en una caja?** "
+            "Mediana de S/N(óptima)/S/N(apertura 3×3) ≥ 1 (se espera 1.1–1.3). | El método no "
+            "aporta: la extracción óptima solo se justifica por la ganancia de S/N. |\n"
+            "| `v2_error_ratio_ok` | **¿La barra de error describe el ruido real?** Igual que en C2: "
+            "propagado vs empírico de controles, razón mediana en [0.7, 1.4]. | El σ no es el ruido "
+            "y la significancia posterior queda mal escalada. |\n"
+            "| `v3_continuum_bias_ok` | **¿El método se come el continuo del compañero?** "
+            "(óptima − apertura)/apertura en bandas de continuo, < 2–3%. | Es el chequeo que "
+            "**rechaza `optimal_ls`** en esta cadena: sobre-sustrae el halo y deja el continuo "
+            "negativo. La variante que G1 valida es `optimal_psfsub`. |\n"
+            "| `v4_clip_concentration_ok` | **¿El rechazo de píxeles se está comiendo la señal?** "
+            "El mapa de clipping no debe concentrarse en la posición del compañero (< 2× la tasa "
+            "media). | Se estaría recortando el objeto y llamándolo ruido. |\n"
+            "| `v5_ls_vs_psfsub_written` | **¿Quedan las dos variantes en disco para compararlas?** "
+            "No juzga: entrega el diagnóstico del modelo de halo a D1. | Falta insumo para D1. |\n"
+        ),
         narrative_md=(
             "## Qué hace C3 y las dos variantes\n\n"
             "C3 es **extracción óptima de Horne (1986)**: por canal, pondera cada píxel por el "
@@ -2180,6 +2301,23 @@ STAGES: list[dict] = [
                   cost="Moderado (~3 min con Psfao lru_cache; sin cache era 2h+)."),
         qc="stages/spec_psffit_qc.json",
         salient=["chi2r.median", "condition_number_median", "rho_ab_median", "vs_large_aperture_median_ratio", "v3_star_scale_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "C4 ajusta **dos PSF a la vez** (primaria + compañero) canal a canal, así que sus "
+            "chequeos preguntan por lo que puede salir mal en ese ajuste conjunto.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v3_star_scale_ok` | **¿El ajuste reproduce la estrella que sí vemos bien?** Razón "
+            "entre el espectro de la primaria ajustada y su fotometría de apertura grande: mediana "
+            "en [0.97, 1.03] y sin pendiente con λ. | Si el modelo no reproduce la fuente brillante, "
+            "el residuo donde vive el compañero tampoco es de fiar. |\n"
+            "| `v4_rho_ab_ok` | **¿Son separables las dos fuentes?** Correlación ρ(a,b) entre las "
+            "amplitudes de primaria y compañero, y número de condición del ajuste; a esta separación "
+            "se espera \\|ρ\\| < 0.3. | Con ρ→1 el ajuste no puede decidir cuánta luz es de cada una: "
+            "el flujo del compañero se vuelve **degenerado** (cualquier reparto encaja igual de bien) "
+            "y su error real es mucho mayor que el formal. |\n\n"
+            "Las otras verificaciones de la spec (χ²ᵣ~1, residuo limpio, crosstalk, contraste con "
+            "C2/C3) se revisan en los plots de abajo, no como banderas del QC.\n"
+        ),
         narrative_md=(
             "## Qué hace C4 y por qué es el canónico\n\n"
             "C4 (`psffit`) es el **método primario** recomendado por la literatura para un compañero a "
@@ -2335,6 +2473,25 @@ STAGES: list[dict] = [
         qc="stages/spec_sgf_qc.json",
         salient=["halosub.n_exposures", "sgf.window", "errors.mode",
                  "checks.v1_reference_ok", "checks.v2_far_continuum_ok", "checks.v4_scale_convention_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_reference_ok` | **¿Hay bastante halo para construir la referencia estelar?** "
+            "≥ 50 spaxels conservados por exposición. | La referencia es ruido: el método resta "
+            "ruido en vez de halo. |\n"
+            "| `v2_far_continuum_ok` | **¿La sustracción deja el fondo en cero donde no hay nada?** "
+            "Mediana del residuo en los controles, en continuo lejos de líneas, compatible con 0. | "
+            "Hay un pedestal residual: todo lo extraído después lleva ese sesgo. |\n"
+            "| `v3_predictor_written` | **¿Cuánta señal de línea se espera perder?** El SGF filtra el "
+            "continuo por construcción y muerde también la línea; el predictor (Ec. 1 de Julo+25) "
+            "queda registrado para cada línea estándar en cobertura. | No hay con qué interpretar el "
+            "flujo de línea de este método. |\n"
+            "| `v4_scale_convention_ok` | **¿Queda trazable en qué escala está el producto?** "
+            "Cabeceras `BKGMODE`/`SCALEREF` y espectros de control persistidos. | D1 no puede "
+            "comparar este método con los otros sin adivinar la convención. |\n"
+            "| `v5_no_pca` | **¿Se coló PCA?** Declara explícitamente `pca_applied = false`. | "
+            "Sería saltarse una decisión congelada (PCA descartado en D1). |\n"
+        ),
         narrative_md=(
             "## Qué hace C5 y por qué existe\n\n"
             "C5 implementa el método **estado-del-arte de literatura** (HRSDI/SGF): por spaxel, "
@@ -2446,6 +2603,26 @@ STAGES: list[dict] = [
         qc="stages/spec_lpm_qc.json",
         salient=["lpm.degree", "lpm.line_preservation_recovery", "degree_diagnostics.mse_argmin",
                  "checks.v2_line_preservation_ok", "checks.v4_slow_path_ok", "checks.v5_scale_convention_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_reference_ok` | **¿Hay bastante halo para la referencia?** ≥ 50 spaxels por "
+            "exposición, como en C5. | La referencia es ruido. |\n"
+            "| `v2_line_preservation_ok` | **¿El método respeta la línea, que es lo que buscamos?** "
+            "Se inyecta una gaussiana de 5σ en un control, se sustrae con la misma matriz y se exige "
+            "recuperar **≥ 90%** del flujo. Es el argumento de LPM frente a SGF, que sí muerde la "
+            "línea. | El método estaría borrando la señal de acreción junto con el halo. Es un smoke "
+            "interno: la calibración formal es E4. |\n"
+            "| `v3_condition_ok` | **¿El ajuste es numéricamente estable?** Número de condición "
+            "< 1e8. | Los coeficientes son ruido amplificado: el residuo deja de significar nada. |\n"
+            "| `v4_slow_path_ok` | **¿Cuántos spaxels necesitaron el camino lento?** ≤ 20%. | Señal "
+            "de mal condicionamiento generalizado (y de coste). |\n"
+            "| `v5_scale_convention_ok` | **¿Escala y cabeceras trazables?** Igual que C5. | D1 no "
+            "puede comparar sin adivinar la convención. |\n"
+            "| `v6_degree_diagnostics_written` | **¿Está justificado el grado 4 del polinomio?** "
+            "Energy-share, curva de MSE y mapas de coeficientes persistidos. | Se pierde la evidencia "
+            "de por qué ese grado y no otro (avisos que no bloquean: se miran en los plots). |\n"
+        ),
         narrative_md=(
             "## Qué hace C6 y por qué preserva las líneas\n\n"
             "C6 implementa el método **propuesto** por Julo et al. 2025 (LPM): cada spaxel se modela "
@@ -2565,6 +2742,31 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_x10_compare.sh", cost="Ligero (~6 s)."),
         qc="stages/stage_x10_qc.json",
         salient=["verdict", "action", "recommended_method", "primary_pairs", "spec_version"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "D1 decide si dos métodos **discrepan de verdad** o solo por ruido. Sus chequeos vigilan "
+            "las tres formas de engañarse en esa comparación: subestimar el ruido, comparar contra "
+            "controles sucios y contar una corrección dos veces.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_sigma_empirical_le_naive` | **¿Estamos subestimando el ruido de la diferencia?** "
+            "El σ medido en controles no debería ser MENOR que el de propagar errores independientes: "
+            "la correlación entre métodos solo puede aumentar la dispersión, nunca reducirla. | Un σ "
+            "empírico menor que el ingenuo delata controles mal emparejados o un σ contaminado — y "
+            "toda diferencia parecería más significativa de lo que es. |\n"
+            "| `v2_controls_clean` | **¿Los controles de los pares primarios son utilizables?** "
+            "Ningún par primario degradado (por controles ausentes o inconsistentes). | El veredicto "
+            "del par se marca degradado: no se puede afirmar que dos métodos difieran. |\n"
+            "| `v5_no_double_throughput` | **¿Se aplicó la corrección de throughput dos veces?** La "
+            "corrección es interna a la comparación (solo en memoria); los productos en disco quedan "
+            "SIN corregir y E3/G2 aplican la suya. | El flujo del compañero saldría corregido dos "
+            "veces aguas abajo — un sesgo silencioso en Ṁ. |\n"
+            "| `v6_scale_check_ok` | **¿Están los dos métodos en la misma escala antes de restarlos?** "
+            "| Se estaría midiendo una diferencia de convención, no de física. |\n"
+            "| `v7_t_calibration` | **¿El estadístico t está bien calibrado?** Fracción de pares de "
+            "CONTROL que salen «divergentes» vs la fracción esperada: en posiciones sin fuente, los "
+            "métodos solo pueden diferir por ruido, así que el ritmo de falsos positivos debe ser el "
+            "nominal. | El umbral de «discrepan» no significa lo que dice. |\n"
+        ),
         narrative_md=(
             "## Qué hace D1 v3 y cómo decide\n\n"
             "D1 compara los métodos **por pares y por banda** con un **t control-centrado** "
@@ -2744,12 +2946,18 @@ STAGES: list[dict] = [
             "**Diagnóstico del 'continuo rojo inestable'** ([`docs/d2_red_continuum_diagnosis.md`]"
             "(../docs/d2_red_continuum_diagnosis.md)): son 3 cosas reales (señal de enana fría + "
             "sistemático de nivel inter-método + rigidez del polinomio), **no** un defecto de PSF.\n\n"
-            "**La referenciación a controles que integramos (2026-07-11):** `v3_continuum_stable` "
-            "gatea ahora sobre la concordancia inter-método **control-referenciada** "
-            "(**0.867**, consistente con el t control-centrado de D1), guardando la cruda (0.317) como "
-            "diagnóstico; el sistemático rojo baja de **1.76× → 1.35×**; y el producto final lleva la "
-            "columna `cont_runmed_biasref` para G3. v3 sigue <0.90 → falla por el sistemático "
-            "cromático **genuino**, no por el pedestal. **No afecta la línea Hα ni el límite de Ṁ.**"
+            "**El chequeo de continuo estable (`v3_continuum_stable`)** pregunta, en físico: *¿el "
+            "continuo que llamamos «del compañero» es suyo, o es lo que quedó del halo de la "
+            "primaria?* Se responde comparando dos métodos de extracción independientes — abajo, en "
+            "el Plot 1, está explicado en detalle. Para este objeto: "
+            "{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.fraction_channels_methods_agree:.3f}} "
+            "de los canales concuerdan (umbral "
+            "{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.threshold}}), así que el chequeo "
+            "**{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.ok}}** = ok. Desde 2026-07-11 "
+            "la métrica es la **control-referenciada** (consistente con el t control-centrado de D1) y "
+            "el producto final lleva la columna `cont_runmed_biasref` para G3. **Lo que queda es un "
+            "sistemático cromático genuino, y afecta a la FORMA del continuo (G3), no a la línea Hα "
+            "ni al límite de Ṁ (E1/E3).**"
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -2777,7 +2985,13 @@ STAGES: list[dict] = [
             "print(f\"  DESPUÉS (referenciado) fraction_agree={ar['fraction_channels_methods_agree']:.3f}  red_ratio={ar['red_band_median_ratio']:.2f}×\")\n"
             "print(f\"  sesgo rojo psffit/psfsub = {ar['canonical_control_bias_red']:+.0f} / {ar['other_control_bias_red']:+.0f}\")\n"
             "v3 = q['checks']['v3_continuum_stable']\n"
-            "print(f\"\\nv3_continuum_stable: ok={v3['ok']} (métrica={v3['metric']}, umbral {v3['threshold']}) -> falla por el sistemático genuino\")\n"
+            "print(f\"\\ncontinuo estable (V3): ok={v3['ok']} — {v3['fraction_channels_methods_agree']:.3f}\"\n"
+            "      f\" de los canales tienen los dos métodos de acuerdo dentro del error combinado,\"\n"
+            "      f\" umbral {v3['threshold']}\")\n"
+            "print(f\"  métrica={v3['metric']}\")\n"
+            "print('  significa: lo que NO concuerda no puede ser el compañero (los dos métodos miden el mismo objeto)')\n"
+            "print('             sino residuo cromático de la sustracción de halo -> afecta a la FORMA del continuo (G3),')\n"
+            "print('             no a la línea Hα ni al límite de Ṁ (E1/E3).')\n"
             "\n"
             "# Los espectros definitivos: la tabla que D2 deja en su QC.\n"
             "sp = q.get('spectra')\n"
@@ -2802,12 +3016,188 @@ STAGES: list[dict] = [
         plots=[
             dict(
                 md=(
-                    "## Plot 1 — la referenciación a controles (antes/después)\n\n"
-                    "Continuos de los dos métodos G1-validados (psffit, optimal_psfsub), crudos vs "
-                    "referenciados a sus controles. En el **rojo** (>7500 Å, donde el compañero se "
-                    "detecta) los referenciados **concuerdan**; la concordancia global sube de 0.317 a "
-                    "0.867. *(El azul, λ<7000, tiene SNR<1: su discrepancia está dentro del error "
-                    "combinado — no es señal.)*"
+                    "## Plot 1 — dónde se mide\n\n"
+                    "Antes de comparar métodos, ver el sitio. Es el **flujo mediano en λ** del cubo "
+                    "sin sustraer (1 de cada 10 canales, que para situar aperturas sobra), en escala "
+                    "**logarítmica**: en lineal solo se vería el núcleo de la primaria y el halo — "
+                    "que es de lo que trata toda esta etapa — quedaría invisible.\n\n"
+                    "Encima, las cuatro cajas box3 donde se hace la fotometría: la del **compañero** "
+                    "y las **tres de control**, con el círculo punteado que marca la separación. La "
+                    "imagen deja claro de un vistazo lo que sostiene toda la comparación: las cuatro "
+                    "caen sobre el mismo halo, a la misma distancia de la estrella, y las tres verdes "
+                    "no tienen fuente dentro.\n\n"
+                    "*(Esta celda calcula la referencia sin sustraer y la deja en "
+                    "`ref_sin_sustraer` para los dos plots siguientes: construir el modelo de PSF "
+                    "tarda ~27 s y se hace una sola vez.)*"
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from musepipe.stages import unsubtracted_aperture_reference, photometry_map_figure\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    ref_sin_sustraer, motivo = unsubtracted_aperture_reference(rd / 'stages')\n"
+                    "    if ref_sin_sustraer is None:\n"
+                    "        print('No se pudo construir la referencia sin sustraer:', motivo)\n"
+                    "    else:\n"
+                    "        print('apertura', ref_sin_sustraer['aperture'],\n"
+                    "              '· apcorr', ref_sin_sustraer['apcorr_mode'],\n"
+                    "              '· compañero yx =', [round(v, 1) for v in ref_sin_sustraer['position_yx']])\n"
+                    "        for c in ref_sin_sustraer['controls']:\n"
+                    "            print(f\"  control {c['name']:18s} PA {c['pa_deg']:6.1f}°  yx={[round(v,1) for v in c['position_yx']]}\")\n"
+                    "        for s in ref_sin_sustraer['controls_skipped']:\n"
+                    "            print('  (saltado)', s['name'], '->', s['reason'])\n"
+                    "        fig, ax = photometry_map_figure(rd / 'stages', plt=plt, reference=ref_sin_sustraer)\n"
+                    "        outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "        fig.savefig(outdir / 'photometry_map.png', dpi=110)\n"
+                    "        print('figura ->', outdir / 'photometry_map.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — los 6 métodos contra la misma apertura SIN sustraer\n\n"
+                    "Todos los métodos hacen, en el fondo, lo mismo: **quitar el halo de la primaria** "
+                    "en la posición del compañero. Para saber cuánto quitó cada uno hace falta una "
+                    "medida de *lo que había antes*, y esa medida es una **apertura simple sin "
+                    "sustracción**: la misma caja 3×3, en la misma posición de B3 y con la misma "
+                    "corrección de apertura de C1 que usa C2 — lo único que cambia es que se mide "
+                    "sobre `cube_input_local_object.fits`, el cubo tal cual entra a 04b.\n\n"
+                    "La corrección de apertura no es un detalle: una caja 3×3 recoge una fracción "
+                    "minúscula de la PSF de NFM, así que apcorr vale ~40×. Sin aplicarla a la "
+                    "referencia la comparación no sería de manzanas con manzanas.\n\n"
+                    "**Izquierda — `continuo − offset`.** En gris lo que hay en la apertura sin restar "
+                    "nada; encima, lo que deja el método. A la referencia se le resta su **valor "
+                    "mínimo** (el offset, escrito en la leyenda): sin eso el pedestal la manda arriba "
+                    "del todo y lo único que se aprende es que está muy por encima; con el mínimo "
+                    "fuera, lo que queda en el eje es su **forma**, comparable con la del método.\n\n"
+                    "**Derecha — la misma resta donde NO hay compañero.** En verde, las tres "
+                    "posiciones de control tal cual (halo puro). En morado, esas mismas tres después "
+                    "de aplicarles **la resta que el método hizo en el compañero**:\n\n"
+                    "> `control − (referencia − método)`\n\n"
+                    "Ahí no hay ninguna fuente, así que si el método quita exactamente el halo que "
+                    "corresponde a ese radio, el morado debe quedarse **en cero**. Lo que se separe "
+                    "del cero es halo que el método no quitó (por encima) o que quitó de más (por "
+                    "debajo), en ese ángulo. Es el mismo argumento del chequeo de continuo estable, "
+                    "pero medido contra sitios sin compañero en vez de contra otro método — y por eso "
+                    "**este panel no lleva offset**: su cero es físico.\n\n"
+                    "Las tres verdes valen además por sí solas: su dispersión mide **cuánto cambia el "
+                    "halo con el ángulo** a esa misma separación. En ROXs 12 b los continuos medianos "
+                    "van de 3778 (posición opuesta) a 4317 — una variación azimutal comparable a lo "
+                    "que aporta el compañero en esa apertura. Eso es, en una imagen, por qué la "
+                    "sustracción de halo domina esta etapa.\n\n"
+                    "Los dos ejes son symlog porque los residuos cruzan el cero."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from musepipe.stages import halo_removal_figure\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    # Reutiliza la referencia del mapa de arriba si esa celda ya corrió.\n"
+                    "    fig, axes = halo_removal_figure(rd / 'stages', plt=plt,\n"
+                    "                                    reference=globals().get('ref_sin_sustraer'))\n"
+                    "    if fig is None:\n"
+                    "        print('No se pudo construir la referencia sin sustraer:', axes)\n"
+                    "    else:\n"
+                    "        outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "        fig.savefig(outdir / 'halo_removal.png', dpi=110)\n"
+                    "        print('figura ->', outdir / 'halo_removal.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 3 — lo que QUEDA tras restar, en % de lo que había\n\n"
+                    "La otra mitad de la comparación anterior, ahora que cada método tiene su panel "
+                    "a ancho completo. Se dice «lo que queda» y no «cuánto se quitó» porque el 100% "
+                    "**no** es la meta: la referencia incluye también al compañero, así que lo que "
+                    "*debe* quedar es él. Lo que no admite discusión es el **cero**: por debajo se "
+                    "quitó más de lo que había, y eso es sobre-sustracción.\n\n"
+                    "Aquí se usa la referencia **entera**, sin el offset del plot anterior — con él "
+                    "dejaría de ser «% de lo que había».\n\n"
+                    "Lo que se ve en ROXs 12 b, en el rojo (donde el compañero existe): `psffit` deja "
+                    "~18%, `aperture` ~19% — el compañero. `optimal_ls` deja **−47%**: quitó vez y "
+                    "media lo que había, el mismo defecto que su chequeo `v3_continuum_bias` señala "
+                    "en C3. `sgf` y `lpm` se quedan pegados al 0 porque **filtran el continuo por "
+                    "construcción**: su valor está en la línea, no en el nivel."
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from musepipe.stages import halo_remaining_figure\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    # Reutiliza la referencia del plot anterior si esa celda ya corrió.\n"
+                    "    fig, axes = halo_remaining_figure(rd / 'stages', plt=plt,\n"
+                    "                                      reference=globals().get('ref_sin_sustraer'))\n"
+                    "    if fig is None:\n"
+                    "        print('No se pudo construir la referencia sin sustraer:', axes)\n"
+                    "    else:\n"
+                    "        outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "        fig.savefig(outdir / 'halo_remaining.png', dpi=110)\n"
+                    "        print('figura ->', outdir / 'halo_remaining.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 4 — ¿el continuo del compañero es suyo o es halo de la primaria?\n\n"
+                    "### La pregunta física\n\n"
+                    "El compañero está a **{{qc:stages/stage01c_qc.json:astrometry.sep_arcsec:.2f}}″** de "
+                    "una estrella unas **10³ veces más brillante** (en el rojo; más aún en el azul), y a "
+                    "esa separación seguimos dentro de su halo AO. Todo espectro del compañero es, por "
+                    "tanto, un **residuo**: lo que queda tras restar el halo. Cada método de extracción "
+                    "lo resta de una forma distinta, así que la pregunta obligada antes de creerse la "
+                    "forma del continuo es: *¿esta pendiente y estas bandas son del compañero, o son lo "
+                    "que a este método le sobró del halo?*\n\n"
+                    "### Cómo se responde (y qué es «V3»)\n\n"
+                    "**V3** es la tercera verificación de la spec de D2 (§6), y «gate» / «gatea» quiere "
+                    "decir que es un chequeo con umbral cuyo resultado entra en el semáforo final de F1 "
+                    "— no un cálculo que cambie ningún dato. En el QC vive como "
+                    "`checks.v3_continuum_stable`.\n\n"
+                    "La idea: **dos métodos independientes miden el mismo objeto real**, así que su "
+                    "continuo debería coincidir *dentro del error*. Lo que no coincide no puede ser el "
+                    "compañero — es sistemático del método. Se mide como la **fracción de canales** en "
+                    "los que\n\n"
+                    "> |continuo_A − continuo_B| ≤ √(σ_A² + σ_B²)  (errores estadísticos combinados)\n\n"
+                    "y se exige ≥ **{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.threshold}}**. "
+                    "El par no es fijo: lo eligen D1/D2 y lo declara el QC — aquí es "
+                    "**{{qc:stages/stage_x11_qc.json:canonical_method}}** (canónico) vs "
+                    "**{{qc:stages/stage_x11_qc.json:continuum.intermethod_systematic.canonical_vs}}**.\n\n"
+                    "### Por qué «referenciado a controles» (los dos paneles)\n\n"
+                    "Además del residuo en el compañero, cada método deja un **pedestal en sitios donde "
+                    "no hay nada** — controles al mismo radio, procesados igual. Ese pedestal es común y "
+                    "no dice nada del método: compararlo cuenta el halo dos veces. Restando a cada "
+                    "método su propio nivel de control queda solo la discrepancia **genuinamente "
+                    "dependiente del método**.\n\n"
+                    "La operación es literalmente una resta, y el panel la enseña: la **línea "
+                    "discontinua** de la izquierda es el nivel de controles de cada método, y el panel "
+                    "derecho es *izquierda menos discontinua*. Si las dos columnas se parecen mucho, "
+                    "es que ese pedestal común era pequeño frente a la discrepancia — que es "
+                    "justamente el caso aquí, y por eso el chequeo sigue por debajo del umbral.\n\n"
+                    "Para este objeto: "
+                    "{{qc:stages/stage_x11_qc.json:continuum.intermethod_systematic.fraction_channels_methods_agree:.3f}} "
+                    "(crudo) → "
+                    "{{qc:stages/stage_x11_qc.json:continuum.intermethod_systematic.after_control_reference.fraction_channels_methods_agree:.3f}} "
+                    "(referenciado). Referenciar **no siempre sube** la cifra: acerca los continuos donde "
+                    "el pedestal era común y puede bajarla si el residuo cromático no lo es — eso también "
+                    "es información.\n\n"
+                    "### Qué significa que falle\n\n"
+                    "Que parte de lo que llamamos continuo del compañero es **residuo cromático de la "
+                    "sustracción de halo**, no su SED. Consecuencia acotada:\n\n"
+                    "- **Afecta a G3** (ajuste atmosférico, Teff / tipo espectral), que vive de la "
+                    "*forma* del continuo → por eso G3 usa `cont_runmed_biasref`.\n"
+                    "- **No afecta a Hα** (E1) ni al límite de Ṁ (E3): la línea es estrecha y se mide "
+                    "contra su continuo local, con controles procesados igual que el objeto.\n\n"
+                    "No es un defecto de PSF — C1 ya usa Psfao. El diagnóstico completo, con las tres "
+                    "causas reales, está en [`docs/d2_red_continuum_diagnosis.md`]"
+                    "(../../docs/d2_red_continuum_diagnosis.md).\n\n"
+                    "*(La métrica original de la spec era |runmed − poly| sobre un solo espectro; se "
+                    "sustituyó porque confunde la estructura molecular **real** de una enana fría con el "
+                    "sistemático. Se conserva como `legacy_runmed_poly_fraction`.)*\n\n"
+                    "*(En el azul, λ<7000 Å, el compañero tiene SNR<1: la discrepancia de esa zona está "
+                    "dentro del error combinado y no es señal.)*"
                 ),
                 code=(
                     "try:\n"
@@ -2817,21 +3207,43 @@ STAGES: list[dict] = [
                     "    rd = nb.run_dir(RUN_ID)\n"
                     "    qx = nb.load_qc('stages/stage_x11_qc.json', RUN_ID)\n"
                     "    im = qx['continuum']['intermethod_systematic']; ar = im['after_control_reference']\n"
-                    "    def col(fn, c):\n"
-                    "        h = fits.open(rd / 'stages' / fn); v = np.asarray(h[1].data[c], float); h.close(); return v\n"
-                    "    wave = col('spec_calibrated_psffit_object.fits', 'wave_A')   # eje λ del producto\n"
+                    "    # El par lo declara el QC (D1/D2 lo eligen: el primer par primario que\n"
+                    "    # contiene al canónico, excluyendo sgf). Fijarlo a mano mostraba una\n"
+                    "    # comparación distinta de la que gatea v3 en cuanto cambiaba de objeto.\n"
+                    "    pair = [qx['canonical_method'], im['canonical_vs']]\n"
+                    "    def col(method, c):\n"
+                    "        h = fits.open(rd / 'stages' / f'spec_calibrated_{method}_object.fits')\n"
+                    "        v = np.asarray(h[1].data[c], float); h.close(); return v\n"
+                    "    wave = col(pair[0], 'wave_A')   # eje λ del producto\n"
                     "    fig, (axl, axr) = plt.subplots(1, 2, figsize=(13, 4.3), sharey=True)\n"
-                    "    axl.plot(wave, col('spec_calibrated_psffit_object.fits', 'cont_runmed'), lw=1.1, color='tab:blue', label='psffit')\n"
-                    "    axl.plot(wave, col('spec_calibrated_optimal_psfsub_object.fits', 'cont_runmed'), lw=1.1, color='tab:orange', label='optimal_psfsub')\n"
-                    "    axl.set_title(f\"ANTES: continuos crudos (concuerdan {im['fraction_channels_methods_agree']:.3f})\")\n"
-                    "    axr.plot(wave, col('spec_calibrated_psffit_object.fits', 'cont_runmed_biasref'), lw=1.1, color='tab:blue', label='psffit ref')\n"
-                    "    axr.plot(wave, col('spec_calibrated_optimal_psfsub_object.fits', 'cont_runmed_biasref'), lw=1.1, color='tab:orange', label='optimal_psfsub ref')\n"
-                    "    axr.set_title(f\"DESPUÉS: referenciados a controles ({ar['fraction_channels_methods_agree']:.3f})\")\n"
+                    "    panels = ((axl, 'cont_runmed', 'ANTES: continuos crudos', im['fraction_channels_methods_agree']),\n"
+                    "              (axr, 'cont_runmed_biasref', 'DESPUÉS: referenciados a controles', ar['fraction_channels_methods_agree']))\n"
+                    "    drawn = []\n"
+                    "    for ax, c, title, frac in panels:\n"
+                    "        for method, color in zip(pair, ('tab:blue', 'tab:orange')):\n"
+                    "            y = col(method, c); drawn.append(y)\n"
+                    "            ax.plot(wave, y, lw=1.1, color=color,\n"
+                    "                    label=method + (' (canónico)' if method == pair[0] else ''))\n"
+                    "            if c == 'cont_runmed':\n"
+                    "                # Lo que se RESTA: el propio producto lleva las dos columnas,\n"
+                    "                # así que el nivel de controles es su diferencia exacta.\n"
+                    "                bias = y - col(method, 'cont_runmed_biasref')\n"
+                    "                ax.plot(wave, bias, lw=0.9, ls='--', color=color, alpha=0.7,\n"
+                    "                        label=f'nivel de controles de {method} (se resta)')\n"
+                    "        ax.set_title(f'{title}\\n{frac:.3f} de canales dentro del error combinado', fontsize=10)\n"
                     "    for ax in (axl, axr):\n"
                     "        ax.set_xlabel('λ [Å]'); ax.axvline(6563, color='tab:red', ls=':'); ax.axhline(0, color='0.7', lw=0.6); ax.legend(fontsize=8)\n"
-                    "    axl.set_ylabel('continuo'); axl.set_ylim(-1500, 1500)\n"
-                    "    axr.text(5000, -1300, 'azul: SNR<1\\n(dentro del error)', fontsize=7, color='0.4')\n"
-                    "    fig.suptitle('D2 · referenciación a controles: acerca los dos métodos G1-validados')\n"
+                    "    axl.set_ylabel('continuo')\n"
+                    "    # Límites por percentil: la escala fija estaba dimensionada para el flujo\n"
+                    "    # del primer objeto y recortaba el continuo de cualquier otro.\n"
+                    "    vals = np.concatenate([y[np.isfinite(y)] for y in drawn])\n"
+                    "    if vals.size:\n"
+                    "        lo, hi = np.percentile(vals, [1, 99]); pad = 0.15 * (hi - lo) or 1.0\n"
+                    "        axl.set_ylim(lo - pad, hi + pad)\n"
+                    "    axl.text(0.02, 0.04, 'azul (λ<7000): SNR<1\\n(dentro del error)', fontsize=7,\n"
+                    "             color='0.4', transform=axl.transAxes)\n"
+                    "    fig.suptitle(f\"D2 · ¿el continuo es del compañero o es halo residual?\"\n"
+                    "                 f\"  ·  {pair[0]} vs {pair[1]}  ·  chequeo V3 de continuo estable\")\n"
                     "    fig.tight_layout()\n"
                     "    outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
                     "    fig.savefig(outdir / 'referencing.png', dpi=110); print('figura ->', outdir / 'referencing.png'); plt.show()\n"
@@ -2841,15 +3253,19 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Plot 2 — el presupuesto de error\n\n"
+                    "## Plot 5 — el presupuesto de error\n\n"
                     "Cada componente del error del `spec_final_object.fits` vs λ (escala log). El total "
                     "está **dominado por el `stat`** (empírico, M5 rojo); el sistemático de continuo "
                     "(runmed vs poly) es el segundo; flujo-cal/cielo/telúrico son ~0.\n\n"
-                    "La línea **discontinua** es `sys_fluxcal_declared`: el desvío de calibración "
-                    "absoluta que M3 mide frente a Gaia (|1−`flux_factor`|), **declarado y no sumado** "
-                    "a `flux_err_total` — M3 no publica barra de error, y plegarlo movería el error del "
-                    "compañero, que sostiene decisiones congeladas. G3 ya asume su propio 10% "
-                    "(`g3_sys_fluxcal_frac`), mayor que este valor."
+                    "**Las líneas discontinuas NO entran en `flux_err_total`** (la leyenda lo repite en "
+                    "cada una), y son dos casos distintos:\n\n"
+                    "- `sys_continuum` — por diseño de la spec (§3.5): el continuo se entrega como "
+                    "columna y es el modelado quien decide si lo usa; sumarlo aquí sería decidir por él.\n"
+                    "- `sys_fluxcal_declared` — el desvío de calibración absoluta que M3 mide frente a "
+                    "Gaia (|1−`flux_factor`|), **declarado y no plegado**: M3 no publica barra de error, "
+                    "y plegarlo movería el error del compañero, que sostiene decisiones congeladas. G3 ya "
+                    "asume su propio 10% (`g3_sys_fluxcal_frac`), mayor que este valor.\n\n"
+                    "El total sólido es, por tanto, `stat ⊕ fluxcal ⊕ psf ⊕ cielo ⊕ telúrico`."
                 ),
                 code=(
                     "try:\n"
@@ -2859,20 +3275,26 @@ STAGES: list[dict] = [
                     "    rd = nb.run_dir(RUN_ID)\n"
                     "    h = fits.open(rd / 'stages' / 'spec_final_object.fits'); d = h[1].data\n"
                     "    wave = np.asarray(d['wave_A'], float)   # eje λ del propio producto\n"
-                    "    comp = {'stat': 'flux_err_stat', 'flujo-cal': 'sys_fluxcal', 'psf': 'sys_psf',\n"
-                    "            'cielo': 'sys_sky', 'telúrico': 'sys_telluric', 'continuo': 'sys_continuum'}\n"
+                    "    # `sumado` = si el termino entra en flux_err_total (spec 3.5). El continuo\n"
+                    "    # NUNCA entro: se entrega como columna. Se dibujan discontinuos los dos que\n"
+                    "    # no suman, para no leerlos como parte del total.\n"
+                    "    comp = [('stat', 'flux_err_stat', True), ('flujo-cal', 'sys_fluxcal', True),\n"
+                    "            ('psf', 'sys_psf', True), ('cielo', 'sys_sky', True),\n"
+                    "            ('telúrico', 'sys_telluric', True), ('continuo', 'sys_continuum', False),\n"
+                    "            ('flujo-cal DECLARADO', 'sys_fluxcal_declared', False)]\n"
                     "    sm = lambda x, n=51: np.convolve(np.nan_to_num(np.abs(x)), np.ones(n) / n, mode='same')\n"
                     "    fig, ax = plt.subplots(figsize=(11, 4))\n"
-                    "    for lab, c in comp.items():\n"
+                    "    for lab, c, summed in comp:\n"
                     "        if c in d.columns.names:\n"
-                    "            ax.plot(wave, sm(np.asarray(d[c], float)), lw=1, label=lab)\n"
-                    "    ax.plot(wave, sm(np.asarray(d['flux_err_total'], float)), lw=2, color='k', label='TOTAL')\n"
-                    "    if 'sys_fluxcal_declared' in d.columns.names:   # declarado, NO sumado\n"
-                    "        ax.plot(wave, sm(np.asarray(d['sys_fluxcal_declared'], float)), lw=1.3,\n"
-                    "                ls='--', color='tab:pink', label='flujo-cal DECLARADO (no en el total)')\n"
+                    "            ax.plot(wave, sm(np.asarray(d[c], float)), lw=1 if summed else 1.3,\n"
+                    "                    ls='-' if summed else '--',\n"
+                    "                    label=lab if summed else f'{lab} (NO en el total)')\n"
+                    "    ax.plot(wave, sm(np.asarray(d['flux_err_total'], float)), lw=2, color='k',\n"
+                    "            label='TOTAL = stat ⊕ fluxcal ⊕ psf ⊕ cielo ⊕ telúrico')\n"
                     "    h.close()\n"
                     "    ax.set_yscale('log'); ax.set_xlabel('λ [Å]'); ax.set_ylabel('error (|componente|, suavizado)')\n"
-                    "    ax.set_title('D2 · presupuesto de error: stat + sistemáticos'); ax.legend(fontsize=8, ncol=4)\n"
+                    "    ax.set_title('D2 · presupuesto de error: continuo y flujo-cal declarado quedan FUERA del total')\n"
+                    "    ax.legend(fontsize=7, ncol=3)\n"
                     "    outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
                     "    fig.tight_layout(); fig.savefig(outdir / 'error_budget.png', dpi=110)\n"
                     "    print('figura ->', outdir / 'error_budget.png'); plt.show()\n"
@@ -2882,7 +3304,7 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Plot 3 — los espectros definitivos (6 métodos + la primaria)\n\n"
+                    "## Plot 6 — los espectros definitivos (6 métodos + la primaria)\n\n"
                     "El entregable de D2 en una figura, dibujada con la **misma función que usa la "
                     "etapa** (`musepipe.stages.definitive_spectra_figure`), leyendo los productos "
                     "calibrados del run:\n\n"
@@ -2914,8 +3336,8 @@ STAGES: list[dict] = [
         decisions=[
             ("**Los espectros definitivos (6 métodos + primaria) son el entregable de D2**, antes del estudio de Hα: todos con `BUNIT` declarado y error total; la tabla vive en `qc['spectra']` y la figura en `plots/stage_x11_spectra.png`.", "espectros_definitivos_handoff_2026-07-25.md"),
             ("**Diagnóstico honesto del 'continuo rojo inestable'**: 3 cosas reales (señal de enana fría + sistemático de nivel inter-método + rigidez del polinomio). NO es defecto de PSF.", "d2_red_continuum_diagnosis.md"),
-            ("**Referenciación a controles integrada** (2026-07-11): v3 gatea sobre la métrica referenciada (0.867 vs cruda 0.317); sistemático rojo 1.76×→1.35×; columna `cont_runmed_biasref` entregada para G3.", None),
-            ("D1 **ya era control-centrado** (su veredicto refleja el sistemático genuino); esto solo puso a D2 al mismo nivel. v3 sigue <0.90 → sistemático cromático genuino, limitación aceptada en F1.", None),
+            ("**Referenciación a controles integrada** (2026-07-11): el chequeo de continuo estable (V3) gatea sobre la métrica referenciada — a cada método se le resta su propio nivel en controles, para no contar dos veces el pedestal de halo que ambos comparten. Columna `cont_runmed_biasref` entregada para G3.", None),
+            ("D1 **ya era control-centrado** (su veredicto refleja el sistemático genuino); esto solo puso a D2 al mismo nivel. Lo que V3 sigue midiendo por debajo del umbral es sistemático cromático **genuino** (no el pedestal): limitación aceptada en F1, que afecta a la forma del continuo (G3) y no al endpoint de Hα.", None),
             ("El sistemático rojo NO afecta la línea Hα ni el límite de Ṁ; escala de flujo 1.0 validada vs Gaia; error total dominado por el stat.", None),
         ],
         checks=None,
@@ -2926,11 +3348,17 @@ STAGES: list[dict] = [
             "- **Fecha:** calibración D1 v2 realineado (2026-07-09); referenciación integrada "
             "2026-07-11.\n"
             "- **λ/flujo:** todos los factores trazables a A4 (M1 offset, M3 Gaia).\n"
-            "- **Continuo:** referenciación a controles integrada — v3 sobre 0.867 (cruda 0.317), "
-            "rojo 1.76×→1.35×, columna `cont_runmed_biasref` para G3.\n"
-            "- **v3 sigue fallando** (0.867<0.90) por el sistemático cromático genuino → limitación "
-            "aceptada; F1 sigue yellow.\n"
-            "- **Endpoint intacto:** la línea Hα (E1) y el límite de Ṁ (E3) no dependen de esto.\n"
+            "- **Continuo:** referenciación a controles integrada (a cada método se le resta su propio "
+            "nivel en controles); columna `cont_runmed_biasref` para G3.\n"
+            "- **Continuo estable (V3):** "
+            "{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.fraction_channels_methods_agree:.3f}} "
+            "de canales concuerdan entre los dos métodos dentro del error combinado, umbral "
+            "{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.threshold}} → ok="
+            "**{{qc:stages/stage_x11_qc.json:checks.v3_continuum_stable.ok}}**. Lo que no concuerda es "
+            "sistemático cromático **genuino** de sustracción de halo, no el pedestal común: "
+            "limitación aceptada, F1 sigue yellow.\n"
+            "- **Endpoint intacto:** eso afecta a la FORMA del continuo (G3); la línea Hα (E1) y el "
+            "límite de Ṁ (E3) no dependen de ello.\n"
             "- **Espectros definitivos:** los 6 métodos + la primaria, con unidad y error total "
             "(tabla en `qc['spectra']`, figura en `plots/stage_x11_spectra.png`) — resultado en sí "
             "mismos, entregados antes del estudio de Hα.\n"
@@ -2950,6 +3378,23 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_h01_detect.sh", cost="Ligero–moderado."),
         qc="stages/stage_h01_qc.json",
         salient=["verdict", "reason", "global_fap_lt", "significant_methods", "rv_consistent"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "E1 es el endpoint: aquí se decide si hay o no emisión. Los chequeos existen para que un "
+            "«sí» no pueda venir de un control contaminado ni de una FAP mal calibrada.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v2_controls` | **¿La distribución de máximos nulos es sana?** Sin bimodalidades ni "
+            "outliers extremos que delaten un control contaminado por otra fuente. | La FAP se "
+            "calibra contra una distribución sucia: el umbral de detección deja de valer. (Se puede "
+            "excluir un control contaminado, con registro, y recalcular — máximo 2.) |\n"
+            "| `v3_placebo` | **¿La cadena «detecta» donde no puede haber nada?** La misma "
+            "maquinaria, centrada en 6400 y 6700 Å (líneas placebo), no debe superar el umbral. | Si "
+            "un placebo detecta, **la FAP está mal calibrada** y la detección de Hα no vale: es "
+            "hallazgo mayor, no un detalle. La batería completa de placebos es E2/T5. |\n"
+            "| `v4_multimethod` | **¿Los métodos coinciden?** Las FAP por método, contadas y "
+            "comparadas. | Una discrepancia grande entre métodos apunta a que el resultado depende "
+            "de cómo se restó el halo → insumo directo para E2. |\n"
+        ),
         narrative_md=(
             "## Qué hace E1 y el resultado\n\n"
             "E1 busca **emisión de Hα** del compañero con un **matched filter** (plantilla de la línea "
@@ -3131,6 +3576,22 @@ STAGES: list[dict] = [
         qc="stages/stage_h01b_qc.json",
         salient=["params.threshold_sigma", "params.kernel_source",
                  "checks.v1_maps_written", "checks.v2_known_source_reported"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_maps_written` | **¿Hay mapa de z para cada método?** Al menos uno. | No hay "
+            "búsqueda ciega que revisar. |\n"
+            "| `v2_known_source_reported` | **¿Se ve la compañera que YA sabemos dónde está?** Su z "
+            "se reporta en todos los métodos. | Control de cordura: si el mapa no recupera la fuente "
+            "conocida, tampoco vale para buscar desconocidas. |\n"
+            "| `v3_ring_noise_written` | **¿Cómo es el ruido a cada radio?** σ, asimetría, curtosis y "
+            "fracción de \\|z\\|>3 por anillo. Cerca de la estrella el ruido no es gaussiano, así que "
+            "un mismo z **no significa lo mismo** a 0.5″ que a 3″. | Los z del mapa no se pueden "
+            "traducir a probabilidad. |\n"
+            "| `v4_no_candidate_at_star_core` | **¿La máscara del núcleo estelar funciona?** Ningún "
+            "candidato con r < r_min. | El propio halo de la primaria entra en la lista como si "
+            "fuera una detección. |\n"
+        ),
         narrative_md=(
             "## Qué hace E1b\n\n"
             "Para cada cubo residual: plantilla espectral gaussiana (FWHM=LSF) en la línea "
@@ -3222,6 +3683,33 @@ STAGES: list[dict] = [
         salient=["overall", "overall_raw", "t2.status", "t5.status",
                  "halpha_map_correlation.corr_stripe_scatter_vs_halpha_sigma",
                  "halpha_map_correlation.halpha_sigma_slicer_aligned"],
+        checks_md=(
+            "## La batería T1–T5, en físico\n\n"
+            "`t1`…`t5` son la batería **congelada** de la spec: cinco maneras distintas de que lo que "
+            "E1 midió sea un artefacto y no el compañero. Cada una ataca un origen instrumental "
+            "diferente, y por eso se pasan todas aunque E1 diga no-detección (en ese caso se aplican "
+            "al máximo del mapa, o sea al ruido dominante).\n\n"
+            "| Test | ¿Qué artefacto descarta? | Criterio |\n|---|---|---|\n"
+            "| **T1 · coincidencia instrumental** | Que el canal de la señal caiga sobre algo que el "
+            "instrumento ya ensucia: franjas del slicer (lista de B2), líneas de cielo (catálogo de "
+            "A4) o los bordes del hueco del láser AO. | Distancia al artefacto más cercano de cada "
+            "lista; coincide si \\|Δcanal\\| ≤ 2. |\n"
+            "| **T2 · coherencia espacial** | Que la señal no tenga la forma de una estrella. Una "
+            "fuente real es la PSF de C1 centrada donde B3 puso al compañero; un artefacto es "
+            "alargado, desplazado o con varios picos. | χ² de PSF vs plano, centroide < 1 px de B3, "
+            "elongación < 1.5×. |\n"
+            "| **T3 · estabilidad temporal** | Que venga de una sola exposición. Una señal real crece "
+            "como √N al combinar; un rayo cósmico o un defecto no. | z > z_total/√2 en ambas mitades "
+            "independientes. **Con una sola exposición no se puede aplicar** — queda `unavailable` y "
+            "así consta: es un eje de robustez que este dataset no cubre. |\n"
+            "| **T4 · estabilidad frente a parámetros** | Que la señal dependa de cómo la analizamos. "
+            "Se repite E1 moviendo UNA perilla cada vez (radio de ajuste local, máscara de C1, ancho "
+            "de plantilla, continuo). | Rango de z entre variantes Δz < 1. |\n"
+            "| **T5 · placebos espectrales** | Que el método «detecte» en cualquier sitio. La cadena "
+            "completa se centra en líneas donde no se espera nada (6200, 6400, 6700, 7100 Å; 6300 "
+            "descartada por skyline). | Ningún placebo supera el umbral de E1. Si alguno lo supera, "
+            "**la FAP está mal calibrada** y el resultado de E1 no vale. |\n"
+        ),
         narrative_md=(
             "## Qué hace E2 y cómo se reinterpreta\n\n"
             "E2 corre una **batería FIJA de 5 tests de artefactos** sobre el resultado de E1 (siempre "
@@ -3569,6 +4057,28 @@ STAGES: list[dict] = [
                   cost="Pesado (~22 min grid 112 casos con `h04_process_pool`)."),
         qc="stages/stage_h04_qc.json",
         salient=["per_method_at_snr5", "v2_nulls_clean.status", "v4_hierarchy.status", "n_injections"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "E4 inyecta líneas de flujo conocido y mide cuánto sobrevive (**throughput**). Ese número "
+            "es el que convierte el límite de flujo de E1 en un límite de Ṁ, así que los chequeos "
+            "vigilan que la inyección se comporte como debe.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_regression` | **¿La cadena sigue dando lo mismo que el caso histórico validado?** "
+            "| Algo cambió en el camino sin que nadie lo decidiera. |\n"
+            "| `v2_nulls_clean` | **¿Inventa recuperaciones donde no inyectamos nada?** Las "
+            "inyecciones de S/N 0 no deben producir recuperaciones sobre el umbral. | La tasa de "
+            "falsos positivos no es la que E1 supone. |\n"
+            "| `v3_monotonic` | **¿Más señal inyectada da más señal recuperada?** Throughput y "
+            "completitud monótonos con S/N. | Una no-monotonía es bug o estadística insuficiente: hay "
+            "que investigarla ANTES de usar el número. |\n"
+            "| `v4_hierarchy` | **¿Los métodos se ordenan como la física manda?** Las extracciones "
+            "que usan el modelo de PSF (C3/C4) deberían recuperar al menos tanto como la apertura "
+            "simple (C2), con sesgo < 5% a S/N ≥ 5. | Si la apertura supera al ajuste de PSF, algo "
+            "está mal en C4 — no es que la apertura sea mejor. |\n"
+            "| `v5_continuum` | **¿Cuánto cuesta tener continuo debajo de la línea?** El caso «con "
+            "continuo» no debe degradar el throughput más de lo esperable por la sustracción de "
+            "fondo. | Es el número que sostiene la decisión sobre los métodos de halo (C5/C6). |\n"
+        ),
         narrative_md=(
             "## Qué hace E4 y qué valida\n\n"
             "E4 **inyecta** señales sintéticas de Hα de flujo/SNR conocidos en la posición del "
@@ -3708,6 +4218,19 @@ STAGES: list[dict] = [
         qc="stages/stage_h05_qc.json",
         salient=["params.threshold_sigma", "params.f_star_line",
                  "checks.v1_curves_written", "checks.v2_monotonic_trend"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_curves_written` | **¿Hay curva para cada método disponible?** | No hay contraste "
+            "que comparar. |\n"
+            "| `v2_monotonic_trend` | **¿La sensibilidad mejora al alejarse de la estrella?** El "
+            "contraste mediano del tercio externo debe ser ≤ el del tercio interno: lejos del halo se "
+            "detectan compañeros más débiles. Es sanidad, no bloquea. | Una tendencia invertida "
+            "delata un problema de normalización o de máscara, no una propiedad del instrumento. |\n"
+            "| `v3_grid_saturation` | **¿La rejilla de contrastes probados es la adecuada?** Fracción "
+            "de separaciones cuyo contraste al 50% quedó en el borde de la rejilla; > 50% = aviso. | "
+            "La curva está tocando el techo: mide la rejilla, no el instrumento. |\n"
+        ),
         narrative_md=(
             "## Qué hace E5\n\n"
             "Inyecta líneas falsas (gaussiana FWHM=LSF × PSF C1) en anillos concéntricos "
@@ -3785,6 +4308,21 @@ STAGES: list[dict] = [
         qc="stages/stage_h06_qc.json",
         salient=["params.n_null_wavelengths", "checks.v1_curves_written",
                  "checks.v2_auc_above_random", "checks.v3_null_sample_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "Una ROC cruza **detección** (qué fracción de inyecciones supera el umbral) contra "
+            "**falsa alarma** (qué fracción del ruido lo supera). El AUC resume: 1.0 = separación "
+            "perfecta, 0.5 = el método no distingue señal de ruido.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_curves_written` | **¿Hay ROC para cada método × escenario?** | Falta el escenario. |\n"
+            "| `v2_auc_above_random` | **¿El detector es mejor que tirar una moneda?** AUC ≥ 0.5 − "
+            "2/√n_iny en todos los escenarios. | Un AUC por debajo del azar **no** significa un "
+            "instrumento malo: significa un bug de signo o de normalización (estaríamos detectando "
+            "al revés). |\n"
+            "| `v3_null_sample_ok` | **¿Hay bastante ruido medido para que la FAP signifique algo?** "
+            "≥ 500 muestras nulas por escenario. | Con pocas muestras la parte izquierda de la curva "
+            "(FAP baja) es justo la que no se puede medir — y es la que importa. |\n"
+        ),
         narrative_md=(
             "## Qué hace E6\n\n"
             "Complementa a E5: en vez de fijar el FAP (5σ) y variar el contraste, fija el "
@@ -3850,6 +4388,27 @@ STAGES: list[dict] = [
         exec=dict(kind="pyscript", target="build_report.py", cost="Ligero."),
         qc="report/run_summary.json",
         salient=["overall_status", "accepted_limitations_hash", "schema_version"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "F1 no mide nada: **audita** lo que midieron las demás y decide si el run se puede "
+            "publicar. De ahí que casi todo aquí sea integridad y trazabilidad, no astronomía.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `overall_status` | El semáforo del run: verde / amarillo / rojo. | Amarillo = "
+            "utilizable **con limitaciones declaradas**; rojo = hay algo bloqueante sin resolver. |\n"
+            "| `gate_policy` | Qué chequeos son bloqueantes y cuáles solo informativos. | Sin ella, "
+            "«falla un chequeo» no dice si el run sirve o no. |\n"
+            "| `accepted_limitations` + `..._hash` | Los problemas **conocidos y aceptados a "
+            "propósito** (p.ej. el sistemático cromático de continuo de D2), con un hash de la "
+            "lista. | El hash es lo que impide que una limitación se edite o desaparezca en "
+            "silencio: si alguien la cambia, deja de cuadrar. |\n"
+            "| `hash_chain` | Encadenado de sha256 de los productos de cada etapa. | Prueba que el "
+            "espectro que se publica desciende de los cubos que se dice: si un producto intermedio "
+            "se regeneró y no el resto, la cadena se rompe. |\n"
+            "| `traceability` | De qué QC sale cada número del informe. | Ningún valor del paper "
+            "debería carecer de la etapa que lo midió. |\n"
+            "| `spectrum_conventions` | Marco de λ, unidad de flujo, convención de error. | Es lo que "
+            "permite que otro lea el producto sin adivinar. |\n"
+        ),
         narrative_md=(
             "## Qué hace F1 y cómo gatea\n\n"
             "F1 consolida todos los QC de A→E en el **paquete final** y aplica el **gate**: un "
@@ -3984,6 +4543,22 @@ STAGES: list[dict] = [
         exec=dict(kind="pyscript", target="run_g0.py", cost="Ligero."),
         qc="stages/stage_g0_qc.json",
         salient=["hash_chain_ok", "stat_verdict", "n_flagged", "frozen_criteria_untouched"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `stat_verdict` | Si la extensión `STAT` del cubo real sirve como σ. | Es la pregunta "
+            "de M5 hecha sobre el cubo definitivo: si el STAT subestima el ruido, **σ se mide "
+            "siempre en controles** ([`docs/noise_model.md`](../../docs/noise_model.md)). |\n"
+            "| `hash_chain_ok` | Que el encadenado de sha256 entre etapas cuadre. | Garantiza que "
+            "estos resultados salen de estos datos, sin productos mezclados de otra ejecución. |\n"
+            "| `frozen_criteria_untouched` | Que los umbrales y decisiones congelados sigan siendo "
+            "los mismos. | Correr sobre datos reales **no** puede ir acompañado de aflojar un umbral: "
+            "eso convertiría el criterio en una consecuencia del resultado. |\n"
+            "| `pytest_before` / `pytest_after` | La suite antes y después de la ejecución. | Deja "
+            "constancia de que el código no cambió a mitad del proceso. |\n"
+            "| `legacy_comparison` | Contraste con la reducción histórica (ADP). | Sitúa la "
+            "re-reducción propia frente a la del archivo. |\n"
+        ),
         narrative_md=(
             "## Qué hace G0 y por qué\n\n"
             "G0 es la **entrada del bloque G (caracterización)**. Ejecuta la cadena multi-método "
@@ -4094,6 +4669,29 @@ STAGES: list[dict] = [
         exec=dict(kind="pyscript", target="run_g1.py", cost="Moderado."),
         qc="stages/stage_g1_qc.json",
         salient=["method_verdicts", "corr_length_channels_median", "n_eff_over_n_median", "spatial_inflation_by_box"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "G1 mide **cuánto miente el ruido ingenuo**. Todo lo de abajo son formas de decir que los "
+            "píxeles y los canales vecinos NO son independientes, así que sumar errores en cuadratura "
+            "subestima σ.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `corr_length_channels_median` | Sobre cuántos canales sigue correlacionado el ruido. | "
+            "Si es ~2, dos canales contiguos no aportan dos medidas independientes: el remuestreo en "
+            "λ los mezcló. |\n"
+            "| `n_eff_over_n_median` | Cuántos canales **efectivamente independientes** hay por cada "
+            "canal nominal. | Si sale ~0.4, una línea repartida en 10 canales aporta como ~4: la "
+            "significancia real es menor que la que da contar canales. |\n"
+            "| `spatial_inflation_by_box` | Factor por el que se subestima σ en una caja N×N si se "
+            "suponen píxeles independientes. | Crece con la caja porque el desplazamiento subpíxel de "
+            "B1 correlacionó vecinos; es lo que convierte «3×3» en mucho menos que 9 medidas. |\n"
+            "| `method_verdicts` | Por método: `validated`, `validated_with_bias` o `rejected`. | "
+            "`validated_with_bias` = utilizable **si se transporta su sesgo** al presupuesto de "
+            "error; `rejected` = no se usa para ciencia (aquí caen los que sobre-sustraen). |\n"
+            "| `bias_budget_table` | El sesgo de cada método, con su origen. | Es lo que permite "
+            "aceptar un método imperfecto sin esconder su defecto. |\n"
+            "| `impact_on_x10_chi2` | Cómo cambia la comparación de D1 al usar la covarianza real. | "
+            "Sin ella, dos métodos parecerían discrepar mucho más de lo que discrepan. |\n"
+        ),
         narrative_md=(
             "## Qué hace G1 y qué valida\n\n"
             "G1 **valida los métodos de extracción**: cuantifica la **covarianza del ruido** "
@@ -4241,6 +4839,27 @@ STAGES: list[dict] = [
                   cost="Ligero."),
         qc="stages/stage_g2_qc.json",
         salient=["n_detected", "n_upper_limit", "n_not_measurable", "halpha_reconciliation_v3", "lsf_fwhm_A"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `n_detected` / `n_marginal` / `n_upper_limit` / `n_not_measurable` | El reparto del "
+            "catálogo de líneas: medida, dudosa, solo cota superior, o **imposible de medir** (cae "
+            "en el hueco del láser, fuera de rango o sobre una telúrica). | «No medible» no es «no "
+            "hay»: distinguirlo evita convertir una laguna instrumental en un límite físico. |\n"
+            "| `lsf_source` / `lsf_fwhm_A` | La anchura instrumental usada para el ajuste, y de dónde "
+            "sale (medida en A4/M2, no la nominal). | Una línea no resuelta tiene exactamente esta "
+            "anchura: si se pone mal, el flujo integrado sale mal. |\n"
+            "| `covariance_used` | Si el ajuste usó la covarianza espectral de G1. | Sin ella, el "
+            "error de una línea que abarca varios canales sale demasiado pequeño. |\n"
+            "| `throughput_applied` / `throughput_source` | La fracción de flujo que la extracción "
+            "deja pasar, medida por inyección en E4. | El flujo observado se divide por ella para "
+            "recuperar el intrínseco; por eso importa que no se aplique dos veces (ver D1). |\n"
+            "| `rv_weighted_kms` | Velocidad radial combinada de las líneas medidas. | Una línea "
+            "real está a la velocidad del sistema; una a otra velocidad es sospechosa. |\n"
+            "| `halpha_reconciliation_v3` | Que la Hα de G2 y la de E1 cuenten lo mismo. | Dos "
+            "etapas midiendo la misma línea con distinto método deben coincidir, o una de las dos "
+            "está mal. |\n"
+        ),
         narrative_md=(
             "## Qué hace G2 y el resultado\n\n"
             "G2 mide las líneas espectrales de forma **genérica** (cero lógica específica de Hα — el "
@@ -4388,6 +5007,28 @@ STAGES: list[dict] = [
                   cost="Moderado (MC n=2000)."),
         qc="stages/stage_g3_qc.json",
         salient=["mdot_p50_msun_yr", "l_acc_lsun", "combined_accretion", "libraries", "definition"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "La cadena física es: **flujo de línea → luminosidad de línea → L_acc → Ṁ**. Cada flecha "
+            "es una relación empírica de literatura con su dispersión, y ahí está casi todo el error.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `l_acc_lsun` | Luminosidad de acreción: la energía por segundo que libera el material "
+            "al caer. | Se obtiene de la luminosidad de la línea con una relación calibrada en "
+            "objetos donde ambas se midieron. |\n"
+            "| `mdot_p50_msun_yr` | La **mediana** (percentil 50) de la distribución de Ṁ del Monte "
+            "Carlo, no un valor único. | Ṁ = L_acc·R/(G·M)·(1−R/R_in): cada ingrediente (masa, radio, "
+            "extinción, distancia) entra con su incertidumbre, así que el resultado es una "
+            "distribución. |\n"
+            "| `combined_accretion` | Cómo se combinan varias líneas en un solo número. | Con solo "
+            "cotas superiores, la combinación es **la más restrictiva**, no un promedio. |\n"
+            "| `libraries` | Qué relaciones y modelos externos se usaron, con cita. | Cambiar de "
+            "calibración cambia Ṁ en un factor: el número no significa nada sin decir con cuál se "
+            "obtuvo. |\n"
+            "| `halpha_h03_consistency_v5` | Que G3 y E3 den lo mismo para Hα. | Miden lo mismo por "
+            "caminos distintos; si divergen, hay un factor aplicado dos veces o ninguna. |\n"
+            "| `provisional` | Que el resultado depende de algo aún no cerrado. | Marca el número como "
+            "no publicable todavía, aunque esté calculado. |\n"
+        ),
         narrative_md=(
             "## Qué hace G3 y qué queda diferido\n\n"
             "G3 es la **inferencia física**: de los flujos/límites de líneas (G2) infiere la "
@@ -4532,6 +5173,27 @@ STAGES: list[dict] = [
                   cost="Ligero."),
         qc="stages/stage_g4_classification.json",
         salient=["final_class", "background_probability", "tests_available", "tests_unavailable"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `hypotheses` / `combined_ranking` | Las explicaciones posibles de lo que hay en esa "
+            "posición (planeta, enana marrón, estrella M ligada, estrella de fondo…) ordenadas por "
+            "cuánto las apoya la evidencia. | La clasificación es una **comparación entre "
+            "hipótesis**, no una medida directa. |\n"
+            "| `background_probability` | Probabilidad de que una estrella no relacionada caiga por "
+            "azar tan cerca en el cielo. | Es lo que descarta la coincidencia fortuita: con densidad "
+            "estelar baja y separación pequeña, sale despreciable. |\n"
+            "| `tests_available` / `tests_unavailable` | Qué discriminantes se pudieron aplicar y "
+            "cuáles no (por falta de dato, no por resultado). | Un test ausente no es evidencia en "
+            "contra; que la lista sea explícita evita leerlo así. |\n"
+            "| `leave_one_out_stable` (LOO) | Si el ranking sobrevive al quitar **un test cada vez**. "
+            "| Si al retirar un solo discriminante cambia el ganador, la clasificación se apoya en "
+            "una sola pata: por eso el veredicto puede quedar «ambiguo» aunque haya un favorito. |\n"
+            "| `correlated_groups` | Tests que no son independientes entre sí. | Contarlos por "
+            "separado inflaría artificialmente la evidencia de una hipótesis. |\n"
+            "| `frozen_thresholds` + `..._hash` | Los umbrales de decisión, congelados y con hash. | "
+            "Impide ajustar el criterio después de ver el resultado. |\n"
+        ),
         narrative_md=(
             "## Qué hace G4 y por qué queda ambigua\n\n"
             "G4 clasifica la fuente con una **matriz transparente hipótesis × test**: para cada "
@@ -4680,6 +5342,23 @@ STAGES: list[dict] = [
         exec=dict(kind="pyscript", target="build_characterization.py", cost="Ligero."),
         qc="report/characterization/characterization_summary.json",
         salient=["final_class", "consistency", "provisional", "n_lines", "n_physical_properties"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "G5 no añade ciencia: **empaqueta** y comprueba que lo que sale de la cadena es "
+            "coherente consigo mismo.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `consistency` | Que las etapas no se contradigan entre sí (la Hα de E1/G2, el Ṁ de "
+            "E3/G3, la clase de G4). | Dos caminos que miden lo mismo deben coincidir; si no, hay un "
+            "factor aplicado de más o de menos. |\n"
+            "| `provisional` | Que algún ingrediente sigue abierto. | Un resultado provisional está "
+            "calculado pero **no es publicable**: la etiqueta viaja con él para que no se cite por "
+            "error. |\n"
+            "| `n_lines` / `n_physical_properties` | Cuántas líneas medidas y cuántas magnitudes "
+            "físicas derivadas entran en el paquete. | Es el inventario de lo que realmente sostiene "
+            "la síntesis. |\n"
+            "| `final_class` | La clasificación heredada de G4, con su ambigüedad si la tiene. | G5 "
+            "no re-clasifica: transporta el veredicto y su incertidumbre. |\n"
+        ),
         narrative_md=(
             "## Qué hace G5 y el cierre\n\n"
             "G5 es la **síntesis final**: consolida G0–G4 en el paquete de caracterización "
@@ -4884,6 +5563,30 @@ STAGES: list[dict] = [
             "metrics.transverse_significance", "metrics.n_selected_low_err",
             "channel_step_A", "runtime_s",
         ],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "S0 mide, **spaxel a spaxel**, cuánto se desvía la solución de longitud de onda respecto "
+            "de una referencia. La pregunta no es «¿hay desviación?» (siempre hay ruido) sino "
+            "**«¿tiene forma de slicer?»**: un defecto del instrumento produce bandas paralelas a los "
+            "slicers; el ruido de S/N, no.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `structure_significance` (*stripe_sig*) | Cuánto destaca el perfil promediado **a lo "
+            "largo** de la dirección del slicer frente al ruido. | Es la firma que se busca. |\n"
+            "| `transverse_significance` | Lo mismo en la dirección **perpendicular**, donde no puede "
+            "haber franjas. | Es el **control**: si las dos significancias son parecidas, lo que se "
+            "ve es estructura radial o ruido, no slicers. Comparar sin este control es el error "
+            "clásico. |\n"
+            "| `p95_abs_offset_A` | El percentil 95 del desvío absoluto en Å. | Mide magnitud, no "
+            "forma: en spaxels débiles está dominado por el ruido de la correlación cruzada, así que "
+            "un p95 grande **no implica** franjas. |\n"
+            "| `max_err_ch` / `n_selected_low_err` | Corte de error por spaxel y cuántos lo pasan. | "
+            "Sin ese corte, el mapa mide sobre todo spaxels sin señal. |\n"
+            "| `orientation` | En qué dirección van los slicers en este cubo. | Buscar en la "
+            "orientación equivocada garantiza no encontrar nada. |\n"
+            "| `gate_g1.recommendation` vs `.decision` | Lo que sugiere el umbral automático vs lo "
+            "que **decidió una persona**, con su motivo. | Están separados a propósito: aquí la "
+            "recomendación automática se anuló con argumento físico, y eso queda escrito. |\n"
+        ),
         evidence_md=(
             "## Evidencia: realineado vs ADP (control)\n\n"
             "Los dos cubos deben coincidir: el mapa de offset es un diagnóstico del "
@@ -5234,6 +5937,29 @@ STAGES: list[dict] = [
             "halpha_map.sigma_transverse_significance", "halpha_map.corr_a_sigma",
             "halpha_map.P_cov", "halpha_map.n_fit",
         ],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "S1 ajusta, en cada spaxel del halo, la Hα de la **primaria** como "
+            "`φ = b·(1 + a·exp(−(λ−μ)²/2σ²))`. No busca al compañero: busca si la línea cambia de "
+            "forma según en qué parte del detector se mida.\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `a` (amplitud) | Cuánto sobresale la línea sobre el continuo local. | Si variara con "
+            "el slicer, la razón línea/continuo dependería del instrumento. |\n"
+            "| `sigma_median_A` | Anchura de la línea por spaxel. | Es la resolución espectral "
+            "efectiva **medida donde importa**; si varía espacialmente, la LSF única de A4/M2 sería "
+            "una simplificación. |\n"
+            "| `mu` | Centro de la línea. | Su variación espacial es el mismo desvío de λ que mide S0, "
+            "visto en una línea real en vez de en el cielo. |\n"
+            "| `*_structure_significance` vs `*_transverse_significance` | Igual que en S0: la firma "
+            "buscada frente a su **control perpendicular**. | Si estructura ≈ transversal, lo que se "
+            "ve es radial (núcleo vs halo), no alineado con el slicer. |\n"
+            "| `corr_a_sigma` / `P_cov` | Correlación entre amplitud y anchura, y si el producto "
+            "`a·σ` se conserva. | Es la firma instrumental de Xie+20: si una línea se ensancha, su "
+            "pico baja **manteniendo el área**. Que `P` NO sea constante indica que la variación no "
+            "es ese efecto. |\n"
+            "| `n_fit` | Cuántos spaxels tuvieron señal para ajustar. | Fija el alcance real del "
+            "mapa. |\n"
+        ),
         evidence_md=(
             "## Resultado (realineado, full-res)\n\n"
             "n_fit=29203, σ_median=2.01 Å. **NO alineado con slicers:** a struct 6.7× vs "

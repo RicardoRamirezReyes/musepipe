@@ -56,19 +56,24 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | A3 | Corrección telúrica | `musepipe/reduction/` (telluric) | `scripts/telluric.sh` | `stage00t_qc.json` |
 | A4 | QC del cubo (M1–M5) | `musepipe/qc/cube_qc.py` | `scripts/cube_qc.sh` | `stage00q_qc.json` |
 | B1 | Carga/alineación/crop | `musepipe/stages/stage01_align.py` | — | `stage01_qc.json` |
-| B2 | Xcorr / franjas | `musepipe/stages/stage02_xcorr.py` | `scripts/stage02_xcorr.sh` | `stage02_qc.json` |
+| B2 | Xcorr / franjas | `musepipe/stages/stage02_xcorr.py` | `scripts/stage02_xcorr.sh` | `stage02_xcorr_qc.json` |
 | B3 | Localización del compañero | `musepipe/stages/stage01c_localize.py` | `scripts/stage01c_localize.sh` | `stage01c_qc.json` |
 | C1 | PSF cromática (Moffat/Psfao) | `musepipe/stages/stage_e01_psf.py` (+`stage_e01_psfao.py`) | `scripts/stage_e01_psf.sh` | `stage_e01_qc.json`, `psf_model.json` |
 | 04b | Fondo local (superficie) | `musepipe/stages/stage04b_local_surface.py` | — | `stage04b_qc.json` |
 | C2 | Extracción por apertura | `musepipe/stages/stage_x01_aperture.py` | `scripts/stage_x01_aperture.sh` | `spec_aperture_qc.json` |
 | C3 | Extracción óptima | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
 | C4 | Ajuste de PSF (psffit) | `musepipe/stages/stage_x03_psffit.py` | `scripts/stage_x03_psffit.sh` | `spec_psffit_qc.json` |
+| C5 | Sustracción de halo SGF | `musepipe/stages/stage_x04_sgf.py` (+`halosub_stage.py`) | — | `spec_sgf_qc.json` |
+| C6 | Sustracción de halo LPM | `musepipe/stages/stage_x05_lpm.py` (+`halosub_stage.py`) | — | `spec_lpm_qc.json` |
 | D1 | Comparación inter-método | `musepipe/stages/stage_x10_compare.py` | `scripts/stage_x10_compare.sh` | `stage_x10_qc.json` |
 | D2 | Calibración espectral | `musepipe/stages/stage_x11_calibrate.py` | `scripts/stage_x11_calibrate.sh` | `stage_x11_qc.json` |
 | E1 | Detección Hα | `musepipe/stages/stage_h01_detect.py` | `scripts/stage_h01_detect.sh` | `stage_h01_qc.json` |
+| E1b | Detección ciega en el FoV | `musepipe/stages/stage_h01b_fovmap.py` | — | `stage_h01b_qc.json` |
 | E2 | Batería de artefactos | `musepipe/stages/stage_h02_artifacts.py` | `scripts/stage_h02_artifacts.sh` | `stage_h02_qc.json` |
 | E3 | Límites superiores (Ṁ) | `musepipe/stages/stage_h03_limits.py` | `scripts/stage_h03_limits.sh` | `stage_h03_qc.json` |
 | E4 | Inyección-recuperación | `musepipe/stages/stage_h04_injection.py` | `scripts/stage_h04_injection.sh` | `stage_h04_qc.json` |
+| E5 | Curvas de contraste | `musepipe/stages/stage_h05_contrast.py` | — | `stage_h05_qc.json` |
+| E6 | Curvas ROC | `musepipe/stages/stage_h06_roc.py` | — | `stage_h06_qc.json` |
 | F1 | Paquete final + gate | `musepipe/report.py` | `scripts/build_report.py` | `report/run_summary.json` |
 | G0 | Ejecución cubo real | `musepipe/g0.py` | — | `stage_g0_qc.json` |
 | G1 | Validación de extracción | `musepipe/covariance.py` | — | `stage_g1_qc.json` |
@@ -76,6 +81,20 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | G3 | Inferencia física | `musepipe/models/` + `stages/stage_g3_accretion.py` | — | `stage_g3_qc.json` |
 | G4 | Clasificación de fuente | `musepipe/classify.py` + `stages/stage_g4_classify.py` | — | `stage_g4_classification.json` |
 | G5 | Síntesis final | `musepipe/characterization.py` | `scripts/build_characterization.py` | `report/characterization/` |
+| S0 | Mapa de solución de onda | `musepipe/qc/wavesol_map.py` | — | `stageS0_qc.json` |
+| S1 | Mapas de Hα (LSF, línea/continuo) | `musepipe/qc/halpha_map.py` | — | `stageS1_qc.json` |
+
+`musepipe/stage_registry.py` es la fuente de verdad legible por máquina de esta
+tabla (QC de cada etapa, `qc_aliases` por perfil de reducción, `exec_kind` y
+comando de lanzamiento); los notebooks y `scripts/build_review_notebooks.py`
+validan contra él. B2 escribe `stage02_xcorr_qc.json` (el `stage02_qc.json` de
+los runs antiguos es el de la etapa previa).
+
+Además del canónico `spec_final_object.fits`, **D2 entrega los espectros
+definitivos**: los seis métodos calibrados (`spec_calibrated_<método>_object.fits`)
+y la primaria (`spec_calibrated_psffit_star.fits`), todos con `BUNIT` y
+presupuesto de error, con su tabla en `stage_x11_qc.json` → `spectra` y la figura
+`plots/stage_x11_spectra.png`.
 
 La cadena histórica de objetos lejanos (04b→06→07→07b→08→08c) y la cadena cercana/PCA
 (notebooks 00–06, `LkCa_15`) se documentan más arriba en este README.
@@ -186,14 +205,24 @@ curvas, E5 (contraste) y E6 (ROC). LkCa 15 ya se corrio por la cadena moderna el
 musepipe/
   config.py       seleccion y validacion de runs
   paths.py        rutas estandar por run
-  io.py           lectura y escritura de FITS, CSV y JSON
+  io.py           FITS/CSV/JSON + resolucion de la unidad de flujo (BUNIT -> cgs)
+  stage_registry.py  fuente de verdad de la cadena (QC, exec_kind, lanzamiento)
   stats.py        estadistica robusta
   spectral.py     mascaras y operaciones espectrales
   apertures.py    aperturas y controles al mismo radio
   localfit.py     ajuste y sustraccion de superficies locales
+  psf.py, stripes.py, covariance.py, injection.py, halosub.py, parallel.py
   stages/         implementaciones de etapas migradas
+  extraction/     SpectrumProduct (contenedor canonico) y los extractores
+  reduction/      driver de esorex, cielo/ZAP, telurico, combinacion
+  qc/             QC de cubo y frame, censo de ghosts, STAT empirica, mapas S0/S1
+  models/         BT-Settl, extincion, relaciones de acrecion, tracks, plantillas
+  report.py (F1), characterization.py (G5), classify.py (G4), lines.py (G2), g0.py
+notebooks/        un set de revision por objeto (generado por scripts/)
+scripts/          lanzadores por etapa y trabajos largos
+targets/          ficha por objeto (alias, referencias)
 tests/            pruebas unitarias y sinteticas
-docs/             guias cientificas y planes de trabajo
+docs/             guias cientificas, specs congeladas y planes de trabajo
 runs/             datos y productos locales, ignorados por Git
 legacy/           notebooks + arnes de la version antigua, locales e ignorados por Git
 ```
@@ -213,7 +242,7 @@ Para actualizar un entorno `MUSE` existente con la misma especificación:
 conda env update --name MUSE --file environment.yml --prune
 ```
 
-Las versiones están fijadas al entorno usado para la validación de 52 pruebas.
+Las versiones están fijadas al entorno usado para validar la suite.
 `maoppy` se instala desde PyPI y es necesario para el perfil
 `stage01_profile=maoppy_refined`; sin él, Stage 01 usa su fallback de centrado
 por pico.
@@ -223,11 +252,15 @@ por pico.
 Desde la raiz del proyecto:
 
 ```bash
-python -m unittest discover -s tests
+python -m pytest tests/ -q                         # suite completa (699 pruebas)
+python -m pytest tests/test_h03_chain.py -q        # un solo archivo
+python -m pytest tests/ -q -m "not external_data"  # sin las que piden bibliotecas externas
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
 ```
 
-La suite actual contiene 52 pruebas y el entorno reproducible esta fijado en
+El runner es **pytest** (`pytest.ini` fija `testpaths` y el marcador
+`external_data`), aunque casi todas las pruebas son clases `unittest.TestCase`.
+No hay linter ni formateador configurado. El entorno reproducible esta fijado en
 `environment.yml`.
 
 ## Documentacion
