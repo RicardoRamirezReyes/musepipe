@@ -1,8 +1,13 @@
 # Guia de parametros de `00_config`
 
-Esta guia documenta los parametros definidos por
-[`00_config.ipynb`](../00_config.ipynb) y guardados en
+Esta guia documenta los parametros definidos por `legacy/00_config.ipynb` (el
+notebook que los escribia; ver la seccion `legacy/` del README: no se versiona)
+y guardados en
 [`runs/LkCa_15/config/config.json`](../runs/LkCa_15/config/config.json).
+
+> Sigue siendo referencia **viva**: 76 de los parametros documentados aqui los
+> lee hoy `musepipe/` + `scripts/`. Lo obsoleto es el notebook que los generaba,
+> no las claves: hoy se editan en `runs/<RUN_ID>/config/config.json`.
 
 El objetivo de `00_config` es actuar como la fuente unica de verdad para el
 resto del pipeline: rutas, lista de cubos, decisiones cientificas, geometria de

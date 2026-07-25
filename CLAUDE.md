@@ -140,5 +140,7 @@ relations, tracks, template fitting; `report.py` (F1), `characterization.py` (G5
 - Never run two writing stages against the same run concurrently. Raw reduction, full
   notebook executions, downloads, and long injections need approval — they are hours-long
   and overwrite products.
-- Root-level notebooks (`00_*`–`11_*`, `Far_*`) and dated plans/reports in `docs/` and
-  `reports/` are historical snapshots, not the current interface.
+- The old root-level notebooks (`00_*`–`11_*`, `Far_*`) now live in `legacy/`, which is
+  gitignored — they are historical snapshots, not the current interface, and a fresh clone
+  will not have them (recover with `git checkout 225a8fc -- '*.ipynb'`). Dated plans and
+  reports in `docs/` and `reports/` are snapshots too, and still cite the old root paths.

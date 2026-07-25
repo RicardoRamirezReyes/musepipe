@@ -11,17 +11,34 @@ Las etapas para objetos lejanos ya migradas son:
 
 | Etapa | Implementacion canonica | Interfaz historica |
 |---|---|---|
-| 04b, sustraccion local | `musepipe/stages/stage04b_local_surface.py` | `Far_04b_local_surface_subtraction.ipynb` |
-| 06, inyeccion local | `musepipe/stages/stage06_local_surface_injection.py` | `Far_06_inject_halpha_signal.ipynb` |
-| 06 C2, resumen PCA | `musepipe/stages/stage06_pca_c2_summary.py` | `06c_pca_c2_multiline_40.ipynb` |
-| 07, lineas de acrecion | `musepipe/stages/stage07_accretion_lines.py` | `Far_07_accretion_line_spectra.ipynb` |
-| 07b, robustez de Halpha | `musepipe/stages/stage07b_halpha_robustness.py` | `Far_07b_halpha_robustness_checks.ipynb` |
-| 08, espectro completo | `stage08_full_spectrum_for_modeling.py` | `Far_08_full_spectrum_for_modeling.ipynb` |
+| 04b, sustraccion local | `musepipe/stages/stage04b_local_surface.py` | `legacy/Far_04b_local_surface_subtraction.ipynb` |
+| 06, inyeccion local | `musepipe/stages/stage06_local_surface_injection.py` | `legacy/Far_06_inject_halpha_signal.ipynb` |
+| 06 C2, resumen PCA | `musepipe/stages/stage06_pca_c2_summary.py` | `legacy/06c_pca_c2_multiline_40.ipynb` |
+| 07, lineas de acrecion | `musepipe/stages/stage07_accretion_lines.py` | `legacy/Far_07_accretion_line_spectra.ipynb` |
+| 07b, robustez de Halpha | `musepipe/stages/stage07b_halpha_robustness.py` | `legacy/Far_07b_halpha_robustness_checks.ipynb` |
+| 08, espectro completo | `stage08_full_spectrum_for_modeling.py` | `legacy/Far_08_full_spectrum_for_modeling.ipynb` |
 | 08c, falsos positivos | `musepipe/stages/stage08c_look_elsewhere.py` | API `run_stage08c()` |
 
 `Far_` se conserva por compatibilidad y contexto historico. No identifica una
 segunda implementacion: los notebooks migrados son interfaces sobre el codigo
 compartido.
+
+### `legacy/` — notebooks de la version antigua
+
+Los 31 notebooks que vivian en la raiz (`00_*`–`11_*`, `01b_*`, `02b/02c_*`,
+`03b_*`, `04c/04d_*`, `06c_*`, `A1_F1_run_inspection`, `Far_*`) y su arnes de
+validacion `validate_o2b.sh` se movieron a `legacy/`, que **no se versiona**
+(`.gitignore`). Son instantaneas historicas: la interfaz actual es
+`notebooks/<objeto>/` sobre `musepipe/` + `scripts/`.
+
+Si `legacy/` no esta en tu copia, recuperalo del historial:
+
+```bash
+git checkout 225a8fc -- '*.ipynb' validate_o2b.sh   # ultimo commit con ellos en la raiz
+```
+
+Los planes y reports fechados de `docs/` los siguen citando por su ruta
+antigua en la raiz: son registros de su momento y no se reescriben.
 
 `ROXs12b_short` y `ROXs12b` fueron validados sobre copias aisladas. Para
 `ROXs12b`, Stage 04b coincide exactamente con el baseline en todos los datos
@@ -132,17 +149,36 @@ MUSE_RUN_ID=ROXs12b python stage08_full_spectrum_for_modeling.py
 MUSE_RUN_ID=ROXs12b python -c "from musepipe.stages import run_stage08c; run_stage08c()"
 ```
 
-Los nueve casos PCA de C2 se ejecutan desde
-`06c_pca_c2_multiline_40.ipynb`. Una vez completos, su consolidación no repite
+Antes de ejecutarlas sobre un run cientifico, confirma el run y revisa los
+productos existentes. Los notebooks `legacy/Far_04b`, `legacy/Far_07`,
+`legacy/Far_07b` y `legacy/Far_08` ofrecen la misma ruta con figuras de
+inspeccion.
+
+### PCA C2 de LkCa 15: producto historico, no un flujo vigente
+
+El barrido PCA C2 de nueve casos (`stage06_pca_c2_40`, LkCa 15, 2026-06-21) es
+un **resultado ya calculado**, no un paso que se re-ejecute hoy:
+
+- Sus nueve `*_recovery.csv` de entrada los escribia **solo**
+  `legacy/06c_pca_c2_multiline_40.ipynb`; ningun modulo ni script versionado los
+  produce, y `legacy/` no se versiona. Desde un clon limpio ese paso no es
+  reproducible.
+- La etapa no esta en la cadena canonica: no aparece en
+  `musepipe/stage_registry.py`, y `LkCa_15` no tiene ficha en `targets/` (no
+  tiene set en `notebooks/<objeto>/`).
+
+Lo que si sigue vigente es la **consolidacion** de esos productos, que no repite
 PCA ni abre el cubo grande:
 
 ```bash
 MPLBACKEND=Agg python -c "from musepipe.stages import run_stage06_pca_c2_summary; run_stage06_pca_c2_summary('LkCa_15')"
 ```
 
-Antes de ejecutarlas sobre un run cientifico, confirma el run y revisa los
-productos existentes. Los notebooks `Far_04b`, `Far_07`, `Far_07b` y `Far_08` ofrecen la
-misma ruta con figuras de inspeccion.
+**Para inyeccion-recuperacion nueva, el camino es la cadena canonica**: E4
+(`stage_h04_injection`, throughput y curva de recuperacion) y, si se quieren
+curvas, E5 (contraste) y E6 (ROC). LkCa 15 ya se corrio por la cadena moderna el
+2026-07-15 (B1→B2→B3→C1→C5→C6→E1b, ver
+[`docs/smoke_lkca15_2026-07-15.md`](docs/smoke_lkca15_2026-07-15.md)).
 
 ## Estructura
 
@@ -159,6 +195,7 @@ musepipe/
 tests/            pruebas unitarias y sinteticas
 docs/             guias cientificas y planes de trabajo
 runs/             datos y productos locales, ignorados por Git
+legacy/           notebooks + arnes de la version antigua, locales e ignorados por Git
 ```
 
 ## Entorno

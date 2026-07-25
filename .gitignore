@@ -1,6 +1,11 @@
 # Generated run products and large intermediate data
 runs/
 
+# Notebooks históricos de la versión antigua (antes en la raíz). Se conservan en
+# local para consulta; la interfaz actual es notebooks/<objeto>/ + musepipe/.
+# Siguen en el historial de Git si hace falta recuperarlos.
+legacy/
+
 # Notebook and Python caches
 .ipynb_checkpoints/
 __pycache__/
