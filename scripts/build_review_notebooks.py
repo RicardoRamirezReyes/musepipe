@@ -560,6 +560,13 @@ def build_cells(s: dict) -> list[dict]:
             "embebido en la reducción / documentado en la nota de decisión de abajo."
         ))
 
+    # 5a-bis. Los chequeos del QC, traducidos a la pregunta FÍSICA que responden.
+    # `v3_continuum_stable`, `t5`, `rho_ab` significan algo dentro del codigo y
+    # nada para quien revisa: el nombre en clave se queda (hay que poder buscarlo
+    # en el QC) pero acompañado de que pregunta contesta y que implica fallar.
+    if s.get("checks_md"):
+        cells.append(md(s["checks_md"]))
+
     # 5b. Evidencia / explicación a medida (adicional; puede coexistir con el QC)
     if s.get("evidence_md"):
         cells.append(md(s["evidence_md"]))
@@ -1888,6 +1895,24 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_x01_aperture.sh", cost="Ligero–moderado."),
         qc="stages/spec_aperture_qc.json",
         salient=["apertures", "errors.mode", "aperture_correction.median", "v4_apcorr_range_ok", "bad_window_channels"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "Los nombres `v2_…`/`v3_…`/`v4_…` son las verificaciones de la spec (§5) y viven así en "
+            "el QC; esto es la pregunta que contesta cada una.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v2_error_ratio_ok` | **¿La barra de error del espectro describe su dispersión real?** "
+            "Compara el error propagado del cubo con el medido en controles al mismo radio "
+            "(mediana de la razón dentro de [0.7, 1.4]). | Toda significancia posterior (E1, E3) "
+            "queda mal escalada: el σ no es el ruido. |\n"
+            "| `v3_roundtrip_ok` | **¿El fichero que escribimos se relee idéntico?** Integridad del "
+            "formato `SpectrumProduct` (write→read→validate). | No es física: es un producto "
+            "corrupto o una versión de formato incompatible. |\n"
+            "| `v4_apcorr_range_ok` | **¿Sabemos cuánta luz se queda fuera de la apertura?** La "
+            "corrección `apcorr(λ)` debe ser suave y estar en [1.0, ~1.6] para la caja 3×3, y el "
+            "espectro corregido de 3×3 y 5×5 debe coincidir: si la curva de crecimiento de C1 es "
+            "correcta, medir en caja chica o grande da lo mismo. | El flujo absoluto del compañero "
+            "queda sesgado **y con dependencia en λ** (la PSF se ensancha hacia el azul). |\n"
+        ),
         narrative_md=(
             "## Qué hace C2 y por qué\n\n"
             "C2 extrae el espectro del compañero por **apertura** (`box3` por defecto, `box5`) y define "
@@ -2019,6 +2044,25 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_x02_optimal.sh", cost="Moderado."),
         qc="stages/spec_optimal_qc.json",
         salient=["variants", "snr_gain_vs_aperture.median", "continuum_bias_vs_aperture_pct", "v3_continuum_bias_ok", "fwhm_pm10pct"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_snr_gain_ok` | **¿Pesar por la PSF gana algo frente a sumar en una caja?** "
+            "Mediana de S/N(óptima)/S/N(apertura 3×3) ≥ 1 (se espera 1.1–1.3). | El método no "
+            "aporta: la extracción óptima solo se justifica por la ganancia de S/N. |\n"
+            "| `v2_error_ratio_ok` | **¿La barra de error describe el ruido real?** Igual que en C2: "
+            "propagado vs empírico de controles, razón mediana en [0.7, 1.4]. | El σ no es el ruido "
+            "y la significancia posterior queda mal escalada. |\n"
+            "| `v3_continuum_bias_ok` | **¿El método se come el continuo del compañero?** "
+            "(óptima − apertura)/apertura en bandas de continuo, < 2–3%. | Es el chequeo que "
+            "**rechaza `optimal_ls`** en esta cadena: sobre-sustrae el halo y deja el continuo "
+            "negativo. La variante que G1 valida es `optimal_psfsub`. |\n"
+            "| `v4_clip_concentration_ok` | **¿El rechazo de píxeles se está comiendo la señal?** "
+            "El mapa de clipping no debe concentrarse en la posición del compañero (< 2× la tasa "
+            "media). | Se estaría recortando el objeto y llamándolo ruido. |\n"
+            "| `v5_ls_vs_psfsub_written` | **¿Quedan las dos variantes en disco para compararlas?** "
+            "No juzga: entrega el diagnóstico del modelo de halo a D1. | Falta insumo para D1. |\n"
+        ),
         narrative_md=(
             "## Qué hace C3 y las dos variantes\n\n"
             "C3 es **extracción óptima de Horne (1986)**: por canal, pondera cada píxel por el "
@@ -2180,6 +2224,23 @@ STAGES: list[dict] = [
                   cost="Moderado (~3 min con Psfao lru_cache; sin cache era 2h+)."),
         qc="stages/spec_psffit_qc.json",
         salient=["chi2r.median", "condition_number_median", "rho_ab_median", "vs_large_aperture_median_ratio", "v3_star_scale_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "C4 ajusta **dos PSF a la vez** (primaria + compañero) canal a canal, así que sus "
+            "chequeos preguntan por lo que puede salir mal en ese ajuste conjunto.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v3_star_scale_ok` | **¿El ajuste reproduce la estrella que sí vemos bien?** Razón "
+            "entre el espectro de la primaria ajustada y su fotometría de apertura grande: mediana "
+            "en [0.97, 1.03] y sin pendiente con λ. | Si el modelo no reproduce la fuente brillante, "
+            "el residuo donde vive el compañero tampoco es de fiar. |\n"
+            "| `v4_rho_ab_ok` | **¿Son separables las dos fuentes?** Correlación ρ(a,b) entre las "
+            "amplitudes de primaria y compañero, y número de condición del ajuste; a esta separación "
+            "se espera \\|ρ\\| < 0.3. | Con ρ→1 el ajuste no puede decidir cuánta luz es de cada una: "
+            "el flujo del compañero se vuelve **degenerado** (cualquier reparto encaja igual de bien) "
+            "y su error real es mucho mayor que el formal. |\n\n"
+            "Las otras verificaciones de la spec (χ²ᵣ~1, residuo limpio, crosstalk, contraste con "
+            "C2/C3) se revisan en los plots de abajo, no como banderas del QC.\n"
+        ),
         narrative_md=(
             "## Qué hace C4 y por qué es el canónico\n\n"
             "C4 (`psffit`) es el **método primario** recomendado por la literatura para un compañero a "
@@ -2335,6 +2396,25 @@ STAGES: list[dict] = [
         qc="stages/spec_sgf_qc.json",
         salient=["halosub.n_exposures", "sgf.window", "errors.mode",
                  "checks.v1_reference_ok", "checks.v2_far_continuum_ok", "checks.v4_scale_convention_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_reference_ok` | **¿Hay bastante halo para construir la referencia estelar?** "
+            "≥ 50 spaxels conservados por exposición. | La referencia es ruido: el método resta "
+            "ruido en vez de halo. |\n"
+            "| `v2_far_continuum_ok` | **¿La sustracción deja el fondo en cero donde no hay nada?** "
+            "Mediana del residuo en los controles, en continuo lejos de líneas, compatible con 0. | "
+            "Hay un pedestal residual: todo lo extraído después lleva ese sesgo. |\n"
+            "| `v3_predictor_written` | **¿Cuánta señal de línea se espera perder?** El SGF filtra el "
+            "continuo por construcción y muerde también la línea; el predictor (Ec. 1 de Julo+25) "
+            "queda registrado para cada línea estándar en cobertura. | No hay con qué interpretar el "
+            "flujo de línea de este método. |\n"
+            "| `v4_scale_convention_ok` | **¿Queda trazable en qué escala está el producto?** "
+            "Cabeceras `BKGMODE`/`SCALEREF` y espectros de control persistidos. | D1 no puede "
+            "comparar este método con los otros sin adivinar la convención. |\n"
+            "| `v5_no_pca` | **¿Se coló PCA?** Declara explícitamente `pca_applied = false`. | "
+            "Sería saltarse una decisión congelada (PCA descartado en D1). |\n"
+        ),
         narrative_md=(
             "## Qué hace C5 y por qué existe\n\n"
             "C5 implementa el método **estado-del-arte de literatura** (HRSDI/SGF): por spaxel, "
@@ -2446,6 +2526,26 @@ STAGES: list[dict] = [
         qc="stages/spec_lpm_qc.json",
         salient=["lpm.degree", "lpm.line_preservation_recovery", "degree_diagnostics.mse_argmin",
                  "checks.v2_line_preservation_ok", "checks.v4_slow_path_ok", "checks.v5_scale_convention_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_reference_ok` | **¿Hay bastante halo para la referencia?** ≥ 50 spaxels por "
+            "exposición, como en C5. | La referencia es ruido. |\n"
+            "| `v2_line_preservation_ok` | **¿El método respeta la línea, que es lo que buscamos?** "
+            "Se inyecta una gaussiana de 5σ en un control, se sustrae con la misma matriz y se exige "
+            "recuperar **≥ 90%** del flujo. Es el argumento de LPM frente a SGF, que sí muerde la "
+            "línea. | El método estaría borrando la señal de acreción junto con el halo. Es un smoke "
+            "interno: la calibración formal es E4. |\n"
+            "| `v3_condition_ok` | **¿El ajuste es numéricamente estable?** Número de condición "
+            "< 1e8. | Los coeficientes son ruido amplificado: el residuo deja de significar nada. |\n"
+            "| `v4_slow_path_ok` | **¿Cuántos spaxels necesitaron el camino lento?** ≤ 20%. | Señal "
+            "de mal condicionamiento generalizado (y de coste). |\n"
+            "| `v5_scale_convention_ok` | **¿Escala y cabeceras trazables?** Igual que C5. | D1 no "
+            "puede comparar sin adivinar la convención. |\n"
+            "| `v6_degree_diagnostics_written` | **¿Está justificado el grado 4 del polinomio?** "
+            "Energy-share, curva de MSE y mapas de coeficientes persistidos. | Se pierde la evidencia "
+            "de por qué ese grado y no otro (avisos que no bloquean: se miran en los plots). |\n"
+        ),
         narrative_md=(
             "## Qué hace C6 y por qué preserva las líneas\n\n"
             "C6 implementa el método **propuesto** por Julo et al. 2025 (LPM): cada spaxel se modela "
@@ -2565,6 +2665,31 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_x10_compare.sh", cost="Ligero (~6 s)."),
         qc="stages/stage_x10_qc.json",
         salient=["verdict", "action", "recommended_method", "primary_pairs", "spec_version"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "D1 decide si dos métodos **discrepan de verdad** o solo por ruido. Sus chequeos vigilan "
+            "las tres formas de engañarse en esa comparación: subestimar el ruido, comparar contra "
+            "controles sucios y contar una corrección dos veces.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_sigma_empirical_le_naive` | **¿Estamos subestimando el ruido de la diferencia?** "
+            "El σ medido en controles no debería ser MENOR que el de propagar errores independientes: "
+            "la correlación entre métodos solo puede aumentar la dispersión, nunca reducirla. | Un σ "
+            "empírico menor que el ingenuo delata controles mal emparejados o un σ contaminado — y "
+            "toda diferencia parecería más significativa de lo que es. |\n"
+            "| `v2_controls_clean` | **¿Los controles de los pares primarios son utilizables?** "
+            "Ningún par primario degradado (por controles ausentes o inconsistentes). | El veredicto "
+            "del par se marca degradado: no se puede afirmar que dos métodos difieran. |\n"
+            "| `v5_no_double_throughput` | **¿Se aplicó la corrección de throughput dos veces?** La "
+            "corrección es interna a la comparación (solo en memoria); los productos en disco quedan "
+            "SIN corregir y E3/G2 aplican la suya. | El flujo del compañero saldría corregido dos "
+            "veces aguas abajo — un sesgo silencioso en Ṁ. |\n"
+            "| `v6_scale_check_ok` | **¿Están los dos métodos en la misma escala antes de restarlos?** "
+            "| Se estaría midiendo una diferencia de convención, no de física. |\n"
+            "| `v7_t_calibration` | **¿El estadístico t está bien calibrado?** Fracción de pares de "
+            "CONTROL que salen «divergentes» vs la fracción esperada: en posiciones sin fuente, los "
+            "métodos solo pueden diferir por ruido, así que el ritmo de falsos positivos debe ser el "
+            "nominal. | El umbral de «discrepan» no significa lo que dice. |\n"
+        ),
         narrative_md=(
             "## Qué hace D1 v3 y cómo decide\n\n"
             "D1 compara los métodos **por pares y por banda** con un **t control-centrado** "
@@ -3039,6 +3164,23 @@ STAGES: list[dict] = [
         exec=dict(kind="script", target="stage_h01_detect.sh", cost="Ligero–moderado."),
         qc="stages/stage_h01_qc.json",
         salient=["verdict", "reason", "global_fap_lt", "significant_methods", "rv_consistent"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "E1 es el endpoint: aquí se decide si hay o no emisión. Los chequeos existen para que un "
+            "«sí» no pueda venir de un control contaminado ni de una FAP mal calibrada.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v2_controls` | **¿La distribución de máximos nulos es sana?** Sin bimodalidades ni "
+            "outliers extremos que delaten un control contaminado por otra fuente. | La FAP se "
+            "calibra contra una distribución sucia: el umbral de detección deja de valer. (Se puede "
+            "excluir un control contaminado, con registro, y recalcular — máximo 2.) |\n"
+            "| `v3_placebo` | **¿La cadena «detecta» donde no puede haber nada?** La misma "
+            "maquinaria, centrada en 6400 y 6700 Å (líneas placebo), no debe superar el umbral. | Si "
+            "un placebo detecta, **la FAP está mal calibrada** y la detección de Hα no vale: es "
+            "hallazgo mayor, no un detalle. La batería completa de placebos es E2/T5. |\n"
+            "| `v4_multimethod` | **¿Los métodos coinciden?** Las FAP por método, contadas y "
+            "comparadas. | Una discrepancia grande entre métodos apunta a que el resultado depende "
+            "de cómo se restó el halo → insumo directo para E2. |\n"
+        ),
         narrative_md=(
             "## Qué hace E1 y el resultado\n\n"
             "E1 busca **emisión de Hα** del compañero con un **matched filter** (plantilla de la línea "
@@ -3220,6 +3362,22 @@ STAGES: list[dict] = [
         qc="stages/stage_h01b_qc.json",
         salient=["params.threshold_sigma", "params.kernel_source",
                  "checks.v1_maps_written", "checks.v2_known_source_reported"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_maps_written` | **¿Hay mapa de z para cada método?** Al menos uno. | No hay "
+            "búsqueda ciega que revisar. |\n"
+            "| `v2_known_source_reported` | **¿Se ve la compañera que YA sabemos dónde está?** Su z "
+            "se reporta en todos los métodos. | Control de cordura: si el mapa no recupera la fuente "
+            "conocida, tampoco vale para buscar desconocidas. |\n"
+            "| `v3_ring_noise_written` | **¿Cómo es el ruido a cada radio?** σ, asimetría, curtosis y "
+            "fracción de \\|z\\|>3 por anillo. Cerca de la estrella el ruido no es gaussiano, así que "
+            "un mismo z **no significa lo mismo** a 0.5″ que a 3″. | Los z del mapa no se pueden "
+            "traducir a probabilidad. |\n"
+            "| `v4_no_candidate_at_star_core` | **¿La máscara del núcleo estelar funciona?** Ningún "
+            "candidato con r < r_min. | El propio halo de la primaria entra en la lista como si "
+            "fuera una detección. |\n"
+        ),
         narrative_md=(
             "## Qué hace E1b\n\n"
             "Para cada cubo residual: plantilla espectral gaussiana (FWHM=LSF) en la línea "
@@ -3311,6 +3469,33 @@ STAGES: list[dict] = [
         salient=["overall", "overall_raw", "t2.status", "t5.status",
                  "halpha_map_correlation.corr_stripe_scatter_vs_halpha_sigma",
                  "halpha_map_correlation.halpha_sigma_slicer_aligned"],
+        checks_md=(
+            "## La batería T1–T5, en físico\n\n"
+            "`t1`…`t5` son la batería **congelada** de la spec: cinco maneras distintas de que lo que "
+            "E1 midió sea un artefacto y no el compañero. Cada una ataca un origen instrumental "
+            "diferente, y por eso se pasan todas aunque E1 diga no-detección (en ese caso se aplican "
+            "al máximo del mapa, o sea al ruido dominante).\n\n"
+            "| Test | ¿Qué artefacto descarta? | Criterio |\n|---|---|---|\n"
+            "| **T1 · coincidencia instrumental** | Que el canal de la señal caiga sobre algo que el "
+            "instrumento ya ensucia: franjas del slicer (lista de B2), líneas de cielo (catálogo de "
+            "A4) o los bordes del hueco del láser AO. | Distancia al artefacto más cercano de cada "
+            "lista; coincide si \\|Δcanal\\| ≤ 2. |\n"
+            "| **T2 · coherencia espacial** | Que la señal no tenga la forma de una estrella. Una "
+            "fuente real es la PSF de C1 centrada donde B3 puso al compañero; un artefacto es "
+            "alargado, desplazado o con varios picos. | χ² de PSF vs plano, centroide < 1 px de B3, "
+            "elongación < 1.5×. |\n"
+            "| **T3 · estabilidad temporal** | Que venga de una sola exposición. Una señal real crece "
+            "como √N al combinar; un rayo cósmico o un defecto no. | z > z_total/√2 en ambas mitades "
+            "independientes. **Con una sola exposición no se puede aplicar** — queda `unavailable` y "
+            "así consta: es un eje de robustez que este dataset no cubre. |\n"
+            "| **T4 · estabilidad frente a parámetros** | Que la señal dependa de cómo la analizamos. "
+            "Se repite E1 moviendo UNA perilla cada vez (radio de ajuste local, máscara de C1, ancho "
+            "de plantilla, continuo). | Rango de z entre variantes Δz < 1. |\n"
+            "| **T5 · placebos espectrales** | Que el método «detecte» en cualquier sitio. La cadena "
+            "completa se centra en líneas donde no se espera nada (6200, 6400, 6700, 7100 Å; 6300 "
+            "descartada por skyline). | Ningún placebo supera el umbral de E1. Si alguno lo supera, "
+            "**la FAP está mal calibrada** y el resultado de E1 no vale. |\n"
+        ),
         narrative_md=(
             "## Qué hace E2 y cómo se reinterpreta\n\n"
             "E2 corre una **batería FIJA de 5 tests de artefactos** sobre el resultado de E1 (siempre "
@@ -3658,6 +3843,28 @@ STAGES: list[dict] = [
                   cost="Pesado (~22 min grid 112 casos con `h04_process_pool`)."),
         qc="stages/stage_h04_qc.json",
         salient=["per_method_at_snr5", "v2_nulls_clean.status", "v4_hierarchy.status", "n_injections"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "E4 inyecta líneas de flujo conocido y mide cuánto sobrevive (**throughput**). Ese número "
+            "es el que convierte el límite de flujo de E1 en un límite de Ṁ, así que los chequeos "
+            "vigilan que la inyección se comporte como debe.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_regression` | **¿La cadena sigue dando lo mismo que el caso histórico validado?** "
+            "| Algo cambió en el camino sin que nadie lo decidiera. |\n"
+            "| `v2_nulls_clean` | **¿Inventa recuperaciones donde no inyectamos nada?** Las "
+            "inyecciones de S/N 0 no deben producir recuperaciones sobre el umbral. | La tasa de "
+            "falsos positivos no es la que E1 supone. |\n"
+            "| `v3_monotonic` | **¿Más señal inyectada da más señal recuperada?** Throughput y "
+            "completitud monótonos con S/N. | Una no-monotonía es bug o estadística insuficiente: hay "
+            "que investigarla ANTES de usar el número. |\n"
+            "| `v4_hierarchy` | **¿Los métodos se ordenan como la física manda?** Las extracciones "
+            "que usan el modelo de PSF (C3/C4) deberían recuperar al menos tanto como la apertura "
+            "simple (C2), con sesgo < 5% a S/N ≥ 5. | Si la apertura supera al ajuste de PSF, algo "
+            "está mal en C4 — no es que la apertura sea mejor. |\n"
+            "| `v5_continuum` | **¿Cuánto cuesta tener continuo debajo de la línea?** El caso «con "
+            "continuo» no debe degradar el throughput más de lo esperable por la sustracción de "
+            "fondo. | Es el número que sostiene la decisión sobre los métodos de halo (C5/C6). |\n"
+        ),
         narrative_md=(
             "## Qué hace E4 y qué valida\n\n"
             "E4 **inyecta** señales sintéticas de Hα de flujo/SNR conocidos en la posición del "
@@ -3797,6 +4004,19 @@ STAGES: list[dict] = [
         qc="stages/stage_h05_qc.json",
         salient=["params.threshold_sigma", "params.f_star_line",
                  "checks.v1_curves_written", "checks.v2_monotonic_trend"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_curves_written` | **¿Hay curva para cada método disponible?** | No hay contraste "
+            "que comparar. |\n"
+            "| `v2_monotonic_trend` | **¿La sensibilidad mejora al alejarse de la estrella?** El "
+            "contraste mediano del tercio externo debe ser ≤ el del tercio interno: lejos del halo se "
+            "detectan compañeros más débiles. Es sanidad, no bloquea. | Una tendencia invertida "
+            "delata un problema de normalización o de máscara, no una propiedad del instrumento. |\n"
+            "| `v3_grid_saturation` | **¿La rejilla de contrastes probados es la adecuada?** Fracción "
+            "de separaciones cuyo contraste al 50% quedó en el borde de la rejilla; > 50% = aviso. | "
+            "La curva está tocando el techo: mide la rejilla, no el instrumento. |\n"
+        ),
         narrative_md=(
             "## Qué hace E5\n\n"
             "Inyecta líneas falsas (gaussiana FWHM=LSF × PSF C1) en anillos concéntricos "
@@ -3874,6 +4094,21 @@ STAGES: list[dict] = [
         qc="stages/stage_h06_qc.json",
         salient=["params.n_null_wavelengths", "checks.v1_curves_written",
                  "checks.v2_auc_above_random", "checks.v3_null_sample_ok"],
+        checks_md=(
+            "## Los chequeos del QC, en físico\n\n"
+            "Una ROC cruza **detección** (qué fracción de inyecciones supera el umbral) contra "
+            "**falsa alarma** (qué fracción del ruido lo supera). El AUC resume: 1.0 = separación "
+            "perfecta, 0.5 = el método no distingue señal de ruido.\n\n"
+            "| Chequeo | ¿Qué pregunta contesta? | Si falla |\n|---|---|---|\n"
+            "| `v1_curves_written` | **¿Hay ROC para cada método × escenario?** | Falta el escenario. |\n"
+            "| `v2_auc_above_random` | **¿El detector es mejor que tirar una moneda?** AUC ≥ 0.5 − "
+            "2/√n_iny en todos los escenarios. | Un AUC por debajo del azar **no** significa un "
+            "instrumento malo: significa un bug de signo o de normalización (estaríamos detectando "
+            "al revés). |\n"
+            "| `v3_null_sample_ok` | **¿Hay bastante ruido medido para que la FAP signifique algo?** "
+            "≥ 500 muestras nulas por escenario. | Con pocas muestras la parte izquierda de la curva "
+            "(FAP baja) es justo la que no se puede medir — y es la que importa. |\n"
+        ),
         narrative_md=(
             "## Qué hace E6\n\n"
             "Complementa a E5: en vez de fijar el FAP (5σ) y variar el contraste, fija el "
