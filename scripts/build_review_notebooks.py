@@ -3016,7 +3016,51 @@ STAGES: list[dict] = [
         plots=[
             dict(
                 md=(
-                    "## Plot 1 — ¿el continuo del compañero es suyo o es halo de la primaria?\n\n"
+                    "## Plot 1 — los 6 métodos contra la misma apertura SIN sustraer\n\n"
+                    "Todos los métodos hacen, en el fondo, lo mismo: **quitar el halo de la primaria** "
+                    "en la posición del compañero. Para saber cuánto quitó cada uno hace falta una "
+                    "medida de *lo que había antes*, y esa medida es una **apertura simple sin "
+                    "sustracción**: la misma caja 3×3, en la misma posición de B3 y con la misma "
+                    "corrección de apertura de C1 que usa C2 — lo único que cambia es que se mide "
+                    "sobre `cube_input_local_object.fits`, el cubo tal cual entra a 04b.\n\n"
+                    "La corrección de apertura no es un detalle: una caja 3×3 recoge una fracción "
+                    "minúscula de la PSF de NFM, así que apcorr vale ~40×. Sin aplicarla a la "
+                    "referencia la comparación no sería de manzanas con manzanas.\n\n"
+                    "**Columna izquierda** (eje symlog, porque hay dos órdenes de magnitud y el "
+                    "residuo cruza el cero): en gris lo que hay en la apertura sin restar nada; en "
+                    "color lo que deja el método.\n\n"
+                    "**Columna derecha — lo que QUEDA, en % de lo que había.** Se dice así, y no "
+                    "«cuánto se quitó», porque el 100% **no** es la meta: la referencia incluye "
+                    "también al compañero, así que lo que *debe* quedar es él. Lo que no admite "
+                    "discusión es el **cero**: por debajo se quitó más de lo que había, y eso es "
+                    "sobre-sustracción.\n\n"
+                    "Lo que se ve en ROXs 12 b, en el rojo (donde el compañero existe): `psffit` deja "
+                    "~18%, `aperture` ~19% — el compañero. `optimal_ls` deja **−47%**: quitó "
+                    "vez y media lo que había, que es el mismo defecto que su chequeo "
+                    "`v3_continuum_bias` señala en C3. `sgf` y `lpm` se quedan pegados al 0 porque "
+                    "**filtran el continuo por construcción**: su valor está en la línea, no en el "
+                    "nivel.\n\n"
+                    "*(La celda lee un cubo y evalúa la PSF canal a canal: tarda ~25 s.)*"
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from musepipe.stages import halo_removal_figure\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    fig, axes = halo_removal_figure(rd / 'stages', plt=plt)\n"
+                    "    if fig is None:\n"
+                    "        print('No se pudo construir la referencia sin sustraer:', axes)\n"
+                    "    else:\n"
+                    "        outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "        fig.savefig(outdir / 'halo_removal.png', dpi=110)\n"
+                    "        print('figura ->', outdir / 'halo_removal.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "## Plot 2 — ¿el continuo del compañero es suyo o es halo de la primaria?\n\n"
                     "### La pregunta física\n\n"
                     "El compañero está a **{{qc:stages/stage01c_qc.json:astrometry.sep_arcsec:.2f}}″** de "
                     "una estrella unas **10³ veces más brillante** (en el rojo; más aún en el azul), y a "
@@ -3044,7 +3088,12 @@ STAGES: list[dict] = [
                     "no hay nada** — controles al mismo radio, procesados igual. Ese pedestal es común y "
                     "no dice nada del método: compararlo cuenta el halo dos veces. Restando a cada "
                     "método su propio nivel de control queda solo la discrepancia **genuinamente "
-                    "dependiente del método**. Izquierda = crudos; derecha = referenciados.\n\n"
+                    "dependiente del método**.\n\n"
+                    "La operación es literalmente una resta, y el panel la enseña: la **línea "
+                    "discontinua** de la izquierda es el nivel de controles de cada método, y el panel "
+                    "derecho es *izquierda menos discontinua*. Si las dos columnas se parecen mucho, "
+                    "es que ese pedestal común era pequeño frente a la discrepancia — que es "
+                    "justamente el caso aquí, y por eso el chequeo sigue por debajo del umbral.\n\n"
                     "Para este objeto: "
                     "{{qc:stages/stage_x11_qc.json:continuum.intermethod_systematic.fraction_channels_methods_agree:.3f}} "
                     "(crudo) → "
@@ -3093,6 +3142,12 @@ STAGES: list[dict] = [
                     "            y = col(method, c); drawn.append(y)\n"
                     "            ax.plot(wave, y, lw=1.1, color=color,\n"
                     "                    label=method + (' (canónico)' if method == pair[0] else ''))\n"
+                    "            if c == 'cont_runmed':\n"
+                    "                # Lo que se RESTA: el propio producto lleva las dos columnas,\n"
+                    "                # así que el nivel de controles es su diferencia exacta.\n"
+                    "                bias = y - col(method, 'cont_runmed_biasref')\n"
+                    "                ax.plot(wave, bias, lw=0.9, ls='--', color=color, alpha=0.7,\n"
+                    "                        label=f'nivel de controles de {method} (se resta)')\n"
                     "        ax.set_title(f'{title}\\n{frac:.3f} de canales dentro del error combinado', fontsize=10)\n"
                     "    for ax in (axl, axr):\n"
                     "        ax.set_xlabel('λ [Å]'); ax.axvline(6563, color='tab:red', ls=':'); ax.axhline(0, color='0.7', lw=0.6); ax.legend(fontsize=8)\n"
@@ -3116,7 +3171,7 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Plot 2 — el presupuesto de error\n\n"
+                    "## Plot 3 — el presupuesto de error\n\n"
                     "Cada componente del error del `spec_final_object.fits` vs λ (escala log). El total "
                     "está **dominado por el `stat`** (empírico, M5 rojo); el sistemático de continuo "
                     "(runmed vs poly) es el segundo; flujo-cal/cielo/telúrico son ~0.\n\n"
@@ -3167,7 +3222,7 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Plot 3 — los espectros definitivos (6 métodos + la primaria)\n\n"
+                    "## Plot 4 — los espectros definitivos (6 métodos + la primaria)\n\n"
                     "El entregable de D2 en una figura, dibujada con la **misma función que usa la "
                     "etapa** (`musepipe.stages.definitive_spectra_figure`), leyendo los productos "
                     "calibrados del run:\n\n"

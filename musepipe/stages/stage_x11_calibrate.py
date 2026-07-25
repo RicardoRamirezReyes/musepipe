@@ -10,7 +10,12 @@ from pathlib import Path
 import numpy as np
 
 from ..config import load_run_config
-from ..extraction.aperture import FLAG_BAD_WINDOW, FLAG_SKYLINE
+from ..extraction.aperture import (
+    FLAG_BAD_WINDOW,
+    FLAG_SKYLINE,
+    aperture_correction_from_psf,
+    aperture_spectrum,
+)
 from ..extraction.product import SpectrumProduct
 from ..io import (
     bunit_to_cgs_scale,
@@ -1335,6 +1340,181 @@ def _write_stage_x11_plots(product: StageX11Product, paths):
     plt.close(fig)
     plots["spectra"] = str(out)
     return plots
+
+
+#: Cubo que entra a 04b: el ultimo estado del dato ANTES de restarle nada al
+#: compañero. `cube_residual_local_object.fits` es ese mismo cubo ya con la
+#: superficie local quitada, y es de donde extrae C2.
+UNSUBTRACTED_CUBE_NAME = "cube_input_local_object.fits"
+
+
+def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0):
+    """La MISMA apertura simple de C2, pero sobre el cubo sin sustraer.
+
+    Sirve de referencia comun para los 6 metodos: todos son, en el fondo, una
+    forma distinta de quitar el halo de la primaria en la posicion del
+    compañero, y sin una medida de *lo que habia antes de quitarlo* no se puede
+    decir cuanto quito cada uno.
+
+    Se replica la operacion de C2 pieza por pieza para que la comparacion sea
+    de manzanas con manzanas: misma posicion (la de B3, no la redondeada de
+    04b), misma apertura (box3), y la misma correccion de apertura por curva de
+    crecimiento de C1 — que aqui vale ~40x, porque una caja 3x3 recoge una
+    fraccion minuscula de la PSF de NFM. Lo unico que cambia es el cubo.
+
+    Devuelve `None` (con motivo) si al run le falta alguna pieza, para que la
+    figura degrade en vez de romperse.
+    """
+    from astropy.io import fits
+
+    stage_dir = Path(stage_dir)
+    cube_path = stage_dir / UNSUBTRACTED_CUBE_NAME
+    if not cube_path.exists():
+        return None, f"falta {UNSUBTRACTED_CUBE_NAME} (04b no dejo su cubo de entrada)"
+    qc_b3 = stage_dir / "stage01c_qc.json"
+    if not qc_b3.exists():
+        return None, "falta stage01c_qc.json (B3 no localizo al compañero)"
+    try:
+        yx = read_json(qc_b3)["companion"]["pos_yx"]
+    except (KeyError, TypeError, ValueError):
+        return None, "stage01c_qc.json no declara companion.pos_yx"
+
+    aperture = {"kind": "box", "size": int(box_size)}
+    half = int(box_size) + 2
+    row, col = int(round(float(yx[0]))), int(round(float(yx[1])))
+    with fits.open(cube_path, memmap=True) as hdul:
+        hdu = next((h for h in hdul if getattr(h.data, "ndim", 0) == 3), None)
+        if hdu is None:
+            return None, f"{UNSUBTRACTED_CUBE_NAME} no contiene un cubo 3D"
+        # Solo se lee la ventana alrededor del compañero: el cubo entero son
+        # ~400 MB y la apertura mira 3x3 pixeles.
+        y0, x0 = max(row - half, 0), max(col - half, 0)
+        stamp = np.asarray(hdu.data[:, y0:row + half + 1, x0:col + half + 1], dtype=np.float64)
+    local_yx = (float(yx[0]) - y0, float(yx[1]) - x0)
+    flux_box, _ = aperture_spectrum(stamp, local_yx, aperture)
+
+    canonical_path = stage_dir / "spec_calibrated_psffit_object.fits"
+    any_product = next(iter(sorted(stage_dir.glob("spec_calibrated_*_object.fits"))), None)
+    ref_product = canonical_path if canonical_path.exists() else any_product
+    if ref_product is None:
+        return None, "no hay productos calibrados de los que tomar la rejilla de λ"
+    wave = np.asarray(SpectrumProduct.read(ref_product).wave_A, dtype=np.float64)
+    if wave.size != flux_box.size:
+        return None, (f"la rejilla del cubo ({flux_box.size} canales) no coincide con la del "
+                      f"producto ({wave.size}): no son comparables")
+
+    psf_path = stage_dir / "psf_model.json"
+    psf_model = read_json(psf_path) if psf_path.exists() else None
+    apcorr, apcorr_mode, _ = aperture_correction_from_psf(
+        wave, aperture, psf_model, center_yx=(float(yx[0]), float(yx[1]))
+    )
+    flux = flux_box * apcorr
+    good = np.isfinite(flux)
+    continuum = continuum_running_median(wave, flux, good, window_A=float(window_A))
+    return {
+        "wave_A": wave,
+        "flux": flux,
+        "flux_box": flux_box,
+        "apcorr": apcorr,
+        "apcorr_mode": apcorr_mode,
+        "continuum": continuum,
+        "aperture": f"box{int(box_size)}",
+        "position_yx": [float(yx[0]), float(yx[1])],
+        "source": str(cube_path),
+    }, None
+
+
+def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=80.0):
+    """Los 6 metodos contra la apertura simple SIN sustraer (6 filas x 2 columnas).
+
+    La comparacion inter-metodo del gate v3 usa dos metodos; esta usa los seis y
+    contra una referencia externa a todos ellos, que es lo unico que permite
+    responder "¿cuanto quito cada uno?" en vez de solo "¿se parecen entre si?".
+
+    Por fila (un metodo):
+
+    - izquierda, escala **symlog** compartida: el continuo sin sustraer (gris) y
+      el del metodo. Hacen falta dos ordenes de magnitud en el mismo eje — en
+      esa apertura el pedestal de halo es varias veces el compañero — y el
+      residuo cruza el cero, asi que log a secas no vale.
+    - derecha: **lo que QUEDA**, en % de lo que habia. Se dice asi y no "cuanto
+      se quito" porque el 100% no es la meta: la referencia incluye tambien al
+      compañero, asi que lo que debe quedar es justamente el (~18% en el rojo
+      para psffit en ROXs 12 b). Lo que no admite discusion es el cero: por
+      debajo se quito MAS de lo que habia, y eso es sobre-sustraccion
+      (`optimal_ls` deja -47% en el rojo).
+
+    Devuelve `(fig, axes)`, o `(None, motivo)` si falta la referencia.
+    """
+    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
+        import matplotlib.pyplot as plt
+    stage_dir = Path(stage_dir)
+    reference, reason = unsubtracted_aperture_reference(stage_dir, window_A=window_A)
+    if reference is None:
+        return None, reason
+
+    products = {}
+    for method in METHOD_ORDER:
+        path = stage_dir / f"spec_calibrated_{method}_object.fits"
+        if path.exists():
+            products[method] = SpectrumProduct.read(path)
+    if not products:
+        return None, f"no hay productos calibrados en {stage_dir}"
+    if canonical_method is None:
+        canonical_method = next(
+            (m for m, p in products.items() if bool(p.header.get("CANON", False))),
+            next(iter(products)),
+        )
+    order = [canonical_method] + [m for m in products if m != canonical_method]
+
+    wave = reference["wave_A"]
+    ref_cont = np.asarray(reference["continuum"], dtype=np.float64)
+    fig, axes = plt.subplots(
+        len(order), 2, figsize=(13, 2.0 * len(order)), sharex=True,
+        gridspec_kw={"width_ratios": [1.35, 1.0]}, constrained_layout=True,
+    )
+    axes = np.atleast_2d(axes)
+    # Umbral lineal del symlog: el nivel del propio compañero, para que su
+    # continuo NO quede aplastado contra el cero por el pedestal de halo.
+    linthresh = float(np.nanpercentile(np.abs(ref_cont), 1)) or 1.0
+    for i, method in enumerate(order):
+        extra = products[method].extra_columns or {}
+        cont = np.asarray(
+            extra.get("cont_runmed", products[method].flux), dtype=np.float64
+        )
+        axl, axr = axes[i, 0], axes[i, 1]
+        axl.plot(wave, ref_cont, lw=1.0, color="0.55",
+                 label="sin sustraer" if i == 0 else None)
+        axl.plot(wave, cont, lw=1.2, color="k" if method == canonical_method else "tab:blue",
+                 label="tras restar" if i == 0 else None)
+        axl.set_yscale("symlog", linthresh=linthresh)
+        axl.axhline(0.0, color="0.8", lw=0.6)
+        axl.set_ylabel(method + ("\n(canónico)" if method == canonical_method else ""), fontsize=8)
+        if i == 0:
+            axl.legend(fontsize=7, loc="lower right", ncol=2)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            remaining_pct = 100.0 * cont / ref_cont
+        axr.plot(wave, remaining_pct, lw=1.0, color="tab:purple")
+        axr.axhline(0.0, color="tab:red", lw=1.0, ls="--")
+        axr.axhline(100.0, color="0.7", lw=0.7, ls=":")
+        axr.set_ylim(*_robust_limits([remaining_pct], low=2, high=98, pad=0.25))
+        axr.set_ylabel("% que queda", fontsize=7)
+    axes[0, 0].set_title(
+        "continuo: lo que hay en la apertura SIN restar (gris) vs lo que deja el método\n"
+        "(eje symlog: el pedestal de halo es varias veces el compañero)", fontsize=9,
+    )
+    axes[0, 1].set_title(
+        "lo que QUEDA, en % de lo que había\n"
+        "en el rojo eso es el compañero · por debajo de 0 (rojo) se quitó de más", fontsize=9,
+    )
+    for ax in axes[-1, :]:
+        ax.set_xlabel("λ [Å]")
+    fig.suptitle(
+        f"D2 · los {len(order)} métodos contra la misma apertura sin sustraer "
+        f"({reference['aperture']} en la posición de B3, apcorr {reference['apcorr_mode']})",
+        fontsize=11,
+    )
+    return fig, axes
 
 
 def _robust_limits(series, *, low=0.5, high=99.5, pad=0.15):
