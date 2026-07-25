@@ -255,12 +255,44 @@ def code(text: str) -> dict:
     }
 
 
+def _pinned_python_version() -> str:
+    """Versión de Python fijada en `environment.yml` (la del kernel de los notebooks).
+
+    Se lee del pin y no de `platform.python_version()`: así, regenerar con otro
+    intérprete no reescribe la metadata de los 64 notebooks.
+    """
+    try:
+        text = (ROOT / "environment.yml").read_text(encoding="utf-8")
+    except OSError:
+        return "3.10"
+    m = re.search(r"^\s*-?\s*python\s*=\s*([0-9][^\s#]*)", text, re.M)
+    return m.group(1) if m else "3.10"
+
+
 def notebook(cells: list[dict]) -> dict:
+    # La metadata es EXACTAMENTE la que escribe Jupyter al guardar. Si difiere,
+    # basta abrir un notebook para que git lo dé por modificado (Jupyter
+    # reescribe `kernelspec`/`language_info` con los del kernel que lo abrió), y
+    # el ruido rebota entre Jupyter y este generador en cada regeneración.
+    # El kernel efectivo es `python3` (el ipykernel del entorno MUSE, ver
+    # `environment.yml`); `display_name` es solo la etiqueta que muestra Jupyter.
     return {
         "cells": cells,
         "metadata": {
-            "kernelspec": {"display_name": "MUSE", "language": "python", "name": "python3"},
-            "language_info": {"name": "python", "version": "3.10"},
+            "kernelspec": {
+                "display_name": "Python 3 (ipykernel)",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {
+                "codemirror_mode": {"name": "ipython", "version": 3},
+                "file_extension": ".py",
+                "mimetype": "text/x-python",
+                "name": "python",
+                "nbconvert_exporter": "python",
+                "pygments_lexer": "ipython3",
+                "version": _pinned_python_version(),
+            },
         },
         "nbformat": 4,
         "nbformat_minor": 5,
