@@ -32,6 +32,17 @@ from musepipe.stats import robust_sigma
 C_KMS = 299792.458
 EXCLUDED_WINDOWS_A = ((5780.0, 6050.0),)
 
+#: LSF de referencia de MUSE: Bacon et al. 2017, A&A 608, A1 (MUSE HUDF Survey I),
+#: Ec. 8 — FWHM(λ) = 5.866e-8 λ² − 9.187e-4 λ + 6.040, con λ y FWHM en Å.
+#: Es la mediana de la LSF medida sobre los cubos UDF (dispersión 1–3%, ~0.05 Å).
+#: Sustituye a la interpolación lineal en R (1770@4800Å → 3590@9300Å) usada antes,
+#: que no procedía de ninguna publicación. Salvedad: es una referencia WFM; se usa
+#: como patrón de comparación, no como la LSF del cubo — aguas abajo (E1/E3/G2) se
+#: usa siempre la LSF *medida* del airglow.
+MUSE_LSF_POLY_BACON2017 = (5.866e-8, -9.187e-4, 6.040)
+MUSE_LSF_REFERENCE = "Bacon et al. 2017, A&A 608, A1, Eq. 8"
+MUSE_LSF_REFERENCE_SHORT = "Bacon+2017"
+
 
 @dataclass(frozen=True)
 class Skyline:
@@ -325,16 +336,22 @@ def measure_m1_m2_from_sky_spectrum(
 
 
 def nominal_muse_fwhm_A(wave_A: Sequence[float]) -> np.ndarray:
-    """Approximate nominal MUSE FWHM from R~1770 at 4800A to R~3590 at 9300A."""
+    """Reference MUSE LSF FWHM in A, from Bacon et al. 2017 (A&A 608, A1), Eq. 8.
+
+    ``FWHM(lambda) = 5.866e-8 lambda^2 - 9.187e-4 lambda + 6.040`` (lambda in A),
+    the median LSF measured on the MUSE UDF cubes. See ``MUSE_LSF_REFERENCE``.
+    """
 
     wave = np.asarray(wave_A, dtype=np.float64)
-    resolution = np.interp(wave, [4800.0, 9300.0], [1770.0, 3590.0])
-    return wave / resolution
+    return np.polyval(MUSE_LSF_POLY_BACON2017, wave)
 
 
 def measure_lsf(measurements: Sequence[LineMeasurement]) -> dict[str, object]:
     if len(measurements) < 2:
-        return {"table_A_fwhm": [], "poly2_coeffs": [], "max_dev_vs_nominal_pct": np.nan, "status": "unavailable"}
+        return {"table_A_fwhm": [], "poly2_coeffs": [], "max_dev_vs_nominal_pct": np.nan,
+                "nominal_reference": MUSE_LSF_REFERENCE,
+                "nominal_poly_coeffs": list(MUSE_LSF_POLY_BACON2017),
+                "status": "unavailable"}
     wave = np.asarray([m.centroid_A for m in measurements], dtype=np.float64)
     fwhm = np.asarray([m.fwhm_A for m in measurements], dtype=np.float64)
     degree = min(2, len(measurements) - 1)
@@ -355,6 +372,8 @@ def measure_lsf(measurements: Sequence[LineMeasurement]) -> dict[str, object]:
         ],
         "poly2_coeffs": coeffs,
         "max_dev_vs_nominal_pct": max_dev,
+        "nominal_reference": MUSE_LSF_REFERENCE,
+        "nominal_poly_coeffs": list(MUSE_LSF_POLY_BACON2017),
         "status": status,
     }
 
@@ -983,6 +1002,9 @@ __all__ = [
     "expected_skyline_wave",
     "fit_wavelength_offsets",
     "M1_CLEAN_AIRGLOW",
+    "MUSE_LSF_POLY_BACON2017",
+    "MUSE_LSF_REFERENCE",
+    "MUSE_LSF_REFERENCE_SHORT",
     "compute_m3_flux",
     "detect_primary_yx",
     "flux_factor_from_reference",

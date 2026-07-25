@@ -106,9 +106,19 @@ incertidumbre y su semáforo verde/amarillo/rojo según los umbrales de §6.
 
 - FWHM de las mismas skylines (deconvolución trivial asumiendo línea
   intrínseca delta); tabla LSF(λ) con ~8 puntos + ajuste polinómico grado 2.
-- Comparar contra la LSF nominal de MUSE (R~1770 en 4800 Å a R~3590 en
-  9300 Å); desviaciones > 15% → amarillo.
-- Figura: FWHM vs λ, medida y nominal.
+- Comparar contra la **LSF de referencia publicada de MUSE**:
+  `FWHM(λ) = 5.866e-8 λ² − 9.187e-4 λ + 6.040` Å (Bacon et al. 2017, A&A 608,
+  A1, Ec. 8 — mediana de la LSF medida en los cubos del MUSE UDF, dispersión
+  1–3%). Desviaciones > 15% → amarillo, > 30% → rojo.
+  - Implementación: `musepipe.qc.cube_qc.nominal_muse_fwhm_A`; la cita y los
+    coeficientes se registran en el QC (`m2_lsf.nominal_reference`,
+    `m2_lsf.nominal_poly_coeffs`).
+  - Es una referencia de WFM y actúa solo como **patrón de comparación**: aguas
+    abajo (E1/E3/G2) se usa siempre la LSF **medida**.
+  - Antes de 2026-07-24 la referencia era una interpolación lineal en R
+    (R~1770 en 4800 Å → R~3590 en 9300 Å) sin origen publicado; los QC escritos
+    con ella no llevan `nominal_reference`.
+- Figura: FWHM vs λ, medida y referencia (la figura debe citar el paper).
 
 ### M3 — Escala de flujo
 
@@ -148,6 +158,8 @@ incertidumbre y su semáforo verde/amarillo/rojo según los umbrales de §6.
                      "linear_a_A": 0.0, "linear_b": 0.0, "spatial_scatter_A": 0.0,
                      "status": "green|yellow|red|unavailable"},
   "m2_lsf": {"table_A_fwhm": [], "poly2_coeffs": [], "max_dev_vs_nominal_pct": 0.0,
+              "nominal_reference": "Bacon et al. 2017, A&A 608, A1, Eq. 8",
+              "nominal_poly_coeffs": [5.866e-8, -9.187e-4, 6.040],
               "status": "..."},
   "m3_flux": {"factor_by_band": {"G": 0.0, "BP": 0.0, "RP": 0.0},
                "err_by_band": {}, "aperture_correction": 0.0,
@@ -167,7 +179,7 @@ incertidumbre y su semáforo verde/amarillo/rojo según los umbrales de §6.
 | Medición | Verde | Amarillo | Rojo |
 |---|---|---|---|
 | M1 offset λ | \|Δλ\| < 0.1 Å y scatter espacial < 0.1 Å | corregible con término lineal (residuo < 0.1 Å) | residuo > 0.1 Å tras lineal |
-| M2 LSF | desv. < 15% de la nominal | 15–30% | > 30% o no medible |
+| M2 LSF | desv. < 15% de la referencia (Bacon+2017, Ec. 8) | 15–30% | > 30% o no medible |
 | M3 flujo | factor en [0.9, 1.1] en las 3 bandas | [0.8, 1.25] (con caveat de variabilidad) | fuera, o pendiente fuerte entre bandas |
 | M4 cielo | \|mediana\| < 0.2×rms y R < 1.5 | R 1.5–2.0 | R > 2 (y A2 no corrió) o sesgo de mediana |
 | M5 STAT | factores en [0.8, 1.5], tendencia plana | [0.5, 2.0] o tendencia suave | fuera de [0.5, 2.0] → STAT inutilizable, plan B empírico |

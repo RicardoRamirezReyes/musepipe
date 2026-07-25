@@ -4,8 +4,11 @@ import numpy as np
 
 from musepipe.qc.cube_qc import (
     M1_CLEAN_AIRGLOW,
+    MUSE_LSF_POLY_BACON2017,
+    MUSE_LSF_REFERENCE,
     Skyline,
     measure_m1_m2_from_sky_spectrum,
+    nominal_muse_fwhm_A,
 )
 
 
@@ -56,6 +59,31 @@ class CubeQcM1M2Tests(unittest.TestCase):
     def test_default_m1_lines_are_clean_atomic(self):
         names = {s.name for s in M1_CLEAN_AIRGLOW}
         self.assertEqual(names, {"OI_5577", "OI_6300", "OI_6363"})
+
+
+class NominalLsfReferenceTests(unittest.TestCase):
+    """La referencia de M2 es la LSF publicada, no una aproximación local."""
+
+    def test_matches_published_polynomial(self):
+        # Bacon et al. 2017, A&A 608, A1, Eq. 8.
+        wave = np.array([4800.0, 6563.0, 7000.0, 9300.0])
+        expected = 5.866e-8 * wave**2 - 9.187e-4 * wave + 6.040
+        np.testing.assert_allclose(nominal_muse_fwhm_A(wave), expected, rtol=1e-12)
+        # Valor citado en el notebook A4 y en la spec para Hα.
+        self.assertAlmostEqual(float(nominal_muse_fwhm_A([6563.0])[0]), 2.537, places=3)
+
+    def test_qc_records_the_citation(self):
+        # Un QC debe declarar contra qué referencia se calculó su desviación:
+        # sin eso, un QC antiguo y uno nuevo son indistinguibles.
+        wave, flux = _synthetic_sky(offset_A=0.0, fwhm_A=2.4)
+        lsf_lines = [Skyline("OI_5577", 5577.338), Skyline("OI_6300", 6300.304)]
+        m2 = measure_m1_m2_from_sky_spectrum(
+            wave, flux, lsf_skylines=lsf_lines, frame="topocentric", vbary_kms=0.0,
+            min_snr_lsf=5.0,
+        )["m2_lsf"]
+        self.assertEqual(m2["nominal_reference"], MUSE_LSF_REFERENCE)
+        self.assertIn("Bacon", m2["nominal_reference"])
+        self.assertEqual(m2["nominal_poly_coeffs"], list(MUSE_LSF_POLY_BACON2017))
 
 
 if __name__ == "__main__":
