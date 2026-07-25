@@ -183,6 +183,49 @@ con M8–L0; V5 altere conclusiones de D1. Reporte: tabla de correcciones
 aplicadas con fuentes, presupuesto de errores (figura V2), verificaciones,
 checklist de límites, comando de reproducción.
 
+## Errata v1.2 (2026-07-25) — los espectros definitivos, la unidad y la primaria
+
+Todo lo de abajo es **aditivo**: ni un umbral, ni el método canónico, ni la
+fórmula de `flux_err_total` (§3.5) cambian. Verificado re-ejecutando D2 en los
+dos objetos con línea base previa (`scripts/verify_bunit_rerun.py`): ningún
+flujo ni error se movió.
+
+1. **El entregable de D2 son los espectros definitivos**, no solo
+   `spec_final_object.fits`: los **6** métodos (§1.3 ya lo mandaba) más la
+   **primaria**, `spec_calibrated_psffit_star.fits`. La primaria pasa por la
+   misma cadena que el compañero (`calibrate_star_product` reutiliza
+   `calibrate_spectrum_product`) y añade la sección `primary_star` al QC. Su
+   `flux_err_emp` es el **empírico de anillo** de C4 (dispersión del coeficiente
+   del psffit entre controles: mide estabilidad del ajuste, no ruido de fotones)
+   y se mantiene en **columna aparte** del presupuesto `sys_*`, etiquetado en
+   cabecera (`EMPSRC`/`ERRSEP`). `also_calibrated` en §5 lista hoy los cinco
+   métodos no canónicos, no tres.
+2. **La unidad viaja con el dato.** Los productos declaran `BUNIT` y la escala
+   física se resuelve con `musepipe.io.resolve_flux_unit`: knob de config →
+   `BUNIT` del producto → `m3_flux.flux_unit_cgs` del QC de A4 → error explícito.
+   El QC gana `flux.unit`, que además **contrasta** el `BUNIT` del producto con
+   la unidad que usó M3 para medir `flux_factor`: si no coinciden, el factor se
+   midió dividiendo por una y se aplica sobre la otra → `open_issues`.
+3. **Tabla y figura de los espectros.** `spectra` en el QC (una fila por método,
+   canónico primero, más la primaria; medianas en **7500–9000 Å**, donde el
+   compañero se detecta; cociente del continuo al canónico vía
+   `cont_runmed_biasref`) y `plots/stage_x11_spectra.png` en tres paneles
+   (`musepipe.stages.definitive_spectra_figure`, compartida con el notebook).
+   Avisos automáticos: `sgf` filtra el continuo por construcción, y un continuo
+   rojo negativo que supera el error total es sobre-sustracción del halo AO
+   cromático (`docs/d2_red_continuum_diagnosis.md`), no un error de signo.
+4. **`sys_fluxcal` era idénticamente cero** porque A4/M3 publica `flux_factor`
+   **sin barra de error** y en una sola banda (RP), así que §3.3 no tenía de
+   dónde sacar el sistemático. Decisión del usuario (2026-07-25): **declararlo
+   sin plegarlo** — nueva columna `sys_fluxcal_declared` = |flujo|·|1−`flux_factor`|
+   (2.7% en ROXs 12 b, 4.4% en ROXs 42B b), fila `fluxcal_declared` de tipo
+   `declared_not_applied` en `error_budget`, `flux.declared_*` en el QC y
+   `SYSFLXD`/`SYSFLXDN` en cabecera. **`flux_err_total` NO cambia**: plegarlo
+   movería el error del compañero, que sostiene decisiones congeladas (E1/E3/G3
+   y los hashes de determinismo de G5). Si M3 llega a publicar su incertidumbre,
+   esa se aplica por §3.3 y el término declarado desaparece — el mismo
+   sistemático no se cuenta dos veces.
+
 ## Errata v1.1 (2026-07-15, era D1 v3)
 
 Con el set de 6 métodos, el comparador del gate v3 (acuerdo de continuo

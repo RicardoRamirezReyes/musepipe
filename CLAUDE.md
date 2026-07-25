@@ -16,7 +16,7 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (647 tests)
+python -m pytest tests/ -q                       # full suite (699 tests)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
@@ -58,7 +58,11 @@ the highest version, e.g. `spec_D1_v3_*`) and a JSON QC product under
 - **B1–B3** load/align/crop → xcorr stripes → companion localization
 - **C1, 04b, C2–C6** chromatic PSF → local-surface background → five extraction methods
   (aperture, optimal, psffit, SGF, LPM)
-- **D1–D2** inter-method comparison → spectral calibration
+- **D1–D2** inter-method comparison → spectral calibration. D2 is where the
+  **definitive spectra** are delivered: the six companion methods plus the primary
+  (`spec_calibrated_psffit_star.fits`), all with `BUNIT` and an error budget, plus
+  the `spectra` table and `stage_x11_spectra.png` — a result in themselves, before
+  the Hα study
 - **E1–E6** Hα detection → artifact battery → Ṁ upper limits → injection-recovery →
   contrast/ROC curves
 - **F1** final package + gate (`report/run_summary.json`)
@@ -109,7 +113,8 @@ generated notebook; edit the builder and regenerate only the requested stages.
 ### Module map (`musepipe/`)
 
 `config.py` run selection/validation + `resolve_stage_io`; `paths.py` `RunPaths` (the only
-way to build run paths); `io.py` FITS/CSV/JSON; `stats.py`, `spectral.py`, `apertures.py`,
+way to build run paths); `io.py` FITS/CSV/JSON + flux-unit resolution (`resolve_bunit`,
+`bunit_to_cgs_scale`, `resolve_flux_unit`, `flux_unit_conflict`); `stats.py`, `spectral.py`, `apertures.py`,
 `localfit.py`, `psf.py`, `stripes.py`, `covariance.py`, `injection.py`, `halosub.py`,
 `parallel.py` shared science; `extraction/` `SpectrumProduct` (the canonical spectrum
 container, versioned by `FORMAT_VERSION`) and the extractors; `reduction/` esorex driver,
@@ -125,6 +130,12 @@ relations, tracks, template fitting; `report.py` (F1), `characterization.py` (G5
   spatial inflation is ~6.5× (3×3) / ~17× (5×5); spectral n_eff/n ≈ 0.69. σ is always
   estimated empirically from **controls processed identically to the object**. Cite
   `docs/noise_model.md` instead of re-deriving these numbers.
+- **Flux units**: the unit travels with the data (`BUNIT`) and there is **no silent
+  default**. Resolve it with `musepipe.io.resolve_flux_unit` / `flux_unit_cgs`, which
+  reads, in order, the config knob → the product's `BUNIT` → `m3_flux.flux_unit_cgs`
+  from A4's QC, and raises otherwise. The declared knob wins on purpose (astropy parses
+  MUSE's `BUNIT` as `1.0000000000000001e-20`, and making it authoritative would move
+  frozen results in the last bit). Never reintroduce a `1.0`/`1e-20` fallback.
 - **Conventions**: cubes are `zyx`, positions are `[y, x]`, quantities carry unit suffixes
   (`_A`, `_kms`, `_px`, `_arcsec`). Preserve deterministic seeds, sha256 hash chains, spec
   versions, QC schemas, and provenance fields — F1/G0/G5 verify them.

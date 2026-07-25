@@ -221,3 +221,24 @@ antes de que la cadena B use el cubo).
 - Factores que D2 debe consumir (`Δλ`, `flux_factor`, `stat_factor_*`) listados
   explícitamente.
 - Checklist de límites §1 y comando de reproducción.
+
+## Errata (2026-07-25) — M3 y la unidad del cubo
+
+Aditivo; ni un umbral ni el semáforo de §6 cambian. M3 mide en **una** banda
+(`m3_recommended_band`, RP por defecto) y publica `flux_factor` **sin barra de
+error**, no el trío `factor_by_band`/`err_by_band` de §5: con una sola banda no
+hay dispersión entre bandas de la que derivarla. La consecuencia aguas abajo es
+que `sys_fluxcal` de D2 salía idénticamente cero; desde 2026-07-25 D2 lo
+**declara sin plegarlo** (`sys_fluxcal_declared`, ver errata v1.2 de la spec D2).
+Si M3 llega a publicar su incertidumbre, esa manda y el término declarado
+desaparece.
+
+La comparación con el catálogo es **en cgs**, así que M3 necesita la unidad del
+cubo. Antes la suponía en silencio (`m3_flux_unit_cgs`, default `1e-20`): un
+cubo en otras unidades daba un `flux_factor` mal por 1e20 con semáforo verde.
+Ahora la resuelve con `musepipe.io.resolve_flux_unit` — knob
+`m3_flux_unit_cgs` → `BUNIT` del cubo que mide → cubo de entrada del run — y,
+si no hay ninguna, devuelve `status: unavailable` con
+`reason: flux_unit_unknown` en vez de suponerla. El QC de M3 anota además
+`flux_unit_cgs`, `flux_unit_source` y `bunit`; esa unidad es la **tercera
+fuente** que E3/G3/D2 usan cuando un producto viejo perdió su `BUNIT`.
