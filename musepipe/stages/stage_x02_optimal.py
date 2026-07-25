@@ -20,7 +20,7 @@ from ..extraction.optimal import (
     scaled_psf_model,
 )
 from ..extraction.product import SpectrumProduct
-from ..io import read_json, write_json
+from ..io import read_json, resolve_bunit, write_json
 from ..paths import RunPaths
 from .stage_x01_aperture import (
     _best_indices_from_stage04b,
@@ -128,7 +128,8 @@ def _load_stage02_cube(paths, cfg, expected_wave=None):
             raise RuntimeError(f"{path} must contain CUBES and WAVELENGTH HDUs.")
         cubes = hdul["CUBES"].data.astype(np.float64)
         wave = hdul["WAVELENGTH"].data.astype(np.float64)
-        bunit = str(hdul["CUBES"].header.get("BUNIT", cfg.get("x02_bunit", "")))
+        bunit = resolve_bunit(cfg, stack_bunit=hdul["CUBES"].header.get("BUNIT")
+                              or hdul[0].header.get("BUNIT"), override_key="x02_bunit")
     if expected_wave is not None and (wave.shape != expected_wave.shape or not np.allclose(wave, expected_wave, rtol=0.0, atol=1e-8)):
         raise RuntimeError("Stage02 and Stage04b wavelength axes differ.")
     if cubes.ndim == 4:

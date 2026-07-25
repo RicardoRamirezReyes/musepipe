@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..constants import LSUN_ERG_S, PC_CM, RJUP_CM, RSUN_CM, SIGMA_SB_CGS
+from ..io import flux_unit_cgs
 
 _PCTS = (16.0, 50.0, 84.0)
 
@@ -104,7 +105,7 @@ def run_mc_chain(cfg, atmo_result, track_grids, rng) -> dict:
     derives R, L_bol and per-family mass. Returns percentiles + mass posterior."""
     n = int(cfg.get("g3_n_mc", 4000))
     sysfrac = float(cfg.get("g3_sys_fluxcal_frac", 0.10))
-    flux_unit = float(cfg.get("h03_flux_unit_cgs", 1e-20))
+    flux_unit = flux_unit_cgs(cfg)
     distance = float(cfg["h03_distance_pc"])
     distance_err = float(cfg.get("h03_distance_err_pc", 0.3))
     age_mean = float(cfg.get("g3_age_myr", 6.0)) / 1000.0  # Gyr

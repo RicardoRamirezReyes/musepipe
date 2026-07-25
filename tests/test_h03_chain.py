@@ -44,6 +44,10 @@ def h03_physical_config(run_id, root):
         "h03_companion_radius_rsun": 1.0,
         "h03_mass_source": "synthetic mass",
         "h03_radius_source": "synthetic radius",
+        # Las sigmas sinteticas de abajo ya van en cgs, asi que la escala es 1.
+        # Se declara explicitamente: H03 ya no asume un default (un run sin esta
+        # clave ni BUNIT en el producto es un error, no un 1.0 silencioso).
+        "h03_flux_unit_cgs": 1.0,
         "h03_canonical_method": "psffit",
         "h03_template_width_factors": [1.0, 2.0],
         "h03_matched_sigma_by_method": {"psffit": {"1": 2.0e-17, "2": 3.0e-17}},

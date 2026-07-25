@@ -24,7 +24,7 @@ from astropy.io import fits
 from scipy.ndimage import shift as ndi_shift
 
 from ..config import load_run_config
-from ..io import write_json
+from ..io import cube_bunit, write_json
 from ..paths import RunPaths
 
 
@@ -659,6 +659,17 @@ def compute_stage01_products(config) -> Stage01Product:
     return Stage01Product(cropped_cubes, wavelengths, stat_cubes, qc)
 
 
+def _input_cube_bunit(cfg) -> str:
+    """`BUNIT` del primer cubo de entrada del run ("" si no lo declara)."""
+    cubes = cfg.get("cube_files") or []
+    if not cubes:
+        return ""
+    try:
+        return cube_bunit(cubes[0], ext=cfg.get("data_ext"))
+    except (OSError, ValueError):
+        return ""
+
+
 def write_stage01_products(product: Stage01Product, config, paths_dict):
     cfg = config
     cropped_cubes = product.cubes
@@ -680,6 +691,12 @@ def write_stage01_products(product: Stage01Product, config, paths_dict):
     hdr["CENTER"] = str(cfg["centering_method"])
     hdr["SPATIAL"] = str(cfg["spatial_shift_mode"])
     hdr["SPECMD"] = str(cfg["spectral_grid_mode"])
+    # La unidad de flujo viaja con el dato: sin esto el stack la pierde y los
+    # productos espectrales aguas abajo salen con BUNIT vacio, dejando la escala
+    # fisica en manos de un knob de config (ver `h03_flux_unit_cgs`).
+    bunit = _input_cube_bunit(cfg)
+    if bunit:
+        hdr["BUNIT"] = bunit
     hdus = [fits.PrimaryHDU(header=hdr)]
 
     if isinstance(cropped_cubes, np.ndarray):

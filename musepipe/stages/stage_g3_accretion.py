@@ -17,6 +17,7 @@ import numpy as np
 
 from ..config import load_run_config
 from ..constants import MSUN_OVER_MJUP, RJUP_CM, RSUN_CM
+from ..io import flux_unit_cgs
 from ..models import validate_label
 from ..models.accretion import combine_accretion, line_lacc, mdot_mc
 from ..models.extinction import CCMExtinction
@@ -78,7 +79,7 @@ def compute_stage_g3_accretion(cfg, paths):
     av = float(cfg["h03_av"]); av_err = float(cfg.get("h03_av_err", 0.0))
     rv = float(cfg.get("h03_rv_extinction", 3.1))
     ext = CCMExtinction(rv=rv, citation=cfg.get("h03_extinction_law_citation", "Cardelli+1989"))
-    flux_unit = float(cfg.get("h03_flux_unit_cgs", 1.0))
+    flux_unit = flux_unit_cgs(cfg)
     mass = float(cfg["h03_companion_mass_msun"]); mass_err = float(cfg.get("h03_companion_mass_err_msun", 0.1 * mass))
     radius = float(cfg["h03_companion_radius_rsun"]); radius_err = float(cfg.get("h03_companion_radius_err_rsun", 0.15 * radius))
     seed = int(cfg.get("g3_seed", 0))

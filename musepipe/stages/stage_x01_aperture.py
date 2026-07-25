@@ -17,7 +17,7 @@ from ..extraction.aperture import (
     extract_aperture_products,
 )
 from ..extraction.product import SpectrumProduct
-from ..io import read_json, read_wavelength_axis, write_json
+from ..io import read_json, read_wavelength_axis, resolve_bunit, write_json
 from ..paths import RunPaths
 from .stage04b_local_surface import run_stage04b, stage04b_config_from_run
 
@@ -148,7 +148,8 @@ def _load_residual_cube(paths, cfg):
             if cube.ndim != 3:
                 raise RuntimeError(f"Expected residual cube shape (nz,ny,nx), got {cube.shape}.")
             good, bad = _load_masks(paths, cube.shape[0])
-            bunit = str(header.get("BUNIT", cfg.get("x01_bunit", "")))
+            bunit = resolve_bunit(cfg, stack_bunit=header.get("BUNIT"),
+                                  override_key="x01_bunit")
             return cube, wave, good, bad, path, bunit
 
     stack = paths["stage04b_cube_fits"]
@@ -169,7 +170,7 @@ def _load_residual_cube(paths, cfg):
         cube = residuals
     else:
         raise RuntimeError(f"Unexpected RESIDUALS shape in {stack}: {residuals.shape}")
-    return cube, wave, good, bad, stack, str(cfg.get("x01_bunit", ""))
+    return cube, wave, good, bad, stack, resolve_bunit(cfg, override_key="x01_bunit")
 
 
 def _best_indices_from_stage04b(paths):
