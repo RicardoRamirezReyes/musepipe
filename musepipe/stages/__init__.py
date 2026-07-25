@@ -21,6 +21,7 @@ from .stage_x03_psffit import run_stage_x03, stage_x03_config_from_run
 from .stage_x10_compare import run_stage_x10, stage_x10_config_from_run
 from .stage_x11_calibrate import (
     definitive_spectra_figure,
+    halo_remaining_figure,
     halo_removal_figure,
     run_stage_x11,
     stage_x11_config_from_run,
@@ -29,6 +30,7 @@ from .stage_x11_calibrate import (
 
 __all__ = [
     "definitive_spectra_figure",
+    "halo_remaining_figure",
     "halo_removal_figure",
     "unsubtracted_aperture_reference",
     "run_stage01",

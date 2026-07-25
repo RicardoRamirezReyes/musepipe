@@ -1348,7 +1348,26 @@ def _write_stage_x11_plots(product: StageX11Product, paths):
 UNSUBTRACTED_CUBE_NAME = "cube_input_local_object.fits"
 
 
-def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0):
+#: Los tres sitios donde se repite la medida sin sustraer, como desplazamiento
+#: en PA respecto del compañero: al otro lado de la primaria y a los dos
+#: perpendiculares. Son halo puro a la MISMA separacion, asi que su dispersion
+#: mide cuanto cambia el halo con el angulo — el sistematico que D2 arrastra.
+CONTROL_DELTA_PA_DEG = (("opuesto", 180.0), ("perpendicular +90", 90.0), ("perpendicular -90", -90.0))
+
+
+def _aperture_flux_at(hdu, yx, aperture, *, half):
+    """Flujo de apertura en `yx` leyendo solo su ventana (el cubo son ~400 MB)."""
+    nz, ny, nx = hdu.data.shape
+    row, col = int(round(float(yx[0]))), int(round(float(yx[1])))
+    if not (half <= row < ny - half and half <= col < nx - half):
+        return None
+    y0, x0 = row - half, col - half
+    stamp = np.asarray(hdu.data[:, y0:row + half + 1, x0:col + half + 1], dtype=np.float64)
+    flux, _ = aperture_spectrum(stamp, (float(yx[0]) - y0, float(yx[1]) - x0), aperture)
+    return flux
+
+
+def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0, with_controls=True):
     """La MISMA apertura simple de C2, pero sobre el cubo sin sustraer.
 
     Sirve de referencia comun para los 6 metodos: todos son, en el fondo, una
@@ -1362,10 +1381,17 @@ def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0):
     crecimiento de C1 — que aqui vale ~40x, porque una caja 3x3 recoge una
     fraccion minuscula de la PSF de NFM. Lo unico que cambia es el cubo.
 
+    Con `with_controls` se repite la MISMA medida en tres sitios a la misma
+    separacion de la primaria (ver `CONTROL_DELTA_PA_DEG`), colocados con los
+    helpers de B3 para que hereden su convencion de PA y el `north_angle_deg`
+    del run. Son halo puro: lo que separe al compañero de ellos ES el compañero.
+
     Devuelve `None` (con motivo) si al run le falta alguna pieza, para que la
     figura degrade en vez de romperse.
     """
     from astropy.io import fits
+
+    from .stage01c_localize import position_from_sep_pa
 
     stage_dir = Path(stage_dir)
     cube_path = stage_dir / UNSUBTRACTED_CUBE_NAME
@@ -1374,24 +1400,48 @@ def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0):
     qc_b3 = stage_dir / "stage01c_qc.json"
     if not qc_b3.exists():
         return None, "falta stage01c_qc.json (B3 no localizo al compañero)"
+    qc = read_json(qc_b3)
     try:
-        yx = read_json(qc_b3)["companion"]["pos_yx"]
+        yx = qc["companion"]["pos_yx"]
     except (KeyError, TypeError, ValueError):
         return None, "stage01c_qc.json no declara companion.pos_yx"
 
     aperture = {"kind": "box", "size": int(box_size)}
     half = int(box_size) + 2
-    row, col = int(round(float(yx[0]))), int(round(float(yx[1])))
+    wanted = [("compañero", 0.0, [float(yx[0]), float(yx[1])])]
+    skipped = []
+    if with_controls:
+        astrometry = qc.get("astrometry") or {}
+        primary = (qc.get("primary") or {}).get("pos_yx")
+        scale = qc.get("pixel_scale_arcsec")
+        north = (qc.get("wcs_orientation") or {}).get("north_angle_deg", 0.0)
+        if primary is None or scale is None or astrometry.get("pa_deg") is None:
+            skipped.append({"name": "todos", "reason": "el QC de B3 no trae primaria/escala/PA"})
+        else:
+            for name, delta in CONTROL_DELTA_PA_DEG:
+                pos = position_from_sep_pa(
+                    (float(primary[0]), float(primary[1])),
+                    float(astrometry["sep_arcsec"]),
+                    float(astrometry["pa_deg"]) + float(delta),
+                    float(scale),
+                    north_angle_deg=float(north or 0.0),
+                )
+                wanted.append((name, float(delta), [pos[0], pos[1]]))
+
     with fits.open(cube_path, memmap=True) as hdul:
         hdu = next((h for h in hdul if getattr(h.data, "ndim", 0) == 3), None)
         if hdu is None:
             return None, f"{UNSUBTRACTED_CUBE_NAME} no contiene un cubo 3D"
-        # Solo se lee la ventana alrededor del compañero: el cubo entero son
-        # ~400 MB y la apertura mira 3x3 pixeles.
-        y0, x0 = max(row - half, 0), max(col - half, 0)
-        stamp = np.asarray(hdu.data[:, y0:row + half + 1, x0:col + half + 1], dtype=np.float64)
-    local_yx = (float(yx[0]) - y0, float(yx[1]) - x0)
-    flux_box, _ = aperture_spectrum(stamp, local_yx, aperture)
+        extracted = []
+        for name, delta, pos in wanted:
+            flux = _aperture_flux_at(hdu, pos, aperture, half=half)
+            if flux is None:
+                skipped.append({"name": name, "reason": f"la posicion {np.round(pos, 1).tolist()} cae fuera del cubo"})
+                continue
+            extracted.append((name, delta, pos, flux))
+    if not extracted or extracted[0][0] != "compañero":
+        return None, "la posicion del compañero cae fuera del cubo sin sustraer"
+    flux_box = extracted[0][3]
 
     canonical_path = stage_dir / "spec_calibrated_psffit_object.fits"
     any_product = next(iter(sorted(stage_dir.glob("spec_calibrated_*_object.fits"))), None)
@@ -1408,9 +1458,26 @@ def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0):
     apcorr, apcorr_mode, _ = aperture_correction_from_psf(
         wave, aperture, psf_model, center_yx=(float(yx[0]), float(yx[1]))
     )
-    flux = flux_box * apcorr
-    good = np.isfinite(flux)
-    continuum = continuum_running_median(wave, flux, good, window_A=float(window_A))
+    def _calibrate(raw):
+        # La MISMA apcorr para las cuatro posiciones, que es lo que hace el
+        # pipeline con sus controles (aperture.py: control_spectra_cal). Cambia
+        # ~5% con la fase subpixel, asi que usar una por posicion metaria esa
+        # sensibilidad justo en la comparacion que interesa.
+        total = raw * apcorr
+        return total, continuum_running_median(wave, total, np.isfinite(total), window_A=float(window_A))
+
+    flux, continuum = _calibrate(flux_box)
+    controls = []
+    for name, delta, pos, raw in extracted[1:]:
+        ctrl_flux, ctrl_cont = _calibrate(raw)
+        controls.append({
+            "name": name,
+            "delta_pa_deg": delta,
+            "pa_deg": float((float((qc.get("astrometry") or {}).get("pa_deg", 0.0)) + delta) % 360.0),
+            "position_yx": [float(pos[0]), float(pos[1])],
+            "flux": ctrl_flux,
+            "continuum": ctrl_cont,
+        })
     return {
         "wave_A": wave,
         "flux": flux,
@@ -1420,39 +1487,19 @@ def unsubtracted_aperture_reference(stage_dir, *, box_size=3, window_A=80.0):
         "continuum": continuum,
         "aperture": f"box{int(box_size)}",
         "position_yx": [float(yx[0]), float(yx[1])],
+        "controls": controls,
+        "controls_skipped": skipped,
         "source": str(cube_path),
     }, None
 
 
-def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=80.0):
-    """Los 6 metodos contra la apertura simple SIN sustraer (6 filas x 2 columnas).
-
-    La comparacion inter-metodo del gate v3 usa dos metodos; esta usa los seis y
-    contra una referencia externa a todos ellos, que es lo unico que permite
-    responder "¿cuanto quito cada uno?" en vez de solo "¿se parecen entre si?".
-
-    Por fila (un metodo):
-
-    - izquierda, escala **symlog** compartida: el continuo sin sustraer (gris) y
-      el del metodo. Hacen falta dos ordenes de magnitud en el mismo eje — en
-      esa apertura el pedestal de halo es varias veces el compañero — y el
-      residuo cruza el cero, asi que log a secas no vale.
-    - derecha: **lo que QUEDA**, en % de lo que habia. Se dice asi y no "cuanto
-      se quito" porque el 100% no es la meta: la referencia incluye tambien al
-      compañero, asi que lo que debe quedar es justamente el (~18% en el rojo
-      para psffit en ROXs 12 b). Lo que no admite discusion es el cero: por
-      debajo se quito MAS de lo que habia, y eso es sobre-sustraccion
-      (`optimal_ls` deja -47% en el rojo).
-
-    Devuelve `(fig, axes)`, o `(None, motivo)` si falta la referencia.
-    """
-    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
-        import matplotlib.pyplot as plt
+def _halo_figure_inputs(stage_dir, reference, canonical_method, window_A):
+    """Referencia + productos + orden de metodos, o `(None, motivo)`."""
     stage_dir = Path(stage_dir)
-    reference, reason = unsubtracted_aperture_reference(stage_dir, window_A=window_A)
     if reference is None:
-        return None, reason
-
+        reference, reason = unsubtracted_aperture_reference(stage_dir, window_A=window_A)
+        if reference is None:
+            return None, reason
     products = {}
     for method in METHOD_ORDER:
         path = stage_dir / f"spec_calibrated_{method}_object.fits"
@@ -1466,62 +1513,123 @@ def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=
             next(iter(products)),
         )
     order = [canonical_method] + [m for m in products if m != canonical_method]
+    return (reference, products, order, canonical_method), None
+
+
+def _method_continuum(product):
+    extra = product.extra_columns or {}
+    return np.asarray(extra.get("cont_runmed", product.flux), dtype=np.float64)
+
+
+def halo_removal_figure(stage_dir, *, plt=None, canonical_method=None, window_A=80.0, reference=None):
+    """Que deja cada metodo frente a la apertura SIN sustraer (6 filas x 1).
+
+    Una fila por metodo, a ancho completo. En cada una:
+
+    - **gris**: el continuo de la apertura simple en la posicion del compañero
+      sobre el cubo sin sustraer, con su MINIMO restado (el offset). Sin ese
+      offset el pedestal la manda arriba del todo y solo se ve que "esta muy por
+      encima"; restado, lo que queda en el eje es su FORMA, comparable con la
+      del metodo.
+    - **tres curvas semitransparentes**: la misma medida repetida al otro lado
+      de la primaria y en los dos perpendiculares (`CONTROL_DELTA_PA_DEG`), con
+      **el mismo offset** para que sigan siendo comparables entre si. Son halo
+      puro: lo que separa al gris de ellas ES el compañero, y su dispersion mide
+      cuanto cambia el halo con el angulo a esa misma separacion.
+    - **la curva del metodo**: lo que queda tras restar.
+
+    Eje symlog porque el residuo cruza el cero. Devuelve `(fig, axes)` o
+    `(None, motivo)`.
+    """
+    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
+        import matplotlib.pyplot as plt
+    prepared, reason = _halo_figure_inputs(stage_dir, reference, canonical_method, window_A)
+    if prepared is None:
+        return None, reason
+    reference, products, order, canonical_method = prepared
 
     wave = reference["wave_A"]
     ref_cont = np.asarray(reference["continuum"], dtype=np.float64)
-    fig, axes = plt.subplots(
-        len(order), 2, figsize=(13, 2.0 * len(order)), sharex=True,
-        gridspec_kw={"width_ratios": [1.35, 1.0]}, constrained_layout=True,
-    )
-    axes = np.atleast_2d(axes)
-    # Umbral lineal del symlog: el nivel del propio compañero, para que su
-    # continuo NO quede aplastado contra el cero por el pedestal de halo.
-    linthresh = float(np.nanpercentile(np.abs(ref_cont), 1)) or 1.0
-    # La referencia se dibuja con su MINIMO restado. Sin eso el pedestal la
-    # manda arriba del todo y solo se ve que "esta muy por encima"; con el
-    # minimo fuera, lo que queda en el eje es su FORMA, que es lo comparable
-    # con la del metodo. El offset es solo del dibujo: las cifras de la derecha
-    # usan la referencia entera, o dejarian de ser "% de lo que habia".
+    controls = reference.get("controls") or []
+    # Un solo offset comun (el minimo del compañero) para el gris y para los
+    # tres controles: con uno por curva dejarian de ser comparables entre si.
     ref_offset = float(np.nanmin(ref_cont))
-    ref_shifted = ref_cont - ref_offset
+    linthresh = float(np.nanpercentile(np.abs(ref_cont - ref_offset), 25)) or 1.0
+
+    fig, axes = plt.subplots(
+        len(order), 1, figsize=(13, 2.3 * len(order)), sharex=True, constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
     for i, method in enumerate(order):
-        extra = products[method].extra_columns or {}
-        cont = np.asarray(
-            extra.get("cont_runmed", products[method].flux), dtype=np.float64
-        )
-        axl, axr = axes[i, 0], axes[i, 1]
-        axl.plot(wave, ref_shifted, lw=1.0, color="0.55",
-                 label=f"sin sustraer − offset ({ref_offset:.0f})" if i == 0 else None)
-        axl.plot(wave, cont, lw=1.2, color="k" if method == canonical_method else "tab:blue",
-                 label="tras restar" if i == 0 else None)
-        axl.set_yscale("symlog", linthresh=linthresh)
-        axl.axhline(0.0, color="0.8", lw=0.6)
-        axl.set_ylabel(method + ("\n(canónico)" if method == canonical_method else ""), fontsize=8)
+        ax = axes[i]
+        for ctrl in controls:
+            ax.plot(wave, np.asarray(ctrl["continuum"], dtype=np.float64) - ref_offset,
+                    lw=0.9, alpha=0.35, color="tab:green",
+                    label=(f"{ctrl['name']} (PA {ctrl['pa_deg']:.0f}°)" if i == 0 else None))
+        ax.plot(wave, ref_cont - ref_offset, lw=1.1, color="0.45",
+                label=f"sin sustraer − offset ({ref_offset:.0f})" if i == 0 else None)
+        ax.plot(wave, _method_continuum(products[method]), lw=1.3,
+                color="k" if method == canonical_method else "tab:blue",
+                label="tras restar" if i == 0 else None)
+        ax.set_yscale("symlog", linthresh=linthresh)
+        ax.axhline(0.0, color="0.8", lw=0.6)
+        ax.set_ylabel(method + ("\n(canónico)" if method == canonical_method else ""), fontsize=9)
         if i == 0:
-            axl.legend(fontsize=7, loc="lower right", ncol=2)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            remaining_pct = 100.0 * cont / ref_cont
-        axr.plot(wave, remaining_pct, lw=1.0, color="tab:purple")
-        axr.axhline(0.0, color="tab:red", lw=1.0, ls="--")
-        axr.axhline(100.0, color="0.7", lw=0.7, ls=":")
-        axr.set_ylim(*_robust_limits([remaining_pct], low=2, high=98, pad=0.25))
-        axr.set_ylabel("% que queda", fontsize=7)
-    axes[0, 0].set_title(
+            ax.legend(fontsize=7, ncol=3, loc="upper left")
+    axes[0].set_title(
         "continuo − offset: lo que hay en la apertura SIN restar (gris) vs lo que deja el método\n"
-        f"(a la referencia se le resta su mínimo, {ref_offset:.0f}, para comparar formas; "
-        "eje symlog)", fontsize=9,
+        "en verde, la misma medida en tres sitios sin compañero a la misma separación "
+        "(halo puro; mismo offset)", fontsize=10,
     )
-    axes[0, 1].set_title(
-        "lo que QUEDA, en % de lo que había\n"
-        "en el rojo eso es el compañero · por debajo de 0 (rojo) se quitó de más", fontsize=9,
-    )
-    for ax in axes[-1, :]:
-        ax.set_xlabel("λ [Å]")
+    axes[-1].set_xlabel("λ [Å]")
     fig.suptitle(
         f"D2 · los {len(order)} métodos contra la misma apertura sin sustraer "
         f"({reference['aperture']} en la posición de B3, apcorr {reference['apcorr_mode']})",
         fontsize=11,
     )
+    return fig, axes
+
+
+def halo_remaining_figure(stage_dir, *, plt=None, canonical_method=None, window_A=80.0, reference=None):
+    """Cuanto QUEDA tras restar, en % de lo que habia (6 filas x 1).
+
+    Se dice asi y no "cuanto se quito" porque el 100% no es la meta: la
+    referencia incluye tambien al compañero, asi que lo que debe quedar es
+    justamente el (~18% en el rojo para psffit en ROXs 12 b). Lo que no admite
+    discusion es el cero: por debajo se quito MAS de lo que habia, y eso es
+    sobre-sustraccion (`optimal_ls` deja -47% en el rojo).
+
+    Usa la referencia ENTERA, sin el offset del dibujo de
+    `halo_removal_figure`, o dejaria de ser "% de lo que habia".
+    """
+    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
+        import matplotlib.pyplot as plt
+    prepared, reason = _halo_figure_inputs(stage_dir, reference, canonical_method, window_A)
+    if prepared is None:
+        return None, reason
+    reference, products, order, canonical_method = prepared
+
+    wave = reference["wave_A"]
+    ref_cont = np.asarray(reference["continuum"], dtype=np.float64)
+    fig, axes = plt.subplots(
+        len(order), 1, figsize=(13, 1.8 * len(order)), sharex=True, constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+    for i, method in enumerate(order):
+        ax = axes[i]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            remaining_pct = 100.0 * _method_continuum(products[method]) / ref_cont
+        ax.plot(wave, remaining_pct, lw=1.0, color="tab:purple")
+        ax.axhline(0.0, color="tab:red", lw=1.0, ls="--")
+        ax.axhline(100.0, color="0.7", lw=0.7, ls=":")
+        ax.set_ylim(*_robust_limits([remaining_pct], low=2, high=98, pad=0.25))
+        ax.set_ylabel(method + ("\n(canónico)" if method == canonical_method else ""), fontsize=9)
+    axes[0].set_title(
+        "lo que QUEDA, en % de lo que había en la apertura sin restar\n"
+        "en el rojo eso es el compañero · por debajo de 0 (rojo) se quitó de más", fontsize=10,
+    )
+    axes[-1].set_xlabel("λ [Å]")
+    fig.suptitle(f"D2 · cuánto queda tras restar, por método ({len(order)} métodos)", fontsize=11)
     return fig, axes
 
 
