@@ -16,6 +16,7 @@ import numpy as np
 
 from ..config import load_run_config
 from ..constants import MSUN_OVER_MJUP
+from ..io import read_stage00q_qc
 from ..models import validate_label
 from ..models.derived import plot_hrd, run_mc_chain
 from ..models.manifest import library_root
@@ -74,7 +75,8 @@ def compute_stage_g3_derived(cfg, paths, *, atmo_result=None, track_grids=None):
     if track_grids is None:
         track_grids = _build_track_grids(cfg)
     rng = np.random.default_rng(int(cfg.get("g3_seed", 0)))
-    mc = run_mc_chain(cfg, atmo_result, track_grids, rng)
+    qc_m3 = read_stage00q_qc(getattr(paths.get("paths"), "stage_dir", None))
+    mc = run_mc_chain(cfg, atmo_result, track_grids, rng, qc_m3=qc_m3)
 
     pc = mc["percentiles"]
     tr = mc["tracks"]

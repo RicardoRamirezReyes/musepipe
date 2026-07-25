@@ -2763,6 +2763,13 @@ STAGES: list[dict] = [
             "if q['flux'].get('declared_err_frac'):\n"
             "    print(f\"       flujo-cal declarado (NO en el total): {100 * q['flux']['declared_err_frac']:.1f}%\"\n"
             "          f\" — {q['flux']['declared_source'][:70]}\")\n"
+            "# La unidad que resolverán E3/G3: knob -> BUNIT del producto -> QC de M3.\n"
+            "un = q['flux'].get('unit')\n"
+            "if un:\n"
+            "    print(f\"       unidad: {un['cgs']} erg/s/cm²/Å vía {un['source']}\"\n"
+            "          f\" (BUNIT={un['from_bunit']}, M3={un['from_m3_qc']})\")\n"
+            "    if un['conflict']:\n"
+            "        print('       ⚠ ' + un['conflict'])\n"
             "im = q['continuum']['intermethod_systematic']; ar = im['after_control_reference']\n"
             "print()\n"
             "print('continuo inter-método (psffit vs optimal_psfsub):')\n"
@@ -2927,6 +2934,9 @@ STAGES: list[dict] = [
             "- **Espectros definitivos:** los 6 métodos + la primaria, con unidad y error total "
             "(tabla en `qc['spectra']`, figura en `plots/stage_x11_spectra.png`) — resultado en sí "
             "mismos, entregados antes del estudio de Hα.\n"
+            "- **Unidad de flujo:** `qc['flux']['unit']` deja resuelta y contrastada la escala que "
+            "usarán E3/G3 (knob → `BUNIT` → `m3_flux.flux_unit_cgs`). Si el `BUNIT` del producto y "
+            "la unidad con la que M3 midió el factor no coinciden, sale como `open_issue`.\n"
             "- **Downstream:** `spec_final_object` alimenta E1, E3 y G2."
         ),
     ),

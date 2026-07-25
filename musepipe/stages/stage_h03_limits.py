@@ -169,6 +169,8 @@ def stage_h03_config_from_run(
 
 
 def _read_optional_json(path):
+    if path is None:
+        return None
     path = Path(path)
     if not path.exists():
         return None
@@ -799,7 +801,12 @@ def _product_path_for_method(paths, method):
 
 
 def resolve_flux_unit_cgs(cfg, paths, canonical_method):
-    """Escala a erg/s/cm2/A: knob de config, o el `BUNIT` del producto canonico."""
+    """Escala a erg/s/cm2/A: knob, `BUNIT` del producto canonico, o el QC de M3.
+
+    La tercera fuente cubre los productos generados antes de que B1/B2
+    propagaran `BUNIT`: si A4/M3 midio el factor de flujo sobre ese mismo cubo,
+    la unidad que uso es la que sostiene la escala que D2 ya aplico.
+    """
     bunit = None
     product_path = _product_path_for_method(paths, canonical_method)
     if product_path is not None and Path(product_path).exists():
@@ -807,7 +814,7 @@ def resolve_flux_unit_cgs(cfg, paths, canonical_method):
             bunit = cube_bunit(product_path)
         except (OSError, ValueError):
             bunit = None
-    return _flux_unit_cgs(cfg, bunit=bunit)
+    return _flux_unit_cgs(cfg, bunit=bunit, qc_m3=_read_optional_json(paths.get("stage00q_qc_json")))
 
 def _matched_sigma_from_product(paths, h01_qc, method, factor):
     product_path = _product_path_for_method(paths, method)

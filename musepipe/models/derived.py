@@ -99,13 +99,18 @@ def _sample_age_gyr(rng, mean_gyr, err_lo_gyr, err_hi_gyr, n):
     return np.clip(age, 1e-6, None)
 
 
-def run_mc_chain(cfg, atmo_result, track_grids, rng) -> dict:
+def run_mc_chain(cfg, atmo_result, track_grids, rng, *, qc_m3=None) -> dict:
     """End-to-end MC (spec §3.4). Samples (Teff, A_V, Ω) from the Δχ² 3-D grid by
     weights exp(-Δχ²/2), plus distance / age / abs-cal / interpolation, then
-    derives R, L_bol and per-family mass. Returns percentiles + mass posterior."""
+    derives R, L_bol and per-family mass. Returns percentiles + mass posterior.
+
+    ``qc_m3``: QC de A4 opcional, para que la escala de flujo pueda salir de la
+    unidad que M3 uso si el config no declara el knob (ver ``io.flux_unit_cgs``).
+    Ω sale del ajuste atmosferico sobre el espectro calibrado, asi que su unidad
+    es la de ese producto, la misma que M3 fijo."""
     n = int(cfg.get("g3_n_mc", 4000))
     sysfrac = float(cfg.get("g3_sys_fluxcal_frac", 0.10))
-    flux_unit = flux_unit_cgs(cfg)
+    flux_unit = flux_unit_cgs(cfg, qc_m3=qc_m3)
     distance = float(cfg["h03_distance_pc"])
     distance_err = float(cfg.get("h03_distance_err_pc", 0.3))
     age_mean = float(cfg.get("g3_age_myr", 6.0)) / 1000.0  # Gyr

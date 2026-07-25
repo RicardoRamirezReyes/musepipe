@@ -12,7 +12,14 @@ import numpy as np
 from ..config import load_run_config
 from ..extraction.aperture import FLAG_BAD_WINDOW, FLAG_SKYLINE
 from ..extraction.product import SpectrumProduct
-from ..io import read_json, write_json
+from ..io import (
+    bunit_to_cgs_scale,
+    flux_unit_conflict,
+    flux_unit_from_m3_qc,
+    read_json,
+    resolve_flux_unit,
+    write_json,
+)
 from ..paths import RunPaths
 from ..reduction.sky_zap import SKYLINE_WINDOWS
 from ..reduction.telluric import TELLURIC_BANDS
@@ -1122,6 +1129,9 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             "Los espectros calibrados no comparten una unidad declarada: "
             f"{qc['spectra']['unit']} (ver musepipe.io.resolve_bunit y B1/B2)."
         )
+    qc["flux"]["unit"] = _flux_unit_block(cfg, qc00, calibrated[canonical_method].product)
+    if qc["flux"]["unit"]["conflict"]:
+        qc["open_issues"].append(qc["flux"]["unit"]["conflict"])
     return StageX11Product(
         canonical_method=canonical_method,
         products=products,
@@ -1129,6 +1139,37 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
         qc=_json_ready(qc),
         star=star_calibrated,
     )
+
+
+def _flux_unit_block(cfg, qc00, product) -> dict:
+    """Las tres fuentes de la unidad de flujo, resueltas y contrastadas en D2.
+
+    D2 no convierte a cgs (aplica un factor adimensional), pero es la etapa que
+    publica los espectros definitivos: dejar aqui que escala van a resolver E3 y
+    G3, y de donde sale, evita que cada una lo deduzca por su cuenta.
+
+    El contraste importa mas que el valor: `flux_factor` se midio dividiendo por
+    la unidad de M3 y D2 lo aplica a un flujo expresado en el `BUNIT` del
+    producto. Si no son la misma, la escala absoluta sale mal por ese cociente y
+    nadie se enteraria (ver `io.flux_unit_conflict`).
+    """
+    bunit = str(product.header.get("BUNIT", "")) or None
+    block = {
+        "bunit": bunit,
+        "from_bunit": bunit_to_cgs_scale(bunit),
+        "from_m3_qc": flux_unit_from_m3_qc(qc00),
+        "conflict": flux_unit_conflict(bunit, qc00),
+        "note": (
+            "Escala a erg/s/cm2/A que resolveran E3/G3 (io.resolve_flux_unit): knob de config "
+            "-> BUNIT del producto -> `m3_flux.flux_unit_cgs`. D2 no la aplica."
+        ),
+    }
+    try:
+        block["cgs"], block["source"] = resolve_flux_unit(cfg, bunit=bunit, qc_m3=qc00)
+    except ValueError as exc:
+        block["cgs"], block["source"] = None, None
+        block["reason"] = str(exc)
+    return block
 
 
 #: Banda roja donde el compañero SE detecta. Las cifras de la tabla de espectros

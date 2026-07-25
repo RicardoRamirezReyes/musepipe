@@ -17,7 +17,7 @@ import numpy as np
 
 from ..config import load_run_config
 from ..constants import MSUN_OVER_MJUP, RJUP_CM, RSUN_CM
-from ..io import flux_unit_cgs
+from ..io import flux_unit_cgs, read_stage00q_qc
 from ..models import validate_label
 from ..models.accretion import combine_accretion, line_lacc, mdot_mc
 from ..models.extinction import CCMExtinction
@@ -65,6 +65,12 @@ def _own_mr_from_derived(path):
             rad_rjup * rjup_over_rsun, r_err_rjup * rjup_over_rsun)
 
 
+def _stage_dir(paths):
+    """`stages/` del run, o None si quien llama monto un `paths` minimo."""
+    run_paths = paths.get("paths") if hasattr(paths, "get") else None
+    return getattr(run_paths, "stage_dir", None)
+
+
 def _read_g2(path):
     rows = list(csv.DictReader(open(path)))
     def f(x):
@@ -79,7 +85,9 @@ def compute_stage_g3_accretion(cfg, paths):
     av = float(cfg["h03_av"]); av_err = float(cfg.get("h03_av_err", 0.0))
     rv = float(cfg.get("h03_rv_extinction", 3.1))
     ext = CCMExtinction(rv=rv, citation=cfg.get("h03_extinction_law_citation", "Cardelli+1989"))
-    flux_unit = flux_unit_cgs(cfg)
+    # Knob -> QC de M3 (los flujos de G2 vienen del producto calibrado, cuya
+    # escala absoluta la fijo M3): sin default silencioso, ver `io.flux_unit_cgs`.
+    flux_unit = flux_unit_cgs(cfg, qc_m3=read_stage00q_qc(_stage_dir(paths)))
     mass = float(cfg["h03_companion_mass_msun"]); mass_err = float(cfg.get("h03_companion_mass_err_msun", 0.1 * mass))
     radius = float(cfg["h03_companion_radius_rsun"]); radius_err = float(cfg.get("h03_companion_radius_err_rsun", 0.15 * radius))
     seed = int(cfg.get("g3_seed", 0))

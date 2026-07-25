@@ -25,6 +25,7 @@ from musepipe.reduction.sky_zap import (
     compute_sky_residual_metrics,
     wavelength_mask,
 )
+from musepipe.io import cube_bunit, resolve_bunit, resolve_flux_unit
 from musepipe.reduction.verify import circular_aperture_mask, extract_aperture_spectrum
 from musepipe.stats import robust_sigma
 
@@ -543,6 +544,7 @@ def compute_m3_flux(
     apply_truncation_correction=None,
     passband_dir=None,
     project_root=None,
+    bunit=None,
 ) -> dict[str, object]:
     """A4/M3: absolute flux-scale check of the PRIMARY vs its Gaia catalog flux.
 
@@ -553,6 +555,13 @@ def compute_m3_flux(
     config block and ``musepipe/qc/data/gaia_passbands/README.md``.
 
     Target-agnostic: all star-specific numbers come from ``config``.
+
+    ``bunit``: unidad del cubo que se esta midiendo. La comparacion con el
+    catalogo es en cgs, asi que sin unidad no hay factor: se resuelve con
+    ``musepipe.io.resolve_flux_unit`` (knob ``m3_flux_unit_cgs`` -> ``BUNIT`` del
+    cubo -> cubo de entrada del run) y, si no hay ninguna, M3 sale
+    ``unavailable`` en vez de suponer la nativa de MUSE — suponerla convertia un
+    cubo en otras unidades en un ``flux_factor`` mal por 1e20 sin decirlo.
     """
 
     passbands = config.get("m3_passbands")
@@ -605,7 +614,14 @@ def compute_m3_flux(
         spectrum = extract_aperture_spectrum(data, (float(primary_yx[0]), float(primary_yx[1])), float(aperture_radius_px))
         effective_radius = float(aperture_radius_px)
 
-    flux_unit_cgs = float(config.get("m3_flux_unit_cgs", 1.0e-20))
+    cube_unit = resolve_bunit(config, stack_bunit=bunit, override_key="m3_bunit")
+    try:
+        flux_unit_cgs, flux_unit_source = resolve_flux_unit(
+            config, bunit=cube_unit, key="m3_flux_unit_cgs"
+        )
+    except ValueError as exc:
+        return {"status": "unavailable", "reason": "flux_unit_unknown",
+                "detail": str(exc), "bunit": cube_unit, "variability_caveat": True}
     synthetic_native = synthetic_band_flux(wave_arr, spectrum, pb_wave, pb_resp)
 
     truncation_correction = 1.0
@@ -634,6 +650,10 @@ def compute_m3_flux(
         "truncation_correction": float(truncation_correction),
         "truncation_slope_flam_vs_lam": truncation_slope,
         "flux_unit_cgs": flux_unit_cgs,
+        # De donde salio la unidad, para que D2/E3/G3 puedan citarla o
+        # contrastarla con el BUNIT del producto (`io.flux_unit_conflict`).
+        "flux_unit_source": flux_unit_source,
+        "bunit": cube_unit,
         "muse_overlap_frac": overlap,
         "source": config.get("m3_passband_source"),
         "variability_caveat": True,
@@ -885,6 +905,9 @@ def m3_flux_phase(args: argparse.Namespace) -> int:
         aperture_correction=args.aperture_correction,
         apply_truncation_correction=args.truncation_correction or None,
         project_root=str(rc.paths.project_root),
+        # La unidad del cubo que M3 mide de verdad, que no tiene por que ser el
+        # `cube_files[0]` del config (A4 corre sobre el telurico, el ADP...).
+        bunit=cube_bunit(cube_path, ext=data_ext),
     )
     m3["cube_file"] = str(cube_path)
     qc_path = Path(args.qc_output)
