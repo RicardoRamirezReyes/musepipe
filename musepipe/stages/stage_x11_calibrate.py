@@ -41,6 +41,13 @@ class CalibrationCorrections:
     flux_scale: float = 1.0
     flux_scale_err_frac: float = 0.0
     flux_source: str = "stage00q_qc.m3_flux"
+    #: Calibracion absoluta DECLARADA y no plegada en `flux_err_total`: A4/M3 da
+    #: `flux_factor` sin barra de error, asi que `flux_scale_err_frac` (el termino
+    #: que si entra en el presupuesto) sale 0 y el desvio medido frente a Gaia se
+    #: quedaba invisible. Se conserva como |1 - flux_factor| en su propia columna
+    #: para poder citarlo sin mover el error de la ciencia congelada.
+    flux_declared_err_frac: float = 0.0
+    flux_declared_source: str = ""
     variability_caveat: bool = True
     psf_frac: float = 0.0
     psf_source: str = "stage_e01_qc.companion_ring_metric.residual_pct_median"
@@ -242,7 +249,38 @@ def _flux_scale_from_m3(m3):
         else:
             if isinstance(m3.get("factor_by_band"), dict):
                 err_frac = _scatter_frac([float(v) for v in m3["factor_by_band"].values()])
-    return float(scale), float(max(err_frac, 0.0)), bool(m3.get("variability_caveat", True)), source, issues
+    declared_frac, declared_source = _declared_fluxcal_from_m3(m3, err_frac)
+    return (float(scale), float(max(err_frac, 0.0)), bool(m3.get("variability_caveat", True)),
+            source, issues, declared_frac, declared_source)
+
+
+def _declared_fluxcal_from_m3(m3, err_frac):
+    """El desvio de calibracion absoluta medido, para DECLARARLO sin aplicarlo.
+
+    M3 compara el flujo sintetico de la primaria con el catalogo de Gaia y deja
+    `flux_factor`, pero **sin barra de error**: `err_frac` sale 0 y el ~3% que
+    M3 acaba de medir no aparece en ningun sitio del presupuesto. Se toma
+    |1 - flux_factor| como la magnitud declarada de ese sistematico.
+
+    No se pliega en `flux_err_total` a proposito: hacerlo cambiaria el error del
+    compañero, que sostiene decisiones congeladas (E1/E3/G3). Nota: G3 ya asume
+    su propio 10% de calibracion absoluta (`g3_sys_fluxcal_frac`), asi que este
+    valor es una cota inferior de lo que el ajuste atmosferico ya se cree.
+    """
+    if err_frac > 0:
+        # Si M3 llega a publicar una barra de error, esa manda y ya va aplicada.
+        return 0.0, ""
+    factor = m3.get("flux_factor") if m3 else None
+    if factor is None:
+        return 0.0, ""
+    factor = float(factor)
+    if not np.isfinite(factor) or factor <= 0:
+        return 0.0, ""
+    return (
+        float(abs(1.0 - factor)),
+        f"|1 - stage00q_qc.m3_flux.flux_factor| = |1 - {factor:.3f}| ({m3.get('band', '?')} band, "
+        "vs Gaia DR3); declarado, NO sumado a flux_err_total",
+    )
 
 
 def _wavelength_from_m1(m1, *, allow_red=False):
@@ -317,7 +355,8 @@ def calibration_corrections_from_qc(qc00, qc_psf=None, qc_sky=None, qc_telluric=
     m3 = qc00.get("m3_flux", {})
     if str(m3.get("status", "unavailable")).lower() == "red" and not bool(cfg.get("x11_allow_red_flux", False)):
         raise RuntimeError("A4/M3 flux status is red; D2 must stop before applying flux scale.")
-    flux_scale, flux_err, variability, flux_source, flux_issues = _flux_scale_from_m3(m3)
+    (flux_scale, flux_err, variability, flux_source, flux_issues,
+     flux_declared, flux_declared_source) = _flux_scale_from_m3(m3)
     issues.extend(flux_issues)
     psf_frac, psf_issues = _psf_frac_from_qc(qc_psf)
     issues.extend(psf_issues)
@@ -337,6 +376,8 @@ def calibration_corrections_from_qc(qc00, qc_psf=None, qc_sky=None, qc_telluric=
         flux_scale=flux_scale,
         flux_scale_err_frac=flux_err,
         flux_source=flux_source,
+        flux_declared_err_frac=float(cfg.get("x11_fluxcal_declared_frac", flux_declared)),
+        flux_declared_source=flux_declared_source,
         variability_caveat=variability,
         psf_frac=float(cfg.get("x11_psf_frac", psf_frac)),
         sky_frac=float(cfg.get("x11_sky_frac", sky_frac)),
@@ -438,8 +479,9 @@ def _telluric_sys(wave, flux, corrections):
     return out
 
 
-def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluric, sys_continuum, corrections):
-    return [
+def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluric, sys_continuum,
+                       corrections, sys_fluxcal_declared=None):
+    rows = [
         {
             "term": "stat",
             "type": "per_channel",
@@ -481,6 +523,21 @@ def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluri
             "source": "D2 continuum runmed/poly difference",
         },
     ]
+    if corrections.flux_declared_err_frac > 0:
+        rows.append({
+            "term": "fluxcal_declared",
+            "type": "declared_not_applied",
+            "value": float(corrections.flux_declared_err_frac),
+            "median": (None if sys_fluxcal_declared is None
+                       else _finite_or_none(np.nanmedian(sys_fluxcal_declared))),
+            "source": corrections.flux_declared_source,
+            "note": (
+                "Columna `sys_fluxcal_declared`. NO entra en `flux_err_total`: plegarlo moveria el "
+                "error del compañero, que sostiene decisiones congeladas (E1/E3/G3). G3 ya asume su "
+                "propio 10% de calibracion absoluta (g3_sys_fluxcal_frac), mayor que este valor."
+            ),
+        })
+    return rows
 
 
 def calibrate_spectrum_product(
@@ -530,6 +587,9 @@ def calibrate_spectrum_product(
     flux_err_total = np.sqrt(
         flux_err_stat**2 + sys_fluxcal**2 + sys_psf**2 + sys_sky**2 + sys_telluric**2
     )
+    # DECLARADO y fuera de la suma: ver `_declared_fluxcal_from_m3`. Va despues
+    # de `flux_err_total` justamente para que se vea que no entra en el.
+    sys_fluxcal_declared = np.abs(flux) * float(corrections.flux_declared_err_frac)
 
     header = dict(product.header)
     header["SRCERRM"] = str(header.get("ERRMODE", "unknown"))
@@ -543,6 +603,8 @@ def calibrate_spectrum_product(
     header["FLXSCL"] = float(scale)
     header["FLXSRC"] = corrections.flux_source
     header["SYSFLX"] = float(corrections.flux_scale_err_frac)
+    header["SYSFLXD"] = float(corrections.flux_declared_err_frac)
+    header["SYSFLXDN"] = "sys_fluxcal_declared NOT in flux_err_total"
     header["ERRTOT"] = "stat+sys"
     header["CONTRUN"] = float(continuum_window_A)
     header["CONTPOL"] = int(continuum_poly_deg)
@@ -556,6 +618,7 @@ def calibrate_spectrum_product(
             "cont_poly": cont_poly,
             "sys_continuum": sys_continuum,
             "sys_fluxcal": sys_fluxcal,
+            "sys_fluxcal_declared": sys_fluxcal_declared,
             "sys_psf": sys_psf,
             "sys_sky": sys_sky,
             "sys_telluric": sys_telluric,
@@ -598,6 +661,7 @@ def calibrate_spectrum_product(
         sys_telluric,
         sys_continuum,
         corrections,
+        sys_fluxcal_declared=sys_fluxcal_declared,
     )
     return CalibratedProduct(
         method=method,
@@ -678,13 +742,14 @@ def calibrate_star_product(cfg, paths, corrections):
             "budget": ["flux_err_stat", "sys_fluxcal", "sys_psf", "sys_sky",
                        "sys_telluric", "sys_continuum"],
             "combined": "flux_err_total",
+            "declared_not_combined": ["sys_fluxcal_declared"],
         },
         "median_error_fraction": {
             name: _finite_or_none(
                 _median_finite(np.asarray(extra[name], dtype=np.float64) / np.abs(flux))
             )
-            for name in ("flux_err_stat", "sys_fluxcal", "sys_psf", "sys_sky",
-                         "sys_telluric", "sys_continuum")
+            for name in ("flux_err_stat", "sys_fluxcal", "sys_fluxcal_declared", "sys_psf",
+                         "sys_sky", "sys_telluric", "sys_continuum")
         },
         "median_empirical_fraction": _finite_or_none(
             _median_finite(np.asarray(calibrated.product.flux_err_emp, dtype=np.float64) / np.abs(flux))
@@ -1000,6 +1065,11 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             "scale_err": float(corrections.flux_scale_err_frac),
             "source": corrections.flux_source,
             "variability_caveat": bool(corrections.variability_caveat),
+            # El desvio absoluto que M3 mide frente a Gaia, declarado aparte
+            # porque M3 no publica barra de error y `scale_err` sale 0.
+            "declared_err_frac": float(corrections.flux_declared_err_frac),
+            "declared_source": corrections.flux_declared_source,
+            "declared_applied": False,
         },
         "continuum": {
             **canonical.continuum_summary,
