@@ -68,6 +68,8 @@ class StageX11Product:
     products: dict[str, SpectrumProduct]
     calibrated: dict[str, CalibratedProduct]
     qc: dict
+    #: primaria calibrada (None si C4 no dejo `spec_psffit_star.fits`)
+    star: CalibratedProduct | None = None
 
 
 def _finite_or_none(value):
@@ -116,6 +118,11 @@ def stage_x11_paths(run_id, project_root=None):
         "spec_calibrated_psffit_object": paths.stage_dir / "spec_calibrated_psffit_object.fits",
         "spec_calibrated_sgf_object": paths.stage_dir / "spec_calibrated_sgf_object.fits",
         "spec_calibrated_lpm_object": paths.stage_dir / "spec_calibrated_lpm_object.fits",
+        # Primaria: C4 la extrae junto al compañero pero nadie la calibraba, asi
+        # que quedaba sin correccion en lambda, sin escala de flujo y sin
+        # presupuesto de error (7 columnas frente a las 18 del compañero).
+        "spec_psffit_star": paths.stage_dir / "spec_psffit_star.fits",
+        "spec_calibrated_psffit_star": paths.stage_dir / "spec_calibrated_psffit_star.fits",
         "stage_x11_qc_json": paths.stage_dir / "stage_x11_qc.json",
         "stage_x11_error_budget_png": paths.plot_dir / "stage_x11_error_budget.png",
         "stage_x11_continuum_png": paths.plot_dir / "stage_x11_continuum.png",
@@ -608,6 +615,85 @@ def _product_paths_from_config(cfg, paths):
     }
 
 
+def calibrate_star_product(cfg, paths, corrections):
+    """Calibra el espectro de la PRIMARIA con la misma cadena que el compañero.
+
+    Devuelve `(CalibratedProduct, resumen_qc)` o `(None, resumen_qc)` si C4 no
+    dejo el producto (p.ej. una cadena que no corrio psffit).
+
+    Los dos terminos de error quedan en columnas SEPARADAS, no fundidos:
+
+    * `flux_err_emp` — empirico de anillo. Es la dispersion del coeficiente de
+      la primaria entre los N ajustes psffit de control, colocados en un anillo
+      a la separacion del compañero alrededor de la estrella
+      (`extraction.psffit.control_psffit_spectra`). Mide cuanto se mueve el
+      flujo de la primaria segun donde se ponga la segunda componente: es un
+      sistematico del ajuste medido sobre el dato, no ruido de fotones.
+    * `flux_err_stat` + `sys_fluxcal` / `sys_psf` / `sys_sky` / `sys_telluric` /
+      `sys_continuum` — el presupuesto de sistematicos de D2, identico al del
+      compañero.
+    * `flux_err_total` — la suma en cuadratura de ambos bloques.
+
+    La primaria tiene S/N enorme, asi que su error NO esta dominado por el
+    termino estadistico sino por el presupuesto (calibracion absoluta de flujo
+    de A4/M3, PSF, telurico). Por eso importa poder mirarlos por separado.
+    """
+    path = Path(cfg.get("x11_spec_psffit_star", paths["spec_psffit_star"]))
+    if not path.exists():
+        return None, {"available": False, "reason": f"C4 no dejo {path.name} en este run"}
+    product = SpectrumProduct.read(path)
+    calibrated = calibrate_spectrum_product(
+        product,
+        corrections,
+        method="psffit",
+        canonical=False,
+        continuum_window_A=float(cfg.get("x11_continuum_window_A", 80.0)),
+        continuum_poly_deg=int(cfg.get("x11_continuum_poly_deg", 5)),
+        error_smooth_channels=int(cfg.get("x11_error_smooth_channels", 21)),
+    )
+    header = calibrated.product.header
+    header["SOURCE"] = "primary"
+    header["EMPSRC"] = "psffit control ring at the companion separation (C4)"
+    header["ERRSEP"] = "flux_err_emp (ring) and sys_* (budget) kept separate"
+
+    flux = np.asarray(calibrated.product.flux, dtype=np.float64)
+    extra = calibrated.product.extra_columns or {}
+    summary = {
+        "available": True,
+        "input": str(path),
+        "output": str(paths["spec_calibrated_psffit_star"]),
+        "n_channels": int(flux.size),
+        "median_snr_total": _finite_or_none(
+            _median_finite(np.abs(flux) / np.asarray(extra["flux_err_total"], dtype=np.float64))
+        ),
+        "median_snr_emp_only": _finite_or_none(
+            _median_finite(np.abs(flux) / np.asarray(calibrated.product.flux_err_emp, dtype=np.float64))
+        ),
+        "error_terms": {
+            "empirical_ring": "flux_err_emp",
+            "budget": ["flux_err_stat", "sys_fluxcal", "sys_psf", "sys_sky",
+                       "sys_telluric", "sys_continuum"],
+            "combined": "flux_err_total",
+        },
+        "median_error_fraction": {
+            name: _finite_or_none(
+                _median_finite(np.asarray(extra[name], dtype=np.float64) / np.abs(flux))
+            )
+            for name in ("flux_err_stat", "sys_fluxcal", "sys_psf", "sys_sky",
+                         "sys_telluric", "sys_continuum")
+        },
+        "median_empirical_fraction": _finite_or_none(
+            _median_finite(np.asarray(calibrated.product.flux_err_emp, dtype=np.float64) / np.abs(flux))
+        ),
+        "note": (
+            "La primaria es la fuente brillante: su error lo domina el presupuesto de "
+            "sistematicos, no el termino estadistico. El empirico de anillo se conserva "
+            "aparte porque mide otra cosa (estabilidad del ajuste), no ruido de fotones."
+        ),
+    }
+    return calibrated, summary
+
+
 def load_x11_products(product_paths):
     products = {}
     for method in METHOD_ORDER:
@@ -950,11 +1036,18 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
             qc["open_issues"].append("Continuum systematic around Halpha exceeds 20 pct of local statistical error.")
     if qc["checks"]["v1_skylines"]["ok"] is False:
         qc["open_issues"].append("V1 skyline residuals exceed 0.05 A after wavelength correction.")
+    star_calibrated, star_summary = calibrate_star_product(cfg, paths, corrections)
+    qc["primary_star"] = star_summary
+    if not star_summary.get("available"):
+        qc["open_issues"].append(
+            "Primary-star spectrum not calibrated: " + str(star_summary.get("reason", "unknown"))
+        )
     return StageX11Product(
         canonical_method=canonical_method,
         products=products,
         calibrated=calibrated,
         qc=_json_ready(qc),
+        star=star_calibrated,
     )
 
 
@@ -1020,11 +1113,16 @@ def write_stage_x11_products(product: StageX11Product, config, paths):
         product.calibrated[method].product.write(out, overwrite=True)
         output_products[method] = str(out)
     product.calibrated[product.canonical_method].product.write(paths["spec_final_object"], overwrite=True)
+    star_out = None
+    if product.star is not None:
+        star_out = paths["spec_calibrated_psffit_star"]
+        product.star.product.write(star_out, overwrite=True)
     plots = _write_stage_x11_plots(product, paths)
     qc = dict(product.qc)
     qc["products"] = {
         "final_object": str(paths["spec_final_object"]),
         "calibrated_by_method": output_products,
+        "calibrated_star": None if star_out is None else str(star_out),
     }
     qc["plots"] = plots
     write_json(paths["stage_x11_qc_json"], _json_ready(qc))
