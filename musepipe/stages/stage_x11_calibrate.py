@@ -127,6 +127,10 @@ def stage_x11_paths(run_id, project_root=None):
         "stage_x11_error_budget_png": paths.plot_dir / "stage_x11_error_budget.png",
         "stage_x11_continuum_png": paths.plot_dir / "stage_x11_continuum.png",
         "stage_x11_multimethod_png": paths.plot_dir / "stage_x11_multimethod.png",
+        # Los espectros definitivos (6 metodos + primaria) como entregable, no
+        # como diagnostico: `stage_x11_multimethod.png` superpone los 6 crudos
+        # y sin unidad, que sirve para mirar de reojo pero no para presentar.
+        "stage_x11_spectra_png": paths.plot_dir / "stage_x11_spectra.png",
     }
 
 
@@ -1042,6 +1046,12 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
         qc["open_issues"].append(
             "Primary-star spectrum not calibrated: " + str(star_summary.get("reason", "unknown"))
         )
+    qc["spectra"] = _spectra_summary(canonical_method, calibrated, star_calibrated)
+    if not qc["spectra"]["unit_consistent"]:
+        qc["open_issues"].append(
+            "Los espectros calibrados no comparten una unidad declarada: "
+            f"{qc['spectra']['unit']} (ver musepipe.io.resolve_bunit y B1/B2)."
+        )
     return StageX11Product(
         canonical_method=canonical_method,
         products=products,
@@ -1049,6 +1059,110 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
         qc=_json_ready(qc),
         star=star_calibrated,
     )
+
+
+#: Banda roja donde el compañero SE detecta. Las cifras de la tabla de espectros
+#: se dan aqui y no sobre toda la rejilla: en el azul su S/N < 1, asi que una
+#: mediana global mediria ruido y haria parecer inconsistentes a los 6 metodos.
+SPECTRA_RED_BAND_A = (7500.0, 9000.0)
+
+#: sgf destruye el continuo por construccion (Julo et al. 2025 Sect. 2.1): su
+#: nivel no es comparable con el de los demas, solo su linea.
+CONTINUUM_FREE_METHODS = ("sgf",)
+
+
+def _spectrum_row(name, role, cal, *, canonical=False, red_reference=None):
+    """Una fila de la tabla de espectros definitivos."""
+    product = cal.product
+    wave = np.asarray(product.wave_A, dtype=np.float64)
+    flux = np.asarray(product.flux, dtype=np.float64)
+    extra = product.extra_columns or {}
+    err = np.asarray(extra.get("flux_err_total", product.flux_err), dtype=np.float64)
+    red = (wave >= SPECTRA_RED_BAND_A[0]) & (wave <= SPECTRA_RED_BAND_A[1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        snr = np.abs(flux) / err
+    cont = np.asarray(
+        extra.get("cont_runmed_biasref", extra.get("cont_runmed", flux)), dtype=np.float64
+    )
+    red_cont = _median_finite(cont[red])
+    row = {
+        "name": str(name),
+        "role": str(role),
+        "canonical": bool(canonical),
+        "n_channels": int(flux.size),
+        "wave_min_A": float(np.nanmin(wave)) if wave.size else None,
+        "wave_max_A": float(np.nanmax(wave)) if wave.size else None,
+        "bunit": str(product.header.get("BUNIT", "")),
+        "flux_median": _finite_or_none(_median_finite(flux)),
+        "flux_err_total_median": _finite_or_none(_median_finite(err)),
+        "snr_median": _finite_or_none(_median_finite(snr)),
+        "red_band_A": list(SPECTRA_RED_BAND_A),
+        "red_flux_median": _finite_or_none(_median_finite(flux[red])),
+        "red_snr_median": _finite_or_none(_median_finite(snr[red])),
+        "red_continuum_median": _finite_or_none(red_cont),
+        "ratio_to_canonical_red": None,
+        "caveat": None,
+    }
+    if red_reference not in (None, 0.0) and np.isfinite(red_cont) and np.isfinite(red_reference):
+        row["ratio_to_canonical_red"] = _finite_or_none(red_cont / float(red_reference))
+    if name in CONTINUUM_FREE_METHODS:
+        row["caveat"] = (
+            "sgf filtra el continuo por construccion: su nivel (y su cociente al canonico) "
+            "no es comparable; su valor esta en la linea, no en el continuo."
+        )
+    elif np.isfinite(red_cont) and red_cont < -abs(row["flux_err_total_median"] or 0.0):
+        # Un cociente negativo desconcierta si no se dice de donde viene: es el
+        # residuo de halo AO cromatico sobre-sustraido, no un error de signo.
+        # Solo se avisa si el continuo negativo SUPERA el error total: un nivel
+        # compatible con cero (sgf/lpm filtran el continuo) no es sobre-sustraccion.
+        row["caveat"] = (
+            "continuo negativo en el rojo: sobre-sustraccion del halo AO cromatico "
+            "(docs/d2_red_continuum_diagnosis.md), emparejada en los controles. El cociente "
+            "al canonico sale negativo por eso."
+        )
+    return row
+
+
+def _spectra_summary(canonical_method, calibrated, star=None) -> dict:
+    """Tabla de los espectros definitivos: los 6 metodos + la primaria.
+
+    Los espectros calibrados son un resultado en si mismos, no solo la entrada
+    de E1: el compañero por los 6 metodos (misma rejilla, superponibles) y la
+    primaria, todos con unidad y error total. Esta seccion los deja listados en
+    el QC para que el notebook los presente sin recalcular nada.
+    """
+    canonical_row = _spectrum_row(
+        canonical_method, "companion", calibrated[canonical_method], canonical=True
+    )
+    reference = canonical_row["red_continuum_median"]
+    rows = [canonical_row]
+    for method in METHOD_ORDER:
+        if method == canonical_method:
+            continue
+        rows.append(
+            _spectrum_row(method, "companion", calibrated[method], red_reference=reference)
+        )
+    if star is not None:
+        rows.append(_spectrum_row("psffit_star", "primary", star))
+    waves = [np.asarray(cal.product.wave_A, dtype=np.float64) for cal in calibrated.values()]
+    same_grid = all(
+        w.size == waves[0].size and np.allclose(w, waves[0], rtol=0, atol=1e-6) for w in waves[1:]
+    )
+    units = {row["bunit"] for row in rows}
+    return {
+        "n_companion": sum(1 for row in rows if row["role"] == "companion"),
+        "n_primary": sum(1 for row in rows if row["role"] == "primary"),
+        "unit": sorted(units)[0] if len(units) == 1 else sorted(units),
+        "unit_consistent": len(units) == 1 and "" not in units,
+        "companions_share_grid": bool(same_grid),
+        "red_band_A": list(SPECTRA_RED_BAND_A),
+        "table": rows,
+        "note": (
+            "Medianas en la banda roja porque el compañero solo se detecta ahi. El cociente "
+            "al canonico usa el continuo referenciado a controles (cont_runmed_biasref) "
+            "cuando existe, que es la comparacion inter-metodo que gatea D1/v3."
+        ),
+    }
 
 
 def _calibrated_output_path(paths, method):
@@ -1098,11 +1212,145 @@ def _write_stage_x11_plots(product: StageX11Product, paths):
     ax.legend(fontsize=8)
     fig.savefig(paths["stage_x11_multimethod_png"], dpi=160)
     plt.close(fig)
-    return {
+
+    plots = {
         "continuum": str(paths["stage_x11_continuum_png"]),
         "error_budget": str(paths["stage_x11_error_budget_png"]),
         "multimethod": str(paths["stage_x11_multimethod_png"]),
     }
+    fig, _ = definitive_spectra_figure(paths["spec_final_object"].parent, plt=plt)
+    out = paths["stage_x11_spectra_png"]
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    plots["spectra"] = str(out)
+    return plots
+
+
+def _robust_limits(series, *, low=0.5, high=99.5, pad=0.15):
+    """Limites por percentil, para que un canal aislado no fije la escala."""
+    values = np.concatenate([np.asarray(s, dtype=np.float64).ravel() for s in series])
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return (-1.0, 1.0)
+    lo, hi = np.percentile(values, [low, high])
+    if hi <= lo:
+        lo, hi = float(np.nanmin(values)), float(np.nanmax(values))
+    if hi <= lo:
+        return (lo - 1.0, hi + 1.0)
+    margin = pad * (hi - lo)
+    return (float(lo - margin), float(hi + margin))
+
+
+def definitive_spectra_figure(stage_dir, *, canonical_method=None, plt=None, smooth_channels=15):
+    """Los espectros definitivos, presentables: los 6 metodos + la primaria.
+
+    Lee los productos calibrados de `stage_dir` (no re-ejecuta nada), asi que el
+    notebook D2 la dibuja igual que la etapa en vez de duplicar el codigo.
+    Devuelve `(fig, axes)`; quien llama decide si la guarda o la muestra.
+
+    Tres paneles con el mismo eje λ porque son tres escalas distintas: la
+    primaria es ~1e3-1e4 veces mas brillante que el compañero, y lo que se
+    compara entre metodos es el continuo, no el flujo canal a canal. El flujo
+    del compañero va suavizado para que se lean los 6 a la vez, sobre la banda
+    de error total del canonico (sin suavizar).
+    """
+    if plt is None:  # pragma: no cover - conveniencia para uso interactivo
+        import matplotlib.pyplot as plt
+    stage_dir = Path(stage_dir)
+    products = {}
+    for method in METHOD_ORDER:
+        path = stage_dir / f"spec_calibrated_{method}_object.fits"
+        if path.exists():
+            products[method] = SpectrumProduct.read(path)
+    if not products:
+        raise FileNotFoundError(f"No hay productos calibrados de D2 en {stage_dir}")
+    star_path = stage_dir / "spec_calibrated_psffit_star.fits"
+    star = SpectrumProduct.read(star_path) if star_path.exists() else None
+    if canonical_method is None:
+        canonical_method = next(
+            (m for m, p in products.items() if bool(p.header.get("CANON", False))),
+            next(iter(products)),
+        )
+
+    def _err(product):
+        extra = product.extra_columns or {}
+        return np.asarray(extra.get("flux_err_total", product.flux_err), dtype=np.float64)
+
+    canonical = products[canonical_method]
+    unit = str(canonical.header.get("BUNIT", "")) or "sin unidad declarada"
+    nrows = 3 if star is not None else 2
+    heights = ([1.0] if star is not None else []) + [1.5, 1.0]
+    fig, axes = plt.subplots(
+        nrows, 1, figsize=(11, 3.1 * nrows), sharex=True,
+        gridspec_kw={"height_ratios": heights}, constrained_layout=True,
+    )
+    axes = list(np.atleast_1d(axes))
+    panels = iter(axes)
+
+    if star is not None:
+        ax = next(panels)
+        swave = np.asarray(star.wave_A, dtype=np.float64)
+        sflux = np.asarray(star.flux, dtype=np.float64)
+        serr = _err(star)
+        ax.fill_between(swave, sflux - serr, sflux + serr, color="tab:orange", alpha=0.30,
+                        lw=0, label="± error total (stat + sistematicos)")
+        ax.plot(swave, sflux, lw=0.7, color="k", label="primaria (psffit)")
+        ax.set_ylabel(f"flujo primaria\n[{unit}]", fontsize=8)
+        ax.legend(fontsize=7, loc="upper left")
+
+    ax = next(panels)
+    wave = np.asarray(canonical.wave_A, dtype=np.float64)
+    cerr = _err(canonical)
+    ax.fill_between(wave, -cerr, cerr, color="0.75", alpha=0.45, lw=0,
+                    label="± error total (canonico)")
+    drawn = []
+    for method, product in products.items():
+        is_canonical = method == canonical_method
+        smoothed = median_filter_1d(np.asarray(product.flux, dtype=np.float64), width=smooth_channels)
+        drawn.append(smoothed)
+        ax.plot(
+            np.asarray(product.wave_A, dtype=np.float64), smoothed,
+            lw=1.4 if is_canonical else 0.8, color="k" if is_canonical else None,
+            zorder=3 if is_canonical else 2,
+            label=f"{method} (canonico)" if is_canonical else method,
+        )
+    # Escala robusta: un solo canal en el borde del notch AO (~6000 A) es 20
+    # veces el continuo del compañero y aplastaria los 6 espectros.
+    ax.set_ylim(*_robust_limits(drawn + [cerr, -cerr]))
+    ax.axhline(0.0, color="0.6", lw=0.6)
+    ax.axvline(6562.8, color="tab:red", ls=":", lw=1.0)
+    ax.set_ylabel(f"flujo compañero\n[{unit}]", fontsize=8)
+    ax.set_title(f"compañero: flujo suavizado {smooth_channels} canales (Hα en rojo)", fontsize=9)
+    ax.legend(fontsize=7, ncol=4, loc="upper left")
+
+    ax = next(panels)
+    ax.axvspan(*SPECTRA_RED_BAND_A, color="tab:red", alpha=0.06, lw=0)
+    for method, product in products.items():
+        extra = product.extra_columns or {}
+        cont = extra.get("cont_runmed_biasref", extra.get("cont_runmed"))
+        if cont is None:
+            continue
+        ax.plot(
+            np.asarray(product.wave_A, dtype=np.float64),
+            np.asarray(cont, dtype=np.float64),
+            lw=1.4 if method == canonical_method else 0.9,
+            color="k" if method == canonical_method else None, label=method,
+        )
+    ax.axhline(0.0, color="0.6", lw=0.6)
+    ax.set_xlabel("λ [Å]")
+    ax.set_ylabel(f"continuo\n[{unit}]", fontsize=8)
+    ax.set_title(
+        "continuo referenciado a controles: la comparacion inter-metodo "
+        f"(banda sombreada {SPECTRA_RED_BAND_A[0]:.0f}-{SPECTRA_RED_BAND_A[1]:.0f} A = donde el "
+        "compañero se detecta)", fontsize=9,
+    )
+    ax.legend(fontsize=7, ncol=6, loc="upper left")
+    fig.suptitle(
+        f"D2 · espectros definitivos: {len(products)} metodos"
+        + (" + la primaria" if star is not None else ""),
+        fontsize=11,
+    )
+    return fig, axes
 
 
 def write_stage_x11_products(product: StageX11Product, config, paths):

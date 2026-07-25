@@ -19,9 +19,14 @@ from .stage_x01_aperture import run_stage_x01, stage_x01_config_from_run
 from .stage_x02_optimal import run_stage_x02, stage_x02_config_from_run
 from .stage_x03_psffit import run_stage_x03, stage_x03_config_from_run
 from .stage_x10_compare import run_stage_x10, stage_x10_config_from_run
-from .stage_x11_calibrate import run_stage_x11, stage_x11_config_from_run
+from .stage_x11_calibrate import (
+    definitive_spectra_figure,
+    run_stage_x11,
+    stage_x11_config_from_run,
+)
 
 __all__ = [
+    "definitive_spectra_figure",
     "run_stage01",
     "run_stage01c",
     "run_stage02",

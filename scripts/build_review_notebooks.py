@@ -2713,14 +2713,21 @@ STAGES: list[dict] = [
     dict(
         id="D2", slug="D2_calibrate", title="Calibración espectral", block="D · Método",
         spec="spec_D2_codex_spectral_calibration.md", run_override=None,
-        what="Calibra el espectro canónico (Δλ, escala de flujo, continuo) y produce `spec_final_object.fits`.",
-        inputs="Método canónico (psffit) + M3", outputs="`stages/stage_x11_qc.json`, `spec_final_object.fits`",
+        what=("Calibra los 6 métodos y la primaria (Δλ, escala de flujo, continuo, presupuesto de "
+              "error) y produce los espectros definitivos, con `spec_final_object.fits` como canónico."),
+        inputs="Los 6 métodos + la primaria de C4 + M3",
+        outputs=("`stages/stage_x11_qc.json`, `spec_final_object.fits`, "
+                 "`spec_calibrated_<método>_object.fits` (6), `spec_calibrated_psffit_star.fits`"),
         downstream="E1, E3, G2",
         exec=dict(kind="script", target="stage_x11_calibrate.sh", cost="Ligero–moderado."),
         qc="stages/stage_x11_qc.json",
         salient=["canonical_method", "scale_factor", "v3_continuum_stable.ok", "fraction_channels_methods_agree", "control_referenced"],
         narrative_md=(
             "## Qué hace D2 y qué integramos\n\n"
+            "**Los espectros definitivos son el entregable de esta etapa**, no solo la entrada de "
+            "E1: el compañero por los **6 métodos** (misma rejilla, superponibles) y la "
+            "**primaria** (`spec_calibrated_psffit_star.fits`), todos con unidad declarada "
+            "(`BUNIT`) y error total. El canónico se copia además a `spec_final_object.fits`.\n\n"
             "D2 convierte el espectro canónico (psffit) en el **producto científico final**: λ "
             "corregida y en marco declarado, flujo en escala validada, continuo por dos vías, y un "
             "**error total con presupuesto de sistemáticos explícito**. **Aplica factores medidos "
@@ -2760,7 +2767,27 @@ STAGES: list[dict] = [
             "print(f\"  DESPUÉS (referenciado) fraction_agree={ar['fraction_channels_methods_agree']:.3f}  red_ratio={ar['red_band_median_ratio']:.2f}×\")\n"
             "print(f\"  sesgo rojo psffit/psfsub = {ar['canonical_control_bias_red']:+.0f} / {ar['other_control_bias_red']:+.0f}\")\n"
             "v3 = q['checks']['v3_continuum_stable']\n"
-            "print(f\"\\nv3_continuum_stable: ok={v3['ok']} (métrica={v3['metric']}, umbral {v3['threshold']}) -> falla por el sistemático genuino\")"
+            "print(f\"\\nv3_continuum_stable: ok={v3['ok']} (métrica={v3['metric']}, umbral {v3['threshold']}) -> falla por el sistemático genuino\")\n"
+            "\n"
+            "# Los espectros definitivos: la tabla que D2 deja en su QC.\n"
+            "sp = q.get('spectra')\n"
+            "if sp is None:\n"
+            "    print('\\n(este QC es anterior a la tabla de espectros: re-ejecuta D2 para tenerla)')\n"
+            "else:\n"
+            "    n = lambda v, f='{:.1f}': '—' if v is None else f.format(v)\n"
+            "    print(f\"\\nespectros definitivos: {sp['n_companion']} métodos + {sp['n_primary']} primaria\"\n"
+            "          f\" | unidad {sp['unit']} (consistente={sp['unit_consistent']})\"\n"
+            "          f\" | misma rejilla={sp['companions_share_grid']}\")\n"
+            "    print(f\"medianas en {sp['red_band_A'][0]:.0f}–{sp['red_band_A'][1]:.0f} Å (donde el compañero se detecta)\")\n"
+            "    print(f\"  {'espectro':16s} {'papel':10s} {'S/N':>7s} {'flujo':>10s} {'err total':>10s} {'ratio/canon':>12s}\")\n"
+            "    for row in sp['table']:\n"
+            "        tag = row['name'] + (' *' if row['canonical'] else '')\n"
+            "        print(f\"  {tag:16s} {row['role']:10s} {n(row['red_snr_median']):>7s}\"\n"
+            "              f\" {n(row['red_flux_median']):>10s} {n(row['flux_err_total_median']):>10s}\"\n"
+            "              f\" {n(row['ratio_to_canonical_red'], '{:.2f}×'):>12s}\")\n"
+            "    for row in sp['table']:\n"
+            "        if row['caveat']:\n"
+            "            print(f\"  ! {row['name']}: {row['caveat']}\")"
         ),
         plots=[
             dict(
@@ -2835,8 +2862,39 @@ STAGES: list[dict] = [
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
+            dict(
+                md=(
+                    "## Plot 3 — los espectros definitivos (6 métodos + la primaria)\n\n"
+                    "El entregable de D2 en una figura, dibujada con la **misma función que usa la "
+                    "etapa** (`musepipe.stages.definitive_spectra_figure`), leyendo los productos "
+                    "calibrados del run:\n\n"
+                    "- **arriba:** la **primaria** con su banda de error total (stat + sistemáticos). "
+                    "Está ~1e3–1e4 veces por encima del compañero, así que necesita su propio panel.\n"
+                    "- **centro:** el **compañero por los 6 métodos**, suavizado 15 canales para que "
+                    "se lean a la vez, sobre la banda de error total del canónico (sin suavizar). "
+                    "Hα en rojo punteado.\n"
+                    "- **abajo:** el **continuo referenciado a controles** — la comparación "
+                    "inter-método real (la del gate v3); la banda sombreada es el rojo, donde el "
+                    "compañero se detecta.\n\n"
+                    "*(`sgf` filtra el continuo por construcción: su nivel no es comparable, su valor "
+                    "está en la línea.)*"
+                ),
+                code=(
+                    "try:\n"
+                    "    import matplotlib.pyplot as plt\n"
+                    "    from musepipe.stages import definitive_spectra_figure\n"
+                    "    rd = nb.run_dir(RUN_ID)\n"
+                    "    fig, axes = definitive_spectra_figure(rd / 'stages', plt=plt)\n"
+                    "    outdir = rd / 'plots' / 'd2_calibrate'; outdir.mkdir(parents=True, exist_ok=True)\n"
+                    "    fig.savefig(outdir / 'definitive_spectra.png', dpi=110)\n"
+                    "    print('figura ->', outdir / 'definitive_spectra.png'); plt.show()\n"
+                    "except Exception as e:\n"
+                    "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
         ],
         decisions=[
+            ("**Los espectros definitivos (6 métodos + primaria) son el entregable de D2**, antes del estudio de Hα: todos con `BUNIT` declarado y error total; la tabla vive en `qc['spectra']` y la figura en `plots/stage_x11_spectra.png`.", "espectros_definitivos_handoff_2026-07-25.md"),
             ("**Diagnóstico honesto del 'continuo rojo inestable'**: 3 cosas reales (señal de enana fría + sistemático de nivel inter-método + rigidez del polinomio). NO es defecto de PSF.", "d2_red_continuum_diagnosis.md"),
             ("**Referenciación a controles integrada** (2026-07-11): v3 gatea sobre la métrica referenciada (0.867 vs cruda 0.317); sistemático rojo 1.76×→1.35×; columna `cont_runmed_biasref` entregada para G3.", None),
             ("D1 **ya era control-centrado** (su veredicto refleja el sistemático genuino); esto solo puso a D2 al mismo nivel. v3 sigue <0.90 → sistemático cromático genuino, limitación aceptada en F1.", None),
@@ -2855,6 +2913,9 @@ STAGES: list[dict] = [
             "- **v3 sigue fallando** (0.867<0.90) por el sistemático cromático genuino → limitación "
             "aceptada; F1 sigue yellow.\n"
             "- **Endpoint intacto:** la línea Hα (E1) y el límite de Ṁ (E3) no dependen de esto.\n"
+            "- **Espectros definitivos:** los 6 métodos + la primaria, con unidad y error total "
+            "(tabla en `qc['spectra']`, figura en `plots/stage_x11_spectra.png`) — resultado en sí "
+            "mismos, entregados antes del estudio de Hα.\n"
             "- **Downstream:** `spec_final_object` alimenta E1, E3 y G2."
         ),
     ),
