@@ -72,6 +72,24 @@ INLINE_SOURCES = {
             "aperture_correction_from_psf",
         ]),
     ],
+    # C3 comparte con C2 el fondo de anillo, los flags y la apcorr — es el mismo
+    # contrato de la etapa — y añade lo suyo: el estimador optimo de Horne y el
+    # ajuste de la PSF de la primaria, que es lo que separa las dos variantes.
+    "C3": [
+        ("musepipe/stats.py", ["finite_values", "robust_sigma", "robust_sigma_axis0"]),
+        ("musepipe/apertures.py", [
+            "angular_separation_deg", "aperture_weights", "same_radius_control_positions",
+        ]),
+        ("musepipe/extraction/aperture.py", [
+            "_as_cube", "annulus_background_spectrum", "_flag_window", "channel_flags",
+            "aperture_correction_from_psf",
+        ]),
+        ("musepipe/extraction/optimal.py", [
+            "circular_window_indices", "normalized_psf_window", "covariance_factor_for_npix",
+            "_channel_estimate", "estimate_variance_cube", "optimal_raw_spectrum",
+            "control_optimal_spectra", "psf_image", "fit_primary_psf_model_cube",
+        ]),
+    ],
 }
 
 
@@ -157,33 +175,12 @@ def needed_constants(sources):
     return out
 
 
-def _knobs_from_config(run_id):
-    """Los valores que la cadena usa en ESTE run, para escribirlos como literales."""
-    path = ROOT / "runs" / run_id / "config" / "config.json"
-    cfg = {}
-    if path.exists():
-        try:
-            cfg = json.loads(path.read_text(encoding="utf-8")).get("config", {})
-        except (OSError, ValueError):
-            cfg = {}
-    return {
-        "x01_aperture_correction": cfg.get("x01_aperture_correction", "auto"),
-        "x01_annulus_bkg_px": cfg.get("x01_annulus_bkg_px", [8.0, 14.0, 30.0]),
-        "x01_control_apertures": int(cfg.get("x01_control_apertures", 8)),
-        "x01_control_exclude_angle_deg": float(cfg.get("x01_control_exclude_angle_deg", 25.0)),
-        "x01_error_mode": cfg.get("x01_error_mode", "auto"),
-        "x01_wings_intact_apcorr": bool(cfg.get("x01_wings_intact_apcorr", True)),
-        "x01_bad_windows_A": cfg.get("x01_bad_windows_A", []),
-        "x01_skyline_windows_A": cfg.get("x01_skyline_windows_A", []),
-        "x01_interpolated_windows_A": cfg.get("x01_interpolated_windows_A", []),
-    }
 
 
 def build_c2_cells(mb, target, run_id):
     """Las celdas de `C2_aperture_debug` para un objeto."""
     md, code = mb.md, mb.code
     sources = extract_sources("C2")
-    knobs = _knobs_from_config(run_id)
     inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
     shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
 
@@ -232,22 +229,29 @@ def build_c2_cells(mb, target, run_id):
         ),
         md(
             "## 1 · Perillas\n\n"
-            "Los valores son los que **la cadena usa en este run** (leídos de su `config.json` al "
-            "generar el notebook). Cambia cualquiera y vuelve a ejecutar desde aquí: la celda de "
-            "comparación del final te dirá exactamente qué efecto tuvo."
+            "Salen del **config resuelto de la etapa**, no del `config.json` crudo: C2 rellena "
+            "defaults que no están escritos en el run, y copiarlos a mano es exactamente cómo se "
+            "consigue un notebook que no reproduce la cadena. Cambia lo que quieras **debajo** de "
+            "la lectura y vuelve a ejecutar: la comparación del final dirá qué efecto tuvo."
         ),
         code(
+            "from musepipe.stages.stage_x01_aperture import stage_x01_config_from_run\n\n"
+            "X01 = stage_x01_config_from_run(RUN_ID)   # config del run + defaults de la etapa\n"
             "APERTURE            = {'kind': 'box', 'size': 3}   # la caja que se compara con la cadena\n"
-            f"APCORR_MODE         = {knobs['x01_aperture_correction']!r}   # cfg x01_aperture_correction\n"
-            f"WINGS_INTACT        = {knobs['x01_wings_intact_apcorr']!r}   # cfg x01_wings_intact_apcorr\n"
-            f"ANNULUS_BKG_PX      = {knobs['x01_annulus_bkg_px']!r}   # cfg x01_annulus_bkg_px\n"
-            f"N_CONTROLS          = {knobs['x01_control_apertures']!r}   # cfg x01_control_apertures\n"
-            f"EXCLUDE_ANGLE_DEG   = {knobs['x01_control_exclude_angle_deg']!r}   # cfg x01_control_exclude_angle_deg\n"
-            f"ERROR_MODE          = {knobs['x01_error_mode']!r}   # cfg x01_error_mode\n"
-            f"BAD_WINDOWS_A       = {knobs['x01_bad_windows_A']!r}\n"
-            f"SKYLINE_WINDOWS_A   = {knobs['x01_skyline_windows_A']!r}\n"
-            f"INTERPOLATED_WIN_A  = {knobs['x01_interpolated_windows_A']!r}\n"
-            "print('perillas listas; APERTURE =', APERTURE)"
+            "APCORR_MODE         = X01.get('x01_aperture_correction', 'auto')\n"
+            "WINGS_INTACT        = bool(X01.get('x01_wings_intact_apcorr', True))\n"
+            "ANNULUS_BKG_PX      = X01.get('x01_annulus_bkg_px', [8.0, 14.0, 30.0])\n"
+            "N_CONTROLS          = int(X01.get('x01_control_apertures', 8))\n"
+            "EXCLUDE_ANGLE_DEG   = float(X01.get('x01_control_exclude_angle_deg', 25.0))\n"
+            "ERROR_MODE          = X01.get('x01_error_mode', 'auto')\n"
+            "BAD_WINDOWS_A       = X01.get('x01_bad_windows_A', [])\n"
+            "SKYLINE_WINDOWS_A   = X01.get('x01_skyline_windows_A', [])\n"
+            "INTERPOLATED_WIN_A  = X01.get('x01_interpolated_windows_A', [])\n\n"
+            "# ---- a partir de aquí, cambia lo que quieras probar ----\n\n"
+            "for _k, _v in {'apertura': APERTURE, 'apcorr': APCORR_MODE, 'wings-intact': WINGS_INTACT,\n"
+            "               'anillo fondo': ANNULUS_BKG_PX, 'controles': N_CONTROLS,\n"
+            "               'modo error': ERROR_MODE}.items():\n"
+            "    print(f'  {_k:14s} {_v}')"
         ),
         md(
             "## 2 · Entradas\n\n"
@@ -554,7 +558,315 @@ def build_c2_cells(mb, target, run_id):
     return cells
 
 
-BUILDERS = {"C2": ("C2_aperture_debug", build_c2_cells)}
+
+
+def build_c3_cells(mb, target, run_id):
+    """Las celdas de `C3_optimal_debug`: el estimador óptimo y sus DOS variantes."""
+    md, code = mb.md, mb.code
+    sources = extract_sources("C3")
+    inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
+    shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+
+    return [
+        md(
+            f"# C3 · extracción óptima — notebook de análisis (`debug`)\n\n"
+            f"**Objeto:** {target}  |  **Run:** `{run_id}`  |  "
+            f"**Spec:** [`docs/spec_C3_codex_optimal_extraction.md`]"
+            f"(../../../docs/spec_C3_codex_optimal_extraction.md)\n\n"
+            "Rehace C3 **dentro del notebook**, con el código a la vista y editable, para probar "
+            "y ajustar sin tocar `musepipe`. El notebook de auditoría es "
+            "[`../C3_optimal.ipynb`](../C3_optimal.ipynb).\n\n"
+            "**C3 produce dos métodos, no uno.** El estimador es el mismo — Horne (1986): por "
+            "canal, cada píxel pesa por el perfil de PSF esperado y por la inversa de su varianza, "
+            "`f = Σ M·P·D/V ÷ Σ M·P²/V` — y lo que cambia es **el cubo del que se extrae**:\n\n"
+            "| variante | cubo | por qué existe |\n|---|---|---|\n"
+            "| `optimal_ls` | residual de superficie local (04b) | **mismo fondo que C2**, así que "
+            "compararlos aísla la ganancia del ponderado óptimo |\n"
+            "| `optimal_psfsub` | cubo de B2 menos el **modelo de PSF de la primaria**, ajustado "
+            "aquí canal a canal | anticipa el fondo de C4; `ls` vs `psfsub` es el diagnóstico del "
+            "modelo de halo que consume D1 |\n\n"
+            "Aquí se hacen **las dos**, en paralelo, y la comparación final las contrasta por "
+            "separado contra sus productos de la cadena."
+        ),
+        code(
+            "import json, sys\n"
+            "from pathlib import Path\n\n"
+            "import numpy as np\n"
+            "from astropy.io import fits\n"
+            "import matplotlib.pyplot as plt\n\n"
+            "_here = Path.cwd()\n"
+            "ROOT = next(p for p in (_here, *_here.parents) if (p / 'musepipe').is_dir())\n"
+            "sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'notebooks'))\n"
+            "import _nbcommon as nb\n\n"
+            f"RUN_ID = nb.resolve_run_id({run_id!r})\n"
+            "RD = nb.run_dir(RUN_ID); SD = RD / 'stages'\n"
+            "CFG = json.loads((RD / 'config' / 'config.json').read_text(encoding='utf-8'))['config']\n"
+            "TARGET = nb.run_target(RUN_ID) or nb.display_name(RUN_ID)\n"
+            "print('objeto :', TARGET, '·', nb.display_name(RUN_ID))\n"
+            "print('run    :', RUN_ID)"
+        ),
+        md(
+            "## 1 · Perillas\n\n"
+            "Salen del **config resuelto de la etapa**, no del `config.json` crudo: C3 rellena "
+            "defaults que no están escritos en el run (`x02_local_bkg_annulus_px` hereda de "
+            "`x01_annulus_bkg_px`, el radio de ajuste de la primaria de `psf_norm_radius_px`…), y "
+            "copiarlos a mano es exactamente cómo se consigue un notebook que no reproduce la "
+            "cadena. Cambia lo que quieras **debajo** de la lectura y vuelve a ejecutar.\n\n"
+            "`WINDOW_RADIUS_PX` es la que más mueve el resultado: define hasta dónde llega el "
+            "ponderado, y la fracción de PSF que queda fuera la recupera después `apcorr`."
+        ),
+        code(
+            "from musepipe.stages.stage_x02_optimal import stage_x02_config_from_run\n\n"
+            "X02 = stage_x02_config_from_run(RUN_ID)   # config del run + defaults de la etapa\n"
+            "WINDOW_RADIUS_PX     = float(X02.get('x02_window_radius_px', 8.0))\n"
+            "CLIP_SIGMA           = float(X02.get('x02_clip_sigma', 4.0))\n"
+            "CLIP_MAX_ITER        = int(X02.get('x02_clip_max_iter', 2))\n"
+            "APCORR_MODE          = X02.get('x02_aperture_correction', 'auto')\n"
+            "ERROR_MODE           = X02.get('x02_error_mode', 'auto')\n"
+            "N_CONTROLS           = int(X02.get('x02_control_apertures', 8))\n"
+            "EXCLUDE_ANGLE_DEG    = float(X02.get('x02_control_exclude_angle_deg', 25.0))\n"
+            "LOCAL_BKG_ANNULUS_PX = X02.get('x02_local_bkg_annulus_px')\n"
+            "PRIMARY_FIT_RADIUS   = float(X02.get('x02_primary_fit_radius_px', 25.0))\n"
+            "PRIMARY_EXCL_RADIUS  = float(X02.get('x02_primary_exclude_radius_px', WINDOW_RADIUS_PX))\n"
+            "BAD_WINDOWS_A        = X02.get('x02_bad_windows_A', [])\n"
+            "SKYLINE_WINDOWS_A    = X02.get('x02_skyline_windows_A', [])\n"
+            "INTERPOLATED_WIN_A   = X02.get('x02_interpolated_windows_A', [])\n\n"
+            "# ---- a partir de aquí, cambia lo que quieras probar ----\n\n"
+            "for _k, _v in sorted({'ventana (px)': WINDOW_RADIUS_PX, 'clip σ': CLIP_SIGMA,\n"
+            "                      'clip iter': CLIP_MAX_ITER, 'apcorr': APCORR_MODE,\n"
+            "                      'modo error': ERROR_MODE, 'controles': N_CONTROLS,\n"
+            "                      'anillo fondo': LOCAL_BKG_ANNULUS_PX,\n"
+            "                      'radio ajuste primaria': PRIMARY_FIT_RADIUS,\n"
+            "                      'radio exclusión compañero': PRIMARY_EXCL_RADIUS}.items()):\n"
+            "    print(f'  {_k:26s} {_v}')"
+        ),
+        md(
+            "## 2 · Entradas — **los dos cubos**\n\n"
+            "`ls` sale del residual de 04b; `psfsub` del cubo de B2. Los dos deben tener la misma "
+            "forma: la cadena lo exige y para aquí si no (serían dos rejillas distintas)."
+        ),
+        code(
+            "qc_b3 = json.loads((SD / 'stage01c_qc.json').read_text(encoding='utf-8'))\n"
+            "OBJECT_YX = tuple(float(v) for v in qc_b3['companion']['pos_yx'])\n"
+            "STAR_YX   = tuple(float(v) for v in qc_b3['primary']['pos_yx'])\n"
+            "PSF_MODEL = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n\n"
+            "with fits.open(SD / 'stage02_xcorr_cube_stack.fits') as h:\n"
+            "    STAGE02 = np.asarray(h['CUBES'].data, dtype=float)\n"
+            "    WAVE = np.asarray(h['WAVELENGTH'].data, dtype=float)\n"
+            "    STAT_CUBE = np.asarray(h['STAT'].data, dtype=float) if 'STAT' in h else None\n"
+            "if STAGE02.ndim == 4:\n"
+            "    STAGE02 = STAGE02[0]\n"
+            "if STAT_CUBE is not None and STAT_CUBE.ndim == 4:\n"
+            "    STAT_CUBE = STAT_CUBE[0]\n"
+            "LS_CUBE = np.asarray(fits.getdata(SD / 'cube_residual_local_object.fits'), dtype=float)\n"
+            "assert LS_CUBE.shape == STAGE02.shape, (LS_CUBE.shape, STAGE02.shape)\n\n"
+            "qc00 = json.loads((SD / 'stage00q_qc.json').read_text(encoding='utf-8'))\n"
+            "qc01 = json.loads((SD / 'stage01_qc.json').read_text(encoding='utf-8'))\n"
+            "m5 = qc00.get('m5_stat', {})\n"
+            "# El STAT crudo se multiplica por el factor POR SPAXEL de M5 (aquí no es 1:\n"
+            "# el DRS subestima la varianza) antes de entrar como peso del estimador.\n"
+            "STAT_FACTOR = float(X02.get('x02_stat_factor_spaxel',\n"
+            "                            m5.get('factor_spaxel_median', 1.0)) or 1.0)\n"
+            "COV_FACTOR  = float(X02.get('x02_covariance_factor_box3',\n"
+            "                            qc01.get('stat', {}).get('covariance_factor_box3', 1.0)) or 1.0)\n"
+            "STAT_STATUS = str(X02.get('x02_stat_status', m5.get('status', 'unknown')))\n"
+            "print('cubos    :', STAGE02.shape, '| STAT:', 'sí' if STAT_CUBE is not None else 'no')\n"
+            "print('compañero:', [round(v, 2) for v in OBJECT_YX], ' primaria:', [round(v, 2) for v in STAR_YX])\n"
+            f"print(f'STAT     : factor={{STAT_FACTOR:.3f}} covarianza={{COV_FACTOR:.3f}} estado={{STAT_STATUS}}')"
+        ),
+        md(
+            "## 3 · Las funciones numéricas, copiadas de `musepipe`\n\n"
+            "Copia **literal**; edítalas y el resultado cambia. Se importan solo "
+            "`evaluate_psf_model` (es de C1) y `run_channel_chunks` (paralelismo, no física).\n\n"
+            + "\n".join(f"- `{name}` — de `{rel}`" for rel, name, _s, _h in sources)
+        ),
+        code(
+            "# ------------------------------------------------------------------\n"
+            "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
+            "# ------------------------------------------------------------------\n"
+            + "\n".join(needed_imports(sources)) + "\n"
+            "from musepipe.psf import evaluate_psf_model      # de C1\n"
+            "from musepipe.parallel import run_channel_chunks  # paralelismo, no física\n\n"
+            + "\n".join(needed_constants(sources)) + "\n\n\n"
+            + inline_src
+        ),
+        md("## 4 · Chequeo de deriva"),
+        code(
+            "import ast as _ast, hashlib as _hashlib\n\n"
+            f"_SHAS = {json.dumps(shas, indent=4)}\n\n"
+            "def chequeo_de_deriva(shas=_SHAS, root=ROOT):\n"
+            "    problemas = []\n"
+            "    for key, sha in shas.items():\n"
+            "        rel, name = key.rsplit(':', 1)\n"
+            "        text = (root / rel).read_text(encoding='utf-8')\n"
+            "        lines = text.splitlines(keepends=True)\n"
+            "        node = next((n for n in _ast.parse(text).body\n"
+            "                     if isinstance(n, _ast.FunctionDef) and n.name == name), None)\n"
+            "        if node is None:\n"
+            "            problemas.append(f'{key}: ya no existe en musepipe'); continue\n"
+            "        start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1\n"
+            "        src = ''.join(lines[start:node.end_lineno]).rstrip('\\n')\n"
+            "        actual = _hashlib.sha256(src.encode('utf-8')).hexdigest()[:12]\n"
+            "        if actual != sha:\n"
+            "            problemas.append(f'{key}: la copia es {sha}, musepipe tiene {actual}')\n"
+            "    return problemas\n\n"
+            "_deriva = chequeo_de_deriva()\n"
+            "if _deriva:\n"
+            "    print('DERIVA — la cadena cambió y esta copia se quedó atrás:')\n"
+            "    for p in _deriva:\n"
+            "        print('  ·', p)\n"
+            "    print(f'\\nRegenera: python scripts/build_debug_notebooks.py --target {TARGET} C3')\n"
+            "else:\n"
+            "    print(f'sin deriva: las {len(_SHAS)} funciones copiadas son las de musepipe')"
+        ),
+        md(
+            "## 5 · El modelo de la primaria (lo que separa las dos variantes)\n\n"
+            "`psfsub` necesita restar la primaria antes de extraer. El ajuste es canal a canal, "
+            "con la PSF de C1, **excluyendo un disco alrededor del compañero** para no absorberlo "
+            "en el modelo de la estrella — si ese radio se queda corto, el modelo se come parte "
+            "del compañero y `psfsub` sale bajo. Es una de las perillas interesantes de tocar.\n\n"
+            "*(Es la celda cara: ajusta un modelo por canal. Un par de minutos.)*"
+        ),
+        code(
+            "primary_model, psfsub_meta = fit_primary_psf_model_cube(\n"
+            "    STAGE02, WAVE, STAR_YX, PSF_MODEL,\n"
+            "    variance_zyx=STAT_CUBE,\n"
+            "    fit_radius_px=PRIMARY_FIT_RADIUS,\n"
+            "    exclude_centers_yx=[OBJECT_YX],\n"
+            "    exclude_radius_px=PRIMARY_EXCL_RADIUS)\n"
+            "PSFSUB_CUBE = STAGE02 - primary_model\n"
+            "print('ajuste de la primaria:', {kk: psfsub_meta[kk] for kk in list(psfsub_meta)[:4]})\n\n"
+            "iz = int(np.argmin(np.abs(WAVE - 7500)))\n"
+            "y, x = int(round(STAR_YX[0])), int(round(STAR_YX[1]))\n"
+            "sl = (slice(y - 40, y + 41), slice(x - 40, x + 41))\n"
+            "fig, axes = plt.subplots(1, 3, figsize=(12, 3.6))\n"
+            "for ax, img, t in ((axes[0], STAGE02[iz][sl], 'B2 (con primaria)'),\n"
+            "                   (axes[1], primary_model[iz][sl], 'modelo de la primaria'),\n"
+            "                   (axes[2], PSFSUB_CUBE[iz][sl], 'residual = psfsub')):\n"
+            "    v = np.nanpercentile(np.abs(img), 99)\n"
+            "    ax.imshow(img, origin='lower', cmap='magma', vmin=-0.1 * v, vmax=v)\n"
+            "    ax.set_title(f'{t}  (λ={WAVE[iz]:.0f} Å)', fontsize=8)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 6 · Las dos extracciones\n\n"
+            "El mismo estimador sobre los dos cubos. `optimal_raw_spectrum` devuelve además la "
+            "varianza propagada, `npix_eff` y la fracción de píxeles rechazados por canal — el "
+            "clipping es el que hay que vigilar: si se concentra en el compañero, se está "
+            "recortando la señal (es el chequeo `v4_clip_concentration` de la spec)."
+        ),
+        code(
+            "def extrae(cube, variance, etiqueta):\n"
+            "    # El peso del estimador es 1/varianza, y la varianza lleva el factor de M5.\n"
+            "    if variance is not None:\n"
+            "        variance = np.asarray(variance, dtype=float) * STAT_FACTOR\n"
+            "    else:\n"
+            "        variance = estimate_variance_cube(cube)\n"
+            "    bkg = None\n"
+            "    if LOCAL_BKG_ANNULUS_PX is not None:\n"
+            "        bkg = annulus_background_spectrum(\n"
+            "            cube, OBJECT_YX, LOCAL_BKG_ANNULUS_PX[0], LOCAL_BKG_ANNULUS_PX[1],\n"
+            "            exclude_yx=STAR_YX,\n"
+            "            exclude_radius=(LOCAL_BKG_ANNULUS_PX[2] if len(LOCAL_BKG_ANNULUS_PX) > 2 else 30.0))\n"
+            "    raw = optimal_raw_spectrum(cube, variance, WAVE, OBJECT_YX, PSF_MODEL,\n"
+            "                               window_radius_px=WINDOW_RADIUS_PX,\n"
+            "                               clip_sigma=CLIP_SIGMA, clip_max_iter=CLIP_MAX_ITER,\n"
+            "                               n_jobs=1, bkg_spectrum=bkg)\n"
+            "    cov = covariance_factor_for_npix(raw['npix_eff'], COV_FACTOR)\n"
+            "    raw_var = raw['variance'] * cov\n"
+            "    ctrl_yx, ctrl = control_optimal_spectra(\n"
+            "        cube, variance, WAVE, OBJECT_YX, STAR_YX, PSF_MODEL,\n"
+            "        window_radius_px=WINDOW_RADIUS_PX, clip_sigma=CLIP_SIGMA,\n"
+            "        clip_max_iter=CLIP_MAX_ITER, n_controls=N_CONTROLS,\n"
+            "        exclude_angle_deg=EXCLUDE_ANGLE_DEG, n_jobs=1,\n"
+            "        local_bkg_annulus_px=LOCAL_BKG_ANNULUS_PX)\n"
+            "    err_emp = (robust_sigma_axis0(ctrl) if ctrl.shape[0] >= 2\n"
+            "               else np.full(WAVE.size, robust_sigma(raw['flux'])))\n"
+            "    usable = (variance is not None and str(ERROR_MODE).lower() != 'empirical'\n"
+            "              and STAT_STATUS.lower() != 'red')\n"
+            "    err = np.sqrt(np.clip(raw_var, 0.0, np.inf)) if usable else np.asarray(err_emp, float)\n"
+            "    modo = 'stat' if usable else 'empirical'\n"
+            "    apert = {'kind': 'circle', 'radius_px': float(WINDOW_RADIUS_PX),\n"
+            "             'name': f'optimal_r{float(WINDOW_RADIUS_PX):g}'}\n"
+            "    apcorr, apcorr_mode, _nr = aperture_correction_from_psf(\n"
+            "        WAVE, apert, PSF_MODEL, center_yx=OBJECT_YX, correction_mode=APCORR_MODE)\n"
+            "    print(f'{etiqueta:8s} modo={modo:9s} apcorr={float(np.nanmedian(apcorr)):6.2f} '\n"
+            "          f'npix_eff={float(np.nanmedian(raw[\"npix_eff\"])):6.1f} '\n"
+            "          f'clip_medio={100 * float(np.nanmedian(raw[\"clip_fraction\"])):.2f}%')\n"
+            "    return {'raw': raw, 'flux': raw['flux'] * apcorr, 'err': err * apcorr,\n"
+            "            'err_emp': np.asarray(err_emp, float) * apcorr, 'apcorr': apcorr,\n"
+            "            'modo': modo, 'controles': ctrl, 'n_ctrl': len(ctrl_yx)}\n\n"
+            "LS     = extrae(LS_CUBE, STAT_CUBE, 'ls')\n"
+            "PSFSUB = extrae(PSFSUB_CUBE, STAT_CUBE, 'psfsub')"
+        ),
+        md(
+            "## 7 · Las dos variantes, una al lado de la otra\n\n"
+            "Es la comparación que D1 consume. Una diferencia **estructurada** entre ellas no es "
+            "ruido: es el modelo de halo, porque el objeto y el estimador son los mismos y lo "
+            "único que cambia es qué se restó antes."
+        ),
+        code(
+            "from musepipe.spectral import median_filter_1d\n"
+            "fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True,\n"
+            "                             gridspec_kw={'height_ratios': [2, 1]})\n"
+            "a1.plot(WAVE, median_filter_1d(LS['flux'], 41), lw=1.1, label='optimal_ls')\n"
+            "a1.plot(WAVE, median_filter_1d(PSFSUB['flux'], 41), lw=1.1, label='optimal_psfsub')\n"
+            "a1.axhline(0, color='0.7', lw=0.6); a1.axvline(6563, color='tab:red', ls=':')\n"
+            "a1.legend(fontsize=8); a1.set_ylabel('flujo (mediana 41 ch)')\n"
+            "a2.plot(WAVE, median_filter_1d(LS['flux'] - PSFSUB['flux'], 41), lw=1.0, color='tab:purple')\n"
+            "a2.axhline(0, color='0.7', lw=0.6)\n"
+            "a2.set_ylabel('ls − psfsub'); a2.set_xlabel('λ [Å]')\n"
+            "a1.set_title('las dos variantes: mismo estimador, distinto fondo', fontsize=9)\n"
+            "fig.tight_layout(); plt.show()\n"
+            "for nombre, v in (('ls', LS), ('psfsub', PSFSUB)):\n"
+            "    print(f\"{nombre:8s} flujo mediano = {float(np.nanmedian(v['flux'])):9.2f}\"\n"
+            "          f\"  error mediano = {float(np.nanmedian(v['err'])):8.2f}  controles = {v['n_ctrl']}\")"
+        ),
+        md(
+            "## 8 · Comparación con la cadena\n\n"
+            "Cada variante contra **su** producto. Con las perillas por defecto deben salir "
+            "idénticas; si tocas `WINDOW_RADIUS_PX` o el radio de exclusión de la primaria, aquí "
+            "se ve exactamente cuánto se movió cada una."
+        ),
+        code(
+            "from musepipe.extraction.product import SpectrumProduct\n\n"
+            "def compara(nombre, mio, fichero, rtol=1e-9):\n"
+            "    ref = SpectrumProduct.read(SD / fichero)\n"
+            "    ok = True\n"
+            "    print(f'{nombre} vs {fichero}:')\n"
+            "    for clave, a, b in (('flujo', mio['flux'], np.asarray(ref.flux, float)),\n"
+            "                        ('error', mio['err'], np.asarray(ref.flux_err, float)),\n"
+            "                        ('apcorr', mio['apcorr'], np.asarray(ref.apcorr, float))):\n"
+            "        fin = np.isfinite(a) & np.isfinite(b)\n"
+            "        d = np.abs(a - b)[fin]\n"
+            "        ig = np.isclose(a[fin], b[fin], rtol=rtol, atol=0.0)\n"
+            "        print(f'   {clave:7s} idénticos {100 * ig.mean():6.2f}% de {fin.sum()} canales'\n"
+            "              f' | máx |Δ| = {d.max():.3e}')\n"
+            "        ok &= bool(ig.all())\n"
+            "    return ok, ref\n\n"
+            "ok_ls, ref_ls = compara('optimal_ls    ', LS, 'spec_optimal_object.fits')\n"
+            "ok_ps, ref_ps = compara('optimal_psfsub', PSFSUB, 'spec_optimal_psfsub_object.fits')\n"
+            "print()\n"
+            "print('IDÉNTICO: la copia reproduce la cadena.' if (ok_ls and ok_ps) else\n"
+            "      'DIFIERE — si has tocado una perilla, es lo esperado; si no, revisa el chequeo de deriva.')\n\n"
+            "fig, axes = plt.subplots(2, 1, figsize=(11, 5.5), sharex=True)\n"
+            "for ax, (nombre, mio, ref) in zip(axes, (('optimal_ls', LS, ref_ls),\n"
+            "                                         ('optimal_psfsub', PSFSUB, ref_ps))):\n"
+            "    ax.plot(WAVE, median_filter_1d(np.asarray(ref.flux, float), 41), lw=1.6,\n"
+            "            color='0.6', label='cadena')\n"
+            "    ax.plot(WAVE, median_filter_1d(mio['flux'], 41), lw=1.0, ls='--',\n"
+            "            color='tab:blue', label='este notebook')\n"
+            "    ax.set_ylabel(nombre, fontsize=9); ax.legend(fontsize=8)\n"
+            "axes[-1].set_xlabel('λ [Å]')\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+    ]
+
+
+BUILDERS = {
+    "C2": ("C2_aperture_debug", build_c2_cells),
+    "C3": ("C3_optimal_debug", build_c3_cells),
+}
 
 
 def main(argv=None):

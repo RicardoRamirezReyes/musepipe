@@ -16,7 +16,8 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (722 tests, ~3 min)
+python -m pytest tests/ -q                       # full suite (723 tests, ~4.5 min)
+python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~90 s)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
@@ -101,9 +102,13 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    without touching the chain. Two guards make the copy safe: a **drift cell** that flags any
    function whose source no longer matches `musepipe`, and a **comparison cell** against the
    stage's real product — with default knobs it must report identical, and
-   `tests/test_debug_notebooks.py` executes the notebook to enforce exactly that (it is why
-   the suite takes ~3 min). Living in `debug/` is deliberate: `--check` and
-   `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb` non-recursively.
+   `tests/test_debug_notebooks.py` executes each notebook end to end to enforce exactly that
+   (marked `slow`, ~90 s each — that is the bulk of the suite's runtime). Knobs are read from
+   the **resolved** stage config (`stage_xNN_config_from_run`), never copied as literals: the
+   stage fills in defaults the run does not spell out, and hardcoding them is precisely what
+   made the first C3 notebook fail to reproduce the chain. Living in `debug/` is deliberate:
+   `--check` and `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb`
+   non-recursively. Covered: **C2** and **C3** (its two variants).
 
 ### Multi-object layout
 

@@ -138,9 +138,19 @@ Copiar código es normalmente mala idea, así que cada notebook lleva dos
 defensas: una **celda de deriva**, que compara el fuente copiado con el que hoy
 tiene `musepipe` y avisa nombrando la función, y una **celda de comparación**
 contra el producto real de la etapa — con las perillas por defecto debe salir
-idéntico (lo verifica `tests/test_debug_notebooks.py` ejecutando el notebook), y
-en cuanto se cambia una perilla dice qué se movió y cuánto. Cubierto hasta ahora:
-**C2** (`C2_aperture_debug`).
+idéntico (lo verifica `tests/test_debug_notebooks.py` ejecutando el notebook
+entero; son los tests marcados `slow`), y en cuanto se cambia una perilla dice
+qué se movió y cuánto.
+
+Las perillas se leen del **config resuelto de la etapa**, no del `config.json`
+crudo: la etapa rellena defaults que el run no escribe (C3 hereda el anillo de
+fondo de C2), y copiarlos a mano fue justo lo que hizo que el primer C3 no
+reprodujera la cadena.
+
+| notebook | qué rehace |
+|---|---|
+| `C2_aperture_debug` | apertura box3, fondo de anillo, controles, error empírico y por STAT, apcorr |
+| `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa |
 
 ## Seleccionar un run
 
