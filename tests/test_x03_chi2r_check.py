@@ -55,6 +55,17 @@ class Chi2rCheckTests(unittest.TestCase):
         self.assertEqual(peores[:2], [7, 3])
         self.assertEqual(out["worst_channels"][0]["chi2r"], 900.0)
 
+    def test_the_worst_channels_survive_the_nan_ones(self):
+        """Con NaN en el cubo (215 canales en los runs reales) la lista salía
+        vacía: `argsort` los manda al final y, al invertir, se colaban ellos."""
+        values = np.full(50, 1.0)
+        values[:20] = np.nan
+        values[31] = 700.0
+        out = _chi2r_check(_fit(values), {}, stat_usable=True)
+        self.assertEqual(len(out["worst_channels"]), 5)
+        self.assertEqual(out["worst_channels"][0]["channel"], 31)
+        self.assertTrue(all(np.isfinite(w["chi2r"]) for w in out["worst_channels"]))
+
     def test_the_range_is_configurable(self):
         fit = _fit(np.full(100, 3.0))
         self.assertFalse(_chi2r_check(fit, {}, stat_usable=True)["ok"])

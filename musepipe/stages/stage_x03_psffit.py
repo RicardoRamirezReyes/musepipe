@@ -156,12 +156,12 @@ def _chi2r_check(fit, cfg, stat_usable):
     lo, hi = (float(v) for v in cfg.get("x03_chi2r_range", CHI2R_RANGE))
     median = float(np.median(finite))
     # Los peores canales, para poder cruzarlos a mano con los canales sucios de
-    # B2 y las skylines de A4 (segunda mitad de V1).
-    order = np.argsort(values)[::-1]
-    worst = [
-        {"channel": int(z), "chi2r": float(values[z])}
-        for z in order[:5] if np.isfinite(values[z])
-    ]
+    # B2 y las skylines de A4 (segunda mitad de V1). Se ordenan SOLO los
+    # finitos: `argsort` manda los NaN al final y, al invertir, se colaban ellos
+    # como "los peores" — con 215 canales sin dato, la lista salía vacía.
+    finite_idx = np.flatnonzero(np.isfinite(values))
+    order = finite_idx[np.argsort(values[finite_idx])[::-1]]
+    worst = [{"channel": int(z), "chi2r": float(values[z])} for z in order[:5]]
     return {
         "ok": None if not stat_usable else bool(lo <= median <= hi),
         "reason": None if stat_usable else "STAT no utilizable: χ²ᵣ no tiene escala absoluta",
