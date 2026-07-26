@@ -108,7 +108,9 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    stage fills in defaults the run does not spell out, and hardcoding them is precisely what
    made the first C3 notebook fail to reproduce the chain. Living in `debug/` is deliberate:
    `--check` and `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb`
-   non-recursively. Covered: **C2**, **C3** (its two variants) and **C4** (the canonical psffit, with a channel-subsampling knob because the per-channel fit costs ~11 min for all 3681).
+   non-recursively. Covered: **C2**, **C3** (its two variants), **C4** (the canonical psffit, with a
+   channel-subsampling knob because the per-channel fit costs ~11 min for all 3681), **C5** and
+   **C6** (which share one builder: same skeleton, different subtraction).
 
 ### Multi-object layout
 

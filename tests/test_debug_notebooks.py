@@ -106,7 +106,9 @@ class GeneratedNotebookTests(unittest.TestCase):
     def test_it_carries_the_drift_check_and_the_comparison(self):
         productos = {"C2": ["spec_aperture_object.fits"],
                      "C3": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
-                     "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"]}
+                     "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
+                     "C5": ["spec_sgf_object.fits"],
+                     "C6": ["spec_lpm_object.fits"]}
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
@@ -125,7 +127,9 @@ class GeneratedNotebookTests(unittest.TestCase):
                 # Con `project_root=ROOT`: musepipe resuelve rutas contra el cwd,
                 # que en un notebook es su propia carpeta — sin eso, buscaba el
                 # config bajo `notebooks/<obj>/debug/runs/...` y reventaba.
-                self.assertIn("_config_from_run(RUN_ID, project_root=ROOT)", text)
+                # `_from_run(...)` y no el nombre completo: C5/C6 lo importan con
+                # alias porque comparten constructor.
+                self.assertIn("_from_run(RUN_ID, project_root=ROOT)", text)
 
     def test_it_writes_a_valid_notebook_under_debug(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +163,8 @@ class ReproducesTheChainTests(unittest.TestCase):
         "C2_aperture_debug": ["spec_aperture_object.fits"],
         "C3_optimal_debug": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
         "C4_psffit_debug": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
+        "C5_sgf_debug": ["spec_sgf_object.fits"],
+        "C6_lpm_debug": ["spec_lpm_object.fits"],
     }
 
     def test_every_debug_notebook_reports_identical(self):

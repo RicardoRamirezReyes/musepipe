@@ -104,6 +104,32 @@ INLINE_SOURCES = {
     ],
 }
 
+#: Lo que C5 y C6 tienen en comun: la referencia estelar y la apertura de C2.
+_HALOSUB_COMUN = [
+    ("musepipe/stats.py", ["finite_values", "robust_sigma", "robust_sigma_axis0"]),
+    ("musepipe/apertures.py", [
+        "angular_separation_deg", "aperture_weights", "same_radius_control_positions",
+    ]),
+    ("musepipe/extraction/aperture.py", [
+        "_as_cube", "_npix_eff", "aperture_spectrum", "annulus_background_spectrum",
+        "aperture_stat_error", "control_aperture_spectra", "_flag_window", "channel_flags",
+        "aperture_correction_from_psf",
+    ]),
+    ("musepipe/halosub.py", [
+        "select_reference_spaxels", "reference_spectrum", "safe_reference", "fill_nan_along_axis0",
+    ]),
+]
+
+INLINE_SOURCES["C5"] = _HALOSUB_COMUN + [
+    ("musepipe/halosub.py", ["SgfResult", "sgf_subtract"]),
+]
+INLINE_SOURCES["C6"] = _HALOSUB_COMUN + [
+    ("musepipe/halosub.py", [
+        "LpmResult", "lpm_design_matrix", "lpm_fit_mask", "lpm_subtract",
+        "lpm_coefficient_energy_share",
+    ]),
+]
+
 
 def extract_sources(stage_id):
     """`[(modulo, nombre, fuente, sha12)]` de las funciones a copiar.
@@ -140,6 +166,9 @@ def needed_imports(sources):
     una función copiada que use `warnings` o `math` traerá su import sola en vez
     de fallar al ejecutar el notebook.
     """
+    # Lo que la copia define no se importa: el `def` local lo pisaria igual, pero
+    # importar algo que acto seguido se redefine confunde a quien lee.
+    copiados = {name for _rel, name, _src, _sha in sources}
     used = set()
     for rel, _name, src, _sha in sources:
         tree = ast.parse(src)
@@ -151,13 +180,26 @@ def needed_imports(sources):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     local = alias.asname or alias.name.split(".")[0]
-                    if local in names:
+                    if local in names and local not in copiados:
                         used.add(f"import {alias.name}" + (f" as {alias.asname}" if alias.asname else ""))
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module != "__future__":
+            elif isinstance(node, ast.ImportFrom) and node.module != "__future__":
+                # Los imports RELATIVOS se resuelven a absolutos: en el notebook
+                # no hay paquete que los ancle. Sin esto, `from .spectral import
+                # STANDARD_LINE_WINDOWS_A` se perdía y la copia reventaba al
+                # ejecutarse (le pasó a C6).
+                modulo = node.module or ""
+                if node.level:
+                    partes = Path(rel).with_suffix("").parts
+                    paquete = list(partes[:-1])
+                    if node.level > 1:
+                        paquete = paquete[: -(node.level - 1)]
+                    modulo = ".".join([*paquete, modulo]) if modulo else ".".join(paquete)
                 for alias in node.names:
                     local = alias.asname or alias.name
-                    if local in names:
-                        used.add(f"from {node.module} import {alias.name}")
+                    if local in names and local not in copiados:
+                        # El alias importa: halosub usa `legendre as npleg`.
+                        sufijo = f" as {alias.asname}" if alias.asname else ""
+                        used.add(f"from {modulo} import {alias.name}{sufijo}")
     return sorted(used)
 
 
@@ -374,7 +416,8 @@ def build_c2_cells(mb, target, run_id):
             "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
             "# ------------------------------------------------------------------\n"
             + "\n".join(needed_imports(sources)) + "\n"
-            "from musepipe.psf import evaluate_psf_model   # de C1: no es lo que se ajusta aquí\n\n"
+            "# `evaluate_psf_model` viene de C1 y `run_channel_chunks` es paralelismo:\n"
+            "# no son lo que se ajusta aquí, por eso se importan en vez de copiarse.\n\n"
             + "\n".join(needed_constants(sources)) + "\n\n\n"
             + inline_src
         ),
@@ -1050,8 +1093,17 @@ def build_c3_cells(mb, target, run_id):
             "    STAGE02 = STAGE02[0]\n"
             "if STAT_CUBE is not None and STAT_CUBE.ndim == 4:\n"
             "    STAT_CUBE = STAT_CUBE[0]\n"
-            "LS_CUBE = np.asarray(fits.getdata(SD / 'cube_residual_local_object.fits'), dtype=float)\n"
-            "assert LS_CUBE.shape == STAGE02.shape, (LS_CUBE.shape, STAGE02.shape)\n\n"
+            "LS_04B = np.asarray(fits.getdata(SD / 'cube_residual_local_object.fits'), dtype=float)\n"
+            "assert LS_04B.shape == STAGE02.shape, (LS_04B.shape, STAGE02.shape)\n"
+            "# Wings-intact (2026-07-26): con anillo configurado, LS extrae del cubo CRUDO,\n"
+            "# igual que C2. Antes salia del residual de 04b y encima se le restaba el\n"
+            "# anillo: dos fondos sobre un cubo que no es homogeneo (04b solo resta\n"
+            "# alrededor del objeto). Ver reports/20260726/auditoria_c3_doble_sustraccion.\n"
+            "WINGS_INTACT_LS = bool(X02.get('x02_wings_intact_ls', True))\n"
+            "LS_CUBE = (STAGE02 if (WINGS_INTACT_LS and LOCAL_BKG_ANNULUS_PX is not None)\n"
+            "           else LS_04B)\n"
+            "print('cubo de ls:', 'crudo de B2 (wings-intact)' if LS_CUBE is STAGE02\n"
+            "      else 'residual de 04b (historico)')\n\n"
             "qc00 = json.loads((SD / 'stage00q_qc.json').read_text(encoding='utf-8'))\n"
             "qc01 = json.loads((SD / 'stage01_qc.json').read_text(encoding='utf-8'))\n"
             "m5 = qc00.get('m5_stat', {})\n"
@@ -1077,8 +1129,8 @@ def build_c3_cells(mb, target, run_id):
             "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
             "# ------------------------------------------------------------------\n"
             + "\n".join(needed_imports(sources)) + "\n"
-            "from musepipe.psf import evaluate_psf_model      # de C1\n"
-            "from musepipe.parallel import run_channel_chunks  # paralelismo, no física\n\n"
+            "# `evaluate_psf_model` (C1) y `run_channel_chunks` (paralelismo) se importan\n"
+            "# arriba: no son lo que se ajusta aquí.\n\n"
             + "\n".join(needed_constants(sources)) + "\n\n\n"
             + inline_src
         ),
@@ -1350,8 +1402,8 @@ def build_c4_cells(mb, target, run_id):
             "# ------------------------------------------------------------------\n"
             + "\n".join(needed_imports(sources)) + "\n"
             "from dataclasses import dataclass\n"
-            "from musepipe.psf import evaluate_psf_model      # de C1\n"
-            "from musepipe.parallel import run_channel_chunks  # paralelismo, no física\n\n"
+            "# `evaluate_psf_model` (C1) y `run_channel_chunks` (paralelismo) se importan\n"
+            "# arriba: no son lo que se ajusta aquí.\n\n"
             + "\n".join(needed_constants(sources)) + "\n\n\n"
             + inline_src
         ),
@@ -1493,10 +1545,377 @@ def build_c4_cells(mb, target, run_id):
     ]
 
 
+#: Lo propio de cada metodo de halo, para no duplicar el constructor.
+HALOSUB_META = {
+    "C5": {
+        "slug": "C5_sgf_debug", "metodo": "sgf", "prefijo": "x04",
+        "titulo": "sustracción de halo SGF",
+        "producto": "spec_sgf_object.fits", "qc": "spec_sgf_qc.json",
+        "spec": "spec_C5_codex_sgf_subtraction.md",
+        "config": "from musepipe.stages.stage_x04_sgf import stage_x04_config_from_run as _cfg_from_run",
+        "que_hace": (
+            "**SGF** (Haffert+19; Julo+25 App. A.3) explota la **diversidad espectral**: el halo de "
+            "la estrella tiene la misma forma espectral en todos los spaxels, y el compañero no. "
+            "Cada spaxel se divide por el espectro estelar de referencia, se **suaviza con un filtro "
+            "Savitzky-Golay** —que sigue lo lento y se come lo estrecho— y lo suavizado se toma como "
+            "el halo y se resta.\n\n"
+            "> Por construcción, **el SGF se lleva también el continuo del compañero**: lo que "
+            "sobrevive es la línea, no el nivel. Eso no es un defecto, es su definición — y es la "
+            "razón de que su continuo no sea comparable con el de los demás métodos (aviso "
+            "automático en la tabla de D2)."
+        ),
+        "perillas": (
+            "# OJO: las perillas del método NO llevan prefijo de etapa (`sgf_*`, no `x04_*`).\n"
+            "SGF_WINDOW = int(X0.get('sgf_window', 101))   # ancho del filtro, en canales\n"
+            "SGF_DEGREE = int(X0.get('sgf_degree', 1))     # grado del polinomio local\n"
+        ),
+        "sustraccion_md": (
+            "## 7 · La sustracción SGF\n\n"
+            "Por spaxel: `cociente = espectro / referencia`, se filtra con Savitzky-Golay de "
+            "`SGF_WINDOW` canales y grado `SGF_DEGREE`, y el halo estimado es "
+            "`suavizado × referencia`. El residual es lo que queda.\n\n"
+            "La ventana es **la** perilla: cuanto más ancha, menos se come de la línea, pero peor "
+            "sigue las variaciones lentas del halo."
+        ),
+        "sustraccion_code": (
+            "res = sgf_subtract(CUBE, s_hat, window=SGF_WINDOW, degree=SGF_DEGREE)\n"
+            "residual = res.residual_cube\n"
+            "print('ventana', SGF_WINDOW, 'canales · grado', SGF_DEGREE)\n"
+            "yc, xc = int(round(OBJECT_YX[0])), int(round(OBJECT_YX[1]))\n"
+            "fig, ax = plt.subplots(figsize=(11, 3.6))\n"
+            "ax.plot(WAVE, CUBE[:, yc, xc], lw=0.5, color='0.6', label='spaxel del compañero (crudo)')\n"
+            "ax.plot(WAVE, CUBE[:, yc, xc] - residual[:, yc, xc], lw=1.0, color='tab:orange',\n"
+            "        label='halo estimado por el SGF')\n"
+            "ax.plot(WAVE, residual[:, yc, xc], lw=0.8, color='tab:blue', label='residual')\n"
+            "ax.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
+            "ax.set_xlabel('λ [Å]'); ax.legend(fontsize=8)\n"
+            "ax.set_title('SGF en el spaxel central del compañero', fontsize=9)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+    },
+    "C6": {
+        "slug": "C6_lpm_debug", "metodo": "lpm", "prefijo": "x05",
+        "titulo": "sustracción de halo LPM",
+        "producto": "spec_lpm_object.fits", "qc": "spec_lpm_qc.json",
+        "spec": "spec_C6_codex_lpm_subtraction.md",
+        "config": "from musepipe.stages.stage_x05_lpm import stage_x05_config_from_run as _cfg_from_run",
+        "que_hace": (
+            "**LPM** (Julo+25 App. A.4) parte de la misma idea que el SGF pero **no filtra**: modela "
+            "cada spaxel como el espectro de referencia **modulado por un polinomio de Legendre** de "
+            "grado bajo,\n\n"
+            "> `ŝ_xy(λ) = Σ_k β_k · P_k(λ̃) · ŝ(λ)`\n\n"
+            "y ajusta los `β_k` por mínimos cuadrados **con las líneas de ciencia enmascaradas**. "
+            "Esa máscara es la diferencia clave con el SGF: como la línea no entra en el ajuste, el "
+            "modelo no puede aprenderla, y por eso **el LPM preserva la línea** (su chequeo "
+            "`v2_line_preservation_ok` exige recuperar ≥90% de una línea inyectada)."
+        ),
+        "perillas": (
+            "# OJO: la perilla del método NO lleva prefijo de etapa (`lpm_degree`, no `x05_*`).\n"
+            "LPM_DEGREE = int(X0.get('lpm_degree', 4))   # grado del polinomio de Legendre\n"
+        ),
+        "sustraccion_md": (
+            "## 7 · La sustracción LPM\n\n"
+            "La matriz de diseño tiene una columna por grado: `P_k(λ̃) · ŝ(λ)`. El ajuste es por "
+            "mínimos cuadrados sobre los canales **no enmascarados** (fuera de Hα, Hβ, O I…), y el "
+            "modelo se evalúa después en **todos** los canales — incluidos los de la línea, que es "
+            "donde se quiere que no haya aprendido nada.\n\n"
+            "Subir el grado sigue mejor el halo pero se acerca a poder absorber la línea; es la "
+            "perilla que el diagnóstico de energía por grado vigila."
+        ),
+        "sustraccion_code": (
+            "mask_fit = lpm_fit_mask(WAVE, s_hat)\n"
+            "res = lpm_subtract(CUBE, WAVE, s_hat, degree=LPM_DEGREE)\n"
+            "residual = res.residual_cube\n"
+            "print('grado', LPM_DEGREE, '| canales usados en el ajuste:', int(mask_fit.sum()),\n"
+            "      f'de {WAVE.size} ({100 * mask_fit.mean():.1f}%)')\n"
+            "print('energía por grado:', np.round(lpm_coefficient_energy_share(res.coeffs), 3))\n"
+            "yc, xc = int(round(OBJECT_YX[0])), int(round(OBJECT_YX[1]))\n"
+            "fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True)\n"
+            "design = lpm_design_matrix(WAVE, s_hat, degree=LPM_DEGREE)\n"
+            "for k in range(design.shape[1]):\n"
+            "    a1.plot(WAVE, design[:, k], lw=0.8, label=f'P{k}(λ̃)·ŝ')\n"
+            "a1.set_ylabel('columnas del diseño'); a1.legend(fontsize=7, ncol=5)\n"
+            "a1.set_title('la base: la referencia modulada por Legendre', fontsize=9)\n"
+            "a2.plot(WAVE, CUBE[:, yc, xc], lw=0.5, color='0.6', label='spaxel del compañero (crudo)')\n"
+            "a2.plot(WAVE, CUBE[:, yc, xc] - residual[:, yc, xc], lw=1.0, color='tab:orange',\n"
+            "        label='halo modelado')\n"
+            "a2.plot(WAVE, residual[:, yc, xc], lw=0.8, color='tab:blue', label='residual')\n"
+            "a2.fill_between(WAVE, *a2.get_ylim(), where=~mask_fit, color='tab:red', alpha=0.10,\n"
+            "                label='canales EXCLUIDOS del ajuste (líneas)')\n"
+            "a2.axvline(6563, color='tab:red', ls=':')\n"
+            "a2.set_xlabel('λ [Å]'); a2.legend(fontsize=8)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+    },
+}
+
+
+def build_halosub_cells(mb, target, run_id, stage_id):
+    """Celdas de C5/C6: mismo esqueleto, distinta sustracción."""
+    md, code = mb.md, mb.code
+    meta = HALOSUB_META[stage_id]
+    sources = extract_sources(stage_id)
+    inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
+    shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    pref = meta["prefijo"]
+
+    return [
+        md(
+            f"# {stage_id} · {meta['titulo']} — notebook de análisis (`debug`)\n\n"
+            f"**Objeto:** {target}  |  **Run:** `{run_id}`  |  "
+            f"**Spec:** [`docs/{meta['spec']}`](../../../docs/{meta['spec']})\n\n"
+            + meta["que_hace"] + "\n\n"
+            "El esqueleto de la etapa son cuatro pasos: **elegir los spaxels de referencia**, "
+            "**construir el espectro estelar de referencia**, **restar el halo** (lo propio de cada "
+            "método) y **extraer una apertura box3** del cubo residual — esta última con la misma "
+            "maquinaria que C2, controles y `apcorr` incluidos."
+        ),
+        code(
+            "import json, sys\n"
+            "from pathlib import Path\n\n"
+            "import numpy as np\n"
+            "from astropy.io import fits\n"
+            "import matplotlib.pyplot as plt\n"
+            "from matplotlib.colors import LogNorm\n\n"
+            "_here = Path.cwd()\n"
+            "ROOT = next(p for p in (_here, *_here.parents) if (p / 'musepipe').is_dir())\n"
+            "sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'notebooks'))\n"
+            "import _nbcommon as nb\n\n"
+            f"RUN_ID = nb.resolve_run_id({run_id!r})\n"
+            "RD = nb.run_dir(RUN_ID); SD = RD / 'stages'\n"
+            "TARGET = nb.run_target(RUN_ID) or nb.display_name(RUN_ID)\n"
+            "print('objeto :', TARGET, '·', nb.display_name(RUN_ID))\n"
+            "print('run    :', RUN_ID)"
+        ),
+        md(
+            "## 1 · Perillas\n\n"
+            "Del **config resuelto de la etapa**: rellena defaults que el run no escribe. Cambia lo "
+            "que quieras debajo de la lectura."
+        ),
+        code(
+            meta["config"] + "\n\n"
+            "# `project_root=ROOT`: musepipe resuelve rutas contra el cwd, que en un\n"
+            "# notebook es su propia carpeta, no la raíz del repo.\n"
+            "X0 = _cfg_from_run(RUN_ID, project_root=ROOT)\n"
+            + meta["perillas"] +
+            "FLUX_LO = float(X0.get('halosub_flux_mask_lo', 0.10))   # percentil bajo de la máscara\n"
+            "FLUX_HI = float(X0.get('halosub_flux_mask_hi', 0.90))   # percentil alto\n"
+            "EXCLUDE_RADIUS_PX = float(X0.get('halosub_exclude_radius_px', 3.0))\n"
+            f"N_CONTROLS = int(X0.get('{pref}_control_apertures', 8))\n"
+            f"EXCLUDE_ANGLE_DEG = float(X0.get('{pref}_control_exclude_angle_deg', 25.0))\n"
+            f"APCORR_MODE = X0.get('{pref}_aperture_correction', 'auto')\n"
+            f"ERROR_MODE = X0.get('{pref}_error_mode', 'auto')\n"
+            f"ANNULUS = X0.get('{pref}_annulus_bkg_px')\n"
+            f"BAD_WINDOWS_A = X0.get('{pref}_bad_windows_A', [])\n\n"
+            "# ---- a partir de aquí, cambia lo que quieras probar ----\n\n"
+            "print('máscara de referencia: percentiles', FLUX_LO, '-', FLUX_HI,\n"
+            "      '| excluye', EXCLUDE_RADIUS_PX, 'px alrededor del compañero')\n"
+            "print('extracción: controles', N_CONTROLS, '| apcorr', APCORR_MODE,\n"
+            "      '| anillo', ANNULUS)"
+        ),
+        md(
+            "## 2 · Entradas\n\n"
+            "El cubo de B2 (la etapa trabaja **por exposición** si el run las tiene; aquí se usa el "
+            "stack, que es lo que hay en estos runs) y las posiciones de B3."
+        ),
+        code(
+            "qc_b3 = json.loads((SD / 'stage01c_qc.json').read_text(encoding='utf-8'))\n"
+            "OBJECT_YX = tuple(float(v) for v in qc_b3['companion']['pos_yx'])\n"
+            "STAR_YX   = tuple(float(v) for v in qc_b3['primary']['pos_yx'])\n"
+            "psf_path = SD / 'psf_model.json'\n"
+            "PSF_MODEL = json.loads(psf_path.read_text(encoding='utf-8')) if psf_path.exists() else None\n\n"
+            "with fits.open(SD / 'stage02_xcorr_cube_stack.fits') as h:\n"
+            "    CUBE = np.asarray(h['CUBES'].data, dtype=float)\n"
+            "    WAVE = np.asarray(h['WAVELENGTH'].data, dtype=float)\n"
+            "    STAT_CUBE = np.asarray(h['STAT'].data, dtype=float) if 'STAT' in h else None\n"
+            "if CUBE.ndim == 4:\n"
+            "    CUBE = CUBE[0]\n"
+            "if STAT_CUBE is not None and STAT_CUBE.ndim == 4:\n"
+            "    STAT_CUBE = STAT_CUBE[0]\n\n"
+            "qc00 = json.loads((SD / 'stage00q_qc.json').read_text(encoding='utf-8'))\n"
+            "qc01 = json.loads((SD / 'stage01_qc.json').read_text(encoding='utf-8'))\n"
+            "m5 = qc00.get('m5_stat', {})\n"
+            f"STAT_FACTOR = float(X0.get('{pref}_stat_factor_box3', m5.get('factor_box3_median', 1.0)) or 1.0)\n"
+            f"COV_FACTOR  = float(X0.get('{pref}_covariance_factor_box3',\n"
+            "                            qc01.get('stat', {}).get('covariance_factor_box3', 1.0)) or 1.0)\n"
+            f"STAT_STATUS = str(X0.get('{pref}_stat_status', m5.get('status', 'unknown')))\n"
+            "print('cubo     :', CUBE.shape, '| compañero', [round(v, 1) for v in OBJECT_YX],\n"
+            "      '| primaria', [round(v, 1) for v in STAR_YX])\n"
+            "print(f'STAT     : factor={STAT_FACTOR:.3f} covarianza={COV_FACTOR:.3f} estado={STAT_STATUS}')"
+        ),
+        md(
+            "## 3 · Las funciones copiadas de `musepipe`\n\n"
+            + "\n".join(f"- `{name}` — de `{rel}`" for rel, name, _s, _h in sources)
+        ),
+        code(
+            "# ------------------------------------------------------------------\n"
+            "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
+            "# ------------------------------------------------------------------\n"
+            + "\n".join(needed_imports(sources)) + "\n"
+            "# `evaluate_psf_model` (C1) y el catálogo de líneas se importan arriba:\n"
+            "# no son lo que se ajusta aquí.\n\n"
+            + "\n".join(needed_constants(sources)) + "\n\n\n"
+            + inline_src
+        ),
+        md("## 4 · Chequeo de deriva"),
+        drift_cell(code, shas, stage_id),
+        md(
+            "## 5 · Paso 1 — los spaxels de referencia\n\n"
+            "El halo se estima **con el propio campo**: se eligen los spaxels cuyo flujo está entre "
+            "dos percentiles —ni saturados por el núcleo de la estrella ni dominados por el ruido "
+            "del borde— **excluyendo un disco alrededor del compañero**, para no meterlo en su "
+            "propia referencia. La spec exige ≥50 spaxels: por debajo de eso no hay diversidad "
+            "espectral que explotar."
+        ),
+        code(
+            "keep, keep_qc = select_reference_spaxels(\n"
+            "    CUBE, flux_lo_frac=FLUX_LO, flux_hi_frac=FLUX_HI,\n"
+            "    exclude_yx=[OBJECT_YX], exclude_radius_px=EXCLUDE_RADIUS_PX)\n"
+            "print('spaxels conservados:', keep_qc['n_spaxels_kept'],\n"
+            "      '| mínimo que exige la spec: 50')\n\n"
+            "campo = np.nanmedian(CUBE[::20], axis=0)\n"
+            "pos = campo[np.isfinite(campo) & (campo > 0)]\n"
+            "fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 5))\n"
+            "im1 = a1.imshow(campo, origin='lower', cmap='magma',\n"
+            "                norm=LogNorm(vmin=np.percentile(pos, 60), vmax=np.percentile(pos, 99.9)))\n"
+            "fig.colorbar(im1, ax=a1, shrink=0.8).set_label('flujo mediano · escala LOG', fontsize=7)\n"
+            "a1.set_title('el campo', fontsize=9)\n"
+            "a2.imshow(campo, origin='lower', cmap='gray',\n"
+            "          norm=LogNorm(vmin=np.percentile(pos, 60), vmax=np.percentile(pos, 99.9)))\n"
+            "a2.imshow(np.where(keep, 1.0, np.nan), origin='lower', cmap='cool', alpha=0.55,\n"
+            "          vmin=0, vmax=1)\n"
+            "a2.plot(OBJECT_YX[1], OBJECT_YX[0], marker='o', ms=9, mfc='none', mec='tab:red', mew=1.5)\n"
+            "a2.annotate('compañero (excluido)', (OBJECT_YX[1], OBJECT_YX[0]),\n"
+            "            textcoords='offset points', xytext=(0, 11), ha='center',\n"
+            "            fontsize=7, color='tab:red')\n"
+            "n_keep = int(keep_qc['n_spaxels_kept'])\n"
+            "a2.set_title(f'spaxels de referencia ({n_keep}) en color', fontsize=9)\n"
+            "for ax in (a1, a2):\n"
+            "    ax.set_xlabel('x [px]')\n"
+            "a1.set_ylabel('y [px]')\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 6 · Paso 2 — el espectro estelar de referencia\n\n"
+            "La mediana de los spaxels elegidos, normalizada. Es **el espectro del halo**: lo que "
+            "los dos métodos van a escalar y restar en cada spaxel."
+        ),
+        code(
+            "s_hat = reference_spectrum(CUBE, keep)\n"
+            "print('referencia: mediana', round(float(np.nanmedian(s_hat)), 4),\n"
+            "      '| canales no finitos:', int((~np.isfinite(s_hat)).sum()))\n"
+            "fig, ax = plt.subplots(figsize=(11, 3.2))\n"
+            "ax.plot(WAVE, s_hat, lw=0.7)\n"
+            "ax.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
+            "ax.set_xlabel('λ [Å]'); ax.set_ylabel('referencia ŝ'); ax.legend(fontsize=8)\n"
+            "ax.set_title('espectro estelar de referencia (mediana de los spaxels elegidos)', fontsize=9)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(meta["sustraccion_md"]),
+        code(meta["sustraccion_code"]),
+        md(
+            "## 8 · Paso 4 — la apertura sobre el residual\n\n"
+            "A partir de aquí es **exactamente C2**: caja box3 en la posición de B3 sobre el cubo "
+            "residual, controles al mismo radio procesados igual, σ empírico de su dispersión y "
+            "`apcorr` de la curva de crecimiento de C1. Por eso estos métodos comparten convención "
+            "de flujo con el resto."
+        ),
+        code(
+            "APERTURE = {'kind': 'box', 'size': 3}\n"
+            "raw_flux, npix_eff = aperture_spectrum(residual, OBJECT_YX, APERTURE)\n"
+            "if ANNULUS is not None:\n"
+            "    bkg = annulus_background_spectrum(residual, OBJECT_YX, ANNULUS[0], ANNULUS[1],\n"
+            "                                     exclude_yx=STAR_YX,\n"
+            "                                     exclude_radius=(ANNULUS[2] if len(ANNULUS) > 2 else 30.0))\n"
+            "    raw_flux = raw_flux - bkg * npix_eff\n"
+            "controls_yx, control_spectra, control_npix = control_aperture_spectra(\n"
+            "    residual, OBJECT_YX, STAR_YX, APERTURE,\n"
+            "    n_controls=N_CONTROLS, exclude_angle_deg=EXCLUDE_ANGLE_DEG)\n"
+            "raw_err_emp = (robust_sigma_axis0(control_spectra) if control_spectra.shape[0] >= 2\n"
+            "               else np.full(WAVE.size, robust_sigma(raw_flux)))\n"
+            "usable = (STAT_CUBE is not None and str(ERROR_MODE).lower() != 'empirical'\n"
+            "          and STAT_STATUS.lower() != 'red')\n"
+            "raw_err = (aperture_stat_error(STAT_CUBE, OBJECT_YX, APERTURE,\n"
+            "                               stat_factor=STAT_FACTOR, covariance_factor=COV_FACTOR)\n"
+            "           if usable else np.asarray(raw_err_emp, float))\n"
+            "apcorr, apcorr_mode, _nr = aperture_correction_from_psf(\n"
+            "    WAVE, APERTURE, PSF_MODEL, center_yx=OBJECT_YX, correction_mode=APCORR_MODE)\n"
+            "flux = raw_flux * apcorr\n"
+            "flux_err_emp = np.asarray(raw_err_emp, float) * apcorr\n"
+            "modo_err = 'stat' if usable else 'empirical'\n"
+            "print(f'{len(controls_yx)} controles | modo error: {modo_err}'\n"
+            "      f' | apcorr mediana {float(np.nanmedian(apcorr)):.1f}')\n\n"
+            "def binea(wave, flux, err, n):\n"
+            "    n = int(n); corte = (wave.size // n) * n\n"
+            "    w = wave[:corte].reshape(-1, n); f = flux[:corte].reshape(-1, n)\n"
+            "    e = err[:corte].reshape(-1, n)\n"
+            "    bueno = np.isfinite(f) & np.isfinite(e); cuenta = bueno.sum(axis=1)\n"
+            "    with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "        wb = np.nanmean(np.where(bueno, w, np.nan), axis=1)\n"
+            "        fb = np.nansum(np.where(bueno, f, 0.0), axis=1) / np.maximum(cuenta, 1)\n"
+            "        eb = np.sqrt(np.nansum(np.where(bueno, e, 0.0) ** 2, axis=1)) / np.maximum(cuenta, 1)\n"
+            "    fb[cuenta == 0] = np.nan; eb[cuenta == 0] = np.nan\n"
+            "    return wb, fb, eb\n\n"
+            "BIN_CANALES = 25\n"
+            "N_EFF_OVER_N = 0.43   # medido por G1 (docs/noise_model.md)\n"
+            "wb, fb, eb = binea(WAVE, flux, flux_err_emp, BIN_CANALES)\n"
+            "rojo = (wb >= 7500) & (wb <= 9000)\n"
+            "print(f'flujo mediano en 7500–9000 Å: {np.nanmedian(fb[rojo]):9.2f}'\n"
+            "      f' ± {np.nanmedian(eb[rojo] / np.sqrt(N_EFF_OVER_N)):.2f}')\n"
+            "fig, ax = plt.subplots(figsize=(11, 3.8))\n"
+            "for lo, hi in BAD_WINDOWS_A:\n"
+            "    ax.axvspan(lo, hi, color='0.85', zorder=0)\n"
+            "ax.plot(WAVE, flux, lw=0.3, color='0.75', label='por canal')\n"
+            "ax.errorbar(wb, fb, yerr=eb / np.sqrt(N_EFF_OVER_N), fmt='o', ms=3, lw=0.9,\n"
+            "            color='tab:blue', label=f'binado {BIN_CANALES} ch, ±σ corregido por n_eff')\n"
+            "ax.axhline(0, color='0.5', lw=0.7); ax.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
+            "ax.set_ylim(*np.nanpercentile(fb[np.isfinite(fb)], [1, 99]) * np.array([2.5, 2.5]))\n"
+            "ax.set_xlabel('λ [Å]'); ax.legend(fontsize=8)\n"
+            f"ax.set_title('{stage_id} rehecho en el notebook', fontsize=9)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 9 · Comparación con la cadena\n\n"
+            f"Contra `{meta['producto']}`. Con las perillas por defecto debe salir idéntico; si "
+            "cambias la ventana del filtro, el grado o la máscara de referencia, aquí se ve cuánto "
+            "se movió."
+        ),
+        code(
+            "from musepipe.extraction.product import SpectrumProduct\n"
+            "from musepipe.spectral import median_filter_1d\n\n"
+            f"cadena = SpectrumProduct.read(SD / '{meta['producto']}')\n"
+            "ref_flux = np.asarray(cadena.flux, float)\n"
+            "ok = True\n"
+            "for clave, a, b in (('flujo', flux, ref_flux),\n"
+            "                    ('apcorr', apcorr, np.asarray(cadena.apcorr, float))):\n"
+            "    fin = np.isfinite(a) & np.isfinite(b)\n"
+            "    ig = np.isclose(a[fin], b[fin], rtol=1e-9, atol=0.0)\n"
+            "    print(f'  {clave:7s} idénticos {100 * ig.mean():6.2f}% de {fin.sum()} canales'\n"
+            "          f' | máx |Δ| = {np.abs(a - b)[fin].max():.3e}')\n"
+            "    ok &= bool(ig.all())\n"
+            "print()\n"
+            "print('IDÉNTICO: la copia reproduce la cadena.' if ok else\n"
+            "      'DIFIERE — si has tocado una perilla, es lo esperado; si no, revisa el chequeo de deriva.')\n\n"
+            "fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 5), sharex=True,\n"
+            "                             gridspec_kw={'height_ratios': [2, 1]})\n"
+            "a1.plot(WAVE, median_filter_1d(ref_flux, 41), lw=1.6, color='0.6', label='cadena')\n"
+            "a1.plot(WAVE, median_filter_1d(flux, 41), lw=1.0, ls='--', color='tab:blue',\n"
+            "        label='este notebook')\n"
+            "a1.legend(fontsize=8); a1.set_ylabel('flujo (mediana 41 ch)')\n"
+            "a2.plot(WAVE, flux - ref_flux, lw=0.7, color='tab:purple')\n"
+            "a2.axhline(0, color='0.7', lw=0.6)\n"
+            "a2.set_ylabel('este − cadena'); a2.set_xlabel('λ [Å]')\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+    ]
+
+
 BUILDERS = {
     "C2": ("C2_aperture_debug", build_c2_cells),
     "C3": ("C3_optimal_debug", build_c3_cells),
     "C4": ("C4_psffit_debug", build_c4_cells),
+    "C5": (HALOSUB_META["C5"]["slug"], lambda mb, tg, run: build_halosub_cells(mb, tg, run, "C5")),
+    "C6": (HALOSUB_META["C6"]["slug"], lambda mb, tg, run: build_halosub_cells(mb, tg, run, "C6")),
 }
 
 
