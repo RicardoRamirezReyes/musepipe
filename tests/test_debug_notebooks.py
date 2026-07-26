@@ -121,7 +121,10 @@ class GeneratedNotebookTests(unittest.TestCase):
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
-                self.assertIn("_config_from_run(RUN_ID)", text)
+                # Con `project_root=ROOT`: musepipe resuelve rutas contra el cwd,
+                # que en un notebook es su propia carpeta — sin eso, buscaba el
+                # config bajo `notebooks/<obj>/debug/runs/...` y reventaba.
+                self.assertIn("_config_from_run(RUN_ID, project_root=ROOT)", text)
 
     def test_it_writes_a_valid_notebook_under_debug(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +162,7 @@ class ReproducesTheChainTests(unittest.TestCase):
     def test_every_debug_notebook_reports_identical(self):
         import contextlib
         import io
+        import os
         import matplotlib
         matplotlib.use("Agg")
 
@@ -174,12 +178,21 @@ class ReproducesTheChainTests(unittest.TestCase):
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 namespace = {"__name__": "__main__"}
                 out = io.StringIO()
-                with contextlib.redirect_stdout(out):
-                    for i, cell in enumerate(payload["cells"]):
-                        if cell["cell_type"] != "code":
-                            continue
-                        exec(compile("".join(cell["source"]), f"<{slug} celda {i}>", "exec"),
-                             namespace)
+                # Se ejecuta DESDE LA CARPETA DEL NOTEBOOK, que es el cwd real en
+                # Jupyter. Correrlo desde la raíz del repo escondía un fallo:
+                # musepipe resuelve rutas contra el cwd y `stage_xNN_config_from_run`
+                # buscaba el config bajo `notebooks/<obj>/debug/runs/...`.
+                cwd = os.getcwd()
+                try:
+                    os.chdir(path.parent)
+                    with contextlib.redirect_stdout(out):
+                        for i, cell in enumerate(payload["cells"]):
+                            if cell["cell_type"] != "code":
+                                continue
+                            exec(compile("".join(cell["source"]), f"<{slug} celda {i}>", "exec"),
+                                 namespace)
+                finally:
+                    os.chdir(cwd)
                 text = out.getvalue()
                 self.assertIn("sin deriva", text, "la copia no coincide con musepipe")
                 self.assertIn("IDÉNTICO: la copia reproduce la cadena.", text,
