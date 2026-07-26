@@ -131,6 +131,55 @@ def _comparison_metric(product, path):
     return _median_ratio(product.flux, other.flux)
 
 
+#: Rango de χ²ᵣ mediano que se considera "el modelo describe el dato". Un
+#: factor 2 en χ²ᵣ es un factor √2 en σ: por debajo de eso no se puede
+#: distinguir un modelo imperfecto de un STAT mal escalado.
+CHI2R_RANGE = (0.5, 2.0)
+
+
+def _chi2r_check(fit, cfg, stat_usable):
+    """V1 de la spec C4: ¿describe el ajuste al dato con el error que declara?
+
+    χ²ᵣ ~ 1 significa que el residuo del ajuste de dos PSF es del tamaño que
+    predice la varianza. Si se dispara, o el modelo de PSF no reproduce el dato
+    o la varianza está mal escalada — y los dos casos invalidan el error formal
+    del compañero, que es lo que E1/E3 usan después.
+
+    La spec condiciona V1 a «STAT verde»: sin varianza fiable, χ²ᵣ no tiene
+    escala absoluta y el veredicto se deja en `None` con el motivo, en vez de
+    fabricar un aprobado.
+    """
+    values = np.asarray(fit.chi2r, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return {"ok": None, "reason": "sin canales con χ²ᵣ finito"}
+    lo, hi = (float(v) for v in cfg.get("x03_chi2r_range", CHI2R_RANGE))
+    median = float(np.median(finite))
+    # Los peores canales, para poder cruzarlos a mano con los canales sucios de
+    # B2 y las skylines de A4 (segunda mitad de V1).
+    order = np.argsort(values)[::-1]
+    worst = [
+        {"channel": int(z), "chi2r": float(values[z])}
+        for z in order[:5] if np.isfinite(values[z])
+    ]
+    return {
+        "ok": None if not stat_usable else bool(lo <= median <= hi),
+        "reason": None if stat_usable else "STAT no utilizable: χ²ᵣ no tiene escala absoluta",
+        "median": median,
+        "p90": float(np.percentile(finite, 90)),
+        "range": [lo, hi],
+        "n_channels": int(finite.size),
+        "fraction_in_range": float(np.mean((finite >= lo) & (finite <= hi))),
+        "worst_channels": worst,
+        "note": (
+            "Spec C4 V1: χ²ᵣ mediano ~1 con STAT verde. Si se dispara, el error formal del "
+            "compañero no describe su residuo: el sospechoso es el modelo de PSF de C1 o la "
+            "escala del STAT (A4/M5). Los canales peores se listan para cruzarlos con los "
+            "canales sucios de B2 y las skylines de A4."
+        ),
+    }
+
+
 def _qc_payload(products: PsfFitProducts, cfg, paths, psf_model_path, stat_state, star_check, open_issues):
     fit = products.result
     crosstalk = crosstalk_metric(
@@ -140,6 +189,18 @@ def _qc_payload(products: PsfFitProducts, cfg, paths, psf_model_path, stat_state
         cfg.get("x03_crosstalk_windows_A", []),
     )
     ratio = _median_ratio(products.companion.flux_err, products.companion.flux_err_emp)
+    # `error_mode == "stat"` es exactamente la condición «STAT verde» de la spec:
+    # el producto solo usa el error formal cuando la varianza es utilizable.
+    chi2r = _chi2r_check(fit, cfg, stat_usable=products.error_mode == "stat")
+    if chi2r.get("ok") is False:
+        open_issues.append(
+            f"V1: χ²ᵣ mediano = {chi2r['median']:.1f}, fuera de "
+            f"[{chi2r['range'][0]:g}, {chi2r['range'][1]:g}] (solo "
+            f"{100 * chi2r['fraction_in_range']:.1f}% de los canales dentro del rango). El ajuste "
+            "de dos PSF no describe el dato con el error que declara: el error formal del "
+            "compañero no es su residuo. Sospechosos: el modelo de PSF de C1 o la escala del "
+            "STAT (A4/M5); ver spec C4 §V1."
+        )
     return {
         "stage": "x03_psffit",
         "run_id": str(cfg["run_id"]),
@@ -174,6 +235,7 @@ def _qc_payload(products: PsfFitProducts, cfg, paths, psf_model_path, stat_state
             "vs_optimal_median_ratio": _comparison_metric(products.companion, paths["spec_optimal_object"]),
         },
         "checks": {
+            "v1_chi2r": chi2r,
             "v3_star_scale_ok": None
             if star_check["vs_large_aperture_median_ratio"] is None
             else bool(0.97 <= star_check["vs_large_aperture_median_ratio"] <= 1.03),

@@ -165,3 +165,32 @@ Reporte: tabla V1–V6; espectro del compañero con ambos errores; sistemático
 heredado de C1 (de su QC) y cómo se manifiesta aquí; recomendación preliminar
 para D1 (¿concuerdan los tres métodos a ojo?) sin adelantar el veredicto
 formal; checklist de límites; comando de reproducción.
+
+## Errata (2026-07-25) — V1 pasa a ser un chequeo
+
+V1 pide χ²ᵣ mediano ~1 «(STAT verde)». El QC guardaba `chi2r.median` desde
+siempre, pero **no había chequeo ni aviso**: en ROXs 42B b vale **2673** —el
+residuo del ajuste es ~2700 veces la varianza declarada— y el único
+`open_issue` de la etapa hablaba del marco de longitud de onda.
+
+Implementado como `checks.v1_chi2r`, con la condición de la spec respetada:
+
+- **Con STAT utilizable** (`errors.mode == "stat"`, que es exactamente cuando el
+  producto usa el error formal) el veredicto vale: `ok` si la mediana cae en
+  **[0.5, 2.0]**, configurable con `x03_chi2r_range`. Un factor 2 en χ²ᵣ es un
+  factor √2 en σ; por debajo de eso no se distingue un modelo imperfecto de un
+  STAT mal escalado.
+- **Sin él**, `ok = None` con motivo: χ²ᵣ no tiene escala absoluta y aprobar
+  sería inventar. Es el caso de ROXs 12 b, cuyo M5 está rojo (mediana 0.92,
+  informada pero sin veredicto).
+
+Publica además `p90`, `fraction_in_range` y los **5 peores canales** con su λ,
+para la segunda mitad de V1: cruzarlos a mano con los canales sucios de B2 y las
+skylines de A4.
+
+Cuando falla, el `open_issue` dice que el error formal del compañero no es su
+residuo y nombra a los dos sospechosos: el modelo de PSF de C1 o la escala del
+STAT (A4/M5). En ROXs 42B b esto se suma a `v3_star_scale_ok = False` (el ajuste
+no reproduce la primaria frente a su fotometría de apertura grande) y, en C2, a
+V4(b) con box5/box3 = 0.608: **tres indicadores independientes apuntando al
+mismo sitio en ese objeto**.
