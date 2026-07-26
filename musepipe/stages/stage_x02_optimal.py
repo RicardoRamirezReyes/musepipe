@@ -345,10 +345,36 @@ def compute_stage_x02_products(config, paths=None):
         raise RuntimeError(f"Stage02 cube shape {stage02_cube.shape} != LS cube shape {ls_cube.shape}.")
 
     # All variants record the common MOTHER cube (stage02) as INCUBE so D1 sees a
-    # single mother cube; LS is just a background treatment (stage04b local
-    # surface) of it, like PSFSUB subtracts the C1 model. (D1 §3.1.)
+    # single mother cube; LS is just a background treatment of it, like PSFSUB
+    # subtracts the C1 model. (D1 §3.1.)
+    #
+    # Wings-intact LS (2026-07-26): LS extracts from the RAW cube with the
+    # annulus background, exactly like C2 does. It used to extract from the
+    # stage04b residual AND subtract the annulus on top, which was two
+    # background treatments on a cube that is not homogeneous: stage04b fits a
+    # local surface only AROUND THE OBJECT, so the annulus at the companion saw
+    # a residual (~3/px) while at the controls it saw the untouched background
+    # (~13/px). Measured on both objects, that second subtraction produced ~93%
+    # of the negative continuum that gets `optimal_ls` rejected (red-band median
+    # -2045 with it, -140 without), i.e. the rejection was dominated by the
+    # background treatment, not by the Horne estimator.
+    #
+    # It also restores what the variant exists for: C2 moved to the raw cube in
+    # the same commit that added this annulus (d688a64), so LS stopped being
+    # "comparable 1:1 with C2" — which is its entire purpose (spec C3 3.1).
+    ls_cube_used = ls_cube
+    wings_intact_ls = bool(cfg.get("x02_wings_intact_ls", True))
+    if wings_intact_ls and common["local_bkg_annulus_px"] is not None:
+        ls_cube_used = stage02_cube
+        open_issues.append(
+            "LS extracts from the raw stage02 cube with the annulus background (same treatment "
+            "as C2), not from the stage04b residual: subtracting both removed the local "
+            "background twice at the companion and once at the controls, because stage04b only "
+            "fits a surface around the object. Set x02_wings_intact_ls=false for the historical "
+            "behaviour."
+        )
     ls = make_optimal_product(
-        ls_cube,
+        ls_cube_used,
         wave,
         object_yx,
         psf_model,
@@ -379,7 +405,9 @@ def compute_stage_x02_products(config, paths=None):
         **psfsub_common,
     )
     psf_sensitivity = _psf_sensitivity(
-        ls_cube,
+        # El mismo cubo del que sale `ls`: la sensibilidad a la PSF se mide
+        # contra ese producto, así que compararla con otro fondo no diría nada.
+        ls_cube_used,
         wave,
         object_yx,
         psf_model,
