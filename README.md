@@ -260,6 +260,8 @@ musepipe/
   qc/             QC de cubo y frame, censo de ghosts, STAT empirica, mapas S0/S1
   models/         BT-Settl, extincion, relaciones de acrecion, tracks, plantillas
   report.py (F1), characterization.py (G5), classify.py (G4), lines.py (G2), g0.py
+  telluric_lines.py  bandas teluricas + curva de transmision medida por A3
+  paper_spectrum.py  figura de publicacion (sin binar, con lineas) + export ECSV
 notebooks/        un set de revision por objeto (generado por scripts/)
 scripts/          lanzadores por etapa y trabajos largos
 targets/          ficha por objeto (alias, referencias)

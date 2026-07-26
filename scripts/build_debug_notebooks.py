@@ -987,6 +987,105 @@ def build_c2_cells(mb, target, run_id):
             "                   or v == w) else '   <-- difiere'\n"
             "    print(f'{k:32s} {_fmt(v)} {_fmt(w)}{marca}')"
         ),
+        md(
+            "## 14 · Por qué el continuo se va a negativo en el azul\n\n"
+            "En algunos objetos el continuo del extremo azul queda **por debajo de cero** en la "
+            "figura anterior. La primera sospecha razonable es un error de formulación: que en vez "
+            "de multiplicar por `apcorr` se estuviera restando algo. **No es eso**, y esta celda "
+            "lo comprueba elemento a elemento:\n\n"
+            "> `producto = (crudo − fondo × npix_eff) × apcorr`\n\n"
+            "Cuando pasa, lo que se lee en la tabla de abajo son dos cosas encadenadas:\n\n"
+            "1. **En el azul el anillo mide más que la caja.** El fondo por píxel del anillo es "
+            "*mayor* que el flujo por píxel dentro de la caja, así que `crudo − fondo × npix_eff` "
+            "sale **negativo** antes de tocar la corrección de apertura. El halo AO de la "
+            "primaria es **cromático** (mucho peor en el azul) y **no es plano**: a la distancia "
+            "del compañero cae con el radio, así que la mediana del anillo —que abarca radios "
+            "mayores y menores— no representa el fondo justo debajo de la caja.\n"
+            "2. **`apcorr` amplifica ese negativo.** En el azul la PSF es más ancha, la caja "
+            "recoge menos luz y la corrección es varias veces la del rojo: multiplica el signo "
+            "negativo por un factor grande y lo convierte en un continuo negativo llamativo.\n\n"
+            "La celda mide los tres fondos por píxel —caja, anillo y halo de la primaria a la "
+            "misma distancia— así que el diagnóstico sale **para este objeto**, no heredado de "
+            "otro: en unos el anillo queda por encima de la caja y el continuo azul se va a "
+            "negativo, en otros no.\n\n"
+            "O sea: el signo viene del **modelo de fondo**, no de la aritmética. Es de la misma "
+            "familia que el residuo de halo AO documentado para C3/psfsub, y es el motivo por el "
+            "que el nivel absoluto en el azul no se cita sin la calibración de D2."
+        ),
+        code(
+            "BANDA_AZUL = (4800.0, 5600.0)   # cámbiala y vuelve a ejecutar\n\n"
+            "sel = (WAVE >= BANDA_AZUL[0]) & (WAVE <= BANDA_AZUL[1]) & (flags == 0)\n"
+            "crudo = raw_flux + (bkg * npix_eff if ANNULUS is not None else 0.0)\n"
+            "resta = crudo - raw_flux\n"
+            "med = lambda v: float(np.nanmedian(np.asarray(v, dtype=float)[sel]))\n"
+            "print(f'banda {BANDA_AZUL[0]:.0f}-{BANDA_AZUL[1]:.0f} Å, medianas por canal:')\n"
+            "print(f'  crudo (suma de la caja)      : {med(crudo):10.2f}')\n"
+            "print(f'  fondo × npix_eff             : {med(resta):10.2f}')\n"
+            "marca = '   <-- ya negativo ANTES de apcorr' if med(raw_flux) < 0 else ''\n"
+            "print(f'  crudo − fondo × npix_eff     : {med(raw_flux):10.2f}{marca}')\n"
+            "print(f'  apcorr                       : {med(apcorr):10.2f}')\n"
+            "print(f'  producto                     : {med(flux):10.2f}')\n"
+            "# La comprobación literal: no hay ninguna resta escondida en el último paso.\n"
+            "esperado = raw_flux * apcorr\n"
+            "print(f'\\n¿producto == (crudo − fondo·npix) × apcorr, bit a bit?  '\n"
+            "      f'{np.array_equal(flux, esperado, equal_nan=True)}')\n\n"
+            "# Y de dónde sale el signo: el fondo POR PÍXEL, en tres sitios.\n"
+            "img = np.nanmedian(CUBE[sel], axis=0)\n"
+            "yy, xx = np.indices(img.shape, dtype=float)\n"
+            "rr_obj = np.hypot(yy - OBJECT_YX[0], xx - OBJECT_YX[1])\n"
+            "rr_star = np.hypot(yy - STAR_YX[0], xx - STAR_YX[1])\n"
+            "r_comp = float(np.hypot(OBJECT_YX[0] - STAR_YX[0], OBJECT_YX[1] - STAR_YX[1]))\n"
+            "en_caja = rr_obj <= 1.5\n"
+            "if ANNULUS is not None:\n"
+            "    en_anillo = ((rr_obj >= ANNULUS[0]) & (rr_obj <= ANNULUS[1])\n"
+            "                 & (rr_star > (ANNULUS[2] if len(ANNULUS) > 2 else 30.0)))\n"
+            "else:\n"
+            "    en_anillo = np.zeros_like(en_caja)\n"
+            "# El halo de la primaria a la MISMA distancia que el compañero, mirando\n"
+            "# alrededor: es la referencia justa, y la que el anillo no reproduce.\n"
+            "en_halo = (np.abs(rr_star - r_comp) <= 1.5) & (rr_obj > 6.0)\n"
+            "print('\\nfondo por píxel en esa banda:')\n"
+            "for nombre, mascara in (('dentro de la caja', en_caja),\n"
+            "                        ('anillo del fondo', en_anillo),\n"
+            "                        ('halo a la misma distancia de la primaria', en_halo)):\n"
+            "    if mascara.any():\n"
+            "        print(f'  {nombre:42s}: {float(np.nanmedian(img[mascara])):7.3f}')\n"
+            "if med(raw_flux) < 0:\n"
+            "    print('  -> el anillo mide MÁS que la caja: la resta deja el continuo negativo,')\n"
+            "    print('     y apcorr (grande en el azul) lo amplifica. No hay error de fórmula.')\n"
+            "else:\n"
+            "    print('  -> aquí la caja queda por encima del anillo: en este objeto el continuo')\n"
+            "    print('     azul NO se va a negativo. El mecanismo es el mismo, el signo no.')"
+        ),
+        md(
+            mb.PAPER_SPECTRUM_MD
+            + "\n\n> **Aquí sale de TUS números**, los recalculados arriba, no del producto de "
+            "la cadena: si has tocado una perilla, la figura y la tabla llevan ese cambio. "
+            "Por eso se escriben con el sufijo `_debug`, en `plots/c2_aperture_debug/` y "
+            "`tables/…_debug.ecsv`, y no pisan lo que exporta el notebook de auditoría."
+        ),
+        code(
+            mb.paper_spectrum_cell(
+                arrays_code=(
+                    "    ROOT_P = ROOT\n"
+                    "    METHOD_P = 'aperture'\n"
+                    "    PRODUCT_P = 'recalculado en C2_aperture_debug (no leído de disco)'\n"
+                    "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
+                    "    BUNIT_P = BUNIT or 'ADU'\n"
+                    "    W_P, F_P = WAVE, flux\n"
+                    "    E_P, E_ALT_P = flux_err_emp, flux_err\n"
+                    "    if not np.isfinite(E_P).any():\n"
+                    "        E_P, E_ALT_P = flux_err, None\n"
+                    "    EXTRA_P = {'flux_err_stat': flux_err, 'apcorr': apcorr,\n"
+                    "               'npix_eff': npix_eff, 'flags': flags}\n"
+                    "    MODO_P = error_mode\n"
+                ),
+                subdir="c2_aperture_debug",
+                err_label="±1σ empírico (controles procesados igual)",
+                err_alt_label="±1σ propagado del STAT (no es σ)",
+                title_suffix="apertura box3, rehecha en el notebook (C2 debug)",
+            )
+        ),
     ]
     return cells
 

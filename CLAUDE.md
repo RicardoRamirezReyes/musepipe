@@ -140,7 +140,10 @@ container, versioned by `FORMAT_VERSION`) and the extractors; `reduction/` esore
 sky/ZAP, telluric, per-exposure planning, streaming combine; `qc/` cube/frame QC, ghost
 census, STAT-empirical, wavesol/Hα maps; `models/` BT-Settl, extinction, accretion
 relations, tracks, template fitting; `report.py` (F1), `characterization.py` (G5),
-`classify.py` (G4), `lines.py` (G2), `g0.py`.
+`classify.py` (G4), `lines.py` (G2), `g0.py`; `telluric_lines.py` telluric **bands** (not
+lines: MUSE does not resolve them) + the transmission curve A3 actually measured for the
+run; `paper_spectrum.py` the publication figure (unbinned spectrum, both error estimates,
+telluric bands and accretion lines) and its ECSV export.
 
 ## Scientific invariants
 

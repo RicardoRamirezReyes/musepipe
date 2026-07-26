@@ -356,6 +356,113 @@ def audit_code(body: str) -> dict:
     )
 
 
+#: Texto de la celda «figura de paper». Vive aquí, y no duplicado en cada
+#: notebook, porque `build_debug_notebooks.py` la reutiliza tal cual: la figura
+#: del notebook de auditoría y la del de análisis tienen que ser LA MISMA
+#: figura, o comparar una con otra no diría nada.
+def paper_spectrum_cell(
+    *,
+    arrays_code: str,
+    subdir: str,
+    err_label: str,
+    err_alt_label: str,
+    title_suffix: str,
+) -> str:
+    """Celda que dibuja el espectro sin binar y **escribe sus datos**.
+
+    `arrays_code` es el trozo que cambia entre notebooks (de dónde salen los
+    números) y tiene que dejar definidos, ya indentados a 4 espacios:
+    `ROOT_P`, `W_P`, `F_P`, `E_P`, `E_ALT_P`, `EXTRA_P`, `BUNIT_P`, `TARGET_P`,
+    `METHOD_P`, `PRODUCT_P` y `MODO_P`.
+    """
+    return (
+        "try:\n"
+        "    import numpy as np\n"
+        "    import matplotlib.pyplot as plt\n"
+        "    from musepipe.paper_spectrum import (paper_spectrum_figure, pretty_flux_unit,\n"
+        "                                         spectrum_table_meta, write_spectrum_table)\n"
+        "    from musepipe.telluric_lines import measured_transmission\n"
+        f"{arrays_code}"
+        "    # Cuando la etapa eligió el error empírico, la columna `flux_err` ES\n"
+        "    # la empírica: dibujar las dos encima fingiría dos estimaciones\n"
+        "    # independientes donde solo hay una.\n"
+        "    if E_ALT_P is not None and np.allclose(E_ALT_P, E_P, equal_nan=True):\n"
+        "        E_ALT_P = None\n"
+        "        EXTRA_P.pop('flux_err_stat', None)\n"
+        "        print('las dos columnas de error coinciden (modo empírico):'\n"
+        "              ' una sola banda, y una sola columna en la tabla')\n"
+        "    # La transmisión telúrica MEDIDA de este run (A3). Si el objeto se\n"
+        "    # redujo en modo `cascade` no existe suelta: se marcan las bandas del\n"
+        "    # catálogo sin la profundidad de esa noche, y se dice.\n"
+        "    trans = measured_transmission(RUN_ID, project_root=ROOT_P)\n"
+        "    print('transmisión telúrica:', trans['source'] if trans else\n"
+        "          'no medida en este run — se marcan las bandas del catálogo')\n"
+        "    # Los canales que la etapa marcó como malos (hueco del láser AO) no\n"
+        "    # se dibujan: valen 0, y un 0 pintado se lee como una medida.\n"
+        "    from musepipe.extraction.aperture import FLAG_BAD_WINDOW\n"
+        "    MALOS_P = (np.asarray(EXTRA_P.get('flags', 0), dtype=int) & FLAG_BAD_WINDOW) != 0\n"
+        "    fig, _ejes = paper_spectrum_figure(\n"
+        "        W_P, F_P, E_P, flux_err_alt=E_ALT_P, bad_channels=MALOS_P,\n"
+        f"        err_label={err_label!r}, err_alt_label={err_alt_label!r},\n"
+        "        transmission=trans,\n"
+        f"        title=nb.display_name(RUN_ID) + ' · ' + {title_suffix!r},\n"
+        "        flux_label='flujo [' + pretty_flux_unit(BUNIT_P) + ']')\n"
+        f"    outdir = nb.run_dir(RUN_ID) / 'plots' / {subdir!r}\n"
+        "    outdir.mkdir(parents=True, exist_ok=True)\n"
+        "    # PDF además de PNG: es la que va al paper, y en vectorial las\n"
+        "    # etiquetas de las 24 líneas siguen leyéndose al ampliar.\n"
+        "    for ext in ('png', 'pdf'):\n"
+        "        fig.savefig(outdir / ('spectrum_paper.' + ext), dpi=200)\n"
+        "    tabla = write_spectrum_table(\n"
+        "        nb.run_dir(RUN_ID) / 'tables' / ('spec_' + METHOD_P + '_' + TARGET_P + '.ecsv'),\n"
+        "        W_P, F_P, E_P, extra_columns=EXTRA_P,\n"
+        "        units={'flux': BUNIT_P, 'flux_err': BUNIT_P, 'flux_err_stat': BUNIT_P},\n"
+        "        meta=spectrum_table_meta(run_id=RUN_ID, target=TARGET_P, method=METHOD_P,\n"
+        "                                 product=PRODUCT_P, flux_unit=BUNIT_P,\n"
+        "                                 error_mode=MODO_P,\n"
+        "                                 extra={'figure': str(outdir / 'spectrum_paper.pdf')}))\n"
+        "    print('figura ->', outdir / 'spectrum_paper.pdf')\n"
+        "    print('tabla  ->', tabla, '(' + str(tabla.stat().st_size // 1024) + ' kB, '\n"
+        "          + str(int(np.size(W_P))) + ' canales)')\n"
+        "    print('        se lee con:  from astropy.table import Table; Table.read(ruta)')\n"
+        "    plt.show()\n"
+        "except Exception as e:\n"
+        "    print('No se pudo generar el plot:', type(e).__name__, e)"
+    )
+
+
+#: Lo que explica la celda de arriba, en los dos notebooks.
+PAPER_SPECTRUM_MD = (
+    "## Figura de paper — el espectro sin binar, con su error y sus líneas\n\n"
+    "Las figuras anteriores son de diagnóstico. Ésta es la que se publica, y por eso "
+    "cambia en tres cosas:\n\n"
+    "- **Sin binar**: cada canal con su σ. Binar es cómodo para leer un continuo, pero "
+    "esconde justo lo que se quiere enseñar (o no enseñar): que en Hα no hay nada por "
+    "encima del ruido **a la resolución del dato**.\n"
+    "- **Dos barras de error**: la **empírica** (dispersión de los controles procesados "
+    "igual que el objeto) como banda, y la **propagada del STAT** como línea. Que se vean "
+    "las dos es la forma honesta de enseñar que el STAT del cubo no es σ "
+    "([`docs/noise_model.md`](../docs/noise_model.md)).\n"
+    "- **Marcado completo**: las **bandas telúricas** sombreadas por especie (O₂ naranja, "
+    "H₂O cian) con la **transmisión medida esa noche** en la tira de arriba, las **líneas "
+    "de acreción** por familia (Balmer, He I, prohibidas, O I, Ca II, Paschen) y las "
+    "**líneas de emisión de cielo** en gris discontinuo.\n\n"
+    "### Por qué bandas telúricas y no líneas telúricas\n\n"
+    "A la resolución de MUSE (FWHM ≈ 2.5 Å) las líneas individuales de O₂ y H₂O **no se "
+    "resuelven**: dentro de un píxel espectral caen muchas. Marcar líneas sueltas daría "
+    "una precisión que el dato no tiene, así que se marcan **bandas**. `molecfit` no está "
+    "disponible aquí y, en estos datos, **no convergió** (A3 corrigió con la estrella "
+    "telúrica estándar), pero de ahí quedó una **curva de transmisión medida** en la misma "
+    "rejilla de λ: eso es más específico que cualquier lista de laboratorio y es lo que "
+    "se dibuja. Catálogo y curva: [`musepipe/telluric_lines.py`](../musepipe/telluric_lines.py).\n\n"
+    "### Y sus datos, en columnas\n\n"
+    "La celda **escribe la tabla** además de la figura, en **ECSV** (el estándar portable "
+    "de astropy): texto plano, con las unidades y la procedencia en la cabecera, que se "
+    "lee con `Table.read(ruta)` sin configurar nada y se puede mandar por correo. Una "
+    "figura sin sus datos no es un resultado citable."
+)
+
+
 def build_cells(s: dict) -> list[dict]:
     cells: list[dict] = []
     spec_link = f"[`docs/{s['spec']}`](../docs/{s['spec']})" if s.get("spec") else "—"
@@ -2092,6 +2199,36 @@ STAGES: list[dict] = [
                     "    fig.savefig(outdir / 'apcorr.png', dpi=110); print('figura ->', outdir / 'apcorr.png'); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_spectrum_cell(
+                    arrays_code=(
+                        "    from astropy.io import fits\n"
+                        "    ROOT_P = nb.project_root()\n"
+                        "    METHOD_P = 'aperture'\n"
+                        "    PRODUCT_P = 'spec_aperture_object.fits'\n"
+                        "    TARGET_P = (nb.run_target(RUN_ID) or RUN_ID).replace(' ', '')\n"
+                        "    _h = fits.open(nb.run_dir(RUN_ID) / 'stages' / PRODUCT_P)\n"
+                        "    _d = _h[1].data\n"
+                        "    # La unidad viaja con el dato (BUNIT); no hay default silencioso.\n"
+                        "    BUNIT_P = _h[1].header.get('BUNIT') or 'ADU'\n"
+                        "    W_P = np.asarray(_d['wave_A'], float)\n"
+                        "    F_P = np.asarray(_d['flux'], float)\n"
+                        "    E_P = np.asarray(_d['flux_err_emp'], float)\n"
+                        "    E_ALT_P = np.asarray(_d['flux_err'], float)\n"
+                        "    EXTRA_P = {'flux_err_stat': E_ALT_P,\n"
+                        "               'apcorr': np.asarray(_d['apcorr'], float),\n"
+                        "               'npix_eff': np.asarray(_d['npix_eff'], float),\n"
+                        "               'flags': np.asarray(_d['flags'], int)}\n"
+                        "    _h.close()\n"
+                        "    MODO_P = nb.load_qc('stages/spec_aperture_qc.json', RUN_ID)['errors']['mode']\n"
+                    ),
+                    subdir="c2_aperture",
+                    err_label="±1σ empírico (controles procesados igual)",
+                    err_alt_label="±1σ propagado del STAT (no es σ)",
+                    title_suffix="espectro del compañero · apertura box3 (C2)",
                 ),
             ),
         ],
