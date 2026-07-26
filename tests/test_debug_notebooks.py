@@ -105,7 +105,8 @@ class GeneratedNotebookTests(unittest.TestCase):
 
     def test_it_carries_the_drift_check_and_the_comparison(self):
         productos = {"C2": ["spec_aperture_object.fits"],
-                     "C3": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"]}
+                     "C3": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
+                     "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"]}
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
@@ -157,6 +158,7 @@ class ReproducesTheChainTests(unittest.TestCase):
     CASOS = {
         "C2_aperture_debug": ["spec_aperture_object.fits"],
         "C3_optimal_debug": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
+        "C4_psffit_debug": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
     }
 
     def test_every_debug_notebook_reports_identical(self):

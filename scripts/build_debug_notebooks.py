@@ -90,6 +90,18 @@ INLINE_SOURCES = {
             "control_optimal_spectra", "psf_image", "fit_primary_psf_model_cube",
         ]),
     ],
+    # C4 ajusta DOS PSF a la vez por canal. Lo copiado es el ajuste entero: la
+    # region, la matriz de diseño, el estimador por canal y los controles.
+    "C4": [
+        ("musepipe/stats.py", ["finite_values", "robust_sigma", "robust_sigma_axis0"]),
+        ("musepipe/apertures.py", ["angular_separation_deg", "same_radius_control_positions"]),
+        ("musepipe/extraction/aperture.py", ["_flag_window", "channel_flags"]),
+        ("musepipe/extraction/optimal.py", ["covariance_factor_for_npix", "estimate_variance_cube"]),
+        ("musepipe/extraction/psffit.py", [
+            "PsfFitCubeResult", "fit_region_mask", "psf_pair_design", "_correlation",
+            "_fit_one_channel", "fit_psffit_cube", "control_psffit_spectra",
+        ]),
+    ],
 }
 
 
@@ -104,11 +116,13 @@ def extract_sources(stage_id):
         text = (ROOT / rel).read_text(encoding="utf-8")
         lines = text.splitlines(keepends=True)
         tree = ast.parse(text)
-        found = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        # También clases: C4 copia la dataclass que sus funciones construyen.
+        found = {n.name: n for n in tree.body
+                 if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
         for name in names:
             node = found.get(name)
             if node is None:
-                raise KeyError(f"{rel}: no se encuentra la función {name!r}")
+                raise KeyError(f"{rel}: no se encuentra {name!r}")
             start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1
             # El sha se calcula sobre el MISMO texto que se copia (ya recortado):
             # si se calculara sobre el texto con su salto final, el chequeo de
@@ -175,6 +189,44 @@ def needed_constants(sources):
     return out
 
 
+
+
+def drift_cell(code, shas, stage_id):
+    """La celda que compara la copia con el fuente actual de `musepipe`.
+
+    Es la que sostiene toda la idea de copiar codigo, asi que vive en un solo
+    sitio y no una vez por etapa.
+    """
+    return code(
+        "import ast as _ast, hashlib as _hashlib\n\n"
+        f"_SHAS = {json.dumps(shas, indent=4)}\n\n"
+        "def chequeo_de_deriva(shas=_SHAS, root=ROOT):\n"
+        "    problemas = []\n"
+        "    for key, sha in shas.items():\n"
+        "        rel, name = key.rsplit(':', 1)\n"
+        "        text = (root / rel).read_text(encoding='utf-8')\n"
+        "        lines = text.splitlines(keepends=True)\n"
+        "        node = next((n for n in _ast.parse(text).body\n"
+        "                     if isinstance(n, (_ast.FunctionDef, _ast.ClassDef)) and n.name == name),\n"
+        "                    None)\n"
+        "        if node is None:\n"
+        "            problemas.append(f'{key}: ya no existe en musepipe'); continue\n"
+        "        start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1\n"
+        "        src = ''.join(lines[start:node.end_lineno]).rstrip('\\n')\n"
+        "        actual = _hashlib.sha256(src.encode('utf-8')).hexdigest()[:12]\n"
+        "        if actual != sha:\n"
+        "            problemas.append(f'{key}: la copia es {sha}, musepipe tiene {actual}')\n"
+        "    return problemas\n\n"
+        "_deriva = chequeo_de_deriva()\n"
+        "if _deriva:\n"
+        "    print('DERIVA — la cadena cambió y esta copia se quedó atrás:')\n"
+        "    for p in _deriva:\n"
+        "        print('  ·', p)\n"
+        "    print(f'\\nRegenera: python scripts/build_debug_notebooks.py"
+        f" --target {{TARGET}} {stage_id}')\n"
+        "else:\n"
+        "    print(f'sin deriva: las {len(_SHAS)} piezas copiadas son las de musepipe')"
+    )
 
 
 def build_c2_cells(mb, target, run_id):
@@ -328,35 +380,7 @@ def build_c2_cells(mb, target, run_id):
             "cambió la cadena, esta celda lo dice nombrando la función: es lo que evita que este "
             "notebook siga dando resultados «de la cadena» cuando ya no lo son."
         ),
-        code(
-            "import ast as _ast, hashlib as _hashlib\n\n"
-            f"_SHAS = {json.dumps(shas, indent=4)}\n\n"
-            "def chequeo_de_deriva(shas=_SHAS, root=ROOT):\n"
-            "    problemas = []\n"
-            "    for key, sha in shas.items():\n"
-            "        rel, name = key.rsplit(':', 1)\n"
-            "        text = (root / rel).read_text(encoding='utf-8')\n"
-            "        lines = text.splitlines(keepends=True)\n"
-            "        node = next((n for n in _ast.parse(text).body\n"
-            "                     if isinstance(n, _ast.FunctionDef) and n.name == name), None)\n"
-            "        if node is None:\n"
-            "            problemas.append(f'{key}: ya no existe en musepipe'); continue\n"
-            "        start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1\n"
-            "        src = ''.join(lines[start:node.end_lineno]).rstrip('\\n')\n"
-            "        actual = _hashlib.sha256(src.encode('utf-8')).hexdigest()[:12]\n"
-            "        if actual != sha:\n"
-            "            problemas.append(f'{key}: la copia es {sha}, musepipe tiene {actual}')\n"
-            "    return problemas\n\n"
-            "_deriva = chequeo_de_deriva()\n"
-            "if _deriva:\n"
-            "    print('DERIVA — la cadena cambió y esta copia se quedó atrás:')\n"
-            "    for p in _deriva:\n"
-            "        print('  ·', p)\n"
-            "    print(f'\\nRegenera el notebook: python scripts/build_debug_notebooks.py'\n"
-            "          f' --target {TARGET} C2')\n"
-            "else:\n"
-            "    print(f'sin deriva: las {len(_SHAS)} funciones copiadas son las de musepipe')"
-        ),
+        drift_cell(code, shas, "C2"),
         md(
             "## 5 · Paso 1 — la apertura\n\n"
             "Los pesos de la caja y el número **efectivo** de píxeles por canal: `npix_eff` no es "
@@ -790,34 +814,7 @@ def build_c3_cells(mb, target, run_id):
             + inline_src
         ),
         md("## 4 · Chequeo de deriva"),
-        code(
-            "import ast as _ast, hashlib as _hashlib\n\n"
-            f"_SHAS = {json.dumps(shas, indent=4)}\n\n"
-            "def chequeo_de_deriva(shas=_SHAS, root=ROOT):\n"
-            "    problemas = []\n"
-            "    for key, sha in shas.items():\n"
-            "        rel, name = key.rsplit(':', 1)\n"
-            "        text = (root / rel).read_text(encoding='utf-8')\n"
-            "        lines = text.splitlines(keepends=True)\n"
-            "        node = next((n for n in _ast.parse(text).body\n"
-            "                     if isinstance(n, _ast.FunctionDef) and n.name == name), None)\n"
-            "        if node is None:\n"
-            "            problemas.append(f'{key}: ya no existe en musepipe'); continue\n"
-            "        start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1\n"
-            "        src = ''.join(lines[start:node.end_lineno]).rstrip('\\n')\n"
-            "        actual = _hashlib.sha256(src.encode('utf-8')).hexdigest()[:12]\n"
-            "        if actual != sha:\n"
-            "            problemas.append(f'{key}: la copia es {sha}, musepipe tiene {actual}')\n"
-            "    return problemas\n\n"
-            "_deriva = chequeo_de_deriva()\n"
-            "if _deriva:\n"
-            "    print('DERIVA — la cadena cambió y esta copia se quedó atrás:')\n"
-            "    for p in _deriva:\n"
-            "        print('  ·', p)\n"
-            "    print(f'\\nRegenera: python scripts/build_debug_notebooks.py --target {TARGET} C3')\n"
-            "else:\n"
-            "    print(f'sin deriva: las {len(_SHAS)} funciones copiadas son las de musepipe')"
-        ),
+        drift_cell(code, shas, "C3"),
         md(
             "## 5 · El modelo de la primaria (lo que separa las dos variantes)\n\n"
             "`psfsub` necesita restar la primaria antes de extraer. El ajuste es canal a canal, "
@@ -962,9 +959,275 @@ def build_c3_cells(mb, target, run_id):
     ]
 
 
+def build_c4_cells(mb, target, run_id):
+    """Las celdas de `C4_psffit_debug`: el ajuste simultáneo de dos PSF."""
+    md, code = mb.md, mb.code
+    sources = extract_sources("C4")
+    inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
+    shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+
+    return [
+        md(
+            f"# C4 · psffit — notebook de análisis (`debug`)\n\n"
+            f"**Objeto:** {target}  |  **Run:** `{run_id}`  |  "
+            f"**Spec:** [`docs/spec_C4_codex_psf_fitting.md`]"
+            f"(../../../docs/spec_C4_codex_psf_fitting.md)\n\n"
+            "Rehace C4 **dentro del notebook**. Es el **método canónico** de la cadena, y el "
+            "único que no mide un residuo: en cada canal ajusta **dos PSF a la vez** —la primaria "
+            "y el compañero— resolviendo un sistema lineal de dos amplitudes. El halo no se resta "
+            "antes, se ajusta *junto con* la fuente.\n\n"
+            "Eso trae su propio modo de fallo, y es el que hay que vigilar aquí: si las dos PSF se "
+            "parecen demasiado en la región de ajuste, el sistema no puede repartir la luz entre "
+            "ellas. La correlación **ρ(a,b)** mide justo eso, y es el chequeo `v4_rho_ab_ok` del "
+            "QC.\n\n"
+            "> **El ajuste es por canal y cuesta ~11 min para los 3681.** Por eso el notebook trae "
+            "una perilla de submuestreo: cada canal se ajusta de forma independiente, así que "
+            "quedarse con 1 de cada N no cambia el resultado de esos canales — verificado "
+            "comparando dos submuestreos distintos, que salen **bit a bit iguales** en los canales "
+            "comunes. Ponla a 1 para recorrer los 3681.\n\n"
+            "> Frente al producto **guardado** por la cadena el acuerdo es de redondeo (~1e-12 en "
+            "relativo), no bit a bit como en C2 y C3: aquí hay un sistema lineal por canal, no una "
+            "suma. Por eso la comparación usa `rtol=1e-9`."
+        ),
+        code(
+            "import json, sys\n"
+            "from pathlib import Path\n\n"
+            "import numpy as np\n"
+            "from astropy.io import fits\n"
+            "import matplotlib.pyplot as plt\n\n"
+            "_here = Path.cwd()\n"
+            "ROOT = next(p for p in (_here, *_here.parents) if (p / 'musepipe').is_dir())\n"
+            "sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'notebooks'))\n"
+            "import _nbcommon as nb\n\n"
+            f"RUN_ID = nb.resolve_run_id({run_id!r})\n"
+            "RD = nb.run_dir(RUN_ID); SD = RD / 'stages'\n"
+            "TARGET = nb.run_target(RUN_ID) or nb.display_name(RUN_ID)\n"
+            "print('objeto :', TARGET, '·', nb.display_name(RUN_ID))\n"
+            "print('run    :', RUN_ID)"
+        ),
+        md(
+            "## 1 · Perillas\n\n"
+            "Los dos radios son **la** decisión de esta etapa: definen la región donde se ajustan "
+            "las dos PSF. Agrandar el del compañero mete más halo en el ajuste; encogerlo deja "
+            "menos píxeles para separar las dos fuentes. Las dos cosas se ven en ρ(a,b)."
+        ),
+        code(
+            "from musepipe.stages.stage_x03_psffit import stage_x03_config_from_run\n\n"
+            "# `project_root=ROOT`: musepipe resuelve rutas contra el cwd, que en un\n"
+            "# notebook es su propia carpeta, no la raíz del repo.\n"
+            "X03 = stage_x03_config_from_run(RUN_ID, project_root=ROOT)\n"
+            "STAR_RADIUS_PX    = float(X03.get('x03_star_radius_px', 20.0))\n"
+            "COMP_RADIUS_PX    = float(X03.get('x03_comp_radius_px', 12.0))\n"
+            "ERROR_MODE        = X03.get('x03_error_mode', 'auto')\n"
+            "N_CONTROLS        = int(X03.get('x03_control_apertures', 8))\n"
+            "EXCLUDE_ANGLE_DEG = float(X03.get('x03_control_exclude_angle_deg', 25.0))\n"
+            "BAD_WINDOWS_A     = X03.get('x03_bad_windows_A', [])\n"
+            "SKYLINE_WINDOWS_A = X03.get('x03_skyline_windows_A', [])\n"
+            "INTERPOLATED_WIN_A = X03.get('x03_interpolated_windows_A', [])\n\n"
+            "# Submuestreo: 1 de cada N canales. El ajuste es independiente por canal,\n"
+            "# así que estos salen idénticos a los de la cadena completa. Pon 1 (y ~11\n"
+            "# min de paciencia) para comparar los 3681.\n"
+            "PASO_CANALES = 20\n\n"
+            "# ---- a partir de aquí, cambia lo que quieras probar ----\n\n"
+            "print(f'radios: primaria {STAR_RADIUS_PX:.0f} px · compañero {COMP_RADIUS_PX:.0f} px'\n"
+            "      f' | controles {N_CONTROLS} | 1 de cada {PASO_CANALES} canales')"
+        ),
+        md(
+            "## 2 · Entradas\n\n"
+            "C4 extrae del **cubo de B2**, sin sustracción previa: la primaria entra en el ajuste "
+            "como una de las dos componentes."
+        ),
+        code(
+            "qc_b3 = json.loads((SD / 'stage01c_qc.json').read_text(encoding='utf-8'))\n"
+            "COMP_YX = tuple(float(v) for v in qc_b3['companion']['pos_yx'])\n"
+            "STAR_YX = tuple(float(v) for v in qc_b3['primary']['pos_yx'])\n"
+            "PSF_MODEL = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n\n"
+            "with fits.open(SD / 'stage02_xcorr_cube_stack.fits') as h:\n"
+            "    CUBE_FULL = np.asarray(h['CUBES'].data, dtype=float)\n"
+            "    WAVE_FULL = np.asarray(h['WAVELENGTH'].data, dtype=float)\n"
+            "    STAT_FULL = np.asarray(h['STAT'].data, dtype=float) if 'STAT' in h else None\n"
+            "if CUBE_FULL.ndim == 4:\n"
+            "    CUBE_FULL = CUBE_FULL[0]\n"
+            "if STAT_FULL is not None and STAT_FULL.ndim == 4:\n"
+            "    STAT_FULL = STAT_FULL[0]\n\n"
+            "qc00 = json.loads((SD / 'stage00q_qc.json').read_text(encoding='utf-8'))\n"
+            "qc01 = json.loads((SD / 'stage01_qc.json').read_text(encoding='utf-8'))\n"
+            "m5 = qc00.get('m5_stat', {})\n"
+            "STAT_FACTOR = float(X03.get('x03_stat_factor_spaxel',\n"
+            "                            m5.get('factor_spaxel_median', 1.0)) or 1.0)\n"
+            "COV_FACTOR  = float(X03.get('x03_covariance_factor_box3',\n"
+            "                            qc01.get('stat', {}).get('covariance_factor_box3', 1.0)) or 1.0)\n"
+            "STAT_STATUS = str(X03.get('x03_stat_status', m5.get('status', 'unknown')))\n\n"
+            "CANALES = np.arange(0, WAVE_FULL.size, PASO_CANALES)\n"
+            "CUBE = CUBE_FULL[CANALES]\n"
+            "WAVE = WAVE_FULL[CANALES]\n"
+            "STAT = None if STAT_FULL is None else STAT_FULL[CANALES]\n"
+            "print('cubo     :', CUBE_FULL.shape, '-> se ajustan', WAVE.size, 'canales')\n"
+            "print('primaria :', [round(v, 2) for v in STAR_YX],\n"
+            "      ' compañero:', [round(v, 2) for v in COMP_YX])\n"
+            "sep = float(np.hypot(COMP_YX[0] - STAR_YX[0], COMP_YX[1] - STAR_YX[1]))\n"
+            "print(f'separación: {sep:.1f} px | radios de ajuste {STAR_RADIUS_PX:.0f}/{COMP_RADIUS_PX:.0f} px'\n"
+            "      f\" -> las regiones {'SE SOLAPAN' if sep < STAR_RADIUS_PX + COMP_RADIUS_PX else 'no se solapan'}\")\n"
+            f"print(f'STAT     : factor={{STAT_FACTOR:.3f}} covarianza={{COV_FACTOR:.3f}} estado={{STAT_STATUS}}')"
+        ),
+        md(
+            "## 3 · Las funciones copiadas de `musepipe`\n\n"
+            "Incluye la dataclass del resultado, porque el ajuste la construye.\n\n"
+            + "\n".join(f"- `{name}` — de `{rel}`" for rel, name, _s, _h in sources)
+        ),
+        code(
+            "# ------------------------------------------------------------------\n"
+            "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
+            "# ------------------------------------------------------------------\n"
+            + "\n".join(needed_imports(sources)) + "\n"
+            "from dataclasses import dataclass\n"
+            "from musepipe.psf import evaluate_psf_model      # de C1\n"
+            "from musepipe.parallel import run_channel_chunks  # paralelismo, no física\n\n"
+            + "\n".join(needed_constants(sources)) + "\n\n\n"
+            + inline_src
+        ),
+        md("## 4 · Chequeo de deriva"),
+        drift_cell(code, shas, "C4"),
+        md(
+            "## 5 · La región de ajuste y las dos PSF\n\n"
+            "La máscara es la unión de dos discos. Y las dos columnas de la matriz de diseño son "
+            "las dos PSF normalizadas: **si se parecen dentro de la máscara, el ajuste no puede "
+            "separarlas**, y eso es exactamente lo que mide ρ(a,b) más abajo."
+        ),
+        code(
+            "mask = fit_region_mask(CUBE.shape[1:], STAR_YX, COMP_YX,\n"
+            "                       star_radius_px=STAR_RADIUS_PX, comp_radius_px=COMP_RADIUS_PX)\n"
+            "iz = int(np.argmin(np.abs(WAVE - 7500)))\n"
+            "design = psf_pair_design(CUBE.shape[1:], WAVE[iz], STAR_YX, COMP_YX, PSF_MODEL)\n"
+            "print('píxeles en la región de ajuste:', int(mask.sum()))\n\n"
+            "ys, xs = np.nonzero(mask)\n"
+            "sl = (slice(ys.min() - 3, ys.max() + 4), slice(xs.min() - 3, xs.max() + 4))\n"
+            "fig, axes = plt.subplots(1, 3, figsize=(12, 3.6))\n"
+            "axes[0].imshow(mask[sl], origin='lower', cmap='gray')\n"
+            "axes[0].set_title('región de ajuste (unión de dos discos)', fontsize=8)\n"
+            "for ax, i, t in ((axes[1], 0, 'PSF de la primaria'), (axes[2], 1, 'PSF del compañero')):\n"
+            "    img = design[i][sl]\n"
+            "    ax.imshow(img, origin='lower', cmap='magma',\n"
+            "              vmax=np.nanpercentile(img, 99.5))\n"
+            "    ax.set_title(f'{t}  (λ={WAVE[iz]:.0f} Å)', fontsize=8)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 6 · El ajuste, canal a canal\n\n"
+            "Dos amplitudes por canal, con sus covarianzas. Los tres diagnósticos que importan:\n\n"
+            "- **χ²ᵣ ~ 1** dice que el modelo describe el dato con el error que declara el STAT "
+            "(verificación V1 de la spec).\n"
+            "- **ρ(a,b)** es la degeneración: con \\|ρ\\|→1 el ajuste no puede decidir cuánta luz es "
+            "de cada fuente, y el error real del compañero es mucho mayor que el formal. A esta "
+            "separación se espera \\|ρ\\| < 0.3 (`v4_rho_ab_ok`).\n"
+            "- El **número de condición** avisa de lo mismo por la vía numérica."
+        ),
+        code(
+            "variance = (estimate_variance_cube(CUBE) if STAT is None\n"
+            "            else np.asarray(STAT, dtype=float) * STAT_FACTOR)\n"
+            "res = fit_psffit_cube(CUBE, variance, WAVE, STAR_YX, COMP_YX, PSF_MODEL,\n"
+            "                      star_radius_px=STAR_RADIUS_PX, comp_radius_px=COMP_RADIUS_PX,\n"
+            "                      n_jobs=1)\n"
+            "print(f'χ²ᵣ mediano   = {float(np.nanmedian(res.chi2r)):.3f}')\n"
+            "print(f'|ρ(a,b)| mediano = {float(np.nanmedian(np.abs(res.rho_ab))):.3f}'\n"
+            "      f'  (p95 {float(np.nanpercentile(np.abs(res.rho_ab), 95)):.3f})')\n"
+            "print(f'condición mediana = {float(np.nanmedian(res.condition_number)):.1f}')\n\n"
+            "fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 5), sharex=True)\n"
+            "a1.plot(WAVE, res.chi2r, lw=0.7); a1.axhline(1.0, color='tab:red', ls='--', lw=0.8)\n"
+            "a1.set_ylabel('χ²ᵣ'); a1.set_ylim(0, np.nanpercentile(res.chi2r, 99))\n"
+            "a2.plot(WAVE, res.rho_ab, lw=0.7, color='tab:purple')\n"
+            "for lim in (-0.3, 0.3):\n"
+            "    a2.axhline(lim, color='tab:red', ls='--', lw=0.8)\n"
+            "a2.set_ylabel('ρ(a,b)'); a2.set_xlabel('λ [Å]')\n"
+            "a1.set_title('¿describe el modelo al dato? ¿y puede separar las dos fuentes?', fontsize=9)\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 7 · Errores y controles\n\n"
+            "El error formal sale de la covarianza del ajuste, inflado por el factor de covarianza "
+            "espacial. El empírico se mide re-ajustando **el mismo par de PSF** en posiciones de "
+            "control al mismo radio: mide la estabilidad del ajuste, no el ruido de fotones — y por "
+            "eso en D2 viaja en columna aparte."
+        ),
+        code(
+            "cov = covariance_factor_for_npix(res.npix_eff_comp, COV_FACTOR)\n"
+            "comp_var = res.covariance[:, 1, 1] * cov\n"
+            "star_var = res.covariance[:, 0, 0] * cov\n"
+            "controls_yx, star_ctrl, comp_ctrl = control_psffit_spectra(\n"
+            "    CUBE, variance, WAVE, STAR_YX, COMP_YX, PSF_MODEL,\n"
+            "    star_radius_px=STAR_RADIUS_PX, comp_radius_px=COMP_RADIUS_PX,\n"
+            "    n_controls=N_CONTROLS, exclude_angle_deg=EXCLUDE_ANGLE_DEG, n_jobs=1)\n"
+            "comp_err_emp = (robust_sigma_axis0(comp_ctrl) if comp_ctrl.shape[0] >= 2\n"
+            "                else np.full(WAVE.size, robust_sigma(res.coeffs[:, 1])))\n"
+            "star_err_emp = (robust_sigma_axis0(star_ctrl) if star_ctrl.shape[0] >= 2\n"
+            "                else np.full(WAVE.size, robust_sigma(res.coeffs[:, 0])))\n"
+            "usable = (STAT is not None and str(ERROR_MODE).lower() != 'empirical'\n"
+            "          and STAT_STATUS.lower() != 'red')\n"
+            "comp_err = np.sqrt(np.clip(comp_var, 0.0, np.inf)) if usable else comp_err_emp\n"
+            "star_err = np.sqrt(np.clip(star_var, 0.0, np.inf)) if usable else star_err_emp\n"
+            "modo = 'stat' if usable else 'empirical'\n"
+            "print(f'{len(controls_yx)} controles | modo de error: {modo}')\n"
+            "print(f'  compañero: formal {float(np.nanmedian(np.sqrt(comp_var))):8.2f}'\n"
+            "      f'  empírico {float(np.nanmedian(comp_err_emp)):8.2f}')\n"
+            "print(f'  primaria : formal {float(np.nanmedian(np.sqrt(star_var))):8.2f}'\n"
+            "      f'  empírico {float(np.nanmedian(star_err_emp)):8.2f}')"
+        ),
+        md(
+            "## 8 · Los dos espectros\n\n"
+            "C4 entrega **dos** productos: el compañero (`spec_psffit_object.fits`, el canónico de "
+            "toda la cadena) y la primaria (`spec_psffit_star.fits`, que D2 calibra desde 2026-07-25). "
+            "Aquí `apcorr` es 1: el ajuste devuelve directamente el flujo total de cada fuente, no "
+            "el de una apertura."
+        ),
+        code(
+            "comp_flux = res.coeffs[:, 1]\n"
+            "star_flux = res.coeffs[:, 0]\n"
+            "from musepipe.spectral import median_filter_1d\n"
+            "fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 5.5), sharex=True)\n"
+            "a1.plot(WAVE, median_filter_1d(star_flux, 11), lw=1.0, color='k')\n"
+            "a1.set_ylabel('primaria'); a1.set_title('las dos componentes del ajuste', fontsize=9)\n"
+            "a2.fill_between(WAVE, -comp_err_emp, comp_err_emp, color='0.85', label='±σ empírico')\n"
+            "a2.plot(WAVE, median_filter_1d(comp_flux, 11), lw=1.0, color='tab:blue')\n"
+            "a2.axvline(6563, color='tab:red', ls=':', label='Hα')\n"
+            "a2.set_ylabel('compañero'); a2.set_xlabel('λ [Å]'); a2.legend(fontsize=8)\n"
+            "fig.tight_layout(); plt.show()\n"
+            "print(f'razón primaria/compañero (mediana): '\n"
+            "      f'{float(np.nanmedian(star_flux) / np.nanmedian(comp_flux)):.0f}×')"
+        ),
+        md(
+            "## 9 · Comparación con la cadena\n\n"
+            "Los dos productos, **solo en los canales ajustados** (el submuestreo no cambia el "
+            "resultado de un canal: el ajuste es independiente canal a canal). Con las perillas por "
+            "defecto debe salir idéntico."
+        ),
+        code(
+            "from musepipe.extraction.product import SpectrumProduct\n\n"
+            "def compara(nombre, mio_flux, mio_err, fichero, rtol=1e-9):\n"
+            "    ref = SpectrumProduct.read(SD / fichero)\n"
+            "    ok = True\n"
+            "    print(f'{nombre} vs {fichero}:')\n"
+            "    for clave, a, b in (('flujo', mio_flux, np.asarray(ref.flux, float)[CANALES]),\n"
+            "                        ('error', mio_err, np.asarray(ref.flux_err, float)[CANALES])):\n"
+            "        fin = np.isfinite(a) & np.isfinite(b)\n"
+            "        d = np.abs(a - b)[fin]\n"
+            "        ig = np.isclose(a[fin], b[fin], rtol=rtol, atol=0.0)\n"
+            "        print(f'   {clave:6s} idénticos {100 * ig.mean():6.2f}% de {fin.sum()} canales'\n"
+            "              f' | máx |Δ| = {d.max():.3e}')\n"
+            "        ok &= bool(ig.all())\n"
+            "    return ok\n\n"
+            "ok = compara('compañero', comp_flux, comp_err, 'spec_psffit_object.fits')\n"
+            "ok &= compara('primaria ', star_flux, star_err, 'spec_psffit_star.fits')\n"
+            "print()\n"
+            "print('IDÉNTICO: la copia reproduce la cadena.' if ok else\n"
+            "      'DIFIERE — si has tocado una perilla, es lo esperado; si no, revisa el chequeo de deriva.')"
+        ),
+    ]
+
+
 BUILDERS = {
     "C2": ("C2_aperture_debug", build_c2_cells),
     "C3": ("C3_optimal_debug", build_c3_cells),
+    "C4": ("C4_psffit_debug", build_c4_cells),
 }
 
 
