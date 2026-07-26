@@ -26,6 +26,22 @@ from astropy.io import fits
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE_NAME = "baseline_pre_bunit_rerun.json"
 
+#: El flujo SI es bit-reproducible: se re-suma el mismo dato con los mismos
+#: pesos, asi que una desviacion aqui es un cambio real y se para.
+FLUX_RTOL = 1e-12
+
+#: El error, no siempre. En C4 sale de la COVARIANZA del ajuste de dos PSF, y
+#: la inversa de AtA amplifica el redondeo: re-ejecutar C4 mueve el error
+#: mediano ~4e-12 (compañero) y ~8e-12 (primaria) en ROXs 42B b, con el flujo
+#: intacto (3e-16). No pasa en ROXs 12 b porque alli el modo de error es
+#: `empirical` —dispersion de controles, una mediana— que si es exacta.
+#:
+#: 1e-9 deja pasar ese redondeo y sigue siendo mil veces mas estricto que
+#: cualquier cambio con significado fisico: las barras de error de esta cadena
+#: se conocen al ~10% (ver docs/noise_model.md). Medido 2026-07-25 al
+#: re-ejecutar C4 para publicar el chequeo V1.
+ERR_RTOL = 1e-9
+
 
 def _summarize(path: Path) -> dict:
     data = fits.getdata(path, 1)
@@ -82,15 +98,20 @@ def verify(run_dir: Path) -> int:
             problems.append(f"{name}: DESAPARECIO")
             continue
         now = _summarize(product)
-        flux_ok = np.isclose(now["flux_sum"], before["flux_sum"], rtol=1e-12, atol=0.0)
-        err_ok = np.isclose(now["err_med"], before["err_med"], rtol=1e-12, atol=0.0)
+        flux_ok = np.isclose(now["flux_sum"], before["flux_sum"], rtol=FLUX_RTOL, atol=0.0)
+        err_ok = np.isclose(now["err_med"], before["err_med"], rtol=ERR_RTOL, atol=0.0)
         if not flux_ok:
             rel = abs(now["flux_sum"] - before["flux_sum"]) / max(abs(before["flux_sum"]), 1e-30)
             problems.append(
                 f"{name}: flujo {before['flux_sum']:.9e} -> {now['flux_sum']:.9e} (rel {rel:.2e})"
             )
         if not err_ok:
-            problems.append(f"{name}: error {before['err_med']:.9e} -> {now['err_med']:.9e}")
+            rel = abs(now["err_med"] - before["err_med"]) / max(abs(before["err_med"]), 1e-30)
+            # Con la tolerancia anterior (1e-12) los dos valores salian iguales
+            # a la precision impresa y el aviso no se podia interpretar.
+            problems.append(
+                f"{name}: error {before['err_med']:.12e} -> {now['err_med']:.12e} (rel {rel:.2e})"
+            )
         print(f"  {name:42s} {'cambia' if now['bunit'] != before['bunit'] else 'igual':>8s} "
               f"{'OK' if flux_ok else 'CAMBIA':>8s} {'OK' if err_ok else 'CAMBIA':>8s}  {now['bunit']}")
 
