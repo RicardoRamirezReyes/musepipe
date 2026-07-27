@@ -367,6 +367,7 @@ def paper_spectrum_cell(
     err_label: str,
     err_alt_label: str,
     title_suffix: str,
+    stem: str = "spectrum_paper",
 ) -> str:
     """Celda que dibuja el espectro sin binar y **escribe sus datos**.
 
@@ -414,7 +415,7 @@ def paper_spectrum_cell(
         "    # 300 dpi es el mínimo que piden las revistas para figuras de línea.\n"
         "    DPI_P = 300      # súbelo si necesitas más resolución\n"
         "    for ext in ('png', 'pdf'):\n"
-        "        fig.savefig(outdir / ('spectrum_paper.' + ext), dpi=DPI_P)\n"
+        f"        fig.savefig(outdir / ({stem!r} + '.' + ext), dpi=DPI_P)\n"
         "    tabla = write_spectrum_table(\n"
         "        nb.run_dir(RUN_ID) / 'tables' / ('spec_' + METHOD_P + '_' + TARGET_P + '.ecsv'),\n"
         "        W_P, F_P, E_P, extra_columns=EXTRA_P,\n"
@@ -422,8 +423,8 @@ def paper_spectrum_cell(
         "        meta=spectrum_table_meta(run_id=RUN_ID, target=TARGET_P, method=METHOD_P,\n"
         "                                 product=PRODUCT_P, flux_unit=BUNIT_P,\n"
         "                                 error_mode=MODO_P,\n"
-        "                                 extra={'figure': str(outdir / 'spectrum_paper.pdf')}))\n"
-        "    print('figura ->', outdir / 'spectrum_paper.pdf')\n"
+        f"                                 extra={{'figure': str(outdir / ({stem!r} + '.pdf'))}}))\n"
+        f"    print('figura ->', outdir / ({stem!r} + '.pdf'))\n"
         "    print('tabla  ->', tabla, '(' + str(tabla.stat().st_size // 1024) + ' kB, '\n"
         "          + str(int(np.size(W_P))) + ' canales)')\n"
         "    print('        se lee con:  from astropy.table import Table; Table.read(ruta)')\n"
