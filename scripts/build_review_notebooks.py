@@ -558,6 +558,18 @@ def build_cells(s: dict) -> list[dict]:
         "    if _p not in sys.path:\n"
         "        sys.path.insert(0, _p)\n"
         "import _nbcommon as nb\n"
+        # Resolución de las figuras EN PANTALLA: `savefig` ya guarda a 300 dpi,
+        # pero lo que se ve dentro del notebook lo fija el backend inline, que
+        # va a 100 dpi y sale borroso. Entre try/except porque estos notebooks
+        # auditan QC y tienen que abrir aunque falte el stack científico.
+        "try:\n"
+        "    import matplotlib as mpl\n"
+        "    mpl.rcParams['figure.dpi'] = 120     # retina dobla esto sin agrandar\n"
+        "    mpl.rcParams['savefig.dpi'] = 200\n"
+        "    from matplotlib_inline.backend_inline import set_matplotlib_formats\n"
+        "    set_matplotlib_formats('retina')\n"
+        "except Exception:\n"
+        "    pass\n"
         f"RUN_ID = nb.resolve_run_id({(s['run_override'] or DEFAULT_RUN)!r})\n"
         "print('run  =', RUN_ID)\n"
         "print('root =', _root)\n"
