@@ -18,6 +18,7 @@ from .aperture import (
     FLAG_CLIPPED,
     annulus_background_spectrum,
     azimuthal_background_spectrum,
+    local_plane_background_spectrum,
     aperture_correction_from_psf,
     channel_flags,
     sha256_file,
@@ -223,7 +224,7 @@ def optimal_raw_spectrum(
 #: lado interior. Cual es mejor NO es universal: medido en los dos objetos del
 #: proyecto el cambio va en direcciones opuestas (ver el informe del 2026-07-27),
 #: asi que se elige por config y el defecto no se mueve solo.
-BACKGROUND_MODES = ("annulus", "azimuthal")
+BACKGROUND_MODES = ("annulus", "azimuthal", "local_plane")
 
 
 def local_background_spectrum(
@@ -235,6 +236,8 @@ def local_background_spectrum(
     annulus_px=None,
     azimuthal_width_px=3.0,
     azimuthal_exclude_px=10.0,
+    plane_fit_radius_px=14.0,
+    plane_mask_radius_px=3.0,
 ):
     """El fondo local de una posicion, en el modo pedido, o None si no hay.
 
@@ -247,6 +250,12 @@ def local_background_spectrum(
     mode = str(mode or "annulus").lower()
     if mode not in BACKGROUND_MODES:
         raise ValueError(f"background mode must be one of {BACKGROUND_MODES}, got {mode!r}")
+    if mode == "local_plane":
+        return local_plane_background_spectrum(
+            cube, center_yx,
+            fit_radius_px=float(plane_fit_radius_px),
+            mask_radius_px=float(plane_mask_radius_px),
+        )
     if mode == "azimuthal":
         radius = float(np.hypot(float(center_yx[0]) - float(star_yx[0]),
                                 float(center_yx[1]) - float(star_yx[1])))
@@ -283,6 +292,8 @@ def control_optimal_spectra(
     background_mode="annulus",
     azimuthal_width_px=3.0,
     azimuthal_exclude_px=10.0,
+    plane_fit_radius_px=14.0,
+    plane_mask_radius_px=3.0,
 ):
     cube = np.asarray(cube_zyx, dtype=np.float64)
     _, ny, nx = cube.shape
@@ -303,6 +314,8 @@ def control_optimal_spectra(
             annulus_px=local_bkg_annulus_px,
             azimuthal_width_px=azimuthal_width_px,
             azimuthal_exclude_px=azimuthal_exclude_px,
+            plane_fit_radius_px=plane_fit_radius_px,
+            plane_mask_radius_px=plane_mask_radius_px,
         )
         raw = optimal_raw_spectrum(
             cube,
@@ -357,6 +370,8 @@ def make_optimal_product(
     background_mode: str = "annulus",
     azimuthal_width_px: float = 3.0,
     azimuthal_exclude_px: float = 10.0,
+    plane_fit_radius_px: float = 14.0,
+    plane_mask_radius_px: float = 3.0,
 ) -> OptimalExtraction:
     cube = np.asarray(cube_zyx, dtype=np.float64)
     wave = np.asarray(wave_A, dtype=np.float64)
@@ -382,6 +397,8 @@ def make_optimal_product(
         annulus_px=local_bkg_annulus_px,
         azimuthal_width_px=azimuthal_width_px,
         azimuthal_exclude_px=azimuthal_exclude_px,
+        plane_fit_radius_px=plane_fit_radius_px,
+        plane_mask_radius_px=plane_mask_radius_px,
     )
     raw = optimal_raw_spectrum(
         cube,
@@ -461,7 +478,9 @@ def make_optimal_product(
     if input_cube_sha is None:
         input_cube_sha = sha256_file(input_cube_path) if input_cube_path.exists() else ""
     label = f"optimal_{variant}_r{float(window_radius_px):g}"
-    if str(background_mode).lower() == "azimuthal":
+    if str(background_mode).lower() == "local_plane":
+        bkg_mode = f"local_plane_r{float(plane_fit_radius_px):g}_m{float(plane_mask_radius_px):g}"
+    elif str(background_mode).lower() == "azimuthal":
         sep_px = float(np.hypot(float(object_yx[0]) - float(star_yx[0]),
                                 float(object_yx[1]) - float(star_yx[1])))
         bkg_mode = f"azimuthal_r{sep_px:.1f}_w{float(azimuthal_width_px):g}"

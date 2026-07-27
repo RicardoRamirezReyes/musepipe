@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 
 from ..apertures import aperture_weights, same_radius_control_positions
+from ..localfit import fit_local_surface_2d
 from ..psf import evaluate_psf_model
 from ..stats import robust_sigma, robust_sigma_axis0
 from .product import FORMAT_VERSION, SpectrumProduct
@@ -136,16 +137,19 @@ def azimuthal_background_spectrum(
 
     La alternativa a `annulus_background_spectrum` cuando el fondo es el halo de
     una estrella brillante. Un anillo centrado en el **compañero** atraviesa el
-    gradiente radial del halo —a 71 px de la primaria el halo cae un factor ~1.6
-    cada 10 px— y su mediana queda tirada hacia arriba por el lado interior, el
-    que mira a la estrella. Un anillo centrado en la **primaria**, a la misma
-    separación que el compañero, se mantiene a halo constante por construcción.
+    gradiente radial del halo —a 71 px de la primaria cae un factor ~1.6 cada 10
+    px—; uno centrado en la **primaria**, a la misma separación, se mantiene a
+    halo constante por construcción.
 
-    A cambio asume que el halo es **azimutalmente simétrico**, y no lo es: la PSF
-    de AO tiene speckles y spikes, así que la mediana del anillo completo puede
-    estar por encima o por debajo del halo justo bajo el compañero. Medido en los
-    dos objetos del proyecto, el cambio va en direcciones opuestas — ver
-    `reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`. Por eso esto es una
+    Ojo con el signo del sesgo del anillo, que no es el que parece: la curvatura
+    del arco mete más área por fuera, así que la mediana de su radio *estelar*
+    cae 0.7 px MÁS LEJOS de la estrella y el anillo **sub**-estima. La intuición
+    de que el lado interior tira la mediana hacia arriba es falsa.
+
+    A cambio esto asume que el halo es **azimutalmente simétrico**, y no lo es: la
+    PSF de AO tiene speckles y spikes. Medido en los dos objetos del proyecto el
+    cambio va en direcciones opuestas y **el anillo sale mejor que este** — ver
+    `reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`. Por eso es una
     opción seleccionable y no el comportamiento por defecto.
 
     `exclude_radius` quita del anillo el entorno del propio compañero
@@ -167,6 +171,60 @@ def azimuthal_background_spectrum(
         # se devuelve NaN, que es lo correcto, sin llenar la salida de ruido.
         warnings.simplefilter("ignore", RuntimeWarning)
         return np.nanmedian(vals, axis=1).astype(np.float64)
+
+
+def local_plane_background_spectrum(
+    cube_zyx,
+    center_yx,
+    *,
+    fit_radius_px=14.0,
+    mask_radius_px=3.0,
+    exclude_yx=None,
+    exclude_radius_px=3.0,
+    model_kind="plane",
+):
+    """Fondo por canal = plano local ajustado alrededor de la fuente y **evaluado en ella**.
+
+    La diferencia con los otros dos estimadores no es el tamaño de la región: es
+    *dónde se lee el resultado*. Una mediana de anillo devuelve el nivel **del
+    anillo**, que está en otro sitio; el plano se ajusta al entorno y luego se
+    evalúa en la posición de la fuente, así que sigue el gradiente del halo en vez
+    de promediarlo. Medido en la banda azul de ROXs 12 b, por píxel: el plano da
+    4.179 donde el anillo da 4.280 y el valor local es ~4.126.
+
+    Es además el mismo estimador que ya usan **04b** (que resta esta superficie del
+    cubo entero) y **C4** (que lleva el plano dentro de su matriz de diseño), así
+    que ponerlo aquí hace a `optimal_ls` consistente con ellos en vez de ser el
+    único con una receta propia.
+
+    Lo que sigue sin poder describir es una **asimetría local** —el compañero cae
+    en un mínimo del patrón de speckles—: un plano solo puede seguir un gradiente
+    lineal. Ver `reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`.
+
+    `mask_radius_px` excluye del ajuste la propia fuente; `exclude_yx` cualquier
+    otra que caiga dentro del radio de ajuste.
+    """
+
+    cube = _as_cube(cube_zyx)
+    # `fit_local_surface_2d` trunca el centro a entero para armar la region; se
+    # lee el modelo en ESE pixel para que el punto de evaluacion y el origen del
+    # ajuste sean el mismo.
+    yc_i, xc_i = int(float(center_yx[0])), int(float(center_yx[1]))
+    extra = None if exclude_yx is None else [(float(exclude_yx[0]), float(exclude_yx[1]))]
+    out = np.full(cube.shape[0], np.nan, dtype=np.float64)
+    for z in range(cube.shape[0]):
+        model, _n_good = fit_local_surface_2d(
+            cube[z],
+            float(center_yx[0]),
+            float(center_yx[1]),
+            fit_radius_px=float(fit_radius_px),
+            mask_radius_px=float(mask_radius_px),
+            model_kind=str(model_kind),
+            extra_exclusion_yx=extra,
+            extra_exclusion_radius_px=float(exclude_radius_px),
+        )
+        out[z] = model[yc_i, xc_i]
+    return out
 
 
 def aperture_stat_error(

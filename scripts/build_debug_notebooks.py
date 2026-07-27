@@ -84,7 +84,8 @@ INLINE_SOURCES = {
         # ella para ver cuanto del resultado depende de la ventana y del peso.
         ("musepipe/extraction/aperture.py", [
             "_as_cube", "_npix_eff", "aperture_spectrum", "annulus_background_spectrum",
-            "azimuthal_background_spectrum", "aperture_stat_error",
+            "azimuthal_background_spectrum", "local_plane_background_spectrum",
+            "aperture_stat_error",
             "control_aperture_spectra", "_flag_window", "channel_flags",
             "aperture_correction_from_psf",
         ]),

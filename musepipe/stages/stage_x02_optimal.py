@@ -114,6 +114,9 @@ def stage_x02_config_from_run(
     cfg.setdefault("x02_background_mode", "annulus")
     cfg.setdefault("x02_azimuthal_width_px", 3.0)
     cfg.setdefault("x02_azimuthal_exclude_px", 10.0)
+    # `local_plane`: el mismo ajuste que 04b y C4, evaluado EN el compañero.
+    cfg.setdefault("x02_plane_fit_radius_px", 14.0)
+    cfg.setdefault("x02_plane_mask_radius_px", 3.0)
     cfg.setdefault("x02_primary_fit_radius_px", cfg.get("psf_norm_radius_px", 25.0))
     cfg.setdefault("x02_primary_exclude_radius_px", cfg.get("x02_window_radius_px", 8.0))
     return cfg
@@ -260,6 +263,8 @@ def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_fa
             background_mode=cfg.get("x02_background_mode", "annulus"),
             azimuthal_width_px=float(cfg.get("x02_azimuthal_width_px", 3.0)),
             azimuthal_exclude_px=float(cfg.get("x02_azimuthal_exclude_px", 10.0)),
+            plane_fit_radius_px=float(cfg.get("x02_plane_fit_radius_px", 14.0)),
+            plane_mask_radius_px=float(cfg.get("x02_plane_mask_radius_px", 3.0)),
         )
         good = np.isfinite(ext.product.flux) & np.isfinite(base.product.flux) & (np.abs(base.product.flux) > 0)
         if np.any(good):
@@ -352,6 +357,8 @@ def compute_stage_x02_products(config, paths=None):
         "background_mode": cfg.get("x02_background_mode", "annulus"),
         "azimuthal_width_px": float(cfg.get("x02_azimuthal_width_px", 3.0)),
         "azimuthal_exclude_px": float(cfg.get("x02_azimuthal_exclude_px", 10.0)),
+        "plane_fit_radius_px": float(cfg.get("x02_plane_fit_radius_px", 14.0)),
+        "plane_mask_radius_px": float(cfg.get("x02_plane_mask_radius_px", 3.0)),
     }
     stage02_cube, stage02_wave, stage02_path, stage02_bunit = _load_stage02_cube(paths, cfg, expected_wave=wave)
     if stage02_cube.shape != ls_cube.shape:

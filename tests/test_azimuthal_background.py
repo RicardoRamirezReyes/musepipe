@@ -144,7 +144,7 @@ class ModeSelectionTests(unittest.TestCase):
         cube = halo_cube()
         with self.assertRaises(ValueError):
             local_background_spectrum(cube, COMP_YX, STAR_YX, mode="promedio")
-        self.assertEqual(BACKGROUND_MODES, ("annulus", "azimuthal"))
+        self.assertEqual(BACKGROUND_MODES, ("annulus", "azimuthal", "local_plane"))
 
     def test_controls_get_their_OWN_neighbourhood_excluded(self):
         """`control = objeto` exige el mismo estimador, no el mismo número.
@@ -164,3 +164,66 @@ class ModeSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LocalPlaneBackgroundTests(unittest.TestCase):
+    """El plano local: se ajusta al entorno y se evalúa EN la fuente.
+
+    Se añadió el 2026-07-27 por ser el estimador que ya usan 04b y C4. Medido en
+    datos reales resulta ser **peor** que el anillo (ver el informe): sobre un
+    halo convexo el plano queda por encima del valor central, y si la máscara no
+    excluye las alas del compañero se come su flujo. Se fija su comportamiento,
+    no su bondad — la elección sigue siendo del usuario, por config.
+    """
+
+    def test_on_a_linear_gradient_it_recovers_the_value_at_the_centre(self):
+        # Un plano describe exactamente un gradiente lineal: ahí es exacto, y es
+        # el caso para el que se eligió.
+        from musepipe.extraction.aperture import local_plane_background_spectrum
+
+        yy, xx = np.indices(SHAPE[1:], dtype=float)
+        plano = 100.0 + 0.5 * (xx - COMP_YX[1]) - 0.3 * (yy - COMP_YX[0])
+        cube = np.repeat(plano[None], SHAPE[0], axis=0)
+        fondo = local_plane_background_spectrum(cube, COMP_YX, fit_radius_px=14.0,
+                                                mask_radius_px=3.0)
+        np.testing.assert_allclose(fondo, 100.0, rtol=1e-6)
+
+    def test_on_a_convex_halo_it_lands_ABOVE_the_centre_value(self):
+        """Por qué falla en el dato real, aislado.
+
+        El halo cae como una potencia: es convexo. El ajuste lineal sobre un
+        entorno simétrico queda por encima de la función en el centro, así que
+        el plano **sobre**-estima el fondo y la resta se pasa. Y empeora cuanto
+        más lejos se ajusta, que es justo lo medido en los dos objetos.
+        """
+        from musepipe.extraction.aperture import local_plane_background_spectrum
+
+        cube = halo_cube()
+        sep = float(np.hypot(COMP_YX[0] - STAR_YX[0], COMP_YX[1] - STAR_YX[1]))
+        verdadero = 1.0e5 / sep ** 2
+        cerca = float(local_plane_background_spectrum(
+            cube, COMP_YX, fit_radius_px=14.0, mask_radius_px=3.0)[0])
+        lejos = float(local_plane_background_spectrum(
+            cube, COMP_YX, fit_radius_px=30.0, mask_radius_px=14.0)[0])
+        self.assertGreater(cerca, verdadero)
+        self.assertGreater(lejos, cerca)
+
+    def test_the_mask_keeps_the_source_out_of_its_own_background(self):
+        from musepipe.extraction.aperture import local_plane_background_spectrum
+
+        cube = halo_cube()
+        yy, xx = np.indices(SHAPE[1:], dtype=float)
+        # Una fuente ancha, como la PSF de AO: si la mascara es menor que sus
+        # alas, el plano se las come y el fondo sale inflado.
+        cube += 500.0 * np.exp(-((yy - COMP_YX[0]) ** 2 + (xx - COMP_YX[1]) ** 2) / (2 * 5.0 ** 2))
+        estrecha = float(local_plane_background_spectrum(
+            cube, COMP_YX, fit_radius_px=14.0, mask_radius_px=3.0)[0])
+        ancha = float(local_plane_background_spectrum(
+            cube, COMP_YX, fit_radius_px=30.0, mask_radius_px=16.0)[0])
+        self.assertGreater(estrecha, ancha)
+
+    def test_it_is_a_selectable_mode_and_not_the_default(self):
+        cube = halo_cube()
+        self.assertIn("local_plane", BACKGROUND_MODES)
+        directo = local_background_spectrum(cube, COMP_YX, STAR_YX, mode="local_plane")
+        self.assertEqual(directo.shape, (SHAPE[0],))
