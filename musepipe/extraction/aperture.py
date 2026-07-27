@@ -7,6 +7,7 @@ import hashlib
 import math
 from pathlib import Path
 from typing import Sequence
+import warnings
 
 import numpy as np
 
@@ -119,6 +120,52 @@ def annulus_background_spectrum(cube_zyx, center_yx, r_in, r_out, *, exclude_yx=
         return np.zeros(cube.shape[0], dtype=np.float64)
     vals = cube[:, mask]
     with np.errstate(all="ignore"):
+        return np.nanmedian(vals, axis=1).astype(np.float64)
+
+
+def azimuthal_background_spectrum(
+    cube_zyx,
+    star_yx,
+    radius_px,
+    *,
+    width_px=3.0,
+    exclude_yx=None,
+    exclude_radius=10.0,
+):
+    """Fondo por canal = mediana del anillo centrado en la PRIMARIA, al radio dado.
+
+    La alternativa a `annulus_background_spectrum` cuando el fondo es el halo de
+    una estrella brillante. Un anillo centrado en el **compañero** atraviesa el
+    gradiente radial del halo —a 71 px de la primaria el halo cae un factor ~1.6
+    cada 10 px— y su mediana queda tirada hacia arriba por el lado interior, el
+    que mira a la estrella. Un anillo centrado en la **primaria**, a la misma
+    separación que el compañero, se mantiene a halo constante por construcción.
+
+    A cambio asume que el halo es **azimutalmente simétrico**, y no lo es: la PSF
+    de AO tiene speckles y spikes, así que la mediana del anillo completo puede
+    estar por encima o por debajo del halo justo bajo el compañero. Medido en los
+    dos objetos del proyecto, el cambio va en direcciones opuestas — ver
+    `reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`. Por eso esto es una
+    opción seleccionable y no el comportamiento por defecto.
+
+    `exclude_radius` quita del anillo el entorno del propio compañero
+    (`exclude_yx`), que si no contaminaría su propio fondo.
+    """
+
+    cube = _as_cube(cube_zyx)
+    _, ny, nx = cube.shape
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    r_star = np.hypot(yy - float(star_yx[0]), xx - float(star_yx[1]))
+    mask = np.abs(r_star - float(radius_px)) <= float(width_px)
+    if exclude_yx is not None and float(exclude_radius) > 0:
+        mask &= np.hypot(yy - float(exclude_yx[0]), xx - float(exclude_yx[1])) > float(exclude_radius)
+    if not mask.any():
+        return np.zeros(cube.shape[0], dtype=np.float64)
+    vals = cube[:, mask]
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        # Un canal enteramente NaN (hueco del laser) da un aviso por cada uno:
+        # se devuelve NaN, que es lo correcto, sin llenar la salida de ruido.
+        warnings.simplefilter("ignore", RuntimeWarning)
         return np.nanmedian(vals, axis=1).astype(np.float64)
 
 

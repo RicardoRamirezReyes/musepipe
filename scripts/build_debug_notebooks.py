@@ -84,13 +84,15 @@ INLINE_SOURCES = {
         # ella para ver cuanto del resultado depende de la ventana y del peso.
         ("musepipe/extraction/aperture.py", [
             "_as_cube", "_npix_eff", "aperture_spectrum", "annulus_background_spectrum",
-            "aperture_stat_error", "control_aperture_spectra", "_flag_window",
-            "channel_flags", "aperture_correction_from_psf",
+            "azimuthal_background_spectrum", "aperture_stat_error",
+            "control_aperture_spectra", "_flag_window", "channel_flags",
+            "aperture_correction_from_psf",
         ]),
         ("musepipe/extraction/optimal.py", [
             "circular_window_indices", "normalized_psf_window", "covariance_factor_for_npix",
             "_channel_estimate", "estimate_variance_cube", "optimal_raw_spectrum",
-            "control_optimal_spectra", "psf_image", "fit_primary_psf_model_cube",
+            "local_background_spectrum", "control_optimal_spectra", "psf_image",
+            "fit_primary_psf_model_cube",
         ]),
     ],
     # C4 ajusta DOS PSF a la vez por canal. Lo copiado es el ajuste entero: la
@@ -1542,7 +1544,7 @@ def build_c3_cells(mb, target, run_id):
             '- **Estructura que se mueve o se ensancha hacia el azul**: speckles de la AO. El halo no es liso ni simétrico, y ahí es donde una mediana de anillo deja de representar el fondo bajo el compañero.\n\n'
             '- **Un gradiente que crece hacia el azul en la posición del compañero**: la firma de la sobre-sustracción que se ve en el espectro.\n\n'
             '> Sigue siendo **solo para ver**: no entra en ninguna cuenta de la extracción.\n\n'
-            '**Constancia del sesgo del lado interior.** El anillo de fondo (8–14 px alrededor del compañero) barre radios *estelares* de ~57 a ~85 px, y en ese tramo el halo cae un factor ~1.6 cada 10 px. La mediana del anillo queda por tanto **tirada hacia arriba por el lado que mira a la primaria**, donde hay más señal: no es el fondo bajo el compañero, es una mezcla sesgada. Medido en C2 (celda 14) por píxel: caja 4.126, anillo 4.280, halo azimutal al mismo radio 5.094. La diferencia caja–anillo es de solo 0.15 por píxel — pequeña, pero se resta en **cada uno** de los ~200 píxeles de la ventana y luego se multiplica por `apcorr`. Queda registrado en [`reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`](../../../reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md).\n\n'
+            '**Constancia de por qué el fondo se pasa.** El anillo (8–14 px alrededor del compañero) barre radios *estelares* de ~57 a ~85 px y el halo cae un factor ~1.6 cada 10 px ahí. La intuición dice que el lado interior, más brillante, tira la mediana hacia arriba — **y es falsa**: la curvatura del arco mete más área por fuera, así que la mediana del radio estelar dentro del anillo cae 0.7 px MÁS LEJOS de la estrella y el anillo **sub**-estima el halo. Lo que de verdad pasa es que el compañero **está en un mínimo local**: medido en la banda azul, por píxel, caja 4.126, anillo 3–6 px 4.600, anillo 8–14 px 4.280, azimutal al mismo radio estelar 5.111. Cualquier promedio de su entorno le quita de más, y esa diferencia se resta en **cada uno** de los ~200 píxeles de la ventana antes de multiplicar por `apcorr`. Registrado, con la errata, en [`reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`](../../../reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md).\n\n'
         ),
         code(
             'N_BANDAS = 8\n'
