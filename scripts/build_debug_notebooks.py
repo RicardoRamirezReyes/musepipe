@@ -80,9 +80,12 @@ INLINE_SOURCES = {
         ("musepipe/apertures.py", [
             "angular_separation_deg", "aperture_weights", "same_radius_control_positions",
         ]),
+        # La apertura de C2 tambien viaja: la seccion 8 repite la extraccion con
+        # ella para ver cuanto del resultado depende de la ventana y del peso.
         ("musepipe/extraction/aperture.py", [
-            "_as_cube", "annulus_background_spectrum", "_flag_window", "channel_flags",
-            "aperture_correction_from_psf",
+            "_as_cube", "_npix_eff", "aperture_spectrum", "annulus_background_spectrum",
+            "aperture_stat_error", "control_aperture_spectra", "_flag_window",
+            "channel_flags", "aperture_correction_from_psf",
         ]),
         ("musepipe/extraction/optimal.py", [
             "circular_window_indices", "normalized_psf_window", "covariance_factor_for_npix",
@@ -1520,6 +1523,62 @@ def build_c3_cells(mb, target, run_id):
             "    print('sin anillo de fondo configurado: `ls` extrae del residual de 04b')"
         ),
         md(
+            '### El mismo residuo, resuelto en 8 bandas\n\n'
+            'La vista de arriba es una **mediana de la banda** `BANDA_IMAGEN` (7500–9000 Å por defecto), no luz blanca ni un canal suelto: colapsa ~1200 canales en una imagen. Eso hace visible al compañero, pero **promedia toda la estructura cromática** del halo, que es justo lo que se quiere mirar cuando la sospecha está en la resta.\n\n'
+            'Aquí se repite la operación —quitar el perfil radial mediano alrededor de la primaria— en **8 bandas** que cubren el rango completo. Cada panel sigue siendo una integración de ~460 canales, así que el ruido no domina, pero ahora se ve **cómo cambia con λ** lo que queda tras quitar el halo simétrico.\n\n'
+            'Qué buscar, y qué significaría:\n\n'
+            '- **Estructura fija que no cambia con λ** (una mancha, un borde): algo del detector o del combinado; no es halo.\n\n'
+            '- **Estructura que se mueve o se ensancha hacia el azul**: speckles de la AO. El halo no es liso ni simétrico, y ahí es donde una mediana de anillo deja de representar el fondo bajo el compañero.\n\n'
+            '- **Un gradiente que crece hacia el azul en la posición del compañero**: la firma de la sobre-sustracción que se ve en el espectro.\n\n'
+            '> Sigue siendo **solo para ver**: no entra en ninguna cuenta de la extracción.\n\n'
+            '**Constancia del sesgo del lado interior.** El anillo de fondo (8–14 px alrededor del compañero) barre radios *estelares* de ~57 a ~85 px, y en ese tramo el halo cae un factor ~1.6 cada 10 px. La mediana del anillo queda por tanto **tirada hacia arriba por el lado que mira a la primaria**, donde hay más señal: no es el fondo bajo el compañero, es una mezcla sesgada. Medido en C2 (celda 14) por píxel: caja 4.126, anillo 4.280, halo azimutal al mismo radio 5.094. La diferencia caja–anillo es de solo 0.15 por píxel — pequeña, pero se resta en **cada uno** de los ~200 píxeles de la ventana y luego se multiplica por `apcorr`. Queda registrado en [`reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`](../../../reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md).\n\n'
+        ),
+        code(
+            'N_BANDAS = 8\n'
+            'bordes = np.linspace(float(np.nanmin(WAVE)), float(np.nanmax(WAVE)), N_BANDAS + 1)\n'
+            '\n'
+            'def quita_halo(img):\n'
+            '    """Le resta a la imagen el perfil radial mediano alrededor de la primaria."""\n'
+            '    perfil_r = np.full(int(r_bin.max()) + 1, np.nan)\n'
+            '    for b in range(perfil_r.size):\n'
+            '        m_ = r_bin == b\n'
+            '        if m_.any():\n'
+            '            perfil_r[b] = np.nanmedian(img[m_])\n'
+            '    return img - perfil_r[r_bin]\n'
+            '\n'
+            'fig, ejes = plt.subplots(4, 2, figsize=(9.5, 15))\n'
+            'for k, ax in enumerate(ejes.ravel()):\n'
+            '    lo_k, hi_k = bordes[k], bordes[k + 1]\n'
+            '    sel_k = (WAVE >= lo_k) & (WAVE < hi_k)\n'
+            '    n_ch = int(sel_k.sum())\n'
+            '    if n_ch == 0:\n'
+            '        ax.set_axis_off()\n'
+            '        continue\n'
+            '    resid_k = quita_halo(np.nanmedian(LS_CUBE[sel_k], axis=0))[sl]\n'
+            '    v_k = float(np.nanpercentile(np.abs(resid_k[cerca]), 98))\n'
+            "    im_k = ax.imshow(resid_k, origin='lower', cmap='RdBu_r', vmin=-v_k, vmax=v_k)\n"
+            "    ax.set_title(f'{lo_k:.0f}-{hi_k:.0f} Å  ({n_ch} canales)', fontsize=8)\n"
+            '    cb_k = fig.colorbar(im_k, ax=ax, fraction=0.046)\n'
+            '    cb_k.ax.tick_params(labelsize=6)\n'
+            '    ax.add_patch(Circle((OBJECT_YX[1] - x0, OBJECT_YX[0] - y0), WINDOW_RADIUS_PX,\n'
+            "                        fill=False, color='k', lw=0.8))\n"
+            "    ax.plot(OBJECT_YX[1] - x0, OBJECT_YX[0] - y0, '+', color='k', ms=7)\n"
+            '    ax.set_xlim(OBJECT_YX[1] - x0 - _zoom, OBJECT_YX[1] - x0 + _zoom)\n'
+            '    ax.set_ylim(OBJECT_YX[0] - y0 - _zoom, OBJECT_YX[0] - y0 + _zoom)\n'
+            '    ax.set_xticks([]); ax.set_yticks([])\n'
+            '    # Lo que queda DENTRO de la ventana, que es lo que acaba en el espectro.\n'
+            '    yy_k, xx_k = np.indices(resid_k.shape, dtype=float)\n'
+            '    dentro_k = (np.hypot(yy_k - (OBJECT_YX[0] - y0), xx_k - (OBJECT_YX[1] - x0))\n'
+            '                <= float(WINDOW_RADIUS_PX))\n'
+            "    print(f'  {lo_k:6.0f}-{hi_k:6.0f} Å  ({n_ch:4d} ch):'\n"
+            "          f' residuo en la ventana, mediana {float(np.nanmedian(resid_k[dentro_k])):8.3f}'\n"
+            "          f' | pico {float(np.nanmax(resid_k[dentro_k])):8.3f}')\n"
+            "fig.suptitle('halo azimutal restado, banda a banda (solo para ver)'\n"
+            "             '  ·  círculo negro = ventana de extracción', fontsize=9)\n"
+            'fig.tight_layout(); plt.show()\n'
+            '\n'
+        ),
+        md(
             "## 4 · Las funciones numéricas, copiadas de `musepipe`\n\n"
             "Copia **literal**; edítalas y el resultado cambia. Se importan solo "
             "`evaluate_psf_model` (es de C1) y `run_channel_chunks` (paralelismo, no física).\n\n"
@@ -1855,6 +1914,95 @@ def build_c3_cells(mb, target, run_id):
             "            'modo': modo, 'controles': ctrl, 'n_ctrl': len(ctrl_yx)}\n\n"
             "LS     = extrae(LS_CUBE, STAT_CUBE, 'ls')\n"
             "PSFSUB = extrae(PSFSUB_CUBE, STAT_CUBE, 'psfsub')"
+        ),
+        md(
+            '### Doble resultado: las mismas cuentas con una apertura tipo C2\n\n'
+            'Hasta aquí todo sale del estimador óptimo sobre una **ventana circular de `WINDOW_RADIUS_PX`** px. Pero si la sospecha está en la resta del fondo, conviene saber **cuánto del resultado depende de la geometría y del peso**, y no solo del modelo de halo.\n\n'
+            'Así que se repite la extracción con la **receta de C2**: suma en una **caja 3×3**, mismo fondo de anillo, misma `apcorr` — sin pesos y sobre 9 píxeles en vez de ~200. Se hace sobre **los dos cubos**, así que a partir de aquí hay cuatro espectros:\n\n'
+            '| | ventana óptima (r = `WINDOW_RADIUS_PX`) | apertura box3 (C2) |\n\n'
+            '|---|---|---|\n\n'
+            '| cubo de `ls` | `LS` | `LS_AP` |\n\n'
+            '| cubo de `psfsub` | `PSFSUB` | `PSFSUB_AP` |\n\n'
+            'Cómo leerlo: la apertura y la ventana óptima **ven fondos distintos**. La caja 3×3 mide 9 píxeles pegados al compañero; la ventana circular abarca hasta 8 px, donde el gradiente del halo ya es apreciable. Si el negativo del azul apareciera solo en la ventana grande, sería un problema de **extensión**; si aparece en las dos por igual, el fondo que se resta está mal **en el propio píxel del compañero**, y la geometría no tiene la culpa.\n\n'
+            '> Ojo con comparar los niveles en crudo: la caja suma 9 píxeles y la ventana ~200, así que sus cuentas no son comparables. Lo que sí lo es, y es lo que hay que mirar, es **el espectro ya corregido por `apcorr`** — que es precisamente lo que hace `apcorr`: llevar los dos al flujo total de la fuente.\n\n'
+        ),
+        code(
+            "from musepipe.spectral import median_filter_1d\n"
+            '\n'
+            "APERTURA_C2 = {'kind': 'box', 'size': 3}    # la misma que usa C2\n"
+            '\n'
+            'def _fondo_anillo(cube, pos):\n'
+            '    if LOCAL_BKG_ANNULUS_PX is None:\n'
+            '        return None\n'
+            '    r_ex = LOCAL_BKG_ANNULUS_PX[2] if len(LOCAL_BKG_ANNULUS_PX) > 2 else 30.0\n'
+            '    return annulus_background_spectrum(cube, pos, LOCAL_BKG_ANNULUS_PX[0],\n'
+            '                                       LOCAL_BKG_ANNULUS_PX[1],\n'
+            '                                       exclude_yx=STAR_YX, exclude_radius=r_ex)\n'
+            '\n'
+            'def extrae_apertura(cube, etiqueta):\n'
+            '    """La receta de C2 sobre el mismo cubo: caja, anillo, apcorr. Sin pesos."""\n'
+            '    raw_f, npix = aperture_spectrum(cube, OBJECT_YX, APERTURA_C2)\n'
+            '    bkg = _fondo_anillo(cube, OBJECT_YX)\n'
+            '    if bkg is not None:\n'
+            '        raw_f = raw_f - bkg * npix\n'
+            '    ctrl_yx, ctrl, ctrl_npix = control_aperture_spectra(\n'
+            '        cube, OBJECT_YX, STAR_YX, APERTURA_C2,\n'
+            '        n_controls=N_CONTROLS, exclude_angle_deg=EXCLUDE_ANGLE_DEG)\n'
+            '    # Control = objeto: el mismo fondo, restado igual, o el sigma no vale.\n'
+            '    if bkg is not None and ctrl.shape[0]:\n'
+            '        ctrl = np.asarray(ctrl, dtype=float).copy()\n'
+            '        for k, pos in enumerate(ctrl_yx):\n'
+            '            cb = _fondo_anillo(cube, pos)\n'
+            '            if cb is not None:\n'
+            '                ctrl[k] = ctrl[k] - cb * ctrl_npix[k]\n'
+            '    err_emp = (robust_sigma_axis0(ctrl) if ctrl.shape[0] >= 2\n'
+            '               else np.full(WAVE.size, robust_sigma(raw_f)))\n'
+            '    err_stat = None\n'
+            '    if STAT_CUBE is not None:\n'
+            '        err_stat = aperture_stat_error(STAT_CUBE, OBJECT_YX, APERTURA_C2,\n'
+            '                                       stat_factor=STAT_FACTOR,\n'
+            '                                       covariance_factor=COV_FACTOR)\n'
+            '    apc, _m, _r = aperture_correction_from_psf(\n'
+            '        WAVE, APERTURA_C2, PSF_MODEL, center_yx=OBJECT_YX, correction_mode=APCORR_MODE)\n'
+            "    print(f'{etiqueta:11s} apcorr={float(np.nanmedian(apc)):7.2f}'\n"
+            "          f' npix={float(np.nanmedian(npix)):5.1f}'\n"
+            "          f' flujo mediano={float(np.nanmedian(raw_f * apc)):10.2f}')\n"
+            "    return {'raw': {'flux': raw_f}, 'flux': raw_f * apc,\n"
+            "            'err_emp': np.asarray(err_emp, float) * apc,\n"
+            "            'err': np.asarray(err_emp, float) * apc,\n"
+            "            'err_stat': None if err_stat is None else err_stat * apc,\n"
+            "            'apcorr': apc, 'modo': 'empirical', 'controles': ctrl,\n"
+            "            'n_ctrl': len(ctrl_yx)}\n"
+            '\n'
+            "LS_AP     = extrae_apertura(LS_CUBE, 'ls · box3')\n"
+            "PSFSUB_AP = extrae_apertura(PSFSUB_CUBE, 'psfsub · box3')\n"
+            '\n'
+            'ROJO_CMP = (7500.0, 9000.0)\n'
+            'sel_cmp = (WAVE >= ROJO_CMP[0]) & (WAVE <= ROJO_CMP[1])\n'
+            'print()\n'
+            "print(f'flujo mediano en {ROJO_CMP[0]:.0f}-{ROJO_CMP[1]:.0f} Å, ya con apcorr:')\n"
+            "for nombre, opt, ap in (('ls', LS, LS_AP), ('psfsub', PSFSUB, PSFSUB_AP)):\n"
+            "    f_o = float(np.nanmedian(opt['flux'][sel_cmp]))\n"
+            "    f_a = float(np.nanmedian(ap['flux'][sel_cmp]))\n"
+            "    print(f'  {nombre:8s} óptima {f_o:9.1f} | apertura box3 {f_a:9.1f}'\n"
+            '          f\' | apertura/óptima {f_a / f_o if f_o else float("nan"):6.2f}\')\n'
+            '\n'
+            'fig, ejes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)\n'
+            "for ax, (nombre, opt, ap) in zip(ejes, (('optimal_ls', LS, LS_AP),\n"
+            "                                        ('optimal_psfsub', PSFSUB, PSFSUB_AP))):\n"
+            "    ax.plot(WAVE, median_filter_1d(opt['flux'], 41), lw=1.3, color='tab:blue',\n"
+            "            label=f'ventana óptima r={float(WINDOW_RADIUS_PX):g} px')\n"
+            "    ax.plot(WAVE, median_filter_1d(ap['flux'], 41), lw=1.3, color='tab:orange',\n"
+            "            label='apertura box3 (receta de C2)')\n"
+            "    ax.axhline(0, color='0.5', lw=0.7)\n"
+            "    ax.axvline(6562.8, color='tab:red', ls=':', lw=0.8)\n"
+            "    ax.set_ylabel(f'{nombre}  [{UNIDAD}]', fontsize=8)\n"
+            '    ax.legend(fontsize=7)\n'
+            "ejes[-1].set_xlabel('λ [Å]')\n"
+            "ejes[0].set_title('el mismo fondo, dos geometrías: si el negativo del azul está en las'\n"
+            "                  ' dos, no es de la ventana', fontsize=9)\n"
+            'fig.tight_layout(); plt.show()\n'
+            '\n'
         ),
         md(
             "## 9 · Las dos variantes, una al lado de la otra\n\n"
