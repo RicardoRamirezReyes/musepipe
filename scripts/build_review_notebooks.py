@@ -482,6 +482,30 @@ def paper_from_product_cell(*, product, method, subdir, title_suffix, qc=None,
     )
 
 
+#: La primaria, al final de cada notebook de analisis: misma figura, mismos ejes,
+#: para poder poner las dos al lado.
+STAR_REFERENCE_MD = (
+    "## La primaria, en la misma figura\n\n"
+    "Cierra el notebook el espectro de la **estrella central**, dibujado con **exactamente la "
+    "misma figura** que el del compañero: mismos tramos, mismas bandas telúricas, mismas líneas "
+    "marcadas y la misma tira de transmisión. Puestas una al lado de otra se comparan sin "
+    "trampa.\n\n"
+    "Para qué sirve mirarla:\n\n"
+    "- **Es la referencia del halo.** Todo lo que este notebook resta —anillo, modelo de PSF, "
+    "referencia estelar— sale de esta fuente. Su forma es la del fondo que hay que quitar, y su "
+    "color explica por qué el halo es más brillante en el rojo.\n"
+    "- **Separa lo atmosférico de lo del objeto.** Las bandas telúricas y los residuos de cielo "
+    "aparecen en las dos, y con la misma λ. Un rasgo que solo esté en el compañero es del "
+    "compañero; uno que esté en las dos, no.\n"
+    "- **Da la escala.** La primaria es unas mil veces más brillante, así que cualquier fracción "
+    "de su luz que se cuele en la ventana del compañero pesa mucho.\n\n"
+    "> Sale del **producto de la cadena** (`spec_psffit_star.fits`, que escribe C4), no de un "
+    "recálculo de este notebook: así es la misma primaria en los cinco notebooks de análisis y "
+    "sirve de referencia común. Si C4 no se ha ejecutado para este objeto, la celda lo dice y "
+    "sigue."
+)
+
+
 #: Lo que explica la celda de arriba, en los dos notebooks.
 PAPER_SPECTRUM_MD = (
     "## Figura de paper — el espectro sin binar, con su error y sus líneas\n\n"

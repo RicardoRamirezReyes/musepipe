@@ -1248,6 +1248,17 @@ def build_c2_cells(mb, target, run_id):
             "print('   no puede confundirlo con el producto de la cadena.')\n"
             "plt.show()"
         ),
+        md(mb.STAR_REFERENCE_MD),
+        code(
+            mb.paper_from_product_cell(
+                product="spec_psffit_star.fits",
+                method="psffit_star",
+                subdir="c2_aperture_debug",
+                stem="spectrum_paper_star_ref",
+                qc="stages/spec_psffit_qc.json",
+                title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+            )
+        ),
     ]
     return cells
 
@@ -2333,6 +2344,17 @@ def build_c3_cells(mb, target, run_id):
                 title_suffix="optimal_psfsub, rehecha en el notebook (C3 debug)",
             )
         ),
+        md(mb.STAR_REFERENCE_MD),
+        code(
+            mb.paper_from_product_cell(
+                product="spec_psffit_star.fits",
+                method="psffit_star",
+                subdir="c3_optimal_debug",
+                stem="spectrum_paper_star_ref",
+                qc="stages/spec_psffit_qc.json",
+                title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+            )
+        ),
     ]
 
 
@@ -2780,6 +2802,17 @@ def build_c4_cells(mb, target, run_id):
                 title_suffix="psffit de la PRIMARIA, rehecho en el notebook (C4 debug)",
             )
         ),
+        md(mb.STAR_REFERENCE_MD),
+        code(
+            mb.paper_from_product_cell(
+                product="spec_psffit_star.fits",
+                method="psffit_star",
+                subdir="c4_psffit_debug",
+                stem="spectrum_paper_star_ref",
+                qc="stages/spec_psffit_qc.json",
+                title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+            )
+        ),
     ]
 
 
@@ -3196,6 +3229,17 @@ def build_halosub_cells(mb, target, run_id, stage_id):
                 err_label="±1σ empírico (controles procesados igual)",
                 err_alt_label="±1σ propagado del STAT (no es σ)",
                 title_suffix=f"{meta['metodo']}, rehecho en el notebook",
+            )
+        ),
+        md(mb.STAR_REFERENCE_MD),
+        code(
+            mb.paper_from_product_cell(
+                product="spec_psffit_star.fits",
+                method="psffit_star",
+                subdir=meta["slug"].lower(),
+                stem="spectrum_paper_star_ref",
+                qc="stages/spec_psffit_qc.json",
+                title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
             )
         ),
     ]
