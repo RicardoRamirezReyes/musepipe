@@ -687,15 +687,26 @@ def build_c2_cells(mb, target, run_id):
             "vez de fingir una corrección."
         ),
         code(
-            "stat_usable = (STAT_CUBE is not None and str(ERROR_MODE).lower() != 'empirical'\n"
+            "# El STAT se propaga SIEMPRE que exista, aunque la etapa no lo use como\n"
+            "# sigma: es la segunda estimación con la que compararlo. Si solo se\n"
+            "# calculara cuando manda, en los objetos con M5 rojo (que son los que\n"
+            "# más interesa vigilar) no habría con qué comparar.\n"
+            "raw_err_stat = (aperture_stat_error(STAT_CUBE, OBJECT_YX, APERTURE,\n"
+            "                                    stat_factor=STAT_FACTOR,\n"
+            "                                    covariance_factor=COV_FACTOR)\n"
+            "                if STAT_CUBE is not None else None)\n"
+            "stat_usable = (raw_err_stat is not None and str(ERROR_MODE).lower() != 'empirical'\n"
             "               and STAT_STATUS.lower() != 'red')\n"
             "if stat_usable:\n"
-            "    raw_err = aperture_stat_error(STAT_CUBE, OBJECT_YX, APERTURE,\n"
-            "                                  stat_factor=STAT_FACTOR, covariance_factor=COV_FACTOR)\n"
+            "    raw_err = raw_err_stat\n"
             "    error_mode = 'stat'\n"
             "else:\n"
             "    raw_err = np.asarray(raw_err_emp, dtype=float)\n"
-            "    error_mode = 'empirical'\n\n"
+            "    error_mode = 'empirical'\n"
+            "if raw_err_stat is not None and not stat_usable:\n"
+            "    razon = float(np.nanmedian(raw_err_stat) / np.nanmedian(raw_err_emp))\n"
+            "    print(f'el STAT NO se usa como σ (estado {STAT_STATUS}), pero se propaga'\n"
+            "          f' igual para poder compararlo: STAT/empírico = {razon:.2f}×')\n\n"
             "apcorr, apcorr_mode, norm_radius = aperture_correction_from_psf(\n"
             "    WAVE, APERTURE, PSF_MODEL, center_yx=OBJECT_YX, correction_mode=APCORR_MODE)\n"
             "flags = channel_flags(WAVE, bad_windows_A=BAD_WINDOWS_A, skyline_windows_A=SKYLINE_WINDOWS_A,\n"
@@ -735,9 +746,10 @@ def build_c2_cells(mb, target, run_id):
         code(
             "BIN_CANALES = 25        # cámbialo y vuelve a ejecutar\n"
             "N_EFF_OVER_N = 0.43     # medido por G1 (docs/noise_model.md)\n\n"
-            "flux         = raw_flux * apcorr\n"
-            "flux_err     = raw_err * apcorr\n"
-            "flux_err_emp = raw_err_emp * apcorr\n\n"
+            "flux          = raw_flux * apcorr\n"
+            "flux_err      = raw_err * apcorr\n"
+            "flux_err_emp  = raw_err_emp * apcorr\n"
+            "flux_err_stat = None if raw_err_stat is None else raw_err_stat * apcorr\n\n"
             "def binea(wave, flux, err, n):\n"
             "    \"\"\"Media por bloques de n canales, con error gaussiano independiente.\"\"\"\n"
             "    n = int(n)\n"
@@ -1099,10 +1111,13 @@ def build_c2_cells(mb, target, run_id):
                     "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
                     "    BUNIT_P = BUNIT or 'ADU'\n"
                     "    W_P, F_P = WAVE, flux\n"
-                    "    E_P, E_ALT_P = flux_err_emp, flux_err\n"
+                    "    # La banda es la empírica; la línea, el STAT propagado —\n"
+                    "    # calculado exista o no el modo `stat`, para que las dos\n"
+                    "    # curvas salgan en todos los objetos.\n"
+                    "    E_P, E_ALT_P = flux_err_emp, flux_err_stat\n"
                     "    if not np.isfinite(E_P).any():\n"
                     "        E_P, E_ALT_P = flux_err, None\n"
-                    "    EXTRA_P = {'flux_err_stat': flux_err, 'apcorr': apcorr,\n"
+                    "    EXTRA_P = {'flux_err_stat': flux_err_stat, 'apcorr': apcorr,\n"
                     "               'npix_eff': npix_eff, 'flags': flags}\n"
                     "    MODO_P = error_mode\n"
                 ),
@@ -1798,7 +1813,10 @@ def build_c3_cells(mb, target, run_id):
             "               else np.full(WAVE.size, robust_sigma(raw['flux'])))\n"
             "    usable = (variance is not None and str(ERROR_MODE).lower() != 'empirical'\n"
             "              and STAT_STATUS.lower() != 'red')\n"
-            "    err = np.sqrt(np.clip(raw_var, 0.0, np.inf)) if usable else np.asarray(err_emp, float)\n"
+            "    # El STAT propagado se guarda SIEMPRE (exista o no el modo `stat`):\n"
+            "    # es la segunda estimación contra la que se contrasta el empírico.\n"
+            "    err_stat = np.sqrt(np.clip(raw_var, 0.0, np.inf)) if variance is not None else None\n"
+            "    err = err_stat if usable else np.asarray(err_emp, float)\n"
             "    modo = 'stat' if usable else 'empirical'\n"
             "    apert = {'kind': 'circle', 'radius_px': float(WINDOW_RADIUS_PX),\n"
             "             'name': f'optimal_r{float(WINDOW_RADIUS_PX):g}'}\n"
@@ -1809,6 +1827,7 @@ def build_c3_cells(mb, target, run_id):
             "          f'clip_medio={100 * float(np.nanmedian(raw[\"clip_fraction\"])):.2f}%')\n"
             "    return {'raw': raw, 'flux': raw['flux'] * apcorr, 'err': err * apcorr,\n"
             "            'err_emp': np.asarray(err_emp, float) * apcorr, 'apcorr': apcorr,\n"
+            "            'err_stat': None if err_stat is None else err_stat * apcorr,\n"
             "            'modo': modo, 'controles': ctrl, 'n_ctrl': len(ctrl_yx)}\n\n"
             "LS     = extrae(LS_CUBE, STAT_CUBE, 'ls')\n"
             "PSFSUB = extrae(PSFSUB_CUBE, STAT_CUBE, 'psfsub')"
@@ -2019,8 +2038,8 @@ def build_c3_cells(mb, target, run_id):
                     "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
                     "    BUNIT_P = BUNIT or 'ADU'\n"
                     "    W_P, F_P = WAVE, LS['flux']\n"
-                    "    E_P, E_ALT_P = LS['err_emp'], LS['err']\n"
-                    "    EXTRA_P = {'flux_err_stat': LS['err'], 'apcorr': LS['apcorr'],\n"
+                    "    E_P, E_ALT_P = LS['err_emp'], LS['err_stat']\n"
+                    "    EXTRA_P = {'flux_err_stat': LS['err_stat'], 'apcorr': LS['apcorr'],\n"
                     "               'flags': channel_flags(WAVE, bad_windows_A=BAD_WINDOWS_A,\n"
                     "                                      skyline_windows_A=SKYLINE_WINDOWS_A,\n"
                     "                                      interpolated_windows_A=INTERPOLATED_WIN_A)}\n"
@@ -2042,8 +2061,8 @@ def build_c3_cells(mb, target, run_id):
                     "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
                     "    BUNIT_P = BUNIT or 'ADU'\n"
                     "    W_P, F_P = WAVE, PSFSUB['flux']\n"
-                    "    E_P, E_ALT_P = PSFSUB['err_emp'], PSFSUB['err']\n"
-                    "    EXTRA_P = {'flux_err_stat': PSFSUB['err'], 'apcorr': PSFSUB['apcorr'],\n"
+                    "    E_P, E_ALT_P = PSFSUB['err_emp'], PSFSUB['err_stat']\n"
+                    "    EXTRA_P = {'flux_err_stat': PSFSUB['err_stat'], 'apcorr': PSFSUB['apcorr'],\n"
                     "               'flags': channel_flags(WAVE, bad_windows_A=BAD_WINDOWS_A,\n"
                     "                                      skyline_windows_A=SKYLINE_WINDOWS_A,\n"
                     "                                      interpolated_windows_A=INTERPOLATED_WIN_A)}\n"
@@ -2451,6 +2470,58 @@ def build_c4_cells(mb, target, run_id):
             "print('IDÉNTICO: la copia reproduce la cadena.' if ok else\n"
             "      'DIFIERE — si has tocado una perilla, es lo esperado; si no, revisa el chequeo de deriva.')"
         ),
+        md(
+            "## 10 · Figura de paper y tabla — el compañero y la primaria\n\n"
+            + mb.PAPER_SPECTRUM_MD.split("\n\n", 1)[1]
+            + "\n\n> Dos veces: el compañero (el espectro canónico de la cadena) y la "
+            "primaria. Salen de los números recalculados aquí, con sufijo `_debug`.\n\n"
+            "> **Ojo con la rejilla**: el notebook ajusta 1 de cada `PASO_CANALES` canales, "
+            "así que la figura y la tabla llevan esos ~175 puntos, no los 3681. Pon "
+            "`PASO_CANALES = 1` para exportar el espectro completo.\n\n"
+            "> Y la línea fina no es el STAT propagado sino el **error formal del ajuste** "
+            "(la diagonal de la matriz de covarianza): en psffit es esa la segunda "
+            "estimación con la que se contrasta el empírico."
+        ),
+        code(
+            mb.paper_spectrum_cell(
+                arrays_code=(
+                    "    ROOT_P = ROOT\n"
+                    "    METHOD_P = 'psffit'\n"
+                    "    PRODUCT_P = 'recalculado en C4_psffit_debug (compañero)'\n"
+                    "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
+                    "    BUNIT_P = BUNIT or 'ADU'\n"
+                    "    W_P, F_P = WAVE, comp_flux\n"
+                    "    E_P, E_ALT_P = comp_err_emp, np.sqrt(np.clip(comp_var, 0.0, np.inf))\n"
+                    "    EXTRA_P = {'flux_err_stat': np.sqrt(np.clip(comp_var, 0.0, np.inf))}\n"
+                    "    MODO_P = modo\n"
+                ),
+                subdir="c4_psffit_debug",
+                stem="spectrum_paper",
+                err_label="±1σ empírico (controles procesados igual)",
+                err_alt_label="±1σ formal del ajuste (matriz de covarianza)",
+                title_suffix="psffit del compañero, rehecho en el notebook (C4 debug)",
+            )
+        ),
+        code(
+            mb.paper_spectrum_cell(
+                arrays_code=(
+                    "    ROOT_P = ROOT\n"
+                    "    METHOD_P = 'psffit_star'\n"
+                    "    PRODUCT_P = 'recalculado en C4_psffit_debug (primaria)'\n"
+                    "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
+                    "    BUNIT_P = BUNIT or 'ADU'\n"
+                    "    W_P, F_P = WAVE, star_flux\n"
+                    "    E_P, E_ALT_P = star_err_emp, np.sqrt(np.clip(star_var, 0.0, np.inf))\n"
+                    "    EXTRA_P = {'flux_err_stat': np.sqrt(np.clip(star_var, 0.0, np.inf))}\n"
+                    "    MODO_P = modo\n"
+                ),
+                subdir="c4_psffit_debug",
+                stem="spectrum_paper_star",
+                err_label="±1σ empírico (controles procesados igual)",
+                err_alt_label="±1σ formal del ajuste (matriz de covarianza)",
+                title_suffix="psffit de la PRIMARIA, rehecho en el notebook (C4 debug)",
+            )
+        ),
     ]
 
 
@@ -2645,14 +2716,22 @@ def build_halosub_cells(mb, target, run_id, stage_id):
             "STAR_YX   = tuple(float(v) for v in qc_b3['primary']['pos_yx'])\n"
             "psf_path = SD / 'psf_model.json'\n"
             "PSF_MODEL = json.loads(psf_path.read_text(encoding='utf-8')) if psf_path.exists() else None\n\n"
-            "with fits.open(SD / 'stage02_xcorr_cube_stack.fits') as h:\n"
+            "CUBE_PATH = SD / 'stage02_xcorr_cube_stack.fits'\n"
+            "with fits.open(CUBE_PATH) as h:\n"
             "    CUBE = np.asarray(h['CUBES'].data, dtype=float)\n"
             "    WAVE = np.asarray(h['WAVELENGTH'].data, dtype=float)\n"
             "    STAT_CUBE = np.asarray(h['STAT'].data, dtype=float) if 'STAT' in h else None\n"
+            "    _stack_bunit = str(h[0].header.get('BUNIT', '')\n"
+            "                       or h['CUBES'].header.get('BUNIT', '')) or None\n"
             "if CUBE.ndim == 4:\n"
             "    CUBE = CUBE[0]\n"
             "if STAT_CUBE is not None and STAT_CUBE.ndim == 4:\n"
-            "    STAT_CUBE = STAT_CUBE[0]\n\n"
+            "    STAT_CUBE = STAT_CUBE[0]\n"
+            "# La unidad, con la regla de la cadena: el stack de B2 no la declara y\n"
+            "# `resolve_bunit` cae al cubo de entrada del run.\n"
+            "from musepipe.io import resolve_bunit\n"
+            "BUNIT = resolve_bunit(X0, stack_bunit=_stack_bunit)\n"
+            "UNIDAD = BUNIT or 'sin unidad declarada'\n\n"
             "qc00 = json.loads((SD / 'stage00q_qc.json').read_text(encoding='utf-8'))\n"
             "qc01 = json.loads((SD / 'stage01_qc.json').read_text(encoding='utf-8'))\n"
             "m5 = qc00.get('m5_stat', {})\n"
@@ -2756,13 +2835,18 @@ def build_halosub_cells(mb, target, run_id, stage_id):
             "               else np.full(WAVE.size, robust_sigma(raw_flux)))\n"
             "usable = (STAT_CUBE is not None and str(ERROR_MODE).lower() != 'empirical'\n"
             "          and STAT_STATUS.lower() != 'red')\n"
-            "raw_err = (aperture_stat_error(STAT_CUBE, OBJECT_YX, APERTURE,\n"
-            "                               stat_factor=STAT_FACTOR, covariance_factor=COV_FACTOR)\n"
-            "           if usable else np.asarray(raw_err_emp, float))\n"
+            "# El STAT se propaga SIEMPRE que exista, aunque la etapa no lo use como\n"
+            "# sigma: es la segunda estimación con la que contrastar el empírico.\n"
+            "raw_err_stat = (aperture_stat_error(STAT_CUBE, OBJECT_YX, APERTURE,\n"
+            "                                    stat_factor=STAT_FACTOR,\n"
+            "                                    covariance_factor=COV_FACTOR)\n"
+            "                if STAT_CUBE is not None else None)\n"
+            "raw_err = raw_err_stat if usable else np.asarray(raw_err_emp, float)\n"
             "apcorr, apcorr_mode, _nr = aperture_correction_from_psf(\n"
             "    WAVE, APERTURE, PSF_MODEL, center_yx=OBJECT_YX, correction_mode=APCORR_MODE)\n"
             "flux = raw_flux * apcorr\n"
             "flux_err_emp = np.asarray(raw_err_emp, float) * apcorr\n"
+            "flux_err_stat = None if raw_err_stat is None else raw_err_stat * apcorr\n"
             "modo_err = 'stat' if usable else 'empirical'\n"
             "print(f'{len(controls_yx)} controles | modo error: {modo_err}'\n"
             "      f' | apcorr mediana {float(np.nanmedian(apcorr)):.1f}')\n\n"
@@ -2827,6 +2911,34 @@ def build_halosub_cells(mb, target, run_id, stage_id):
             "a2.axhline(0, color='0.7', lw=0.6)\n"
             "a2.set_ylabel('este − cadena'); a2.set_xlabel('λ [Å]')\n"
             "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 10 · Figura de paper y tabla\n\n"
+            + mb.PAPER_SPECTRUM_MD.split("\n\n", 1)[1]
+            + "\n\n> Sale de los números recalculados aquí, no del producto de la cadena: "
+            "si has tocado una perilla, la figura y la tabla la llevan. Ficheros con sufijo "
+            "`_debug`, que no pisan lo que exporta el notebook de auditoría."
+        ),
+        code(
+            mb.paper_spectrum_cell(
+                arrays_code=(
+                    "    ROOT_P = ROOT\n"
+                    f"    METHOD_P = {meta['metodo']!r}\n"
+                    f"    PRODUCT_P = 'recalculado en {meta['slug']}'\n"
+                    "    TARGET_P = str(TARGET).replace(' ', '') + '_debug'\n"
+                    "    BUNIT_P = BUNIT or 'ADU'\n"
+                    "    W_P, F_P = WAVE, flux\n"
+                    "    E_P, E_ALT_P = flux_err_emp, flux_err_stat\n"
+                    "    EXTRA_P = {'flux_err_stat': flux_err_stat, 'apcorr': apcorr,\n"
+                    "               'npix_eff': npix_eff,\n"
+                    "               'flags': channel_flags(WAVE, bad_windows_A=BAD_WINDOWS_A)}\n"
+                    "    MODO_P = modo_err\n"
+                ),
+                subdir=meta["slug"].lower(),
+                err_label="±1σ empírico (controles procesados igual)",
+                err_alt_label="±1σ propagado del STAT (no es σ)",
+                title_suffix=f"{meta['metodo']}, rehecho en el notebook",
+            )
         ),
     ]
 

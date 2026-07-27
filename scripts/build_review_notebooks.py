@@ -434,6 +434,54 @@ def paper_spectrum_cell(
     )
 
 
+def paper_from_product_cell(*, product, method, subdir, title_suffix, qc=None,
+                            stem="spectrum_paper") -> str:
+    """La celda de paper leyendo un producto `SpectrumProduct` de la cadena.
+
+    Todos los métodos escriben el mismo esquema de columnas, así que la única
+    diferencia entre uno y otro es el fichero y la etiqueta: por eso esto es una
+    función y no seis copias.
+    """
+    lectura_qc = (
+        f"    try:\n"
+        f"        MODO_P = (nb.load_qc({qc!r}, RUN_ID).get('errors') or {{}}).get('mode')\n"
+        f"    except Exception:\n"
+        f"        MODO_P = None\n"
+    ) if qc else "    MODO_P = None\n"
+    return paper_spectrum_cell(
+        arrays_code=(
+            "    from astropy.io import fits\n"
+            "    ROOT_P = nb.project_root()\n"
+            f"    METHOD_P = {method!r}\n"
+            f"    PRODUCT_P = {product!r}\n"
+            "    TARGET_P = (nb.run_target(RUN_ID) or RUN_ID).replace(' ', '')\n"
+            "    _h = fits.open(nb.run_dir(RUN_ID) / 'stages' / PRODUCT_P)\n"
+            "    _d = _h[1].data\n"
+            "    _cols = list(_d.columns.names)\n"
+            "    # La unidad viaja con el dato (BUNIT); no hay default silencioso.\n"
+            "    BUNIT_P = _h[1].header.get('BUNIT') or 'ADU'\n"
+            "    W_P = np.asarray(_d['wave_A'], float)\n"
+            "    F_P = np.asarray(_d['flux'], float)\n"
+            "    # El empírico manda; `flux_err` es el que eligió la etapa y solo\n"
+            "    # aporta algo cuando NO es el empírico (ver la nota de abajo).\n"
+            "    E_P = np.asarray(_d['flux_err_emp' if 'flux_err_emp' in _cols\n"
+            "                        else 'flux_err'], float)\n"
+            "    E_ALT_P = np.asarray(_d['flux_err'], float)\n"
+            "    EXTRA_P = {'flux_err_stat': E_ALT_P}\n"
+            "    for _c in ('apcorr', 'npix_eff', 'flags'):\n"
+            "        if _c in _cols:\n"
+            "            EXTRA_P[_c] = np.asarray(_d[_c])\n"
+            "    _h.close()\n"
+            + lectura_qc
+        ),
+        subdir=subdir,
+        stem=stem,
+        err_label="±1σ empírico (controles procesados igual)",
+        err_alt_label="±1σ propagado del STAT (no es σ)",
+        title_suffix=title_suffix,
+    )
+
+
 #: Lo que explica la celda de arriba, en los dos notebooks.
 PAPER_SPECTRUM_MD = (
     "## Figura de paper — el espectro sin binar, con su error y sus líneas\n\n"
@@ -2437,6 +2485,28 @@ STAGES: list[dict] = [
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_optimal_object.fits',
+                    method='optimal_ls',
+                    subdir='c3_optimal',
+                    stem='spectrum_paper_ls',
+                    qc='stages/spec_optimal_qc.json',
+                    title_suffix='espectro del compañero · optimal_ls (C3)',
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_optimal_psfsub_object.fits',
+                    method='optimal_psfsub',
+                    subdir='c3_optimal',
+                    stem='spectrum_paper_psfsub',
+                    qc='stages/spec_optimal_qc.json',
+                    title_suffix='espectro del compañero · optimal_psfsub (C3)',
+                ),
+            ),
         ],
         decisions=[
             ("Extracción óptima de Horne ponderada por la PSF de C1 → **~6.9× ganancia de S/N** vs apertura (`v1` pasa).", None),
@@ -2606,6 +2676,28 @@ STAGES: list[dict] = [
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_psffit_object.fits',
+                    method='psffit',
+                    subdir='c4_psffit',
+                    stem='spectrum_paper',
+                    qc='stages/spec_psffit_qc.json',
+                    title_suffix='espectro del compañero · psffit, el método canónico (C4)',
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_psffit_star.fits',
+                    method='psffit_star',
+                    subdir='c4_psffit',
+                    stem='spectrum_paper_star',
+                    qc='stages/spec_psffit_qc.json',
+                    title_suffix='espectro de la PRIMARIA · psffit (C4)',
+                ),
+            ),
         ],
         decisions=[
             ("**Ajuste lineal por canal** `a·P_estrella + b·P_compañero + plano`: toda la no-linealidad se resuelve aguas arriba (C1/B3). Es el método primario de la literatura.", None),
@@ -2738,6 +2830,17 @@ STAGES: list[dict] = [
                     "    fig.savefig(outdir / 'residual_and_spectrum.png', dpi=110); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_sgf_object.fits',
+                    method='sgf',
+                    subdir='c5_sgf',
+                    stem='spectrum_paper',
+                    qc='stages/spec_sgf_qc.json',
+                    title_suffix='espectro del compañero · sgf (C5)',
                 ),
             ),
         ],
@@ -2879,6 +2982,17 @@ STAGES: list[dict] = [
                     "    ax.legend(); fig.tight_layout(); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_lpm_object.fits',
+                    method='lpm',
+                    subdir='c6_lpm',
+                    stem='spectrum_paper',
+                    qc='stages/spec_lpm_qc.json',
+                    title_suffix='espectro del compañero · lpm (C6)',
                 ),
             ),
         ],

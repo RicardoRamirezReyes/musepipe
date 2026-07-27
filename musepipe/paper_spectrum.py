@@ -265,6 +265,14 @@ def paper_spectrum_figure(
         ax.set_ylabel(flux_label, fontsize=8)
         ax.tick_params(labelsize=8)
         ax.minorticks_on()
+    if not con_tira:
+        # Que la falta de la tira se explique EN la figura: quien mire el PDF no
+        # tiene el stdout del notebook, y si no se dice parece un fallo del plot.
+        axes[0].annotate(
+            "sin curva de transmisión medida en este run:\n"
+            "se marcan las bandas del catálogo, sin su profundidad",
+            (0.995, 1.02), xycoords="axes fraction", ha="right", va="bottom",
+            fontsize=6, color="tab:green")
     axes[-1].set_xlabel("λ [Å]  (aire)", fontsize=9)
     # Leyenda a nivel de figura: dentro del eje tapaba justo el extremo azul,
     # que es donde el continuo se va a negativo y hay que poder verlo.
