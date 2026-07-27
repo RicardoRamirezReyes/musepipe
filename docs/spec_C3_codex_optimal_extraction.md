@@ -166,3 +166,37 @@ Preguntar cuando: V3 falle tras revisar normalización y centrado; V1 < 1.0
 (óptima peor que apertura = síntoma de P o V mal escaladas); STAT vs empírico
 fuera de rango sin explicación. Reporte: tabla V1–V5, sensibilidad a PSF,
 sistemático heredado de C1, checklist de límites, comando de reproducción.
+
+## Errata (2026-07-26) — LS extrae del cubo crudo, no del residual de 04b
+
+§3.1 define LS como «D = cubo − superficie local (04b). Comparable 1:1 con C2»,
+y esa comparabilidad es su razón de ser: aislar la ganancia del ponderado
+óptimo. Dejó de cumplirse en `d688a64`, que en el mismo commit movió **C2** al
+cubo crudo con fondo de anillo (*wings-intact*, porque el residual de 04b se
+come las alas del compañero) y añadió a **LS** ese mismo anillo **encima** del
+residual de 04b.
+
+El resultado eran dos tratamientos de fondo sobre un cubo que **no es
+homogéneo**: 04b ajusta una superficie local solo alrededor del objeto, así que
+el anillo (8–14 px) medía
+
+| | en el compañero | en los controles |
+|---|---:|---:|
+| ROXs 12 b | 2.95 /px | 12.77 /px |
+| ROXs 42B b | 3.67 /px | 14.80 /px |
+
+es decir, al objeto se le quitaba el fondo **dos veces** y a los controles una.
+Medido con la extracción óptima sobre el cubo de LS, esa segunda resta producía
+el **93%** y el **96%** del continuo negativo del método (mediana de la banda
+roja: −2045 con anillo, −140 sin él, en ROXs 12 b).
+
+Consecuencia importante: el sesgo de continuo de **−373%** que hace fallar
+`v3_continuum_bias` y por el que **G1 rechaza `optimal_ls`** estaba dominado por
+el tratamiento de fondo, no por el estimador de Horne.
+
+**Corregido**: cuando hay anillo configurado, LS extrae del cubo crudo de B2 con
+ese anillo — el mismo tratamiento que C2 —, con `x02_wings_intact_ls=false` para
+volver al comportamiento histórico. Tras el cambio, el sesgo de continuo pasa de
+**−373% a −58%**. Lo que queda es de la misma familia que V4(b) de C2 y que el
+contraste círculo/caja: la curva de crecimiento de C1 no es del todo consistente
+entre aperturas.

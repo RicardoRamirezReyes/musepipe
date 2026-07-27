@@ -270,6 +270,64 @@ def _median_ratio(numerator, denominator):
     return float(np.nanmedian(num[good] / den[good]))
 
 
+#: Banda donde se mide la consistencia entre aperturas. En el azul el compañero
+#: tiene S/N < 1: ahi dos aperturas "concuerdan" siempre, porque las dos miden
+#: ruido con barras enormes, y la media global escondería la discrepancia real.
+APCORR_CONSISTENCY_BAND_A = (7500.0, 9000.0)
+
+
+def _apcorr_consistency(extractions, cfg):
+    """V4(b) de la spec: ¿coinciden box3 y box5 DESPUÉS de la corrección?
+
+    Es la parte de V4 que prueba algo físico. La magnitud de `apcorr` por sí
+    sola no dice si la curva de crecimiento de C1 es buena — en NFM una box3
+    recoge ~2% de la PSF, así que vale decenas y eso es normal. Lo que sí lo
+    dice es que dos aperturas distintas, cada una con SU corrección, den el
+    mismo flujo total: si no coinciden, el que está mal es el modelo de PSF, y
+    la spec manda retroalimentar a C1 (§7).
+
+    Devuelve `None` si el run no extrajo las dos cajas.
+    """
+    a, b = extractions.get("box3"), extractions.get("box5")
+    if a is None or b is None:
+        return None
+    wave = np.asarray(a.product.wave_A, dtype=np.float64)
+    f3 = np.asarray(a.product.flux, dtype=np.float64)
+    f5 = np.asarray(b.product.flux, dtype=np.float64)
+    e3 = np.asarray(a.product.flux_err_emp, dtype=np.float64)
+    e5 = np.asarray(b.product.flux_err_emp, dtype=np.float64)
+    band = [float(v) for v in cfg.get("x01_apcorr_consistency_band_A", APCORR_CONSISTENCY_BAND_A)]
+    threshold = float(cfg.get("x01_apcorr_consistency_threshold", 0.90))
+    good = (
+        np.isfinite(f3) & np.isfinite(f5) & np.isfinite(e3) & np.isfinite(e5)
+        & (wave >= band[0]) & (wave <= band[1])
+    )
+    if not np.any(good):
+        return None
+    combined = np.sqrt(e3**2 + e5**2)
+    fraction = float(np.mean((np.abs(f3 - f5) <= combined)[good]))
+    med3 = float(np.nanmedian(f3[good]))
+    ratio = _finite_or_none(float(np.nanmedian(f5[good]) / med3) if med3 != 0 else np.nan)
+    return {
+        "ok": bool(fraction >= threshold),
+        "band_A": band,
+        "n_channels": int(np.count_nonzero(good)),
+        "fraction_channels_agree": fraction,
+        "threshold": threshold,
+        "box5_over_box3_median": ratio,
+        "apcorr_median": {
+            "box3": _finite_or_none(np.nanmedian(a.product.apcorr)),
+            "box5": _finite_or_none(np.nanmedian(b.product.apcorr)),
+        },
+        "note": (
+            "Spec C2 V4(b): el espectro corregido de box3 y box5 debe coincidir dentro de "
+            "errores; es la prueba de que la curva de crecimiento de C1 funciona. Si falla, "
+            "el sospechoso es el modelo de PSF en el core (spec §7: retroalimentar a C1), "
+            "no la fotometria."
+        ),
+    }
+
+
 def _aperture_qc(extractions, cfg, paths, positions_path, cube_path, stat_state, open_issues):
     labels = list(extractions)
     primary = extractions.get("box3") or next(iter(extractions.values()))
@@ -281,6 +339,17 @@ def _aperture_qc(extractions, cfg, paths, positions_path, cube_path, stat_state,
     v4_ok = None
     if apcorr_mode == "psf_growth_curve":
         v4_ok = bool(apcorr_median is not None and apcorr_max is not None and apcorr_median >= 1.0 and apcorr_max <= 1.8)
+    consistency = _apcorr_consistency(extractions, cfg)
+    if consistency is not None and not consistency["ok"]:
+        open_issues.append(
+            "V4(b): box3 y box5 no coinciden tras la corrección de apertura "
+            f"({consistency['box5_over_box3_median']:.3f}× en "
+            f"{consistency['band_A'][0]:.0f}-{consistency['band_A'][1]:.0f} A; solo "
+            f"{100 * consistency['fraction_channels_agree']:.1f}% de los canales dentro del error "
+            f"combinado, umbral {100 * consistency['threshold']:.0f}%). La curva de crecimiento de "
+            "C1 no es consistente entre aperturas: el sospechoso es el modelo de PSF en el core "
+            "(spec C2 §7), no la fotometría."
+        )
 
     return {
         "stage": "x01_aperture",
@@ -313,7 +382,11 @@ def _aperture_qc(extractions, cfg, paths, positions_path, cube_path, stat_state,
         "checks": {
             "v2_error_ratio_ok": v2_ok,
             "v3_roundtrip_ok": True,
+            # V4 son DOS cosas y esta es solo la primera: que la magnitud de la
+            # corrección esté en un rango. La que prueba algo físico es la de
+            # abajo (¿dan lo mismo dos aperturas distintas?).
             "v4_apcorr_range_ok": v4_ok,
+            "v4_apcorr_consistency": consistency,
         },
         "open_issues": list(open_issues),
     }

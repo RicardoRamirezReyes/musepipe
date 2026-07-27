@@ -61,7 +61,7 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | C1 | PSF cromática (Moffat/Psfao) | `musepipe/stages/stage_e01_psf.py` (+`stage_e01_psfao.py`) | `scripts/stage_e01_psf.sh` | `stage_e01_qc.json`, `psf_model.json` |
 | 04b | Fondo local (superficie) | `musepipe/stages/stage04b_local_surface.py` | — | `stage04b_qc.json` |
 | C2 | Extracción por apertura | `musepipe/stages/stage_x01_aperture.py` | `scripts/stage_x01_aperture.sh` | `spec_aperture_qc.json` |
-| C3 | Extracción óptima | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
+| C3 | Extracción óptima — **2 variantes**: `optimal_ls` y `optimal_psfsub` | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
 | C4 | Ajuste de PSF (psffit) | `musepipe/stages/stage_x03_psffit.py` | `scripts/stage_x03_psffit.sh` | `spec_psffit_qc.json` |
 | C5 | Sustracción de halo SGF | `musepipe/stages/stage_x04_sgf.py` (+`halosub_stage.py`) | — | `spec_sgf_qc.json` |
 | C6 | Sustracción de halo LPM | `musepipe/stages/stage_x05_lpm.py` (+`halosub_stage.py`) | — | `spec_lpm_qc.json` |
@@ -90,6 +90,14 @@ comando de lanzamiento); los notebooks y `scripts/build_review_notebooks.py`
 validan contra él. B2 escribe `stage02_xcorr_qc.json` (el `stage02_qc.json` de
 los runs antiguos es el de la etapa previa).
 
+**Cinco etapas de extracción, seis métodos.** C2–C6 son cinco etapas, pero C3
+emite **dos** variantes como productos separados —`optimal_ls` (fondo = la
+superficie local de 04b, comparable 1:1 con C2) y `optimal_psfsub` (fondo = el
+modelo de PSF de la primaria, de C1)— así que la cadena compara seis métodos:
+`aperture`, `optimal_ls`, `optimal_psfsub`, `psffit`, `sgf` y `lpm`. Ese es el
+`METHOD_ORDER` que usan D1, D2, E4 y G1, y la comparación `ls` vs `psfsub` es un
+diagnóstico del modelo de halo, no una redundancia.
+
 Además del canónico `spec_final_object.fits`, **D2 entrega los espectros
 definitivos**: los seis métodos calibrados (`spec_calibrated_<método>_object.fits`)
 y la primaria (`spec_calibrated_psffit_star.fits`), todos con `BUNIT` y
@@ -112,6 +120,40 @@ se pueden lanzar desde el propio notebook. Índice y uso en
 cada QC resuelve). Añadir un objeto = crear su run+config y su
 `targets/<slug>.json`, sin tocar código. Ver
 [`docs/plan_multiobjeto_notebooks_2026-07-24.md`](docs/plan_multiobjeto_notebooks_2026-07-24.md).
+
+### Notebooks de análisis (`debug/`)
+
+`scripts/build_debug_notebooks.py` es un constructor **opcional y aparte** que
+escribe en `notebooks/<Objeto>/debug/`. Los de revisión auditan la cadena
+(llaman a `musepipe`); estos hacen **el proceso dentro del notebook**, con las
+funciones numéricas **copiadas literalmente** del código, para poder probar,
+cambiar y ajustar **sin tocar la cadena general**.
+
+```bash
+python scripts/build_debug_notebooks.py --target ROXs12b        # todas las etapas cubiertas
+python scripts/build_debug_notebooks.py --target ROXs42Bb C2    # solo una
+```
+
+Copiar código es normalmente mala idea, así que cada notebook lleva dos
+defensas: una **celda de deriva**, que compara el fuente copiado con el que hoy
+tiene `musepipe` y avisa nombrando la función, y una **celda de comparación**
+contra el producto real de la etapa — con las perillas por defecto debe salir
+idéntico (lo verifica `tests/test_debug_notebooks.py` ejecutando el notebook
+entero; son los tests marcados `slow`), y en cuanto se cambia una perilla dice
+qué se movió y cuánto.
+
+Las perillas se leen del **config resuelto de la etapa**, no del `config.json`
+crudo: la etapa rellena defaults que el run no escribe (C3 hereda el anillo de
+fondo de C2), y copiarlos a mano fue justo lo que hizo que el primer C3 no
+reprodujera la cadena.
+
+| notebook | qué rehace |
+|---|---|
+| `C2_aperture_debug` | apertura box3, fondo de anillo, controles, error empírico y por STAT, apcorr |
+| `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa |
+| `C4_psffit_debug` | el ajuste simultáneo de **dos PSF** por canal (el método canónico): región de ajuste, matriz de diseño, χ²ᵣ y ρ(a,b), controles y los dos espectros. Trae perilla de submuestreo de canales |
+| `C5_sgf_debug` | selección de spaxels de referencia, espectro estelar de referencia, filtrado Savitzky-Golay y apertura sobre el residual |
+| `C6_lpm_debug` | lo mismo, pero modelando con Legendre y **con las líneas enmascaradas del ajuste**: la base del diseño y la energía por grado |
 
 ## Seleccionar un run
 
@@ -218,6 +260,8 @@ musepipe/
   qc/             QC de cubo y frame, censo de ghosts, STAT empirica, mapas S0/S1
   models/         BT-Settl, extincion, relaciones de acrecion, tracks, plantillas
   report.py (F1), characterization.py (G5), classify.py (G4), lines.py (G2), g0.py
+  telluric_lines.py  bandas teluricas + curva de transmision medida por A3
+  paper_spectrum.py  figura de publicacion (sin binar, con lineas) + export ECSV
 notebooks/        un set de revision por objeto (generado por scripts/)
 scripts/          lanzadores por etapa y trabajos largos
 targets/          ficha por objeto (alias, referencias)

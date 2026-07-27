@@ -17,6 +17,8 @@ from ..stats import robust_sigma, robust_sigma_axis0
 from .aperture import (
     FLAG_CLIPPED,
     annulus_background_spectrum,
+    azimuthal_background_spectrum,
+    local_plane_background_spectrum,
     aperture_correction_from_psf,
     channel_flags,
     sha256_file,
@@ -216,6 +218,62 @@ def optimal_raw_spectrum(
     }
 
 
+#: Modos de fondo local. `annulus` es el historico y el que sigue por defecto;
+#: `azimuthal` se anade en 2026-07-27 tras medir que el anillo centrado en el
+#: compañero atraviesa el gradiente del halo y su mediana queda sesgada por el
+#: lado interior. Cual es mejor NO es universal: medido en los dos objetos del
+#: proyecto el cambio va en direcciones opuestas (ver el informe del 2026-07-27),
+#: asi que se elige por config y el defecto no se mueve solo.
+BACKGROUND_MODES = ("annulus", "azimuthal", "local_plane")
+
+
+def local_background_spectrum(
+    cube,
+    center_yx,
+    star_yx,
+    *,
+    mode="annulus",
+    annulus_px=None,
+    azimuthal_width_px=3.0,
+    azimuthal_exclude_px=10.0,
+    plane_fit_radius_px=14.0,
+    plane_mask_radius_px=3.0,
+):
+    """El fondo local de una posicion, en el modo pedido, o None si no hay.
+
+    Vive aqui y no repetido en el objeto y en los controles porque el principio
+    `control = objeto` exige que a los dos se les aplique EXACTAMENTE el mismo
+    estimador: en `azimuthal` el radio estelar se toma de cada posicion, que por
+    construccion es el mismo para el compañero y sus controles, y lo que se
+    excluye es el entorno de esa posicion y no siempre el del compañero.
+    """
+    mode = str(mode or "annulus").lower()
+    if mode not in BACKGROUND_MODES:
+        raise ValueError(f"background mode must be one of {BACKGROUND_MODES}, got {mode!r}")
+    if mode == "local_plane":
+        return local_plane_background_spectrum(
+            cube, center_yx,
+            fit_radius_px=float(plane_fit_radius_px),
+            mask_radius_px=float(plane_mask_radius_px),
+        )
+    if mode == "azimuthal":
+        radius = float(np.hypot(float(center_yx[0]) - float(star_yx[0]),
+                                float(center_yx[1]) - float(star_yx[1])))
+        return azimuthal_background_spectrum(
+            cube, star_yx, radius,
+            width_px=float(azimuthal_width_px),
+            exclude_yx=center_yx,
+            exclude_radius=float(azimuthal_exclude_px),
+        )
+    if annulus_px is None:
+        return None
+    return annulus_background_spectrum(
+        cube, center_yx, annulus_px[0], annulus_px[1],
+        exclude_yx=star_yx,
+        exclude_radius=float(annulus_px[2]) if len(annulus_px) > 2 else 30.0,
+    )
+
+
 def control_optimal_spectra(
     cube_zyx,
     variance_zyx,
@@ -231,6 +289,11 @@ def control_optimal_spectra(
     exclude_angle_deg=25.0,
     n_jobs=1,
     local_bkg_annulus_px=None,
+    background_mode="annulus",
+    azimuthal_width_px=3.0,
+    azimuthal_exclude_px=10.0,
+    plane_fit_radius_px=14.0,
+    plane_mask_radius_px=3.0,
 ):
     cube = np.asarray(cube_zyx, dtype=np.float64)
     _, ny, nx = cube.shape
@@ -245,16 +308,15 @@ def control_optimal_spectra(
     )
     spectra = []
     for center in controls:
-        bkg = None
-        if local_bkg_annulus_px is not None:
-            bkg = annulus_background_spectrum(
-                cube,
-                center,
-                local_bkg_annulus_px[0],
-                local_bkg_annulus_px[1],
-                exclude_yx=star_yx,
-                exclude_radius=float(local_bkg_annulus_px[2]) if len(local_bkg_annulus_px) > 2 else 30.0,
-            )
+        bkg = local_background_spectrum(
+            cube, center, star_yx,
+            mode=background_mode,
+            annulus_px=local_bkg_annulus_px,
+            azimuthal_width_px=azimuthal_width_px,
+            azimuthal_exclude_px=azimuthal_exclude_px,
+            plane_fit_radius_px=plane_fit_radius_px,
+            plane_mask_radius_px=plane_mask_radius_px,
+        )
         raw = optimal_raw_spectrum(
             cube,
             variance_zyx,
@@ -305,6 +367,11 @@ def make_optimal_product(
     clip_flag_fraction: float = 0.05,
     n_jobs: int = 1,
     local_bkg_annulus_px: Sequence[float] | None = None,
+    background_mode: str = "annulus",
+    azimuthal_width_px: float = 3.0,
+    azimuthal_exclude_px: float = 10.0,
+    plane_fit_radius_px: float = 14.0,
+    plane_mask_radius_px: float = 3.0,
 ) -> OptimalExtraction:
     cube = np.asarray(cube_zyx, dtype=np.float64)
     wave = np.asarray(wave_A, dtype=np.float64)
@@ -321,19 +388,18 @@ def make_optimal_product(
     if not np.isfinite(stat_factor) or stat_factor <= 0:
         stat_factor = 1.0
     variance = variance * stat_factor
-    object_bkg = None
-    if local_bkg_annulus_px is not None:
-        # Same local background reference for object and controls: re-references
-        # any residual pedestal (e.g. the stage04b local-surface residual for
-        # the LS variant) so all methods share the flux convention (D1 v2 §3.1).
-        object_bkg = annulus_background_spectrum(
-            cube,
-            object_yx,
-            local_bkg_annulus_px[0],
-            local_bkg_annulus_px[1],
-            exclude_yx=star_yx,
-            exclude_radius=float(local_bkg_annulus_px[2]) if len(local_bkg_annulus_px) > 2 else 30.0,
-        )
+    # Same local background reference for object and controls: re-references
+    # any residual pedestal (e.g. the stage04b local-surface residual for the
+    # LS variant) so all methods share the flux convention (D1 v2 §3.1).
+    object_bkg = local_background_spectrum(
+        cube, object_yx, star_yx,
+        mode=background_mode,
+        annulus_px=local_bkg_annulus_px,
+        azimuthal_width_px=azimuthal_width_px,
+        azimuthal_exclude_px=azimuthal_exclude_px,
+        plane_fit_radius_px=plane_fit_radius_px,
+        plane_mask_radius_px=plane_mask_radius_px,
+    )
     raw = optimal_raw_spectrum(
         cube,
         variance,
@@ -412,7 +478,13 @@ def make_optimal_product(
     if input_cube_sha is None:
         input_cube_sha = sha256_file(input_cube_path) if input_cube_path.exists() else ""
     label = f"optimal_{variant}_r{float(window_radius_px):g}"
-    if local_bkg_annulus_px is not None:
+    if str(background_mode).lower() == "local_plane":
+        bkg_mode = f"local_plane_r{float(plane_fit_radius_px):g}_m{float(plane_mask_radius_px):g}"
+    elif str(background_mode).lower() == "azimuthal":
+        sep_px = float(np.hypot(float(object_yx[0]) - float(star_yx[0]),
+                                float(object_yx[1]) - float(star_yx[1])))
+        bkg_mode = f"azimuthal_r{sep_px:.1f}_w{float(azimuthal_width_px):g}"
+    elif local_bkg_annulus_px is not None:
         bkg_mode = f"annulus_{float(local_bkg_annulus_px[0]):g}_{float(local_bkg_annulus_px[1]):g}"
     else:
         bkg_mode = "none"

@@ -107,6 +107,16 @@ def stage_x02_config_from_run(
     # the flux convention (D1 v2 §3.1). Same default as x01's wings-intact
     # annulus [r_in, r_out, star_exclude_radius].
     cfg.setdefault("x02_local_bkg_annulus_px", cfg.get("x01_annulus_bkg_px", [8.0, 14.0, 30.0]))
+    # Fondo local: `annulus` (historico) o `azimuthal` (anillo centrado en la
+    # primaria al radio del compañero). El defecto NO se mueve: cual de los dos
+    # es mejor depende del objeto — medido, va en direcciones opuestas en los
+    # dos del proyecto (reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md).
+    cfg.setdefault("x02_background_mode", "annulus")
+    cfg.setdefault("x02_azimuthal_width_px", 3.0)
+    cfg.setdefault("x02_azimuthal_exclude_px", 10.0)
+    # `local_plane`: el mismo ajuste que 04b y C4, evaluado EN el compañero.
+    cfg.setdefault("x02_plane_fit_radius_px", 14.0)
+    cfg.setdefault("x02_plane_mask_radius_px", 3.0)
     cfg.setdefault("x02_primary_fit_radius_px", cfg.get("psf_norm_radius_px", 25.0))
     cfg.setdefault("x02_primary_exclude_radius_px", cfg.get("x02_window_radius_px", 8.0))
     return cfg
@@ -250,6 +260,11 @@ def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_fa
             clip_max_iter=int(cfg.get("x02_clip_max_iter", 2)),
             n_controls=0,
             local_bkg_annulus_px=cfg.get("x02_local_bkg_annulus_px"),
+            background_mode=cfg.get("x02_background_mode", "annulus"),
+            azimuthal_width_px=float(cfg.get("x02_azimuthal_width_px", 3.0)),
+            azimuthal_exclude_px=float(cfg.get("x02_azimuthal_exclude_px", 10.0)),
+            plane_fit_radius_px=float(cfg.get("x02_plane_fit_radius_px", 14.0)),
+            plane_mask_radius_px=float(cfg.get("x02_plane_mask_radius_px", 3.0)),
         )
         good = np.isfinite(ext.product.flux) & np.isfinite(base.product.flux) & (np.abs(base.product.flux) > 0)
         if np.any(good):
@@ -339,16 +354,47 @@ def compute_stage_x02_products(config, paths=None):
         "n_controls": int(cfg.get("x02_control_apertures", 8)),
         "exclude_angle_deg": float(cfg.get("x02_control_exclude_angle_deg", 25.0)),
         "local_bkg_annulus_px": cfg.get("x02_local_bkg_annulus_px"),
+        "background_mode": cfg.get("x02_background_mode", "annulus"),
+        "azimuthal_width_px": float(cfg.get("x02_azimuthal_width_px", 3.0)),
+        "azimuthal_exclude_px": float(cfg.get("x02_azimuthal_exclude_px", 10.0)),
+        "plane_fit_radius_px": float(cfg.get("x02_plane_fit_radius_px", 14.0)),
+        "plane_mask_radius_px": float(cfg.get("x02_plane_mask_radius_px", 3.0)),
     }
     stage02_cube, stage02_wave, stage02_path, stage02_bunit = _load_stage02_cube(paths, cfg, expected_wave=wave)
     if stage02_cube.shape != ls_cube.shape:
         raise RuntimeError(f"Stage02 cube shape {stage02_cube.shape} != LS cube shape {ls_cube.shape}.")
 
     # All variants record the common MOTHER cube (stage02) as INCUBE so D1 sees a
-    # single mother cube; LS is just a background treatment (stage04b local
-    # surface) of it, like PSFSUB subtracts the C1 model. (D1 §3.1.)
+    # single mother cube; LS is just a background treatment of it, like PSFSUB
+    # subtracts the C1 model. (D1 §3.1.)
+    #
+    # Wings-intact LS (2026-07-26): LS extracts from the RAW cube with the
+    # annulus background, exactly like C2 does. It used to extract from the
+    # stage04b residual AND subtract the annulus on top, which was two
+    # background treatments on a cube that is not homogeneous: stage04b fits a
+    # local surface only AROUND THE OBJECT, so the annulus at the companion saw
+    # a residual (~3/px) while at the controls it saw the untouched background
+    # (~13/px). Measured on both objects, that second subtraction produced ~93%
+    # of the negative continuum that gets `optimal_ls` rejected (red-band median
+    # -2045 with it, -140 without), i.e. the rejection was dominated by the
+    # background treatment, not by the Horne estimator.
+    #
+    # It also restores what the variant exists for: C2 moved to the raw cube in
+    # the same commit that added this annulus (d688a64), so LS stopped being
+    # "comparable 1:1 with C2" — which is its entire purpose (spec C3 3.1).
+    ls_cube_used = ls_cube
+    wings_intact_ls = bool(cfg.get("x02_wings_intact_ls", True))
+    if wings_intact_ls and common["local_bkg_annulus_px"] is not None:
+        ls_cube_used = stage02_cube
+        open_issues.append(
+            "LS extracts from the raw stage02 cube with the annulus background (same treatment "
+            "as C2), not from the stage04b residual: subtracting both removed the local "
+            "background twice at the companion and once at the controls, because stage04b only "
+            "fits a surface around the object. Set x02_wings_intact_ls=false for the historical "
+            "behaviour."
+        )
     ls = make_optimal_product(
-        ls_cube,
+        ls_cube_used,
         wave,
         object_yx,
         psf_model,
@@ -379,7 +425,9 @@ def compute_stage_x02_products(config, paths=None):
         **psfsub_common,
     )
     psf_sensitivity = _psf_sensitivity(
-        ls_cube,
+        # El mismo cubo del que sale `ls`: la sensibilidad a la PSF se mide
+        # contra ese producto, así que compararla con otro fondo no diría nada.
+        ls_cube_used,
         wave,
         object_yx,
         psf_model,

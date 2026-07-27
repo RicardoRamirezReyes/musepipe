@@ -356,6 +356,188 @@ def audit_code(body: str) -> dict:
     )
 
 
+#: Texto de la celda «figura de paper». Vive aquí, y no duplicado en cada
+#: notebook, porque `build_debug_notebooks.py` la reutiliza tal cual: la figura
+#: del notebook de auditoría y la del de análisis tienen que ser LA MISMA
+#: figura, o comparar una con otra no diría nada.
+def paper_spectrum_cell(
+    *,
+    arrays_code: str,
+    subdir: str,
+    err_label: str,
+    err_alt_label: str,
+    title_suffix: str,
+    stem: str = "spectrum_paper",
+) -> str:
+    """Celda que dibuja el espectro sin binar y **escribe sus datos**.
+
+    `arrays_code` es el trozo que cambia entre notebooks (de dónde salen los
+    números) y tiene que dejar definidos, ya indentados a 4 espacios:
+    `ROOT_P`, `W_P`, `F_P`, `E_P`, `E_ALT_P`, `EXTRA_P`, `BUNIT_P`, `TARGET_P`,
+    `METHOD_P`, `PRODUCT_P` y `MODO_P`.
+    """
+    return (
+        "try:\n"
+        "    import numpy as np\n"
+        "    import matplotlib.pyplot as plt\n"
+        "    from musepipe.paper_spectrum import (paper_spectrum_figure, pretty_flux_unit,\n"
+        "                                         spectrum_table_meta, write_spectrum_table)\n"
+        "    from musepipe.telluric_lines import measured_transmission\n"
+        f"{arrays_code}"
+        "    # Cuando la etapa eligió el error empírico, la columna `flux_err` ES\n"
+        "    # la empírica: dibujar las dos encima fingiría dos estimaciones\n"
+        "    # independientes donde solo hay una.\n"
+        "    if E_ALT_P is not None and np.allclose(E_ALT_P, E_P, equal_nan=True):\n"
+        "        E_ALT_P = None\n"
+        "        EXTRA_P.pop('flux_err_stat', None)\n"
+        "        print('las dos columnas de error coinciden (modo empírico):'\n"
+        "              ' una sola banda, y una sola columna en la tabla')\n"
+        "    # La transmisión telúrica MEDIDA de este run (A3). Si el objeto se\n"
+        "    # redujo en modo `cascade` no existe suelta: se marcan las bandas del\n"
+        "    # catálogo sin la profundidad de esa noche, y se dice.\n"
+        "    trans = measured_transmission(RUN_ID, project_root=ROOT_P)\n"
+        "    print('transmisión telúrica:', trans['source'] if trans else\n"
+        "          'no medida en este run — se marcan las bandas del catálogo')\n"
+        "    # Los canales que la etapa marcó como malos (hueco del láser AO) no\n"
+        "    # se dibujan: valen 0, y un 0 pintado se lee como una medida.\n"
+        "    from musepipe.extraction.aperture import FLAG_BAD_WINDOW\n"
+        "    MALOS_P = (np.asarray(EXTRA_P.get('flags', 0), dtype=int) & FLAG_BAD_WINDOW) != 0\n"
+        "    fig, _ejes = paper_spectrum_figure(\n"
+        "        W_P, F_P, E_P, flux_err_alt=E_ALT_P, bad_channels=MALOS_P,\n"
+        f"        err_label={err_label!r}, err_alt_label={err_alt_label!r},\n"
+        "        transmission=trans,\n"
+        f"        title=nb.display_name(RUN_ID) + ' · ' + {title_suffix!r},\n"
+        "        flux_label='flujo [' + pretty_flux_unit(BUNIT_P) + ']')\n"
+        f"    outdir = nb.run_dir(RUN_ID) / 'plots' / {subdir!r}\n"
+        "    outdir.mkdir(parents=True, exist_ok=True)\n"
+        "    # PDF además de PNG: es la que va al paper, y en vectorial las\n"
+        "    # etiquetas de las 24 líneas siguen leyéndose al ampliar. El PNG a\n"
+        "    # 300 dpi es el mínimo que piden las revistas para figuras de línea.\n"
+        "    DPI_P = 300      # súbelo si necesitas más resolución\n"
+        "    for ext in ('png', 'pdf'):\n"
+        f"        fig.savefig(outdir / ({stem!r} + '.' + ext), dpi=DPI_P)\n"
+        "    tabla = write_spectrum_table(\n"
+        "        nb.run_dir(RUN_ID) / 'tables' / ('spec_' + METHOD_P + '_' + TARGET_P + '.ecsv'),\n"
+        "        W_P, F_P, E_P, extra_columns=EXTRA_P,\n"
+        "        units={'flux': BUNIT_P, 'flux_err': BUNIT_P, 'flux_err_stat': BUNIT_P},\n"
+        "        meta=spectrum_table_meta(run_id=RUN_ID, target=TARGET_P, method=METHOD_P,\n"
+        "                                 product=PRODUCT_P, flux_unit=BUNIT_P,\n"
+        "                                 error_mode=MODO_P,\n"
+        f"                                 extra={{'figure': str(outdir / ({stem!r} + '.pdf'))}}))\n"
+        f"    print('figura ->', outdir / ({stem!r} + '.pdf'))\n"
+        "    print('tabla  ->', tabla, '(' + str(tabla.stat().st_size // 1024) + ' kB, '\n"
+        "          + str(int(np.size(W_P))) + ' canales)')\n"
+        "    print('        se lee con:  from astropy.table import Table; Table.read(ruta)')\n"
+        "    plt.show()\n"
+        "except Exception as e:\n"
+        "    print('No se pudo generar el plot:', type(e).__name__, e)"
+    )
+
+
+def paper_from_product_cell(*, product, method, subdir, title_suffix, qc=None,
+                            stem="spectrum_paper") -> str:
+    """La celda de paper leyendo un producto `SpectrumProduct` de la cadena.
+
+    Todos los métodos escriben el mismo esquema de columnas, así que la única
+    diferencia entre uno y otro es el fichero y la etiqueta: por eso esto es una
+    función y no seis copias.
+    """
+    lectura_qc = (
+        f"    try:\n"
+        f"        MODO_P = (nb.load_qc({qc!r}, RUN_ID).get('errors') or {{}}).get('mode')\n"
+        f"    except Exception:\n"
+        f"        MODO_P = None\n"
+    ) if qc else "    MODO_P = None\n"
+    return paper_spectrum_cell(
+        arrays_code=(
+            "    from astropy.io import fits\n"
+            "    ROOT_P = nb.project_root()\n"
+            f"    METHOD_P = {method!r}\n"
+            f"    PRODUCT_P = {product!r}\n"
+            "    TARGET_P = (nb.run_target(RUN_ID) or RUN_ID).replace(' ', '')\n"
+            "    _h = fits.open(nb.run_dir(RUN_ID) / 'stages' / PRODUCT_P)\n"
+            "    _d = _h[1].data\n"
+            "    _cols = list(_d.columns.names)\n"
+            "    # La unidad viaja con el dato (BUNIT); no hay default silencioso.\n"
+            "    BUNIT_P = _h[1].header.get('BUNIT') or 'ADU'\n"
+            "    W_P = np.asarray(_d['wave_A'], float)\n"
+            "    F_P = np.asarray(_d['flux'], float)\n"
+            "    # El empírico manda; `flux_err` es el que eligió la etapa y solo\n"
+            "    # aporta algo cuando NO es el empírico (ver la nota de abajo).\n"
+            "    E_P = np.asarray(_d['flux_err_emp' if 'flux_err_emp' in _cols\n"
+            "                        else 'flux_err'], float)\n"
+            "    E_ALT_P = np.asarray(_d['flux_err'], float)\n"
+            "    EXTRA_P = {'flux_err_stat': E_ALT_P}\n"
+            "    for _c in ('apcorr', 'npix_eff', 'flags'):\n"
+            "        if _c in _cols:\n"
+            "            EXTRA_P[_c] = np.asarray(_d[_c])\n"
+            "    _h.close()\n"
+            + lectura_qc
+        ),
+        subdir=subdir,
+        stem=stem,
+        err_label="±1σ empírico (controles procesados igual)",
+        err_alt_label="±1σ propagado del STAT (no es σ)",
+        title_suffix=title_suffix,
+    )
+
+
+#: La primaria, al final de cada notebook de analisis: misma figura, mismos ejes,
+#: para poder poner las dos al lado.
+STAR_REFERENCE_MD = (
+    "## La primaria, en la misma figura\n\n"
+    "Cierra el notebook el espectro de la **estrella central**, dibujado con **exactamente la "
+    "misma figura** que el del compañero: mismos tramos, mismas bandas telúricas, mismas líneas "
+    "marcadas y la misma tira de transmisión. Puestas una al lado de otra se comparan sin "
+    "trampa.\n\n"
+    "Para qué sirve mirarla:\n\n"
+    "- **Es la referencia del halo.** Todo lo que este notebook resta —anillo, modelo de PSF, "
+    "referencia estelar— sale de esta fuente. Su forma es la del fondo que hay que quitar, y su "
+    "color explica por qué el halo es más brillante en el rojo.\n"
+    "- **Separa lo atmosférico de lo del objeto.** Las bandas telúricas y los residuos de cielo "
+    "aparecen en las dos, y con la misma λ. Un rasgo que solo esté en el compañero es del "
+    "compañero; uno que esté en las dos, no.\n"
+    "- **Da la escala.** La primaria es unas mil veces más brillante, así que cualquier fracción "
+    "de su luz que se cuele en la ventana del compañero pesa mucho.\n\n"
+    "> Sale del **producto de la cadena** (`spec_psffit_star.fits`, que escribe C4), no de un "
+    "recálculo de este notebook: así es la misma primaria en los cinco notebooks de análisis y "
+    "sirve de referencia común. Si C4 no se ha ejecutado para este objeto, la celda lo dice y "
+    "sigue."
+)
+
+
+#: Lo que explica la celda de arriba, en los dos notebooks.
+PAPER_SPECTRUM_MD = (
+    "## Figura de paper — el espectro sin binar, con su error y sus líneas\n\n"
+    "Las figuras anteriores son de diagnóstico. Ésta es la que se publica, y por eso "
+    "cambia en tres cosas:\n\n"
+    "- **Sin binar**: cada canal con su σ. Binar es cómodo para leer un continuo, pero "
+    "esconde justo lo que se quiere enseñar (o no enseñar): que en Hα no hay nada por "
+    "encima del ruido **a la resolución del dato**.\n"
+    "- **Dos barras de error**: la **empírica** (dispersión de los controles procesados "
+    "igual que el objeto) como banda, y la **propagada del STAT** como línea. Que se vean "
+    "las dos es la forma honesta de enseñar que el STAT del cubo no es σ "
+    "([`docs/noise_model.md`](../docs/noise_model.md)).\n"
+    "- **Marcado completo**: las **bandas telúricas** sombreadas por especie (O₂ naranja, "
+    "H₂O cian) con la **transmisión medida esa noche** en la tira de arriba, las **líneas "
+    "de acreción** por familia (Balmer, He I, prohibidas, O I, Ca II, Paschen) y las "
+    "**líneas de emisión de cielo** en gris discontinuo.\n\n"
+    "### Por qué bandas telúricas y no líneas telúricas\n\n"
+    "A la resolución de MUSE (FWHM ≈ 2.5 Å) las líneas individuales de O₂ y H₂O **no se "
+    "resuelven**: dentro de un píxel espectral caen muchas. Marcar líneas sueltas daría "
+    "una precisión que el dato no tiene, así que se marcan **bandas**. `molecfit` no está "
+    "disponible aquí y, en estos datos, **no convergió** (A3 corrigió con la estrella "
+    "telúrica estándar), pero de ahí quedó una **curva de transmisión medida** en la misma "
+    "rejilla de λ: eso es más específico que cualquier lista de laboratorio y es lo que "
+    "se dibuja. Catálogo y curva: [`musepipe/telluric_lines.py`](../musepipe/telluric_lines.py).\n\n"
+    "### Y sus datos, en columnas\n\n"
+    "La celda **escribe la tabla** además de la figura, en **ECSV** (el estándar portable "
+    "de astropy): texto plano, con las unidades y la procedencia en la cabecera, que se "
+    "lee con `Table.read(ruta)` sin configurar nada y se puede mandar por correo. Una "
+    "figura sin sus datos no es un resultado citable."
+)
+
+
 def build_cells(s: dict) -> list[dict]:
     cells: list[dict] = []
     spec_link = f"[`docs/{s['spec']}`](../docs/{s['spec']})" if s.get("spec") else "—"
@@ -449,6 +631,18 @@ def build_cells(s: dict) -> list[dict]:
         "    if _p not in sys.path:\n"
         "        sys.path.insert(0, _p)\n"
         "import _nbcommon as nb\n"
+        # Resolución de las figuras EN PANTALLA: `savefig` ya guarda a 300 dpi,
+        # pero lo que se ve dentro del notebook lo fija el backend inline, que
+        # va a 100 dpi y sale borroso. Entre try/except porque estos notebooks
+        # auditan QC y tienen que abrir aunque falte el stack científico.
+        "try:\n"
+        "    import matplotlib as mpl\n"
+        "    mpl.rcParams['figure.dpi'] = 120     # retina dobla esto sin agrandar\n"
+        "    mpl.rcParams['savefig.dpi'] = 200\n"
+        "    from matplotlib_inline.backend_inline import set_matplotlib_formats\n"
+        "    set_matplotlib_formats('retina')\n"
+        "except Exception:\n"
+        "    pass\n"
         f"RUN_ID = nb.resolve_run_id({(s['run_override'] or DEFAULT_RUN)!r})\n"
         "print('run  =', RUN_ID)\n"
         "print('root =', _root)\n"
@@ -2046,7 +2240,12 @@ STAGES: list[dict] = [
                     "    w = np.asarray(d['wave_A'], float); flux = np.asarray(d['flux'], float); h.close()\n"
                     "    ctrl = np.load(rd / 'stages' / 'spec_aperture_controls.npz')['control_spectra']\n"
                     "    sig = np.nanstd(ctrl, axis=0)\n"
-                    "    k = np.ones(41) / 41; sm = np.convolve(np.nan_to_num(flux), k, mode='same')\n"
+                    "    from musepipe.spectral import median_filter_1d\n"
+                    "    # Mediana móvil que IGNORA los NaN. Con una media y nan_to_num, los 215\n"
+                    "    # canales sin dato (hueco del láser, bordes) entraban como CEROS y tiraban\n"
+                    "    # la curva hacia abajo justo donde importa: ~10% en el rojo y una caída\n"
+                    "    # falsa a cero cruzando el hueco.\n"
+                    "    sm = median_filter_1d(flux, 41)\n"
                     "    fig, ax = plt.subplots(figsize=(11, 4))\n"
                     "    ax.fill_between(w, -sig, sig, color='0.8', label=f'±1σ empírico ({ctrl.shape[0]} controles)')\n"
                     "    ax.plot(w, flux, lw=0.3, color='0.5', alpha=0.6)\n"
@@ -2089,6 +2288,36 @@ STAGES: list[dict] = [
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
                 ),
             ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_spectrum_cell(
+                    arrays_code=(
+                        "    from astropy.io import fits\n"
+                        "    ROOT_P = nb.project_root()\n"
+                        "    METHOD_P = 'aperture'\n"
+                        "    PRODUCT_P = 'spec_aperture_object.fits'\n"
+                        "    TARGET_P = (nb.run_target(RUN_ID) or RUN_ID).replace(' ', '')\n"
+                        "    _h = fits.open(nb.run_dir(RUN_ID) / 'stages' / PRODUCT_P)\n"
+                        "    _d = _h[1].data\n"
+                        "    # La unidad viaja con el dato (BUNIT); no hay default silencioso.\n"
+                        "    BUNIT_P = _h[1].header.get('BUNIT') or 'ADU'\n"
+                        "    W_P = np.asarray(_d['wave_A'], float)\n"
+                        "    F_P = np.asarray(_d['flux'], float)\n"
+                        "    E_P = np.asarray(_d['flux_err_emp'], float)\n"
+                        "    E_ALT_P = np.asarray(_d['flux_err'], float)\n"
+                        "    EXTRA_P = {'flux_err_stat': E_ALT_P,\n"
+                        "               'apcorr': np.asarray(_d['apcorr'], float),\n"
+                        "               'npix_eff': np.asarray(_d['npix_eff'], float),\n"
+                        "               'flags': np.asarray(_d['flags'], int)}\n"
+                        "    _h.close()\n"
+                        "    MODO_P = nb.load_qc('stages/spec_aperture_qc.json', RUN_ID)['errors']['mode']\n"
+                    ),
+                    subdir="c2_aperture",
+                    err_label="±1σ empírico (controles procesados igual)",
+                    err_alt_label="±1σ propagado del STAT (no es σ)",
+                    title_suffix="espectro del compañero · apertura box3 (C2)",
+                ),
+            ),
         ],
         decisions=[
             ("Principio **control = objeto**: 33 controles con annulus bkg + apcorr, procesados idénticos al objeto → σ **empírico** (M5 rojo).", "noise_model.md"),
@@ -2113,10 +2342,16 @@ STAGES: list[dict] = [
         ),
     ),
     dict(
-        id="C3", slug="C3_optimal", title="Extracción óptima", block="C · Extracción",
+        id="C3", slug="C3_optimal", title="Extracción óptima (2 variantes → 2 métodos)",
+        block="C · Extracción",
         spec="spec_C3_codex_optimal_extraction.md", run_override=None,
-        what="Extracción óptima (Horne) ponderada por la PSF.",
-        inputs="Cubo + PSF (C1)", outputs="`stages/spec_optimal_qc.json`",
+        what=("Extracción óptima (Horne) ponderada por la PSF, en **dos variantes obligatorias** "
+              "que se diferencian solo en el fondo que se resta antes: `optimal_ls` (superficie "
+              "local de 04b, comparable 1:1 con C2) y `optimal_psfsub` (modelo de PSF de la "
+              "primaria, de C1). Son **2 de los 6 métodos** de la cadena: 5 etapas, 6 métodos."),
+        inputs="Cubo + PSF (C1)",
+        outputs=("`stages/spec_optimal_qc.json`, `spec_optimal_object.fits` (ls), "
+                 "`spec_optimal_psfsub_object.fits`"),
         downstream="D1, E1",
         exec=dict(kind="script", target="stage_x02_optimal.sh", cost="Moderado."),
         qc="stages/spec_optimal_qc.json",
@@ -2147,10 +2382,16 @@ STAGES: list[dict] = [
             "(`f = Σ M·P·D/V / Σ M·P²/V`). Al bajar el peso de los píxeles ruidosos, **gana S/N** "
             "frente a la apertura (aquí ~**6.9× mediana**). La fórmula es cerrada; el valor está en "
             "implementarla exacta (tests analíticos de flujo y varianza).\n\n"
-            "**Dos variantes del fondo:**\n"
-            "- **`optimal_ls`** — usa el residual de superficie local (04b) como fondo.\n"
+            "**Dos variantes del fondo** — mismo estimador, distinto fondo restado antes:\n"
+            "- **`optimal_ls`** — usa el residual de superficie local (04b) como fondo. Mismo fondo "
+            "que C2, así que la comparación con C2 aísla la ganancia del ponderado óptimo.\n"
             "- **`optimal_psfsub`** — ajusta y **resta la PSF de la primaria** primero, y luego "
-            "extrae ópticamente el compañero.\n\n"
+            "extrae ópticamente el compañero. Anticipa el fondo que usará C4, así que `ls` vs "
+            "`psfsub` es un **diagnóstico del modelo de halo** para D1, no una redundancia.\n\n"
+            "> **De dónde salen los 6 métodos.** C2–C6 son **cinco etapas**, pero C3 emite estas "
+            "**dos** variantes como productos separados, así que la cadena compara **seis** "
+            "métodos: `aperture`, `optimal_ls`, `optimal_psfsub`, `psffit`, `sgf` y `lpm` "
+            "(el `METHOD_ORDER` que usan D1, D2, E4 y G1).\n\n"
             "**Decisión:** G1 **valida `psfsub`** (`validated_with_bias`) y la usa como una de las dos "
             "citables (con psffit). **`ls` sobre-sustrae el continuo** (el pedestal de 04b) → sesgo de "
             "continuo **−373 % vs apertura**, `v3_continuum_bias` **falla**. Ambas comparten la forma "
@@ -2198,7 +2439,8 @@ STAGES: list[dict] = [
             "    def spec(path):\n"
             "        h = fits.open(rd / 'stages' / path); d = h[1].data\n"
             "        w = np.asarray(d['wave_A'], float); f = np.asarray(d['flux'], float); h.close(); return w, f\n"
-            "    sm = lambda x, n=41: np.convolve(np.nan_to_num(x), np.ones(n) / n, mode='same')\n"
+            "    from musepipe.spectral import median_filter_1d\n"
+            "    sm = lambda x, n=41: median_filter_1d(x, n)   # mediana móvil, ignora NaN\n"
             "    w, fls = spec('spec_optimal_object.fits')\n"
             "    _, fps = spec('spec_optimal_psfsub_object.fits')\n"
             "    fig, ax = plt.subplots(figsize=(11, 4))\n"
@@ -2247,7 +2489,8 @@ STAGES: list[dict] = [
                     "    for lo, hi in [(5100, 5500), (6600, 7200), (8000, 8800)]:\n"
                     "        b = (wave >= lo) & (wave <= hi)\n"
                     "        print(f'  {lo}-{hi} Å   {np.nanmedian(cm[b]):9.0f}  {np.nanmedian(fo[b]):9.0f}  {np.nanmedian((fo - cm)[b]):9.0f}')\n"
-                    "    sm = lambda x, n=81: np.convolve(np.nan_to_num(x), np.ones(n) / n, mode='same')\n"
+                    "    from musepipe.spectral import median_filter_1d\n"
+                    "    sm = lambda x, n=81: median_filter_1d(x, n)   # mediana móvil, ignora NaN\n"
                     "    fig, ax = plt.subplots(figsize=(11, 4.2))\n"
                     "    ax.plot(wave, sm(fo), lw=1, color='tab:green', label='objeto psfsub (crudo, sobre-sustraído)')\n"
                     "    ax.plot(wave, sm(cm), lw=1, color='tab:red', ls='--', label=f'media de {C.shape[0]} controles = fondo residual del halo')\n"
@@ -2264,6 +2507,28 @@ STAGES: list[dict] = [
                     "    print('figura ->', outdir / 'oversubtraction_diag.png'); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_optimal_object.fits',
+                    method='optimal_ls',
+                    subdir='c3_optimal',
+                    stem='spectrum_paper_ls',
+                    qc='stages/spec_optimal_qc.json',
+                    title_suffix='espectro del compañero · optimal_ls (C3)',
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_optimal_psfsub_object.fits',
+                    method='optimal_psfsub',
+                    subdir='c3_optimal',
+                    stem='spectrum_paper_psfsub',
+                    qc='stages/spec_optimal_qc.json',
+                    title_suffix='espectro del compañero · optimal_psfsub (C3)',
                 ),
             ),
         ],
@@ -2418,7 +2683,8 @@ STAGES: list[dict] = [
                     "    flux = np.asarray(h[1].data['flux'], float); h.close()\n"
                     "    C = np.load(rd / 'stages' / 'spec_psffit_controls.npz')['control_spectra']\n"
                     "    sig = np.nanstd(C, axis=0)\n"
-                    "    sm = np.convolve(np.nan_to_num(flux), np.ones(41) / 41, mode='same')\n"
+                    "    from musepipe.spectral import median_filter_1d\n"
+                    "    sm = median_filter_1d(flux, 41)   # mediana móvil, ignora NaN\n"
                     "    fig, ax = plt.subplots(figsize=(11, 4))\n"
                     "    ax.fill_between(wave, -sig, sig, color='0.85', label=f'±1σ empírico ({C.shape[0]} controles)')\n"
                     "    ax.plot(wave, flux, lw=0.3, color='0.55', alpha=0.6)\n"
@@ -2432,6 +2698,28 @@ STAGES: list[dict] = [
                     "    fig.savefig(outdir / 'spectrum.png', dpi=110); print('figura ->', outdir / 'spectrum.png'); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_psffit_object.fits',
+                    method='psffit',
+                    subdir='c4_psffit',
+                    stem='spectrum_paper',
+                    qc='stages/spec_psffit_qc.json',
+                    title_suffix='espectro del compañero · psffit, el método canónico (C4)',
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_psffit_star.fits',
+                    method='psffit_star',
+                    subdir='c4_psffit',
+                    stem='spectrum_paper_star',
+                    qc='stages/spec_psffit_qc.json',
+                    title_suffix='espectro de la PRIMARIA · psffit (C4)',
                 ),
             ),
         ],
@@ -2566,6 +2854,17 @@ STAGES: list[dict] = [
                     "    fig.savefig(outdir / 'residual_and_spectrum.png', dpi=110); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_sgf_object.fits',
+                    method='sgf',
+                    subdir='c5_sgf',
+                    stem='spectrum_paper',
+                    qc='stages/spec_sgf_qc.json',
+                    title_suffix='espectro del compañero · sgf (C5)',
                 ),
             ),
         ],
@@ -2707,6 +3006,17 @@ STAGES: list[dict] = [
                     "    ax.legend(); fig.tight_layout(); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=PAPER_SPECTRUM_MD,
+                code=paper_from_product_cell(
+                    product='spec_lpm_object.fits',
+                    method='lpm',
+                    subdir='c6_lpm',
+                    stem='spectrum_paper',
+                    qc='stages/spec_lpm_qc.json',
+                    title_suffix='espectro del compañero · lpm (C6)',
                 ),
             ),
         ],
@@ -3282,7 +3592,8 @@ STAGES: list[dict] = [
                     "            ('psf', 'sys_psf', True), ('cielo', 'sys_sky', True),\n"
                     "            ('telúrico', 'sys_telluric', True), ('continuo', 'sys_continuum', False),\n"
                     "            ('flujo-cal DECLARADO', 'sys_fluxcal_declared', False)]\n"
-                    "    sm = lambda x, n=51: np.convolve(np.nan_to_num(np.abs(x)), np.ones(n) / n, mode='same')\n"
+                    "    from musepipe.spectral import median_filter_1d\n"
+                    "    sm = lambda x, n=51: median_filter_1d(np.abs(x), n)   # mediana móvil, ignora NaN\n"
                     "    fig, ax = plt.subplots(figsize=(11, 4))\n"
                     "    for lab, c, summed in comp:\n"
                     "        if c in d.columns.names:\n"

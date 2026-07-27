@@ -137,3 +137,29 @@ Preguntar cuando: V1 falle sin causa identificable; V4 muestre box3 y box5
 incompatibles (señal de PSF de C1 mala en el core — retroalimentar a C1);
 STAT dé resultados absurdos pese a verde en A4. Reporte: tabla V1–V4,
 decisión de `ERRMODE`, y confirmación de formato congelado (`FORMATV=1`).
+
+## Errata (2026-07-25) — V4 son dos cosas, y la que importa faltaba
+
+V4 pide (a) que `apcorr(λ)` esté en rango y (b) que **el espectro corregido de
+box3 y box5 coincida dentro de errores** — «esa es la prueba de que la curva de
+crecimiento de C1 funciona». El código solo implementaba (a).
+
+**(a) no puede pasar en NFM.** El rango del código es `mediana ≥ 1.0` y
+`máx ≤ 1.8`, coherente con el «[1.0, ~1.6] para box3» de arriba, que supone una
+apertura que recoge casi toda la luz. Con la PSF psfao normalizada a r=25 px una
+box3 recoge **~2%**, así que `apcorr` vale decenas: 44.65 en ROXs 12 b y 18.70
+en ROXs 42B b. El chequeo lleva rojo desde siempre y no es accionable; la
+magnitud de la corrección, por sí sola, no dice si la curva es buena.
+
+**(b) implementada** como `checks.v4_apcorr_consistency`: fracción de canales
+con |box3 − box5| ≤ √(σ3² + σ5²), medida en **7500–9000 Å** (en el azul el
+compañero tiene S/N<1 y las dos aperturas «concuerdan» siempre porque las dos
+miden ruido), con umbral 0.90. Knobs: `x01_apcorr_consistency_band_A` y
+`x01_apcorr_consistency_threshold`. Publica además el cociente
+box5/box3 mediano, que es el número interpretable.
+
+Medido sobre los productos existentes: **ROXs 12 b 0.859× (87.9% de canales)** y
+**ROXs 42B b 0.608× (15.2%)**. Los dos por debajo del umbral, el segundo de
+forma grave. Según §7 el sospechoso es el modelo de PSF en el core y toca
+retroalimentar a C1 — no la fotometría, que se validó contra `photutils`
+(máscara idéntica bit a bit, y el redondeo del centro al píxel cuesta <1%).
