@@ -1190,6 +1190,24 @@ def write_stage_h03_products(product: StageH03Product, config, paths):
     qc = dict(product.qc)
     qc["tables"] = {"upper_limits": str(paths["halpha_upper_limits_csv"])}
     qc["figures"] = {"context": str(plot)}
+    # `scripts/s7b_mdot_vs_extinction.py` ANADE `extinction_ladder` a este mismo
+    # QC despues de que E3 corra, y de ahi sale el Mdot que se cita. Reescribir
+    # el fichero entero lo borraba en silencio: un re-run de E3 dejaba el QC sin
+    # el numero del paper y sin ninguna senal de que habia estado ahi. Se marca
+    # como obsoleto (no se conserva: sus numeros vienen del E3 anterior) para
+    # que quien lo lea sepa que hay que relanzar S7b.
+    stale = _read_optional_json(paths["stage_h03_qc_json"]) or {}
+    previous_ladder = stale.get("extinction_ladder")
+    if previous_ladder is not None:
+        qc["extinction_ladder_stale"] = {
+            "reason": "E3 re-run; the previous extinction_ladder came from the earlier E3 output.",
+            "previous_adopted_mdot_msun_yr": previous_ladder.get("adopted_mdot_msun_yr"),
+            "rerun": "python scripts/s7b_mdot_vs_extinction.py --run-id <RUN_ID>",
+        }
+        qc.setdefault("open_issues", []).append(
+            "extinction_ladder was dropped by this E3 re-run; re-run scripts/s7b_mdot_vs_extinction.py "
+            "to restore the adopted Mdot limit."
+        )
     write_json(paths["stage_h03_qc_json"], _json_ready(qc))
     return {"table": paths["halpha_upper_limits_csv"], "plot": plot, "qc_json": paths["stage_h03_qc_json"], "qc": qc}
 

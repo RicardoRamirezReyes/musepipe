@@ -48,7 +48,18 @@ def make_bins(wave, bin_A, bad_windows, min_channels=3):
     return bins
 
 
-def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0):
+def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0, field_yx=None):
+    """Ajuste Psfao de un bin.
+
+    `field_yx` enmascara una fuente de campo igual que hace la rama Moffat. Sin
+    esto las dos formas se ajustaban con MASCARAS DISTINTAS —Moffat con
+    companero + fuente de campo, psfao solo con el companero— y
+    `model_comparison` dejaba de comparar peras con peras: el sesgo iba siempre
+    contra psfao, porque era la unica que se comia el contaminante. Se vio en
+    ROXs 42B b, donde enmascarar ROXs 42B cc1 mejoro Moffat (8.38 -> 6.88%) y
+    dejo psfao intacta (9.80 -> 10.69%).
+    """
+
     from maoppy.psfmodel import Psfao
     from maoppy.psffit import psffit
 
@@ -58,6 +69,8 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0)
     r = np.hypot(yy - cy, xx - cx)
     comp = np.hypot(yy - companion_yx[0], xx - companion_yx[1])
     mask = np.isfinite(image) & (comp > mask_radius) & (r < fit_radius)
+    if field_yx is not None:
+        mask &= np.hypot(yy - float(field_yx[0]), xx - float(field_yx[1])) > mask_radius
     weights = np.where(mask, 1.0 / np.clip(var, 1e-6, None), 0.0)
     imgf = np.where(np.isfinite(image), image, 0.0)
     model = Psfao((ny, nx), system=system, samp=float(samp))
@@ -159,7 +172,7 @@ def prepare_psfao_inputs(cfg, stage_dir):
     }
 
 
-def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *, x0=None):
+def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *, x0=None, field_yx=None):
     """Fit the Psfao model per wavelength bin (companion masked).
 
     Returns ``(rows, recons)`` where ``rows`` is the per-bin parameter table
@@ -178,7 +191,7 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
         samp = float(muse_nfm.samp(mid * 1e-10))
         try:
             params, amp, bck, dxdy, ring, recon = fit_bin(
-                img, var, samp, system, companion, mask_radius, fit_radius, x0
+                img, var, samp, system, companion, mask_radius, fit_radius, x0, field_yx=field_yx
             )
         except Exception as exc:  # pragma: no cover - defensive
             rows.append({"lambda_A": mid, "status": f"fit_failed:{exc}"})

@@ -238,9 +238,12 @@ def paper_spectrum_figure(
             ax.fill_between(wave, -err, err, color="0.82", lw=0, zorder=1,
                             label=err_label if ax is axes[0] else None)
         if err_alt is not None:
-            ax.plot(wave, err_alt, lw=0.6, color="tab:red", alpha=0.7, zorder=3,
+            # alpha 0.5: la segunda estimacion cae POR ENCIMA de la banda empirica
+            # (STAT propagado con el factor de covarianza sobrecorrige ~1.5x), y a
+            # 0.7 su linea dominaba visualmente sobre el sigma que la etapa si usa.
+            ax.plot(wave, err_alt, lw=0.6, color="tab:red", alpha=0.5, zorder=3,
                     label=err_alt_label if ax is axes[0] else None)
-            ax.plot(wave, -err_alt, lw=0.6, color="tab:red", alpha=0.7, zorder=3)
+            ax.plot(wave, -err_alt, lw=0.6, color="tab:red", alpha=0.5, zorder=3)
         ax.plot(wave, flux, lw=0.35, color="0.45", zorder=4,
                 label="flujo por canal (sin binar)" if ax is axes[0] else None)
         if smooth is not None:

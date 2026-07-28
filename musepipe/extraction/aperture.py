@@ -359,8 +359,21 @@ def aperture_correction_from_psf(
     *,
     center_yx=(0.0, 0.0),
     correction_mode: str = "auto",
+    growth_curve=None,
 ) -> tuple[np.ndarray, str, float]:
-    """Return wavelength-dependent aperture correction from a C1 PSF model."""
+    """Return wavelength-dependent aperture correction from a C1 PSF model.
+
+    By default the PSF is normalized to 1 inside ``norm_radius_px`` (25 px =
+    0.63" in NFM), so the recovered "total flux" is really *the flux inside that
+    radius*. Measured on the A2-size cube, 40-55% of the modelled light lies
+    outside it, and the missing factor is chromatic (~2.5 blue, ~1.9 red), so it
+    does not cancel -- it tilts the continuum.
+
+    Passing ``growth_curve`` (A2's ``growth_curve`` QC block) multiplies the
+    correction by the empirically measured ``F_total / F(<=norm_radius)`` and
+    switches the convention to genuine total flux. A2 measures it; the caller
+    decides -- see ``x01_flux_convention``.
+    """
 
     wave = np.asarray(wave_A, dtype=np.float64)
     mode = str(correction_mode or "auto").lower()
@@ -387,7 +400,19 @@ def aperture_correction_from_psf(
         if not np.isfinite(frac) or frac <= 0:
             raise RuntimeError(f"Invalid aperture PSF fraction at wave={w}.")
         fractions[i] = frac
-    return (1.0 / fractions).astype(np.float64), "psf_growth_curve", norm_radius
+    apcorr = (1.0 / fractions).astype(np.float64)
+    if growth_curve:
+        # Import ABSOLUTO y dentro de la funcion: esta funcion se COPIA
+        # literalmente dentro de los notebooks de `debug/`, donde un import
+        # relativo (`from ..growth_curve`) revienta con ImportError por no
+        # haber paquete padre. El absoluto funciona en los dos sitios.
+        from musepipe.growth_curve import factor_at_wavelengths
+
+        factor = np.asarray(factor_at_wavelengths(growth_curve, wave), dtype=np.float64)
+        if not np.all(np.isfinite(factor)) or np.any(factor <= 0):
+            raise RuntimeError("Growth-curve total-flux factor is not finite and positive.")
+        return apcorr * factor, "psf_growth_curve+empirical_total", norm_radius
+    return apcorr, "psf_growth_curve", norm_radius
 
 
 def make_aperture_product(
@@ -407,6 +432,7 @@ def make_aperture_product(
     error_mode: str = "auto",
     psf_model: dict | None = None,
     aperture_correction: str = "auto",
+    growth_curve=None,
     wframe: str = "topocentric",
     bunit: str = "",
     bad_windows_A: Sequence[Sequence[float]] = (),
@@ -490,6 +516,7 @@ def make_aperture_product(
         psf_model,
         center_yx=object_yx,
         correction_mode=aperture_correction,
+        growth_curve=growth_curve,
     )
     flags = channel_flags(
         wave,
@@ -526,7 +553,11 @@ def make_aperture_product(
         "STATFAC": float(stat_factor),
         "COVFAC": float(covariance_factor),
         "BKGMODE": bkg_mode,
-        "SCALEREF": "normrad_total_flux",
+        # La convencion de flujo se DECLARA, no se supone: con la curva de
+        # crecimiento de A2 aplicada el "1" deja de ser el radio de
+        # normalizacion y pasa a ser el flujo total medido.
+        "SCALEREF": ("empirical_total_flux" if "empirical_total" in str(apcorr_mode)
+                     else "normrad_total_flux"),
     }
     product = SpectrumProduct(
         wave_A=wave,
@@ -572,6 +603,7 @@ def extract_aperture_products(
     error_mode: str = "auto",
     psf_model: dict | None = None,
     aperture_correction: str = "auto",
+    growth_curve=None,
     wframe: str = "topocentric",
     bunit: str = "",
     bad_windows_A: Sequence[Sequence[float]] = (),
@@ -606,6 +638,7 @@ def extract_aperture_products(
             error_mode=error_mode,
             psf_model=psf_model,
             aperture_correction=aperture_correction,
+            growth_curve=growth_curve,
             wframe=wframe,
             bunit=bunit,
             bad_windows_A=bad_windows_A,

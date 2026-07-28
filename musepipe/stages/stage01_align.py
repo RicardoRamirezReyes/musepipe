@@ -179,6 +179,17 @@ def find_centroid_peak(image2d: np.ndarray, box_half_size: int = 4):
 
 
 def find_centroid_maoppy_moffat(image2d, y_init=None, x_init=None, stamp_half_size=10, max_nfev=120):
+    """Sub-pixel centroid from a **Moffat** fit (maoppy's, not the Psfao model).
+
+    Deliberately NOT the C1 Psfao model that every photometric stage uses: B1
+    runs *before* C1 exists, so there is no psf_model.json yet, and a centroid
+    only needs a symmetric core -- the AO halo the Psfao form adds does not move
+    the peak. Nothing photometric is derived here.
+
+    Anything that measures *flux* must go through ``psf_model.json`` /
+    ``evaluate_psf_model`` instead, so it inherits whichever form C1 selected.
+    """
+
     if (y_init is None) or (x_init is None):
         y_init, x_init = find_centroid_peak(image2d, box_half_size=4)
     y_init_i = int(np.round(y_init))
@@ -194,12 +205,18 @@ def find_centroid_maoppy_moffat(image2d, y_init=None, x_init=None, stamp_half_si
     cy_global = y1 + (stamp.shape[0] - 1) / 2.0
     cx_global = x1 + (stamp.shape[1] - 1) / 2.0
     try:
-        import maoppy
+        # `from maoppy.psffit import psffit`, NO `maoppy.psffit(...)`:
+        # `maoppy/__init__.py` hace `from . import psffit`, asi que el atributo
+        # del paquete es el MODULO, no la funcion, y llamarlo lanzaba siempre
+        # TypeError. El `except Exception` de abajo se lo tragaba, de modo que
+        # `centering_method="maoppy"` degradaba en silencio al centroide de pico
+        # mientras el plan seguia declarando que habia usado maoppy.
+        from maoppy.psffit import psffit
         from maoppy.psfmodel import Moffat
 
         model = Moffat(npix=stamp.shape, norm=np.inf)
         x0_model = np.array([2.0, 2.0, 0.0, 2.5], dtype=float)
-        res = maoppy.psffit(
+        res = psffit(
             stamp,
             model,
             x0_model,

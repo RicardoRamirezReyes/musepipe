@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 import math
 from pathlib import Path
@@ -12,7 +11,7 @@ import numpy as np
 
 from ..apertures import same_radius_control_positions
 from ..parallel import run_channel_chunks
-from ..psf import evaluate_psf_model
+from ..psf import evaluate_psf_model, scaled_psf_model as _scaled_psf_model
 from ..stats import robust_sigma, robust_sigma_axis0
 from .aperture import (
     FLAG_CLIPPED,
@@ -352,6 +351,7 @@ def make_optimal_product(
     stat_status: str = "unknown",
     error_mode: str = "auto",
     aperture_correction: str = "auto",
+    growth_curve=None,
     wframe: str = "topocentric",
     bunit: str = "",
     window_radius_px: float = 8.0,
@@ -462,6 +462,7 @@ def make_optimal_product(
         psf_model,
         center_yx=object_yx,
         correction_mode=aperture_correction,
+        growth_curve=growth_curve,
     )
     clipped_channels = raw["clip_fraction"] > float(clip_flag_fraction)
     flags = channel_flags(
@@ -511,7 +512,8 @@ def make_optimal_product(
         "VARIANT": str(variant),
         "VARSRC": variance_source,
         "BKGMODE": bkg_mode,
-        "SCALEREF": "normrad_total_flux",
+        "SCALEREF": ("empirical_total_flux" if "empirical_total" in str(apcorr_mode)
+                     else "normrad_total_flux"),
     }
     product = SpectrumProduct(
         wave_A=wave,
@@ -629,13 +631,10 @@ def fit_primary_psf_model_cube(
     return model, meta
 
 
-def scaled_psf_model(model_doc, fwhm_scale):
-    model = deepcopy(model_doc)
-    for key in ("fwhm_maj", "fwhm_min"):
-        if key in model.get("coefficients", {}):
-            coeff = list(model["coefficients"][key].get("coefficients", []))
-            model["coefficients"][key]["coefficients"] = [float(c) * float(fwhm_scale) for c in coeff]
-    return model
+# Re-exportado desde `musepipe.psf`: esta copia solo escalaba coeficientes
+# Moffat, asi que con el modelo psfao (el que C1 elige cuando hay maoppy) la
+# prueba de sensibilidad de C3 salia 0.0% por no perturbar nada.
+scaled_psf_model = _scaled_psf_model
 
 
 __all__ = [

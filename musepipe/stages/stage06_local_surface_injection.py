@@ -164,6 +164,18 @@ def resolve_injection_geometry(config, ny, nx):
 
 
 def make_spatial_psf_patch(ny, nx, y0, x0, fwhm_px, nsigma=5.0):
+    """Circular **Gaussian** injection kernel -- NOT the C1 PSF model.
+
+    Declared explicitly because it differs from the canonical chain: E4
+    (``stage_h04_injection``) injects through ``psf_model.json`` and therefore
+    inherits the Psfao form that C1 selects. This stage is a side/legacy path
+    (it is not among the 32 stages in ``stage_registry``) and keeps a Gaussian
+    of a given FWHM, which ignores the AO halo entirely.
+
+    Consequence: throughputs from here are NOT comparable with E4's, and no
+    result of the canonical A->G chain depends on this function.
+    """
+
     sigma_px = float(fwhm_px) / 2.354820045
     if not np.isfinite(sigma_px) or sigma_px <= 0:
         raise ValueError("Spatial PSF FWHM must be positive.")

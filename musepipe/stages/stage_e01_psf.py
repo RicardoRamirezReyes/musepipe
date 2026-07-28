@@ -108,13 +108,24 @@ def _sha256(path):
     return h.hexdigest()
 
 
-def _maoppy_status():
+def _maoppy_status(form_chosen=None):
+    """Estado de maoppy EN ESTA EJECUCION, no solo si se puede importar.
+
+    Antes devolvia siempre ``"available_not_used"`` con que el import
+    funcionara, sin mirar si la rama psfao se habia elegido. Era una etiqueta de
+    cuando maoppy era opcional y no se usaba, y quedaba contradiciendo a
+    ``fit.model = "maoppy.Psfao"`` y ``model_comparison.form_chosen = "psfao"``
+    en el mismo QC: quien auditara el fichero leia justo lo contrario de la
+    verdad.
+    """
+
     try:
         import maoppy  # noqa: F401
-
-        return "available_not_used"
     except Exception as exc:
         return f"unavailable:{exc.__class__.__name__}"
+    if form_chosen is None:
+        return "available"
+    return "used_selected" if str(form_chosen).lower() == "psfao" else "available_not_selected"
 
 
 def _load_cube(path):
@@ -331,7 +342,7 @@ def _apply_hybrid(ring_pcts, images, models, masks, primary_yx, companion_yx, fw
     return models_hybrid, np.asarray(profiles, dtype=np.float32), radii_ref.astype(np.float32), True, after_pcts
 
 
-def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx):
+def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None):
     """Fit the physical AO (Psfao) model per bin and score each reconstruction
     with the SAME canonical companion-ring metric used for Moffat, so §3.4 is an
     apples-to-apples comparison. Returns a dict with status and, on success, the
@@ -352,6 +363,9 @@ def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx):
     rows, recons = fit_psfao_bins(
         inp["cube"], inp["stat"], inp["wave"], inp["bins"],
         inp["system"], inp["companion"], inp["mask_radius"], inp["fit_radius"],
+        # MISMA mascara que la rama Moffat: sin esto `model_comparison` compara
+        # dos ajustes con contaminantes distintos.
+        field_yx=field_yx,
     )
     width = float(cfg.get("psf_companion_ring_width_px", 3.0))
     excl = float(inp["mask_radius"])
@@ -393,9 +407,8 @@ def compute_stage_e01_products(config) -> StageE01Product:
         bad_windows_A=cfg.get("stage_e01_bad_windows_A", []),
         min_channels=int(cfg.get("psf_min_channels_per_bin", 3)),
     )
-    primary_yx, companion_yx, _ = _positions_from_qc(positions_qc)
+    primary_yx, companion_yx, field_yx = _positions_from_qc(positions_qc)
     sep_px = float(np.hypot(companion_yx[0] - primary_yx[0], companion_yx[1] - primary_yx[1]))
-    maoppy_status = _maoppy_status()
 
     # --- Moffat fit (always run: it is the tie-break form and the FWHM source
     # for the hybrid smoothing scale). -----------------------------------------
@@ -411,7 +424,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
         raise ValueError(f"e01_psf_form must be auto|moffat|psfao, got {form_cfg!r}.")
     psfao = {"status": "skipped"}
     if form_cfg in ("auto", "psfao"):
-        psfao = _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx)
+        psfao = _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx)
     psfao_ok = psfao.get("status") == "ok"
     psfao_ring = (
         np.asarray([r["ring_residual_pct"] for r in psfao["ring_rows"]], dtype=np.float64)
@@ -479,7 +492,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
         }
         fit_qc = {
             "form_chosen": "moffat",
-            "maoppy_status": maoppy_status,
+            "maoppy_status": _maoppy_status("moffat"),
             "background_mode": "fixed_external",
             "clip_frac_max": float(np.nanmax([row["clip_frac"] for row in rows])),
             "chi2r_median": float(np.nanmedian([row["chi2r"] for row in rows])),
@@ -532,7 +545,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
         fit_qc = {
             "form_chosen": "psfao",
             "model": "maoppy.Psfao",
-            "maoppy_status": maoppy_status,
+            "maoppy_status": _maoppy_status("psfao"),
             "background_mode": "psffit_flux_bck",
             "fit_radius_px": float(inp["fit_radius"]),
             "n_ok_bins": int(meta["n_ok"]),
