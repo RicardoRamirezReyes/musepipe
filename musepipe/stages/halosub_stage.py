@@ -17,6 +17,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
+from ..growth_curve import resolve_flux_convention
 from ..extraction.aperture import ApertureExtraction, make_aperture_product
 from ..halosub import (
     DEFAULT_FLUX_MASK_HI,
@@ -224,6 +225,11 @@ def extract_halosub_product(residual_cube, wave, cfg, paths, *, method, open_iss
         open_issues.append("A4/M5 STAT status is red; products use empirical flux_err.")
     wframe = _wavelength_frame(cfg, qc00, open_issues)
 
+    # Misma convencion de flujo que C2/C3/C4: D1 aborta si `SCALEREF` difiere
+    # entre productos, asi que los seis metodos tienen que ir juntos.
+    growth_curve, _flux_convention = resolve_flux_convention(
+        cfg, paths["paths"].stage_dir, knob=f"{prefix}_flux_convention"
+    )
     extraction = make_aperture_product(
         residual_cube,
         wave,
@@ -239,6 +245,7 @@ def extract_halosub_product(residual_cube, wave, cfg, paths, *, method, open_iss
         error_mode=cfg.get(f"{prefix}_error_mode", "auto"),
         psf_model=psf_model,
         aperture_correction=cfg.get(f"{prefix}_aperture_correction", "auto"),
+        growth_curve=growth_curve,
         wframe=wframe,
         # El cargador ya resuelve la unidad, pero aqui se pasaba
         # `cfg["cube_bunit"]`, que nadie define: los productos sgf/lpm salian

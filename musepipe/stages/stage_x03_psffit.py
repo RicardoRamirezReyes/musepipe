@@ -11,6 +11,7 @@ from astropy.io import fits
 
 from ..apertures import aperture_weights
 from ..config import load_run_config
+from ..growth_curve import resolve_flux_convention
 from ..extraction.product import SpectrumProduct
 from ..extraction.psffit import PsfFitProducts, crosstalk_metric, make_psffit_products
 from ..io import read_json, write_json
@@ -273,12 +274,19 @@ def compute_stage_x03_products(config, paths=None):
     if str(stat_status).lower() == "red":
         open_issues.append("A4/M5 STAT status is red; products use empirical flux_err.")
     wframe = _wavelength_frame(cfg, qc00, open_issues)
+    # Convencion de flujo: "normrad" (historica, por defecto) o "total"
+    # (factor empirico de la curva de crecimiento). Falla ruidosamente si se
+    # pide "total" sin medida, en vez de caer en silencio a la vieja.
+    growth_curve, flux_convention = resolve_flux_convention(
+        cfg, paths["paths"].stage_dir, knob="x03_flux_convention"
+    )
     products = make_psffit_products(
         cube,
         wave,
         star_yx,
         comp_yx,
         psf_model,
+        growth_curve=growth_curve,
         run_id=run_id,
         input_cube_path=cube_path,
         variance_zyx=stat_cube,

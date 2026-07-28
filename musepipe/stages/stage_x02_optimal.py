@@ -11,6 +11,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
+from ..growth_curve import resolve_flux_convention
 from ..extraction.aperture import FLAG_CLIPPED
 from ..extraction.optimal import (
     OptimalExtraction,
@@ -332,6 +333,12 @@ def compute_stage_x02_products(config, paths=None):
         open_issues.append("A4/M5 STAT status is red; products use empirical flux_err.")
     wframe = _wavelength_frame(cfg, qc00, open_issues)
 
+    # Convencion de flujo: "normrad" (historica, por defecto) o "total"
+    # (factor empirico de la curva de crecimiento). Falla ruidosamente si se
+    # pide "total" sin medida, en vez de caer en silencio a la vieja.
+    growth_curve, flux_convention = resolve_flux_convention(
+        cfg, paths["paths"].stage_dir, knob="x02_flux_convention"
+    )
     common = {
         "run_id": run_id,
         "star_yx": star_yx,
@@ -341,6 +348,7 @@ def compute_stage_x02_products(config, paths=None):
         "stat_status": stat_status,
         "error_mode": cfg.get("x02_error_mode", "auto"),
         "aperture_correction": cfg.get("x02_aperture_correction", "auto"),
+        "growth_curve": growth_curve,
         "wframe": wframe,
         "bunit": bunit,
         "window_radius_px": float(cfg.get("x02_window_radius_px", 8.0)),

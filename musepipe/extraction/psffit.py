@@ -231,7 +231,7 @@ def control_psffit_spectra(
     return controls, np.asarray(star_specs, dtype=np.float64), np.asarray(comp_specs, dtype=np.float64)
 
 
-def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, error_mode, stat_factor, cov_factor, chi2r):
+def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, error_mode, stat_factor, cov_factor, chi2r, scaleref="normrad_total_flux", apcmode="psf_model_norm_radius"):
     return {
         "FORMATV": FORMAT_VERSION,
         "METHOD": "psffit",
@@ -245,7 +245,7 @@ def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cub
         "NORMRAD": float(psf_model.get("norm_radius_px", 25.0)),
         "BUNIT": str(bunit or ""),
         "ERRMODE": str(error_mode),
-        "APCMODE": "psf_model_norm_radius",
+        "APCMODE": str(apcmode),
         "STATFAC": float(stat_factor),
         "COVFAC": float(cov_factor),
         "ERRINFL": float(np.nanmedian(np.sqrt(np.clip(chi2r, 0.0, np.inf)))),
@@ -253,7 +253,7 @@ def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cub
         # The [p_star, p_comp, 1, y, x] design's plane IS this method's
         # background convention; amplitudes are already total NORMRAD flux.
         "BKGMODE": "psffit_plane",
-        "SCALEREF": "normrad_total_flux",
+        "SCALEREF": str(scaleref),
     }
 
 
@@ -275,6 +275,7 @@ def make_psffit_products(
     wframe: str = "topocentric",
     bunit: str = "",
     star_radius_px: float = 20.0,
+    growth_curve=None,
     comp_radius_px: float = 12.0,
     bad_windows_A: Sequence[Sequence[float]] = (),
     skyline_windows_A: Sequence[Sequence[float]] = (),
@@ -358,13 +359,34 @@ def make_psffit_products(
         good_mask=good_mask,
         bad_mask=bad_mask,
     )
+    # C4 no tiene apertura: el ajuste con P normalizada ya devuelve flujo
+    # "total" en la convencion NORMRAD, y por eso su apcorr es 1 (spec C4 §3.4).
+    # Para pasar a flujo total EMPIRICO el factor se aplica aqui, sobre el
+    # propio apcorr, para que flujo y errores escalen juntos como en C2/C3.
     apcorr = np.ones(wave.size, dtype=np.float64)
+    if growth_curve:
+        # Import ABSOLUTO y dentro de la funcion: esta funcion se COPIA
+        # literalmente dentro de los notebooks de `debug/`, donde un import
+        # relativo (`from ..growth_curve`) revienta con ImportError por no
+        # haber paquete padre. El absoluto funciona en los dos sitios.
+        from musepipe.growth_curve import factor_at_wavelengths
+
+        factor = np.asarray(factor_at_wavelengths(growth_curve, wave), dtype=np.float64)
+        if not np.all(np.isfinite(factor)) or np.any(factor <= 0):
+            raise RuntimeError("Growth-curve total-flux factor is not finite and positive.")
+        apcorr = apcorr * factor
     input_cube_path = Path(input_cube_path)
     if input_cube_sha is None:
         input_cube_sha = sha256_file(input_cube_path) if input_cube_path.exists() else ""
     cov_median = float(np.nanmedian(cov_factor))
-    comp_header = _spectrum_header(run_id, "object", comp_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r)
-    star_header = _spectrum_header(run_id, "star", star_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r)
+    scaleref = "empirical_total_flux" if growth_curve else "normrad_total_flux"
+    # El apcorr nominal de C4 es 1 (spec C4 §3.4), pero cuando lleva el factor
+    # empirico encima el modo tiene que decirlo: un header que declara
+    # `psf_model_norm_radius` mientras el flujo esta en escala total confunde
+    # a quien audite el fichero.
+    apcmode = "psf_model_norm_radius+empirical_total" if growth_curve else "psf_model_norm_radius"
+    comp_header = _spectrum_header(run_id, "object", comp_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode)
+    star_header = _spectrum_header(run_id, "star", star_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode)
     companion = SpectrumProduct(
         wave_A=wave,
         flux=result.coeffs[:, 1],

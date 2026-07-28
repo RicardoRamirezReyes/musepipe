@@ -11,6 +11,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
+from ..growth_curve import resolve_flux_convention
 from ..extraction.aperture import (
     ApertureExtraction,
     default_apertures,
@@ -444,6 +445,12 @@ def compute_stage_x01_products(config, paths=None):
                     "residual would over-subtract the companion wings (box5<box3)."
                 )
 
+    # Convencion de flujo: "normrad" (historica, por defecto) o "total"
+    # (factor empirico de la curva de crecimiento). Falla ruidosamente si se
+    # pide "total" sin medida, en vez de caer en silencio a la vieja.
+    growth_curve, flux_convention = resolve_flux_convention(
+        cfg, paths["paths"].stage_dir, knob="x01_flux_convention"
+    )
     extractions = extract_aperture_products(
         cube,
         wave,
@@ -459,6 +466,7 @@ def compute_stage_x01_products(config, paths=None):
         error_mode=cfg.get("x01_error_mode", "auto"),
         psf_model=psf_model,
         aperture_correction=cfg.get("x01_aperture_correction", "auto"),
+        growth_curve=growth_curve,
         wframe=wframe,
         bunit=bunit,
         bad_windows_A=cfg.get("x01_bad_windows_A", []),

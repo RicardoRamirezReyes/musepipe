@@ -613,6 +613,27 @@ def _source_regions_from_json(values: Sequence[str] | None) -> list[SourceRegion
     return regions
 
 
+def _companion_yx_from_regions(source_regions):
+    """Posicion del companero entre las regiones forzadas, si esta declarada.
+
+    Solo se usa para enmascararlo en las medianas azimutales; es un refinamiento,
+    no un requisito (la mediana por anillo ya lo absorbe casi entero).
+    """
+
+    for region in source_regions or ():
+        if "compan" in str(region.name).lower() or str(region.name).lower() in {"b", "secondary"}:
+            return (float(region.yx[0]), float(region.yx[1]))
+    return None
+
+
+def _pixel_scale_arcsec(header):
+    for key in ("CD1_1", "CDELT1"):
+        value = header.get(key)
+        if value:
+            return abs(float(value)) * 3600.0
+    return None
+
+
 def decision_phase(args: argparse.Namespace) -> int:
     input_info = resolve_input_cube(
         args.input_cube,
@@ -641,6 +662,30 @@ def decision_phase(args: argparse.Namespace) -> int:
         empty_mask &= ~source_mask
         metrics = compute_sky_residual_metrics(cube, wave, empty_mask)
         decision = decide_zap_from_metrics(metrics, sky_fraction)
+        # Curva de crecimiento de la primaria. A2 es la UNICA etapa que tiene
+        # abierto el cubo sin recortar: B1 recorta y se lleva por delante la
+        # mitad exterior del halo, que es justo donde se puede separar cielo de
+        # halo. Va aqui por eso, no por comodidad.
+        #
+        # Es un producto APARTE y NO BLOQUEANTE: si falla, la decision ZAP sigue
+        # su curso. Y A2 mide y publica; NO aplica nada -- quien decide usarlo es
+        # C2 (`x01_flux_convention`), para que el cambio de convencion de flujo
+        # no quede enterrado en una etapa de reduccion.
+        growth = None
+        growth_error = None
+        if not getattr(args, "skip_growth_curve", False):
+            try:
+                from ..growth_curve import measure_growth_curve
+
+                growth = measure_growth_curve(
+                    cube,
+                    wave,
+                    n_bands=int(getattr(args, "growth_bands", 8)),
+                    companion_yx=_companion_yx_from_regions(source_regions),
+                    pixel_scale_arcsec=_pixel_scale_arcsec(data_hdu.header),
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostico, nunca bloqueante
+                growth_error = f"{exc.__class__.__name__}: {exc}"
     finally:
         hdul.close()
 
@@ -677,6 +722,25 @@ def decision_phase(args: argparse.Namespace) -> int:
     qc["verification"]["v1_rms_reduction_skylines"] = (
         None if decision.zap_applied else decision.r_skyline_over_continuum
     )
+    if growth is not None:
+        qc["growth_curve"] = growth
+        # El cielo que A2 usa para ZAP y el suelo que sale de extrapolar el halo
+        # NO son el mismo numero, y la diferencia importa: la mascara de cielo
+        # todavia contiene halo. Se publican los dos, con el aviso, en vez de
+        # elegir uno en silencio.
+        floors = [band["sky_floor"] for band in growth.get("bands", [])]
+        if floors:
+            qc["growth_curve"]["sky_floor_vs_zap_mask"] = {
+                "extrapolated_floor_min": float(min(floors)),
+                "extrapolated_floor_max": float(max(floors)),
+                "zap_sky_fraction": decision.sky_fraction,
+                "note": (
+                    "The ZAP sky mask still contains AO halo at these radii; the extrapolated "
+                    "floor is the halo-free level. They are not interchangeable."
+                ),
+            }
+    elif growth_error is not None:
+        qc["growth_curve"] = {"status": "failed", "error": growth_error}
     qc_path = Path(args.qc_output)
     qc_path.parent.mkdir(parents=True, exist_ok=True)
     qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
@@ -704,6 +768,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     decision_parser.add_argument("--empty-margin-px", type=int, default=8)
     decision_parser.add_argument("--empty-radius-px", type=float, default=2.0)
     decision_parser.add_argument("--skip-checksum", action="store_true")
+    decision_parser.add_argument(
+        "--skip-growth-curve", action="store_true",
+        help="no medir la curva de crecimiento de la primaria (producto aparte, no bloqueante)")
+    decision_parser.add_argument(
+        "--growth-bands", type=int, default=8,
+        help="numero de bandas espectrales de la curva de crecimiento (default 8)")
     decision_parser.set_defaults(func=decision_phase)
 
     args = parser.parse_args(argv)
