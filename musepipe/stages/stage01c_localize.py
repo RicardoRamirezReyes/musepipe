@@ -232,6 +232,18 @@ def default_primary_bands(wavelengths, bad_windows_A=(), n_bands=4):
 
 
 def centroid_2d(image, initial_yx=None, *, stamp_half_size=5, fwhm_px=None):
+    """Sub-pixel centroid from a circular **Gaussian** fit on a small stamp.
+
+    Deliberately NOT the C1 Psfao model that every photometric stage uses: B3
+    runs *before* C1 exists (C1 needs B3's positions to mask the companion), so
+    there is no psf_model.json to read, and only the position is wanted -- the
+    wings, which is where Gaussian and Psfao disagree, do not move the peak.
+    No flux is derived from this fit.
+
+    Anything that measures *flux* must go through ``psf_model.json`` /
+    ``evaluate_psf_model`` instead, so it inherits whichever form C1 selected.
+    """
+
     img = np.asarray(image, dtype=np.float64)
     if img.ndim != 2:
         raise ValueError(f"Expected 2D image, got {img.shape}.")
