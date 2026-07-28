@@ -11,7 +11,7 @@ import shutil
 
 import numpy as np
 
-from .psf import evaluate_psf_model
+from .psf import evaluate_psf_model, scaled_psf_model
 
 
 @dataclass(frozen=True)
@@ -63,16 +63,10 @@ def gaussian_line_profile(wavelengths_A, center_A, fwhm_A):
     return profile / norm
 
 
-def _scaled_psf_model(model_doc, fwhm_scale):
-    scale = float(fwhm_scale)
-    if np.isclose(scale, 1.0):
-        return model_doc
-    model = deepcopy(model_doc)
-    for key in ("fwhm_maj", "fwhm_min"):
-        if key in model.get("coefficients", {}):
-            coeff = list(model["coefficients"][key].get("coefficients", []))
-            model["coefficients"][key]["coefficients"] = [float(value) * scale for value in coeff]
-    return model
+# Re-exportado desde `musepipe.psf`: esta copia solo escalaba coeficientes
+# Moffat, asi que con el modelo psfao (el que C1 elige cuando hay maoppy) las
+# variantes +-10% de E4 salian bit a bit identicas a la nominal.
+_scaled_psf_model = scaled_psf_model
 
 
 def normalized_spatial_psf(shape, y, x, *, wavelength_A, psf_model=None, psf_image=None, fwhm_scale=1.0):

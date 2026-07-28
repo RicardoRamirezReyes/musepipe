@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import functools
 import warnings
@@ -435,6 +436,17 @@ def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
     dx = np.asarray(dx, dtype=np.float64)
     if dy.shape != dx.shape:
         raise ValueError("psfao evaluation expects matching dy/dx offset arrays.")
+    # FWHM perturbation (C3/E4 sensitivity tests). The Psfao parameters live in
+    # the PSD, so there is no coefficient to multiply the way the Moffat branch
+    # does: the geometric equivalent is to sample the built PSF on offsets
+    # divided by the scale (a dilation by `scale`), with 1/scale**2 conserving
+    # the integral. See `scaled_psf_model`.
+    fwhm_scale = float(model_doc.get("psf_fwhm_scale", 1.0))
+    if not np.isfinite(fwhm_scale) or fwhm_scale <= 0:
+        raise ValueError(f"psf_fwhm_scale must be finite and > 0, got {fwhm_scale!r}.")
+    if fwhm_scale != 1.0:
+        dy = dy / fwhm_scale
+        dx = dx / fwhm_scale
     names = model_doc.get("param_names", _PSFAO_PARAM_NAMES)
     # Snap the wavelength to a coarse bin before building the PSF: C1 fits the
     # Psfao parameters in 100 A bins and the PSF varies <0.5% within ~50 A, so
@@ -483,7 +495,60 @@ def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
     rows = (c + dy).ravel()
     cols = (c + dx).ravel()
     vals = map_coordinates(img, [rows, cols], order=1, mode="constant", cval=0.0).reshape(dy.shape)
-    return vals / total
+    return vals / (total * fwhm_scale ** 2)
+
+
+def scaled_psf_model(model_doc, fwhm_scale):
+    """Return a copy of the PSF model with its spatial FWHM scaled by ``fwhm_scale``.
+
+    The single implementation behind the C3 (`psf_sensitivity`) and E4
+    (`psf_perturbation_pct`) robustness tests, which perturb the PSF width by
+    +-10% and measure how much the recovered flux moves.
+
+    The two forms need different mechanics:
+
+    * **moffat** -- multiply the ``fwhm_maj``/``fwhm_min`` polynomial
+      coefficients, as before (frozen behaviour).
+    * **psfao** -- the maoppy parameters (``r0, C, A, alpha, ratio, theta,
+      beta``) describe the *power spectral density*, not an image-plane width,
+      so no coefficient corresponds to the FWHM. The scale is recorded as
+      ``psf_fwhm_scale`` and applied geometrically when the PSF is evaluated
+      (see ``_evaluate_psfao``).
+
+    Raises on any other form. It used to return the document untouched when it
+    found no ``fwhm_maj``/``fwhm_min`` to scale, which with a psfao model (the
+    one C1 selects whenever maoppy is available) silently turned both
+    robustness tests into no-ops: C3 reported a 0.0% sensitivity and E4's
+    +-10% variants came out bit-for-bit identical.
+    """
+
+    scale = float(fwhm_scale)
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError(f"fwhm_scale must be finite and > 0, got {fwhm_scale!r}.")
+    if np.isclose(scale, 1.0):
+        return model_doc
+
+    form = str(model_doc.get("form", "moffat")).lower()
+    model = deepcopy(model_doc)
+    if form == "psfao":
+        model["psf_fwhm_scale"] = scale * float(model_doc.get("psf_fwhm_scale", 1.0))
+        return model
+    if form != "moffat":
+        raise ValueError(
+            f"Cannot scale the FWHM of psf_model form={form!r}; expected 'moffat' or 'psfao'."
+        )
+    scaled_any = False
+    for key in ("fwhm_maj", "fwhm_min"):
+        if key in model.get("coefficients", {}):
+            coeff = list(model["coefficients"][key].get("coefficients", []))
+            model["coefficients"][key]["coefficients"] = [float(value) * scale for value in coeff]
+            scaled_any = True
+    if not scaled_any:
+        raise ValueError(
+            "Moffat psf_model has neither 'fwhm_maj' nor 'fwhm_min' coefficients to scale; "
+            "refusing to return an unperturbed model."
+        )
+    return model
 
 
 def evaluate_psf_model(model_doc, wavelength_A, dy, dx):
@@ -561,6 +626,7 @@ __all__ = [
     "normalized_moffat_psf",
     "psf_roundtrip_error",
     "radial_hybrid_profile",
+    "scaled_psf_model",
     "source_mask",
     "smooth_parameter",
 ]
