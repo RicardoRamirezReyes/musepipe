@@ -140,6 +140,16 @@ def main(argv=None) -> int:
                  "limit (Hashimoto-style caveat)."),
         "table": str(csv_path), "figure": str(fig_path),
     }
+    # E3 marca `extinction_ladder_stale` al reescribir su QC, porque el bloque
+    # que anade este script viene del E3 anterior. Al escribir uno fresco hay que
+    # RETIRAR el aviso: si no, el QC arrastra una advertencia falsa para siempre.
+    h03.pop("extinction_ladder_stale", None)
+    issues = h03.get("open_issues")
+    if isinstance(issues, list):
+        h03["open_issues"] = [
+            i for i in issues
+            if "extinction_ladder was dropped" not in str(i)
+        ]
     h03_path.write_text(json.dumps(h03, indent=2) + "\n", encoding="utf-8")
 
     print(f"S7b ({canonical}): A_V ladder {av_grid}")
