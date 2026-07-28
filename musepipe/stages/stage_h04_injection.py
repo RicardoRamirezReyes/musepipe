@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 import math
 import os
 from pathlib import Path
+import time
 
 import numpy as np
 from astropy.io import fits
@@ -145,7 +146,7 @@ def stage_h04_config_from_run(
     cfg.setdefault("h04_psf_perturb_snr_grid", [3.0, 5.0])
     cfg.setdefault("h04_psf_perturb_scales", [0.9, 1.1])
     cfg.setdefault("h04_max_runtime_hours", 4.0)
-    cfg.setdefault("h04_expected_seconds_per_case_method", 60.0)
+    cfg.setdefault("h04_expected_seconds_per_case_method", DEFAULT_SECONDS_PER_CASE_METHOD)
     cfg.setdefault("h04_allow_long_run", False)
     cfg.setdefault("h04_detection_threshold_snr", 5.0)
     cfg.setdefault("h04_baseline_subtract_throughput", True)
@@ -317,18 +318,70 @@ def _fork_supported():
     return "fork" in mp.get_all_start_methods()
 
 
-def estimate_runtime_budget(config, n_cases, n_methods):
-    seconds = float(n_cases) * float(n_methods) * float(config.get("h04_expected_seconds_per_case_method", 60.0))
+#: Coste SERIE por caso-metodo, medido (no supuesto) sobre ROXs12b_realigned el
+#: 2026-07-27: 112 casos x 6 metodos en 1320 s de reloj con 8 hilos, y el
+#: ThreadPool rinde ~1.6x por el GIL -> ~3.1 s en serie. El default anterior
+#: eran 60 s, ~19x de mas, que convertia un trabajo de 22 min en "11.2 h" y
+#: encendia `requires_checkpoint` sin motivo.
+DEFAULT_SECONDS_PER_CASE_METHOD = 3.1
+#: Aceleracion efectiva del ThreadPool (limitada por el GIL, medida ~1.6x). Un
+#: ProcessPool con fork si escala con los workers.
+THREADPOOL_SPEEDUP = 1.6
+
+
+def estimate_runtime_budget(config, n_cases, n_methods, *, n_workers=1, forked=False):
+    """Presupuesto de reloj de E4, contando el paralelismo.
+
+    La estimacion anterior multiplicaba casos x metodos x 60 s y **ignoraba que
+    E4 corre en paralelo**, asi que sobrestimaba por ~30x. Aqui el coste serie
+    se divide por la aceleracion real: lineal en los workers con ProcessPool
+    (fork), y limitada por el GIL con ThreadPool.
+
+    Sigue siendo una estimacion a priori: el coste real se mide y se escribe en
+    el mismo bloque de QC (`measured_*`), para que la desviacion sea visible en
+    vez de acumularse en silencio.
+    """
+
+    per_case = float(config.get("h04_expected_seconds_per_case_method", DEFAULT_SECONDS_PER_CASE_METHOD))
+    serial_seconds = float(n_cases) * float(n_methods) * per_case
+    workers = max(1, int(n_workers))
+    speedup = float(workers) if forked else min(float(workers), THREADPOOL_SPEEDUP)
+    seconds = serial_seconds / max(speedup, 1.0)
     hours = seconds / 3600.0
     max_hours = float(config.get("h04_max_runtime_hours", 4.0))
     return {
         "n_cases": int(n_cases),
         "n_methods": int(n_methods),
+        "n_workers": workers,
+        "backend": "process_fork" if forked else ("thread" if workers > 1 else "serial"),
+        "seconds_per_case_method": per_case,
+        "assumed_speedup": speedup,
+        "estimated_serial_seconds": serial_seconds,
         "estimated_seconds": seconds,
         "estimated_hours": hours,
         "max_hours_without_checkpoint": max_hours,
         "requires_checkpoint": bool(hours > max_hours and not bool(config.get("h04_allow_long_run", False))),
     }
+
+
+def close_runtime_budget(budget, elapsed_seconds):
+    """Cierra el presupuesto con lo que costo de verdad.
+
+    Sin esto la estimacion no se contrasta nunca con el resultado y puede
+    quedarse 30x desviada indefinidamente, que es justo lo que paso.
+    """
+
+    out = dict(budget)
+    elapsed = float(elapsed_seconds)
+    n = max(1, int(budget.get("n_cases", 1)) * int(budget.get("n_methods", 1)))
+    out["measured_seconds"] = elapsed
+    out["measured_hours"] = elapsed / 3600.0
+    out["measured_seconds_per_case_method_wall"] = elapsed / n
+    speedup = float(budget.get("assumed_speedup", 1.0)) or 1.0
+    out["measured_seconds_per_case_method_serial"] = elapsed * speedup / n
+    estimated = float(budget.get("estimated_seconds", 0.0))
+    out["estimate_over_measured"] = (estimated / elapsed) if elapsed > 0 else None
+    return out
 
 
 def _lsf_fwhm_from_config_or_qc(config, paths=None):
@@ -503,12 +556,17 @@ def _row_for_method(case, method, injected_flux, measurement, threshold_snr):
 
 
 def _baseline_key(row):
+    # `psf_fwhm_scale` NO entra en la clave: el baseline es una extraccion SIN
+    # fuente inyectada, asi que el ancho de PSF de la fuente no existe en el.
+    # Incluirlo hacia que las filas psf_+-10% (scale 0.9/1.1) no encontraran
+    # baseline —solo se genera a scale=1.0— y se quedaran con el 0.0 por
+    # defecto: su `recovered_flux_net` conservaba el pedestal entero y
+    # `psf_perturbation_pct` acababa midiendo esa resta ausente, no la PSF.
     return (
         row["method"],
         row["position_label"],
         row["continuum_mode"],
         float(row["template_factor"]),
-        float(row["psf_fwhm_scale"]),
     )
 
 
@@ -528,9 +586,16 @@ def _apply_baseline_subtraction(rows):
 
     baseline = {row_key: float(row["recovered_flux"]) for row in rows
                 for row_key in (_baseline_key(row),) if float(row["injected_flux"]) == 0.0}
+    missing = set()
     for row in rows:
         inj = float(row["injected_flux"])
-        base = baseline.get(_baseline_key(row), 0.0)
+        key = _baseline_key(row)
+        if key not in baseline:
+            # Antes esto era un `.get(key, 0.0)` mudo, y una fila sin baseline
+            # entraba en el throughput con el pedestal sin restar como si fuera
+            # senal recuperada. Si vuelve a faltar, que se vea.
+            missing.add(key)
+        base = baseline.get(key, 0.0)
         net = float(row["recovered_flux"]) - base
         row["recovered_flux_baseline"] = base
         row["recovered_flux_net"] = net
@@ -540,6 +605,12 @@ def _apply_baseline_subtraction(rows):
         else:
             row["throughput"] = net / inj
             row["bias_flux_pct"] = 100.0 * (net - inj) / inj
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} baseline key(s) have no injected_flux==0 row: "
+            f"{sorted(missing)[:3]}... Throughput would silently keep the "
+            "un-subtracted pedestal for those cases."
+        )
     return rows
 
 
@@ -956,7 +1027,18 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
     methods = [str(method) for method in cfg.get("h04_methods", DEFAULT_METHODS)]
     positions = resolve_h04_positions(cfg, paths)
     cases = build_h04_cases(cfg, positions)
-    budget = estimate_runtime_budget(cfg, len([case for case in cases if case.variant == "nominal"]), len(methods))
+    # El presupuesto se calcula con el backend que se va a usar de verdad: la
+    # version anterior suponia ejecucion en serie y sobrestimaba ~30x.
+    _pool = _resolve_h04_process_pool(cfg, len(cases))
+    _forked = bool(_pool >= 2 and _fork_supported())
+    _workers = _pool if _forked else max(_resolve_h04_n_jobs(cfg, len(cases)), _pool)
+    budget = estimate_runtime_budget(
+        cfg,
+        len([case for case in cases if case.variant == "nominal"]),
+        len(methods),
+        n_workers=_workers,
+        forked=_forked,
+    )
     if budget["requires_checkpoint"] and extractors is None:
         return _blocked_product(
             cfg,
@@ -1006,7 +1088,9 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
         "threshold": threshold,
         "continuum_window_A": continuum_window_A,
     }
+    _t0 = time.perf_counter()
     rows = _run_case_grid(cases, ctx, cfg)
+    budget = close_runtime_budget(budget, time.perf_counter() - _t0)
     if bool(cfg.get("h04_baseline_subtract_throughput", True)):
         rows = _apply_baseline_subtraction(rows)
 
@@ -1292,6 +1376,7 @@ __all__ = [
     "build_h04_cases",
     "clone_run_for_case",
     "compute_stage_h04_products",
+    "close_runtime_budget",
     "estimate_runtime_budget",
     "historic_regression_check",
     "measure_recovery_with_h01_estimator",
