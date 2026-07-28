@@ -1,12 +1,26 @@
 {
   "slug": "ROXs42Bb",
   "display_name": "ROXs 42B b",
-  "aliases": ["ROXs42Bb", "ROX42Bb", "ROXs 42Bb", "ROXs42B b"],
+  "aliases": [
+    "ROXs42Bb",
+    "ROX42Bb",
+    "ROXs 42Bb",
+    "ROXs42B b"
+  ],
   "companion_class": "planetary/brown-dwarf",
   "references": {
     "distance": "Gaia DR2/DR3 (NASA Exoplanet Archive); Currie+2014 usó 135 pc",
     "extinction": "Currie et al. 2014 (Cardelli R_V=3.1)",
     "membership": "Currie et al. 2014: ROXs 42B miembro de rho Oph, ~3 Myr"
   },
-  "note": "Segundo objeto. Ver docs/plan_roxs42bb_execution_2026-07-20.md."
+  "note": "Segundo objeto. Ver docs/plan_roxs42bb_execution_2026-07-20.md. Ajustes propios del objeto en scripts/target_overrides/ROXs42Bb.py.",
+  "field_notes": {
+    "background_source": {
+      "reported": "Fuente de fondo brillante en un costado del campo, citada a veces como ROXs 42B c.",
+      "source": "conocimiento del usuario / literatura; NO verificada en los datos de este proyecto",
+      "verification_2026_07_27": "No se pudo confirmar en cube_telcorr.fits: con un pasa-altos sobre la luz blanca, excluyendo primaria y companero, solo aparecen fuentes de 10-16 sigma, 4-33 px, repartidas simetricamente a r~60-83 px y con color rojo/azul uniforme 2.3-3.0 (speckle, no fuentes). La causa mas probable es el campo: el cubo esta recortado a 200 px = 5.04\" por stream_combine.DEFAULT_CROP_NPIX, contra 8.3\" en ROXs12b.",
+      "impact": "Contamina toda medida azimutal: fondo de anillo de C2, perfil radial de C3 y la curva de crecimiento de la primaria. Puede explicar por que C1 elige moffat sobre psfao en este objeto (8.38% vs 9.80% de residuo de anillo, empate a favor de moffat).",
+      "handled_by": "scripts/target_overrides/ROXs42Bb.py (censo de fuentes + mascara opcional)"
+    }
+  }
 }
