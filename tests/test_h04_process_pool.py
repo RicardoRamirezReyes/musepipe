@@ -40,6 +40,8 @@ def _synthetic_extractor(cube, wave_A, case, method, config):
 
 
 def _synthetic_config(run_id, root, matched_sigma, **overrides):
+    methods = ["aperture", "psffit"]
+    null = np.linspace(-1.0, 1.0, 8).tolist()
     cfg = {
         "run_id": run_id,
         "project_root": str(root),
@@ -49,10 +51,14 @@ def _synthetic_config(run_id, root, matched_sigma, **overrides):
             {"label": "control2", "y": 38.0, "x": 30.0},
             {"label": "control3", "y": 30.0, "x": 22.0},
         ],
-        "h04_methods": ["aperture", "psffit"],
+        "h04_methods": methods,
         "h04_lsf_fwhm_A": 2.5,
         "h04_injection_flux_sigma": matched_sigma,
-        "h04_continuum_flux_density": 0.0,
+        "h04_continuum_flux_density": 1.0,
+        "h04_empirical_null_reference": {
+            method: {"n_controls": len(null), "by_factor": {"1": null, "2": null}}
+            for method in methods
+        },
         "h04_expected_seconds_per_case_method": 0.01,
         "h04_require_historic_regression": False,
         "h04_historic_expected_snr": 8.97,

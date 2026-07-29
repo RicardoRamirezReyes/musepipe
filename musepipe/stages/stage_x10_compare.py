@@ -1,12 +1,10 @@
-"""Stage X10/D1 v3: compare extraction methods from frozen SpectrumProducts.
+"""Stage X10/D1 v4: compare extraction methods by physical observable.
 
-Spec: docs/spec_D1_v3_codex_method_comparison.md (method set of 6 with the
-C5/C6 spectral-diversity methods + frozen recommendation tree); everything
-else re-frozen from docs/spec_D1_v2_codex_method_comparison.md. Primary pairs
-come from the G1 per-method verdicts; the controls gate acts PER PAIR; the
-primary statistic is a control-centred Student t on band-integrated diffs
-(df = n_controls - 1) with an in-memory throughput correction that is never
-written to products.
+Spec: docs/spec_D1_v4_codex_method_comparison.md. Continuum uses persisted
+total-flux products without Halpha throughput and only continuum-preserving
+methods have veto power. Lines use local-continuum-subtracted residuals with
+the in-memory throughput correction. The primary statistic remains the frozen
+control-centred Student t (df = n_controls - 1).
 """
 
 from __future__ import annotations
@@ -25,15 +23,20 @@ from ..extraction.product import SpectrumProduct
 from ..extraction.scale_check import pair_scale_check
 from ..io import read_json, write_csv, write_json
 from ..paths import RunPaths
+from ..spectral import continuum_running_median
 from ..stats import robust_sigma_axis0
 
 
-SPEC_VERSION = "D1_v3"
+SPEC_VERSION = "D1_v4"
 BAD_COMPARISON_FLAGS = FLAG_BAD_WINDOW | FLAG_SKYLINE
 # D1 v3 (spec_D1_v3 §0): the C5/C6 spectral-diversity methods join the frozen
 # comparison set. Historical runs with spec_version="D1_v2" QC keep their
 # 4-method interpretation.
 METHOD_ORDER = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
+CONTINUUM_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+CONTINUUM_COMPARISON_MODE = "raw_total_continuum"
+LINE_COMPARISON_MODE = "local_continuum_subtracted_throughput_line"
+DEFAULT_LINE_CONTINUUM_WINDOW_A = 80.0
 # v1 primary pairs, kept for reference/back-compat only: D1 v2 derives the
 # primary pairs from the G1 method verdicts (spec v2 §3.2).
 PRIMARY_PAIRS = (
@@ -142,6 +145,10 @@ OBJECT_FIELDS = [
     "throughput_err_j",
     "throughput_source_j",
     "scale_ok",
+    "comparison_mode",
+    "throughput_applied_i",
+    "throughput_applied_j",
+    "observable_role",
 ]
 
 CONTROL_FIELDS = [
@@ -167,6 +174,10 @@ CONTROL_FIELDS = [
     "t_ctrl",
     "p_ctrl",
     "scale_ok",
+    "comparison_mode",
+    "throughput_applied_i",
+    "throughput_applied_j",
+    "observable_role",
 ]
 
 
@@ -314,6 +325,33 @@ def _product_band_mask(product: SpectrumProduct, band: ComparisonBand):
     flags = np.asarray(product.flags, dtype=np.int32)
     values = np.asarray(product.flux, dtype=np.float64)
     return _band_range_mask(product.wave_A, band) & np.isfinite(values) & ((flags & BAD_COMPARISON_FLAGS) == 0)
+
+
+def local_continuum_residuals(product, spectra, *, window_A=DEFAULT_LINE_CONTINUUM_WINDOW_A):
+    """Continuum-subtracted spectra using the frozen D1 v4 running median."""
+
+    wave = np.asarray(product.wave_A, dtype=np.float64)
+    values = np.asarray(spectra, dtype=np.float64)
+    squeeze = values.ndim == 1
+    if squeeze:
+        values = values[None, :]
+    if values.ndim != 2 or values.shape[1] != wave.size:
+        raise ValueError(f"Expected spectra with shape (n, {wave.size}), got {values.shape}.")
+    flags = np.asarray(product.flags, dtype=np.int32)
+    base_good = np.isfinite(wave) & ((flags & BAD_COMPARISON_FLAGS) == 0)
+    min_pixels = max(3, min(15, int(np.count_nonzero(base_good))))
+    residuals = np.empty_like(values)
+    for index, spectrum in enumerate(values):
+        good = base_good & np.isfinite(spectrum)
+        continuum = continuum_running_median(
+            wave,
+            spectrum,
+            good,
+            window_A=float(window_A),
+            min_pixels=min_pixels,
+        )
+        residuals[index] = spectrum - continuum
+    return residuals[0] if squeeze else residuals
 
 
 def _pair_band_mask(product_i: SpectrumProduct, product_j: SpectrumProduct, band: ComparisonBand, sigma_diff):
@@ -577,16 +615,16 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
     wave = np.asarray(product_i.wave_A, dtype=np.float64)
     sigma = pair_sigma["sigma"]
     naive = pair_sigma["naive"]
-    role = v2ctx["role"]
     scale_ok = v2ctx["scale_ok"]
     corr_length = float(v2ctx.get("corr_length_channels", 1.0) or 1.0)
     t_i = v2ctx["throughput_i"]
     t_j = v2ctx["throughput_j"]
-    flux_corr_i = v2ctx["flux_corr_i"]
-    flux_corr_j = v2ctx["flux_corr_j"]
-    controls_corr_i = v2ctx.get("controls_corr_i")
-    controls_corr_j = v2ctx.get("controls_corr_j")
-    sigma_corr = v2ctx.get("sigma_corr")
+    controls_raw_i = v2ctx.get("controls_raw_i")
+    controls_raw_j = v2ctx.get("controls_raw_j")
+    flux_line_corr_i = v2ctx["flux_line_corr_i"]
+    flux_line_corr_j = v2ctx["flux_line_corr_j"]
+    controls_line_corr_i = v2ctx.get("controls_line_corr_i")
+    controls_line_corr_j = v2ctx.get("controls_line_corr_j")
     # Relative throughput error of the diff (spec v2 §3.3), added in quadrature.
     rel_terms = []
     for entry in (t_i, t_j):
@@ -596,17 +634,36 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
             rel_terms.append((err_val / t_val) ** 2)
     rel_t_err = float(np.sqrt(np.sum(rel_terms))) if rel_terms else 0.0
 
-    have_controls = (
-        controls_corr_i is not None
-        and controls_corr_j is not None
-        and controls_corr_i.shape[0] >= 2
-        and controls_corr_i.shape == controls_corr_j.shape
-    )
-    n_controls = int(controls_corr_i.shape[0]) if have_controls else 0
-
     rows = []
     control_rows = []
     for band in COMPARISON_BANDS:
+        if band.kind == "continuum":
+            comparison_mode = CONTINUUM_COMPARISON_MODE
+            comparison_flux_i = np.asarray(product_i.flux, dtype=np.float64)
+            comparison_flux_j = np.asarray(product_j.flux, dtype=np.float64)
+            controls_corr_i = controls_raw_i
+            controls_corr_j = controls_raw_j
+            role = v2ctx["continuum_role"]
+            throughput_applied_i = False
+            throughput_applied_j = False
+            band_rel_t_err = 0.0
+        else:
+            comparison_mode = LINE_COMPARISON_MODE
+            comparison_flux_i = flux_line_corr_i
+            comparison_flux_j = flux_line_corr_j
+            controls_corr_i = controls_line_corr_i
+            controls_corr_j = controls_line_corr_j
+            role = v2ctx["line_role"]
+            throughput_applied_i = bool(v2ctx["throughput_applied_i"])
+            throughput_applied_j = bool(v2ctx["throughput_applied_j"])
+            band_rel_t_err = rel_t_err
+        have_controls = (
+            controls_corr_i is not None
+            and controls_corr_j is not None
+            and controls_corr_i.shape[0] >= 2
+            and controls_corr_i.shape == controls_corr_j.shape
+        )
+        n_controls = int(controls_corr_i.shape[0]) if have_controls else 0
         all_band = _band_range_mask(wave, band)
         mask = _pair_band_mask(product_i, product_j, band, sigma)
         flux_i = _integrated_sum(wave, product_i.flux, mask)
@@ -617,8 +674,8 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
         naive_int = _integrated_sigma(wave, naive, mask)
         diff = flux_i - flux_j if np.isfinite(flux_i) and np.isfinite(flux_j) else np.nan
 
-        band_flux_i_corr = _integrated_sum(wave, flux_corr_i, mask)
-        band_flux_j_corr = _integrated_sum(wave, flux_corr_j, mask)
+        band_flux_i_corr = _integrated_sum(wave, comparison_flux_i, mask)
+        band_flux_j_corr = _integrated_sum(wave, comparison_flux_j, mask)
         diff_corr = (
             band_flux_i_corr - band_flux_j_corr
             if np.isfinite(band_flux_i_corr) and np.isfinite(band_flux_j_corr)
@@ -643,8 +700,8 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
             s_ctrl = float(np.std(finite_ctrl, ddof=1))
             df = int(finite_ctrl.size - 1)
             denom = s_ctrl * float(np.sqrt(1.0 + 1.0 / finite_ctrl.size))
-            if np.isfinite(diff_corr) and rel_t_err > 0:
-                denom = float(np.sqrt(denom**2 + (abs(diff_corr) * rel_t_err) ** 2))
+            if np.isfinite(diff_corr) and band_rel_t_err > 0:
+                denom = float(np.sqrt(denom**2 + (abs(diff_corr) * band_rel_t_err) ** 2))
             if denom > 0:
                 t_stat = _safe_z(diff_corr - mu_ctrl, denom)
                 p_value = _student_t_p_two_sided(t_stat, df)
@@ -663,6 +720,11 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
             t_stat = np.nan
             p_value = np.nan
 
+        sigma_corr = (
+            empirical_sigma_diff(controls_corr_i, controls_corr_j)
+            if have_controls
+            else None
+        )
         sigma_corr_int = _integrated_sigma(wave, sigma_corr, mask) if sigma_corr is not None else np.nan
         z_neff = _safe_z(diff_corr, sigma_corr_int * np.sqrt(corr_length)) if np.isfinite(sigma_corr_int) else np.nan
 
@@ -706,12 +768,16 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
                 "throughput_err_j": _finite_or_none(t_j.get("err")),
                 "throughput_source_j": t_j.get("source"),
                 "scale_ok": scale_ok,
+                "comparison_mode": comparison_mode,
+                "throughput_applied_i": throughput_applied_i,
+                "throughput_applied_j": throughput_applied_j,
+                "observable_role": role,
             }
         )
 
         if have_controls:
-            raw_i = v2ctx["controls_raw_i"]
-            raw_j = v2ctx["controls_raw_j"]
+            raw_i = controls_raw_i
+            raw_j = controls_raw_j
             for k in range(n_controls):
                 _ci_corr, _cj_corr, mask_k = band_ctrl_raw[k]
                 flux_i_k = _integrated_sum(wave, raw_i[k], mask_k)
@@ -754,6 +820,10 @@ def compare_pair_and_controls(product_i, product_j, controls_by_method, pair, pa
                         "t_ctrl": _finite_or_none(t_ctrl),
                         "p_ctrl": _finite_or_none(p_ctrl),
                         "scale_ok": scale_ok,
+                        "comparison_mode": comparison_mode,
+                        "throughput_applied_i": throughput_applied_i,
+                        "throughput_applied_j": throughput_applied_j,
+                        "observable_role": role,
                     }
                 )
     return rows, control_rows
@@ -936,6 +1006,168 @@ def classify_verdict_v2(
     return result
 
 
+def classify_verdict_v4(
+    rows,
+    control_rows,
+    *,
+    primary_pairs_continuum,
+    primary_pairs_lines,
+    scale_checks,
+    p_divergent=DEFAULT_P_DIVERGENT,
+    p_strong=DEFAULT_P_STRONG,
+    gate_alpha=DEFAULT_CONTROL_GATE_ALPHA,
+):
+    """D1 v4 verdict with separate continuum and line roles."""
+
+    continuum_rows = [
+        row for row in rows if row["band_kind"] == "continuum" and row["observable_role"] == "primary"
+    ]
+    line_rows = [row for row in rows if row["band_kind"] == "line" and row["observable_role"] == "primary"]
+    continuum_controls = [
+        row
+        for row in control_rows
+        if row["band_kind"] == "continuum" and row["observable_role"] == "primary"
+    ]
+    line_controls = [
+        row for row in control_rows if row["band_kind"] == "line" and row["observable_role"] == "primary"
+    ]
+    gates_continuum = controls_clean_by_pair(
+        continuum_controls,
+        scale_checks,
+        pairs=primary_pairs_continuum,
+        p_divergent=p_divergent,
+        gate_alpha=gate_alpha,
+    )
+    gates_lines = controls_clean_by_pair(
+        line_controls,
+        scale_checks,
+        pairs=primary_pairs_lines,
+        p_divergent=p_divergent,
+        gate_alpha=gate_alpha,
+    )
+
+    verdict_by_pair = {}
+    degraded_by_observable = {"continuum": {}, "lines": {}}
+    active_continuum = []
+    active_lines = []
+    all_pairs = tuple(dict.fromkeys(tuple(primary_pairs_continuum) + tuple(primary_pairs_lines)))
+    for pair in all_pairs:
+        pid = pair_id(pair)
+        continuum_result = None
+        line_result = None
+        if pair in tuple(primary_pairs_continuum):
+            continuum_result = _classify_pair_rows(
+                [row for row in continuum_rows if row["pair"] == pid],
+                p_divergent=p_divergent,
+                p_strong=p_strong,
+            )
+            if not gates_continuum[pid]["clean"]:
+                degraded_by_observable["continuum"][pid] = gates_continuum[pid]["reason"]
+            elif continuum_result["verdict"] == "insufficient":
+                degraded_by_observable["continuum"][pid] = "missing_object_band"
+            else:
+                active_continuum.append((pid, continuum_result))
+        if pair in tuple(primary_pairs_lines):
+            line_result = _classify_pair_rows(
+                [row for row in line_rows if row["pair"] == pid],
+                p_divergent=p_divergent,
+                p_strong=p_strong,
+            )
+            if not gates_lines[pid]["clean"]:
+                degraded_by_observable["lines"][pid] = gates_lines[pid]["reason"]
+            elif line_result["verdict"] == "insufficient":
+                degraded_by_observable["lines"][pid] = "missing_object_band"
+            else:
+                active_lines.append((pid, line_result))
+        pair_verdicts = [
+            result["verdict"]
+            for result in (continuum_result, line_result)
+            if result is not None and result["verdict"] != "insufficient"
+        ]
+        if "divergent_continuum" in pair_verdicts:
+            combined = "divergent_continuum"
+        elif "divergent_lines" in pair_verdicts:
+            combined = "divergent_lines"
+        elif pair_verdicts:
+            combined = "consistent"
+        else:
+            combined = "insufficient"
+        verdict_by_pair[pid] = {
+            "verdict": combined,
+            "continuum": continuum_result,
+            "lines": line_result,
+            "controls_clean_continuum": None if pair not in tuple(primary_pairs_continuum) else gates_continuum[pid]["clean"],
+            "controls_clean_lines": None if pair not in tuple(primary_pairs_lines) else gates_lines[pid]["clean"],
+            "role": "primary",
+        }
+
+    degraded = dict(degraded_by_observable["continuum"])
+    degraded.update(degraded_by_observable["lines"])
+    merged_gates = {}
+    for pair in all_pairs:
+        pid = pair_id(pair)
+        relevant = []
+        if pid in gates_continuum:
+            relevant.append(gates_continuum[pid])
+        if pid in gates_lines:
+            relevant.append(gates_lines[pid])
+        merged_gates[pid] = {
+            "clean": bool(relevant and all(gate["clean"] for gate in relevant)),
+            "reason": "clean" if relevant and all(gate["clean"] for gate in relevant) else "observable_gate_failed",
+            "scale_ok": (scale_checks.get(pid) or {}).get("ok"),
+        }
+    controls_summary = {
+        "reason": "clean" if not degraded else "primary_pairs_degraded",
+        "by_pair": merged_gates,
+        "by_observable": {"continuum": gates_continuum, "lines": gates_lines},
+        "degraded_primary": degraded,
+    }
+    if not active_continuum and not active_lines:
+        return {
+            "verdict": "uninterpretable",
+            "action": ACTION_BY_VERDICT["uninterpretable"],
+            "reason": "all_primary_observables_degraded",
+            "controls": controls_summary,
+            "verdict_by_pair": verdict_by_pair,
+            "pairs_degraded": degraded,
+            "pairs_degraded_by_observable": degraded_by_observable,
+            "marginal": [],
+        }
+
+    marginal = []
+    line_hits = []
+    continuum_divergent = False
+    for _pid, result in active_continuum:
+        continuum_divergent |= result["verdict"] == "divergent_continuum"
+        marginal.extend(result["marginal"])
+    lines_divergent = False
+    for _pid, result in active_lines:
+        lines_divergent |= result["verdict"] == "divergent_lines"
+        line_hits.extend(result["line_hits"])
+    if continuum_divergent:
+        verdict = "divergent_continuum"
+        reason = "continuum_threshold_crossed"
+    elif lines_divergent:
+        verdict = "divergent_lines"
+        reason = "line_threshold_crossed"
+    else:
+        verdict = "consistent"
+        reason = "primary_observables_within_thresholds"
+    result = {
+        "verdict": verdict,
+        "action": ACTION_BY_VERDICT[verdict],
+        "reason": reason,
+        "controls": controls_summary,
+        "verdict_by_pair": verdict_by_pair,
+        "pairs_degraded": degraded,
+        "pairs_degraded_by_observable": degraded_by_observable,
+        "marginal": marginal,
+    }
+    if line_hits:
+        result["line_hits"] = line_hits
+    return result
+
+
 def _z_matrix(rows):
     matrix = {}
     for row in rows:
@@ -1045,6 +1277,7 @@ def compare_methods(
     p_strong=DEFAULT_P_STRONG,
     scale_gate_sigma=DEFAULT_SCALE_GATE_SIGMA,
     gate_alpha=DEFAULT_CONTROL_GATE_ALPHA,
+    line_continuum_window_A=DEFAULT_LINE_CONTINUUM_WINDOW_A,
     recommendation_context=None,
 ) -> tuple[list[dict], list[dict], dict]:
     header_warnings = validate_product_set(products)
@@ -1058,21 +1291,43 @@ def compare_methods(
     else:
         primary = tuple(tuple(pair) for pair in primary_pairs)
         secondary = tuple(pair for pair in pairs if pair not in primary)
+    primary_continuum = tuple(
+        pair for pair in primary if pair[0] in CONTINUUM_METHODS and pair[1] in CONTINUUM_METHODS
+    )
+    primary_lines = tuple(primary)
     tmap = throughput_for_comparison(g1_inputs)
     for pair in primary:
         for method in pair:
             if tmap[method]["source"] == "unavailable_default_1":
                 open_issues.append(f"Throughput unavailable for validated method {method}; T=1.0 applied.")
-    flux_corr, controls_corr = apply_throughput(products, controls_by_method or {}, tmap)
+    controls_raw = {
+        method: np.asarray(values, dtype=np.float64)
+        for method, values in (controls_by_method or {}).items()
+    }
+    line_flux_corr = {}
+    line_controls_corr = {}
+    for method, product in products.items():
+        t_val = float(tmap[method]["T"])
+        line_flux_corr[method] = local_continuum_residuals(
+            product,
+            product.flux,
+            window_A=float(line_continuum_window_A),
+        ) / t_val
+        if method in controls_raw:
+            line_controls_corr[method] = local_continuum_residuals(
+                product,
+                controls_raw[method],
+                window_A=float(line_continuum_window_A),
+            ) / t_val
     cov = g1_inputs.get("covariance") or {}
     corr_length = float(cov.get("corr_length_channels") or 1.0)
 
-    # Empirical scale check per pair on the corrected controls (spec v2 §3.1).
+    # D1 v4 scale-checks the persisted common flux scale, never Halpha throughput.
     scale_checks = {}
     for pair in pairs:
-        if pair[0] in controls_corr and pair[1] in controls_corr:
-            ci = controls_corr[pair[0]]
-            cj = controls_corr[pair[1]]
+        if pair[0] in controls_raw and pair[1] in controls_raw:
+            ci = controls_raw[pair[0]]
+            cj = controls_raw[pair[1]]
             if ci.ndim == 2 and ci.shape == cj.shape and ci.shape[0] >= 2:
                 scale_checks[pair_id(pair)] = pair_scale_check(ci, cj, gate_sigma=scale_gate_sigma)
     primary_scale = [scale_checks.get(pair_id(pair)) for pair in primary]
@@ -1104,30 +1359,27 @@ def compare_methods(
         )
         pair_sigmas[pair] = pair_sigma
         pid = pair_id(pair)
-        ctrl_corr_i = controls_corr.get(pair[0])
-        ctrl_corr_j = controls_corr.get(pair[1])
-        sigma_corr = None
-        if (
-            ctrl_corr_i is not None
-            and ctrl_corr_j is not None
-            and ctrl_corr_i.ndim == 2
-            and ctrl_corr_i.shape == ctrl_corr_j.shape
-            and ctrl_corr_i.shape[0] >= 2
-        ):
-            sigma_corr = empirical_sigma_diff(ctrl_corr_i, ctrl_corr_j, smooth_channels=sigma_smooth_channels)
+        source_i = str(tmap[pair[0]].get("source", ""))
+        source_j = str(tmap[pair[1]].get("source", ""))
         v2ctx = {
-            "role": "primary" if pair in primary else "secondary",
+            "continuum_role": (
+                "primary"
+                if pair in primary_continuum
+                else "diagnostic_noncomparable_continuum"
+            ),
+            "line_role": "primary" if pair in primary_lines else "secondary",
             "scale_ok": scale_checks.get(pid, {}).get("ok") if pid in scale_checks else None,
             "corr_length_channels": corr_length,
             "throughput_i": tmap[pair[0]],
             "throughput_j": tmap[pair[1]],
-            "flux_corr_i": flux_corr[pair[0]],
-            "flux_corr_j": flux_corr[pair[1]],
-            "controls_corr_i": ctrl_corr_i,
-            "controls_corr_j": ctrl_corr_j,
-            "controls_raw_i": None if controls_by_method is None else _as_control_array(controls_by_method.get(pair[0])),
-            "controls_raw_j": None if controls_by_method is None else _as_control_array(controls_by_method.get(pair[1])),
-            "sigma_corr": sigma_corr,
+            "throughput_applied_i": source_i not in {"unavailable_default_1", "not_applied_rejected_method"},
+            "throughput_applied_j": source_j not in {"unavailable_default_1", "not_applied_rejected_method"},
+            "flux_line_corr_i": line_flux_corr[pair[0]],
+            "flux_line_corr_j": line_flux_corr[pair[1]],
+            "controls_line_corr_i": line_controls_corr.get(pair[0]),
+            "controls_line_corr_j": line_controls_corr.get(pair[1]),
+            "controls_raw_i": controls_raw.get(pair[0]),
+            "controls_raw_j": controls_raw.get(pair[1]),
         }
         pair_rows, pair_control_rows = compare_pair_and_controls(
             product_i, product_j, controls_by_method, pair, pair_sigma, v2ctx
@@ -1135,19 +1387,37 @@ def compare_methods(
         rows.extend(pair_rows)
         control_rows.extend(pair_control_rows)
 
-    verdict = classify_verdict_v2(
+    verdict = classify_verdict_v4(
         rows,
         control_rows,
-        primary_pairs=primary,
-        secondary_pairs=secondary,
+        primary_pairs_continuum=primary_continuum,
+        primary_pairs_lines=primary_lines,
         scale_checks=scale_checks,
         p_divergent=p_divergent,
         p_strong=p_strong,
         gate_alpha=gate_alpha,
     )
+    for pair in pairs:
+        pid = pair_id(pair)
+        if pid in verdict["verdict_by_pair"]:
+            continue
+        diagnostic = _classify_pair_rows(
+            [row for row in rows if row["pair"] == pid],
+            p_divergent=p_divergent,
+            p_strong=p_strong,
+        )
+        verdict["verdict_by_pair"][pid] = {
+            **diagnostic,
+            "controls_clean": None,
+            "role": "secondary",
+            "continuum": None,
+            "lines": None,
+        }
 
     primary_ids = [pair_id(pair) for pair in primary]
-    primary_control_rows = [row for row in control_rows if row["pair"] in primary_ids]
+    primary_continuum_ids = [pair_id(pair) for pair in primary_continuum]
+    primary_line_ids = [pair_id(pair) for pair in primary_lines]
+    primary_control_rows = [row for row in control_rows if row["observable_role"] == "primary"]
     n_primary_ctrl = len(primary_control_rows)
     n_primary_bad = sum(
         1 for row in primary_control_rows if row["p_ctrl"] is None or float(row["p_ctrl"]) < p_divergent
@@ -1159,6 +1429,7 @@ def compare_methods(
             "ok": True,
             "note": (
                 "Throughput correction is internal to the D1 comparison (in-memory only); "
+                "D1 v4 applies it only to local-continuum-subtracted line bands; "
                 "on-disk products remain uncorrected and E3/G2 apply their own correction "
                 "downstream (stage_h03_limits / stage_g2_measure_lines)."
             ),
@@ -1200,6 +1471,8 @@ def compare_methods(
             for band in COMPARISON_BANDS
         ],
         "primary_pairs": primary_ids,
+        "primary_pairs_continuum": primary_continuum_ids,
+        "primary_pairs_lines": primary_line_ids,
         "secondary_pairs": [pair_id(pair) for pair in secondary],
         "pairs": [pair_id(pair) for pair in pairs],
         "z_matrix": _z_matrix(rows),
@@ -1208,6 +1481,7 @@ def compare_methods(
         "controls": verdict["controls"],
         "verdict_by_pair": verdict["verdict_by_pair"],
         "pairs_degraded": verdict["pairs_degraded"],
+        "pairs_degraded_by_observable": verdict.get("pairs_degraded_by_observable", {}),
         "g1_inputs": {
             "available": bool(g1_inputs.get("available")),
             "method_verdicts": g1_inputs.get("method_verdicts") or {},
@@ -1215,7 +1489,7 @@ def compare_methods(
             "sources": g1_inputs.get("sources") or {},
         },
         "throughput_correction": {
-            "applied_in_memory": True,
+            "applied_in_memory": "line_bands_only",
             "by_method": tmap,
             "note": checks["v5_no_double_throughput"]["note"],
         },
@@ -1228,6 +1502,16 @@ def compare_methods(
             "gate_alpha": float(gate_alpha),
             "scale_gate_sigma": float(scale_gate_sigma),
             "corr_length_channels": corr_length,
+        },
+        "comparison_policy": {
+            "continuum_methods": list(CONTINUUM_METHODS),
+            "continuum_mode": CONTINUUM_COMPARISON_MODE,
+            "line_mode": LINE_COMPARISON_MODE,
+            "line_continuum_window_A": float(line_continuum_window_A),
+        },
+        "excluded_from_continuum_verdict": {
+            "sgf": "continuum removed by construction",
+            "lpm": "collinear continuum can be absorbed",
         },
         "recommended_method": recommended,
         "method_caveats": recommendation["method_caveats"],
@@ -1325,6 +1609,7 @@ def stage_x10_config_from_run(
     cfg.setdefault("x10_p_strong", DEFAULT_P_STRONG)
     cfg.setdefault("x10_scale_gate_sigma", DEFAULT_SCALE_GATE_SIGMA)
     cfg.setdefault("x10_control_gate_alpha", DEFAULT_CONTROL_GATE_ALPHA)
+    cfg.setdefault("x10_line_continuum_window_A", DEFAULT_LINE_CONTINUUM_WINDOW_A)
     # D1 v3 recommendation tree inputs (spec v3 §1-§2).
     cfg.setdefault("companion_continuum_is_science", True)
     cfg.setdefault("x10_sgf_predictor_max", DEFAULT_SGF_PREDICTOR_MAX)
@@ -1423,6 +1708,9 @@ def compute_stage_x10_products(config, paths=None) -> StageX10Product:
         p_strong=float(cfg.get("x10_p_strong", DEFAULT_P_STRONG)),
         scale_gate_sigma=float(cfg.get("x10_scale_gate_sigma", DEFAULT_SCALE_GATE_SIGMA)),
         gate_alpha=float(cfg.get("x10_control_gate_alpha", DEFAULT_CONTROL_GATE_ALPHA)),
+        line_continuum_window_A=float(
+            cfg.get("x10_line_continuum_window_A", DEFAULT_LINE_CONTINUUM_WINDOW_A)
+        ),
         recommendation_context=recommendation_context,
     )
     qc["run_id"] = str(cfg["run_id"])
@@ -1544,6 +1832,7 @@ def main(argv=None):
 
 __all__ = [
     "COMPARISON_BANDS",
+    "CONTINUUM_METHODS",
     "DEFAULT_PAIRS",
     "FALLBACK_PRIMARY_PAIRS",
     "METHOD_ORDER",
@@ -1554,6 +1843,7 @@ __all__ = [
     "StageX10Product",
     "apply_throughput",
     "classify_verdict_v2",
+    "classify_verdict_v4",
     "compare_methods",
     "compare_pair_and_controls",
     "compute_stage_x10_products",
@@ -1562,6 +1852,7 @@ __all__ = [
     "load_control_spectra",
     "load_g1_inputs",
     "load_method_products",
+    "local_continuum_residuals",
     "pair_id",
     "primary_pairs_from_verdicts",
     "run_stage_x10",

@@ -361,8 +361,8 @@ def make_psffit_products(
     )
     # C4 no tiene apertura: el ajuste con P normalizada ya devuelve flujo
     # "total" en la convencion NORMRAD, y por eso su apcorr es 1 (spec C4 §3.4).
-    # Para pasar a flujo total EMPIRICO el factor se aplica aqui, sobre el
-    # propio apcorr, para que flujo y errores escalen juntos como en C2/C3.
+    # Para pasar a flujo total EMPIRICO se aplica el mismo factor al objeto,
+    # la estrella, sus errores y los controles, igual que en C2/C3.
     apcorr = np.ones(wave.size, dtype=np.float64)
     if growth_curve:
         # Import ABSOLUTO y dentro de la funcion: esta funcion se COPIA
@@ -387,11 +387,19 @@ def make_psffit_products(
     apcmode = "psf_model_norm_radius+empirical_total" if growth_curve else "psf_model_norm_radius"
     comp_header = _spectrum_header(run_id, "object", comp_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode)
     star_header = _spectrum_header(run_id, "star", star_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode)
+    comp_flux_cal = result.coeffs[:, 1] * apcorr
+    star_flux_cal = result.coeffs[:, 0] * apcorr
+    comp_err_cal = comp_err * apcorr
+    star_err_cal = star_err * apcorr
+    comp_err_emp_cal = comp_err_emp * apcorr
+    star_err_emp_cal = star_err_emp * apcorr
+    comp_controls_cal = comp_controls * apcorr[None, :]
+    star_controls_cal = star_controls * apcorr[None, :]
     companion = SpectrumProduct(
         wave_A=wave,
-        flux=result.coeffs[:, 1],
-        flux_err=comp_err,
-        flux_err_emp=comp_err_emp,
+        flux=comp_flux_cal,
+        flux_err=comp_err_cal,
+        flux_err_emp=comp_err_emp_cal,
         apcorr=apcorr,
         npix_eff=result.npix_eff_comp,
         flags=flags,
@@ -399,9 +407,9 @@ def make_psffit_products(
     )
     star = SpectrumProduct(
         wave_A=wave,
-        flux=result.coeffs[:, 0],
-        flux_err=star_err,
-        flux_err_emp=star_err_emp,
+        flux=star_flux_cal,
+        flux_err=star_err_cal,
+        flux_err_emp=star_err_emp_cal,
         apcorr=apcorr,
         npix_eff=result.npix_eff_comp,
         flags=flags,
@@ -413,10 +421,10 @@ def make_psffit_products(
         companion=companion,
         star=star,
         result=result,
-        comp_flux_err_emp=comp_err_emp,
-        star_flux_err_emp=star_err_emp,
-        control_comp_spectra=comp_controls,
-        control_star_spectra=star_controls,
+        comp_flux_err_emp=comp_err_emp_cal,
+        star_flux_err_emp=star_err_emp_cal,
+        control_comp_spectra=comp_controls_cal,
+        control_star_spectra=star_controls_cal,
         controls_yx=controls_yx,
         error_mode=mode,
     )
