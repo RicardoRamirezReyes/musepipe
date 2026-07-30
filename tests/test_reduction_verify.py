@@ -14,6 +14,7 @@ from musepipe.reduction.verify import (
     verify_stat,
     verify_wcs_headers,
     verify_whitelight_vs_adp,
+    verify_whitelight_vs_adp_psf_matched,
 )
 
 
@@ -130,6 +131,42 @@ class ReductionVerifyTests(unittest.TestCase):
             result = verify_whitelight_vs_adp(cube_path, adp_path)
             self.assertTrue(result.passed)
             self.assertGreater(result.value, 0.99)
+
+    def test_verify_whitelight_vs_adp_psf_matched_handles_broader_reference(self):
+        from scipy.ndimage import gaussian_filter
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cube_path = Path(tmp) / "cube.fits"
+            adp_path = Path(tmp) / "adp.fits"
+            image = np.zeros((41, 41))
+            image[20, 20] = 10.0
+            reference = gaussian_filter(image, 2.0)
+            cube = np.repeat(image[None, :, :], 4, axis=0)
+            adp = np.repeat(reference[None, :, :], 4, axis=0)
+            _write_cube(cube_path, cube, np.ones_like(cube))
+            _write_cube(adp_path, adp, np.ones_like(adp))
+            result = verify_whitelight_vs_adp_psf_matched(cube_path, adp_path)
+            self.assertTrue(result.passed)
+            self.assertGreater(result.value, 0.99)
+
+    def test_verify_star_spectrum_accepts_separate_adp_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cube = Path(tmp) / "cube.fits"
+            adp = Path(tmp) / "adp.fits"
+            new_data = np.ones((6, 9, 9))
+            adp_data = np.ones((6, 12, 12))
+            new_data[:, 4, 4] = 10.0
+            adp_data[:, 8, 7] = 10.0
+            _write_cube(cube, new_data, np.ones_like(new_data), _cube_header())
+            _write_cube(adp, adp_data, np.ones_like(adp_data), _cube_header())
+            result = verify_star_spectrum_vs_adp(
+                cube,
+                adp,
+                star_yx=(4, 4),
+                adp_star_yx=(8, 7),
+                radius=1.5,
+            )
+            self.assertTrue(result.passed)
 
     def test_verify_star_spectrum_vs_adp_passes_smooth_ratio(self):
         with tempfile.TemporaryDirectory() as tmp:

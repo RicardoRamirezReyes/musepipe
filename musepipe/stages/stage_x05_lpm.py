@@ -30,6 +30,7 @@ from .halosub_stage import (
     HalosubStageProduct,
     base_qc_payload,
     combine_residuals,
+    expected_scaleref,
     extract_halosub_product,
     halosub_config_from_run,
     halosub_paths,
@@ -247,7 +248,7 @@ def compute_stage_x05_products(config, paths=None):
         "v3_condition_ok": True,  # enforced above (hard abort otherwise)
         "v4_slow_path_ok": bool(max(slow_fractions) <= MAX_SLOW_FRACTION) if slow_fractions else None,
         "v5_scale_convention_ok": bool(
-            extraction.product.header.get("SCALEREF") == "normrad_total_flux"
+            extraction.product.header.get("SCALEREF") == expected_scaleref(cfg, knob="x05_flux_convention")
             and str(extraction.product.header.get("BKGMODE", "")).startswith("lpm_residual")
             and np.asarray(extraction.control_spectra_cal).size > 0
         ),

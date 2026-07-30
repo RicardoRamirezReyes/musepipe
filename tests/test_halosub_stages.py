@@ -29,6 +29,7 @@ from musepipe.stages.stage_x05_lpm import (
     stage_x05_paths,
     write_stage_x05_products,
 )
+from musepipe.stages.halosub_stage import expected_scaleref
 from tests.test_optimal_analytic import constant_model_doc
 
 NZ = 161
@@ -108,6 +109,21 @@ BASE_CFG = {
     "halosub_exclude_radius_px": 4.0,
     "lsf_fwhm_A": 2.6,
 }
+
+
+class FluxConventionTests(unittest.TestCase):
+    def test_expected_scaleref_tracks_global_and_stage_override(self):
+        self.assertEqual(
+            expected_scaleref({"flux_convention": "total"}, knob="x04_flux_convention"),
+            "empirical_total_flux",
+        )
+        self.assertEqual(
+            expected_scaleref(
+                {"flux_convention": "total", "x04_flux_convention": "normrad"},
+                knob="x04_flux_convention",
+            ),
+            "normrad_total_flux",
+        )
 
 
 class SgfStageTests(unittest.TestCase):

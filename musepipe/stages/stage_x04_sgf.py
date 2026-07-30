@@ -26,6 +26,7 @@ from .halosub_stage import (
     HalosubStageProduct,
     base_qc_payload,
     combine_residuals,
+    expected_scaleref,
     extract_halosub_product,
     halosub_config_from_run,
     halosub_paths,
@@ -187,7 +188,7 @@ def compute_stage_x04_products(config, paths=None):
             and all(row["predictor"] is not None for row in predictors if row["in_range"])
         ),
         "v4_scale_convention_ok": bool(
-            extraction.product.header.get("SCALEREF") == "normrad_total_flux"
+            extraction.product.header.get("SCALEREF") == expected_scaleref(cfg, knob="x04_flux_convention")
             and str(extraction.product.header.get("BKGMODE", "")).startswith("sgf_residual")
             and np.asarray(extraction.control_spectra_cal).size > 0
         ),

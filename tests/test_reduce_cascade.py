@@ -49,6 +49,8 @@ class ReduceCascadeTests(unittest.TestCase):
             _record("std_archive_1.fits", "STD", "2022-08-29T02:00:00", catg=""),
             _record("master_1.fits", "MASTER_BIAS", "2022-08-29T10:00:00", mode="WFM-AO-N", pro_catg="MASTER_BIAS"),
             _record("master_2.fits", "MASTER_BIAS", "2022-08-31T10:00:00", mode="WFM-AO-N", pro_catg="MASTER_BIAS"),
+            _record("lsf_nfm.fits", "LSF_PROFILE", "2018-01-01T00:00:00", pro_catg="LSF_PROFILE"),
+            _record("lsf_wfm.fits", "LSF_PROFILE", "2018-01-01T00:00:00", mode="WFM-AO-N", pro_catg="LSF_PROFILE"),
         ]
         groups = CASCADE.build_night_associations(records)
         first_records, first = groups["2022-08-28"]
@@ -56,6 +58,7 @@ class ReduceCascadeTests(unittest.TestCase):
         self.assertEqual(len([record for record in first_records if record.tag == "OBJECT"]), 1)
         self.assertEqual(first["calibrations"]["STD"], ["/raw/std_raw_1.fits"])
         self.assertEqual(first["calibrations"]["MASTER_BIAS"], ["/raw/master_1.fits"])
+        self.assertEqual(first["calibrations"]["LSF_PROFILE"], ["/raw/lsf_nfm.fits"])
         self.assertEqual(second["calibrations"]["STD"], ["/raw/std_raw_2.fits"])
         self.assertEqual(second["calibrations"]["MASTER_BIAS"], ["/raw/master_2.fits"])
 

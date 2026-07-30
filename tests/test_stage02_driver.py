@@ -62,6 +62,8 @@ class Stage02DriverTests(unittest.TestCase):
                 np.testing.assert_array_equal(hdul["STAT"].data, stat)
 
             qc = json.loads(paths["stage02_qc_json"].read_text())
+            canonical_qc = json.loads(paths["stage02_xcorr_qc_json"].read_text())
+            self.assertEqual(canonical_qc, qc)
             self.assertIn("stripe_metric", qc)
             self.assertIn("stat", qc)
             self.assertIn("equivalence", qc)

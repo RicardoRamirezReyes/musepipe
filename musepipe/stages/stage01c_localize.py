@@ -591,8 +591,10 @@ def locate_companion(cube_zyx, wavelengths, primary, cfg, pixel_scale, north_ang
                 band_used_A=band,
                 peak_merge_radius_px=cfg.get("stage01c_peak_merge_radius_px"),
             ), predicted
-        except SourceNotDetectedError as exc:
+        except (SourceNotDetectedError, AmbiguousDetectionError) as exc:
             last_error = exc
+    if isinstance(last_error, AmbiguousDetectionError):
+        raise AmbiguousDetectionError(f"Companion remains ambiguous in all configured bands: {last_error}")
     raise SourceNotDetectedError(f"Companion not detected in any configured band: {last_error}")
 
 

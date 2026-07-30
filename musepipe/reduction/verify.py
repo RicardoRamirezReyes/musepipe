@@ -349,6 +349,87 @@ def verify_whitelight_vs_adp(
     )
 
 
+def verify_whitelight_vs_adp_psf_matched(
+    cube_path: str | Path,
+    adp_path: str | Path,
+    *,
+    min_corr: float = 0.95,
+    max_shift: int = 3,
+    half_window: int = 20,
+    max_sigma_px: float = 8.0,
+    sigma_step_px: float = 0.1,
+    plot_path: str | Path | None = None,
+) -> VerificationResult:
+    """V4: compare the scene after matching a sharper new cube to the ADP PSF.
+
+    The convolution is diagnostic only and never modifies the science cube.
+    """
+
+    from scipy.ndimage import gaussian_filter
+
+    cube, _ = read_cube_data(cube_path)
+    adp, _ = read_cube_data(adp_path)
+    image, reference, reach = _peak_registered_windows(
+        whitelight_image(cube),
+        whitelight_image(adp),
+        half_window=half_window,
+    )
+    valid = np.isfinite(image)
+    filled = np.where(valid, image, 0.0)
+    best_corr = -np.inf
+    best_shift = (0, 0)
+    best_sigma = 0.0
+    best_image = image
+    for sigma in np.arange(0.0, max_sigma_px + sigma_step_px / 2.0, sigma_step_px):
+        if sigma == 0:
+            matched = image
+        else:
+            weight = gaussian_filter(valid.astype(float), sigma, mode="constant", cval=0.0)
+            smooth = gaussian_filter(filled, sigma, mode="constant", cval=0.0)
+            matched = np.divide(smooth, weight, out=np.full_like(smooth, np.nan), where=weight > 0)
+        corr, shift = best_integer_shift_correlation(
+            matched,
+            reference,
+            max_shift=min(max_shift, reach - 1) if reach > 1 else 0,
+        )
+        if np.isfinite(corr) and corr > best_corr:
+            best_corr = corr
+            best_shift = shift
+            best_sigma = float(sigma)
+            best_image = matched
+
+    if plot_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        output = Path(plot_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        image_norm = best_image / np.nanmax(best_image)
+        reference_norm = reference / np.nanmax(reference)
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+        axes[0].imshow(image_norm, origin="lower", cmap="magma")
+        axes[0].set_title(f"New cube matched (sigma={best_sigma:.1f} px)")
+        axes[1].imshow(reference_norm, origin="lower", cmap="magma")
+        axes[1].set_title("ADP reference")
+        axes[2].imshow(image_norm - reference_norm, origin="lower", cmap="coolwarm", vmin=-0.2, vmax=0.2)
+        axes[2].set_title("Normalized difference")
+        for axis in axes:
+            axis.axis("off")
+        fig.tight_layout()
+        fig.savefig(output, dpi=180)
+        plt.close(fig)
+
+    return VerificationResult(
+        "v4_adp_whitelight_corr",
+        best_corr > min_corr,
+        float(best_corr),
+        f"psf_matched_corr={best_corr:.4f}, sigma_px={best_sigma:.2f}, "
+        f"integer_shift={best_shift}, window=+-{reach}px",
+    )
+
+
 def circular_aperture_mask(shape: tuple[int, int], yx: tuple[float, float], radius: float) -> np.ndarray:
     y, x = np.indices(shape, dtype=np.float64)
     cy, cx = yx
@@ -367,6 +448,7 @@ def verify_star_spectrum_vs_adp(
     adp_path: str | Path,
     *,
     star_yx: tuple[float, float],
+    adp_star_yx: tuple[float, float] | None = None,
     radius: float,
     min_fraction_in_range: float = 0.80,
     ratio_range: tuple[float, float] = (0.9, 1.1),
@@ -376,7 +458,7 @@ def verify_star_spectrum_vs_adp(
     cube, _ = read_cube_data(cube_path)
     adp, _ = read_cube_data(adp_path)
     spec = extract_aperture_spectrum(cube, star_yx, radius)
-    ref = extract_aperture_spectrum(adp, star_yx, radius)
+    ref = extract_aperture_spectrum(adp, adp_star_yx or star_yx, radius)
     mask = np.isfinite(spec) & np.isfinite(ref) & (ref != 0)
     if not mask.any():
         raise VerificationError("No valid channels for star-spectrum comparison.")
@@ -451,5 +533,6 @@ __all__ = [
     "verify_stat",
     "verify_wcs_headers",
     "verify_whitelight_vs_adp",
+    "verify_whitelight_vs_adp_psf_matched",
     "whitelight_image",
 ]

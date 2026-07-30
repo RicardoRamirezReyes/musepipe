@@ -690,6 +690,8 @@ def measure_sky_statistics(
     else:
         status = "red"
     return {
+        "rms_by_channel": rms_by_channel,
+        "median_by_channel": med_by_channel,
         "rms_continuum": rms_cont,
         "rms_skylines": float(metrics["skyline_rms_median"]),
         "R": r_value,
@@ -700,6 +702,35 @@ def measure_sky_statistics(
         "n_apertures": None,
         "status": status,
     }
+
+
+def empty_aperture_centers(
+    source_mask: np.ndarray,
+    valid_mask: np.ndarray,
+    *,
+    radius_px: int = 2,
+    spacing_px: int = 10,
+    max_apertures: int = 32,
+) -> list[tuple[int, int]]:
+    """Select deterministic empty-aperture centers outside all masked sources."""
+
+    sources = np.asarray(source_mask, dtype=bool)
+    valid = np.asarray(valid_mask, dtype=bool)
+    if sources.shape != valid.shape:
+        raise RuntimeError("source and valid masks differ in shape")
+    radius = int(radius_px)
+    margin = radius + 1
+    candidates: list[tuple[int, int]] = []
+    for y in range(margin, sources.shape[0] - margin, int(spacing_px)):
+        for x in range(margin, sources.shape[1] - margin, int(spacing_px)):
+            ys = slice(y - radius, y + radius + 1)
+            xs = slice(x - radius, x + radius + 1)
+            if not sources[ys, xs].any() and valid[ys, xs].all():
+                candidates.append((y, x))
+    if len(candidates) <= int(max_apertures):
+        return candidates
+    indices = np.linspace(0, len(candidates) - 1, int(max_apertures), dtype=int)
+    return [candidates[index] for index in indices]
 
 
 def _box3_sums(arr: np.ndarray, centers_yx: Sequence[tuple[int, int]]) -> np.ndarray:
@@ -976,6 +1007,78 @@ def m1m2_sky_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+def m4m5_phase(args: argparse.Namespace) -> int:
+    cube_path = Path(args.cube).expanduser()
+    mask_path = Path(args.source_mask).expanduser()
+    if not cube_path.exists() or not mask_path.exists():
+        print("ERROR: cube and source mask must exist", file=sys.stderr)
+        return 2
+    with fits.open(cube_path, memmap=True) as hdul:
+        data_hdu = hdul["DATA"] if "DATA" in hdul else hdul[1]
+        stat_hdu = hdul["STAT"] if "STAT" in hdul else None
+        if stat_hdu is None:
+            print("ERROR: cube has no STAT extension", file=sys.stderr)
+            return 2
+        data = np.asarray(data_hdu.data, dtype=np.float64)
+        stat = np.asarray(stat_hdu.data, dtype=np.float64)
+        wave = wavelength_axis_from_header(data_hdu.header, data.shape[0])
+    with fits.open(mask_path, memmap=True) as hdul:
+        source_mask = np.asarray(hdul[0].data, dtype=bool)
+
+    valid_mask = np.mean(np.isfinite(data[::200]), axis=0) >= 0.9
+    centers = empty_aperture_centers(
+        source_mask,
+        valid_mask,
+        radius_px=args.aperture_radius,
+        spacing_px=args.spacing_px,
+        max_apertures=args.max_apertures,
+    )
+    if len(centers) < 10:
+        print(f"ERROR: only {len(centers)} valid empty apertures; A4 requires at least 10", file=sys.stderr)
+        return 2
+
+    yy, xx = np.ogrid[: data.shape[1], : data.shape[2]]
+    sky_mask = np.zeros(data.shape[1:], dtype=bool)
+    for y, x in centers:
+        sky_mask |= (yy - y) ** 2 + (xx - x) ** 2 <= float(args.aperture_radius) ** 2
+
+    m4 = measure_sky_statistics(data, wave, sky_mask)
+    m5 = measure_stat_factors(data, stat, sky_mask, box_centers_yx=centers)
+    m4["sampled_pixel_fraction"] = m4.pop("sky_fraction")
+    m4["sky_fraction"] = float(np.mean((~source_mask) & valid_mask))
+    products_dir = Path(args.products_dir)
+    products_dir.mkdir(parents=True, exist_ok=True)
+    curves_path = products_dir / "stage00q_m4_m5_curves.npz"
+    np.savez_compressed(
+        curves_path,
+        wavelength_A=wave,
+        m4_rms=np.asarray(m4.pop("rms_by_channel")),
+        m4_median=np.asarray(m4.pop("median_by_channel")),
+        m5_factor_spaxel=np.asarray(m5.pop("factor_spaxel_by_channel")),
+        m5_factor_box3=np.asarray(m5.pop("factor_box3_by_channel")),
+        aperture_centers_yx=np.asarray(centers, dtype=np.int16),
+    )
+    m4["n_apertures"] = len(centers)
+    m4["aperture_radius_px"] = float(args.aperture_radius)
+    m4["source_mask"] = str(mask_path)
+    m4["curves"] = str(curves_path)
+    m5["n_apertures"] = len(centers)
+    m5["curves"] = str(curves_path)
+
+    qc_path = Path(args.qc_output)
+    qc = json.loads(qc_path.read_text(encoding="utf-8")) if qc_path.exists() else {}
+    qc["m4_sky"] = m4
+    qc["m5_stat"] = m5
+    qc_path.parent.mkdir(parents=True, exist_ok=True)
+    qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"m4 R={m4['R']:.4f} bias/rms={m4['median_bias'] / m4['rms_continuum']:.4f} "
+        f"({m4['status']}) | m5 spaxel={m5['factor_spaxel_median']:.3f} "
+        f"box3={m5['factor_box3_median']:.3f} ({m5['status']}) | apertures={len(centers)}"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="A4 cube QC helpers.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1010,6 +1113,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     sky_parser.add_argument("--halpha-A", type=float, default=6562.8)
     sky_parser.set_defaults(func=m1m2_sky_phase)
 
+    m4m5_parser = subparsers.add_parser(
+        "m4m5", help="Measure A4/M4 sky residuals and A4/M5 STAT factors."
+    )
+    m4m5_parser.add_argument("--cube", required=True)
+    m4m5_parser.add_argument("--source-mask", required=True)
+    m4m5_parser.add_argument("--qc-output", required=True)
+    m4m5_parser.add_argument("--products-dir", required=True)
+    m4m5_parser.add_argument("--aperture-radius", type=int, default=2)
+    m4m5_parser.add_argument("--spacing-px", type=int, default=10)
+    m4m5_parser.add_argument("--max-apertures", type=int, default=32)
+    m4m5_parser.set_defaults(func=m4m5_phase)
+
     args = parser.parse_args(argv)
     return int(args.func(args))
 
@@ -1030,6 +1145,7 @@ __all__ = [
     "MUSE_LSF_REFERENCE_SHORT",
     "compute_m3_flux",
     "detect_primary_yx",
+    "empty_aperture_centers",
     "flux_factor_from_reference",
     "load_passband_csv",
     "measure_m1_m2_from_sky_spectrum",
