@@ -57,9 +57,18 @@ REASON = (
 FIELD_SOURCES_YX: list[tuple[float, float]] = [(77.7, 98.3)]
 
 
+#: Como se llama el cubo crudo en el notebook de cada etapa. NO es el mismo
+#: nombre: C2 lo llama `CUBE` y C3 `LS_CUBE` (tiene dos, y este es del que
+#: extrae `optimal_ls`). Esta celda se escribio mirando C2 y se aplicaba tal cual
+#: a C3, donde `CUBE` no existe: el notebook de C3 de ROXs 42B b reventaba con
+#: `NameError` y no lo veia nadie porque la suite solo ejecutaba los de ROXs 12 b.
+CUBO_POR_ETAPA = {"C2": "CUBE", "C3": "LS_CUBE"}
+
+
 def apply(stage_id, cells, ctx):
     md, code = ctx["md"], ctx["code"]
     seccion = "## 5 " if stage_id == "C2" else "## 3 "
+    cubo = CUBO_POR_ETAPA[stage_id]
     return insert_after_markdown(
         cells,
         seccion,
@@ -84,15 +93,15 @@ def apply(stage_id, cells, ctx):
             "# ROXs 42B cc1 (Bryan+2016) extrapolado a 2022.6654: 0.381\", PA 241.4 deg.\n"
             "FUENTES_CAMPO = [(77.7, 98.3)]\n"
             "RADIO_MASCARA_PX = 6.0\n\n"
-            "_luz = np.nanmedian(CUBE[::20], axis=0)\n"
+            "_luz = np.nanmedian(" + cubo + "[::20], axis=0)\n"
             "_hp = _luz - ndimage.median_filter(np.nan_to_num(_luz), size=15)\n"
             "_sig = 1.4826 * np.nanmedian(np.abs(_hp - np.nanmedian(_hp)))\n"
             "_yy, _xx = np.indices(_luz.shape, dtype=float)\n"
             "_r = np.hypot(_yy - STAR_YX[0], _xx - STAR_YX[1])\n"
             "_rc = np.hypot(_yy - OBJECT_YX[0], _xx - OBJECT_YX[1])\n"
             "_lab, _n = ndimage.label((_r > 15) & (_rc > 6) & (_hp > 8 * _sig))\n"
-            "_azul = np.nanmedian(CUBE[WAVE < 6000][::10], axis=0)\n"
-            "_rojo = np.nanmedian(CUBE[WAVE > 8000][::10], axis=0)\n"
+            "_azul = np.nanmedian(" + cubo + "[WAVE < 6000][::10], axis=0)\n"
+            "_rojo = np.nanmedian(" + cubo + "[WAVE > 8000][::10], axis=0)\n"
             "print(f'sigma del pasa-altos = {_sig:.4f} | fuentes a >8 sigma, sin primaria ni companero:')\n"
             "print(f\"  {'y':>7s} {'x':>7s} {'r[px]':>7s} {'pico/s':>8s} {'rojo/azul':>10s} {'n_px':>6s}\")\n"
             "_filas = []\n"
@@ -112,13 +121,13 @@ def apply(stage_id, cells, ctx):
             "    print(f'  {_my:7.1f} {_mx:7.1f} {_rr:7.1f} {_pk:8.1f} {_col:10.2f} {_npx:6d}')\n"
             "if not _filas:\n"
             "    print('  (ninguna)')\n"
-            "print(f'\\ncampo del cubo: {CUBE.shape[1]}x{CUBE.shape[2]} px'\n"
-            "      f' = {CUBE.shape[1] * 0.0252:.2f}\" — una fuente mas lejos NO saldria aqui')\n\n"
+            "print(f'\\ncampo del cubo: {" + cubo + ".shape[1]}x{" + cubo + ".shape[2]} px'\n"
+            "      f' = {" + cubo + ".shape[1] * 0.0252:.2f}\" — una fuente mas lejos NO saldria aqui')\n\n"
             "if FUENTES_CAMPO:\n"
             "    _m = np.zeros(_luz.shape, dtype=bool)\n"
             "    for _fy, _fx in FUENTES_CAMPO:\n"
             "        _m |= np.hypot(_yy - _fy, _xx - _fx) <= RADIO_MASCARA_PX\n"
-            "    CUBE = np.where(_m[None, :, :], np.nan, CUBE)\n"
+            "    " + cubo + " = np.where(_m[None, :, :], np.nan, " + cubo + ")\n"
             "    print(f'\\nENMASCARADAS {len(FUENTES_CAMPO)} fuentes ({int(_m.sum())} spaxels):'\n"
             "          ' el resto del notebook usa el cubo ya limpio.')\n"
             "else:\n"

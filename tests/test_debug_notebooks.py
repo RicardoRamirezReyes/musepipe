@@ -218,8 +218,6 @@ class ReproducesTheChainTests(unittest.TestCase):
     de un clon limpio.
     """
 
-    RUN = "ROXs12b_realigned"
-    OBJETO = "ROXs12b"
     #: notebook -> productos de la etapa que tienen que existir para compararlo
     CASOS = {
         "A3_telluric_debug": ["stage00t_qc.json"],
@@ -229,6 +227,11 @@ class ReproducesTheChainTests(unittest.TestCase):
         "C5_sgf_debug": ["spec_sgf_object.fits"],
         "C6_lpm_debug": ["spec_lpm_object.fits"],
     }
+    #: (objeto, run) de cada cadena. Estaba fijado a ROXs 12 b, asi que los cinco
+    #: notebooks de ROXs 42B b **no los ejecutaba nadie**: se generaban y nadie
+    #: comprobaba que reprodujeran su etapa. Cada objeto se salta solo si le
+    #: faltan los productos, asi que un clon limpio sigue pasando.
+    OBJETOS = (("ROXs12b", "ROXs12b_realigned"), ("ROXs42Bb", "ROXs42Bb_realigned"))
 
     @staticmethod
     def _entrada_fuera_del_run(slug, stage_dir):
@@ -252,46 +255,52 @@ class ReproducesTheChainTests(unittest.TestCase):
         return None if (cubo is not None and cubo.exists()) else str(declarado)
 
     def test_every_debug_notebook_reports_identical(self):
-        import contextlib
-        import io
-        import os
         import matplotlib
         matplotlib.use("Agg")
 
-        stage_dir = ROOT / "runs" / self.RUN / "stages"
-        for slug, productos in self.CASOS.items():
-            path = ROOT / "notebooks" / self.OBJETO / "debug" / f"{slug}.ipynb"
-            faltan = [n for n in productos if not (stage_dir / n).exists()]
-            with self.subTest(notebook=slug):
-                if faltan:
-                    self.skipTest(f"{self.RUN} sin productos: falta {faltan[0]}")
-                fuera = self._entrada_fuera_del_run(slug, stage_dir)
-                if fuera:
-                    self.skipTest(f"{slug}: entrada fuera del run sin disponer: {fuera}")
-                if not path.exists():
-                    self.skipTest(f"{slug} no generado")
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                namespace = {"__name__": "__main__"}
-                out = io.StringIO()
-                # Se ejecuta DESDE LA CARPETA DEL NOTEBOOK, que es el cwd real en
-                # Jupyter. Correrlo desde la raíz del repo escondía un fallo:
-                # musepipe resuelve rutas contra el cwd y `stage_xNN_config_from_run`
-                # buscaba el config bajo `notebooks/<obj>/debug/runs/...`.
-                cwd = os.getcwd()
-                try:
-                    os.chdir(path.parent)
-                    with contextlib.redirect_stdout(out):
-                        for i, cell in enumerate(payload["cells"]):
-                            if cell["cell_type"] != "code":
-                                continue
-                            exec(compile("".join(cell["source"]), f"<{slug} celda {i}>", "exec"),
-                                 namespace)
-                finally:
-                    os.chdir(cwd)
-                text = out.getvalue()
-                self.assertIn("sin deriva", text, "la copia no coincide con musepipe")
-                self.assertIn("IDÉNTICO: la copia reproduce la cadena.", text,
-                              f"{slug} no reprodujo la cadena:\n{text[-1200:]}")
+        for objeto, run in self.OBJETOS:
+            stage_dir = ROOT / "runs" / run / "stages"
+            for slug, productos in self.CASOS.items():
+                path = ROOT / "notebooks" / objeto / "debug" / f"{slug}.ipynb"
+                faltan = [n for n in productos if not (stage_dir / n).exists()]
+                with self.subTest(objeto=objeto, notebook=slug):
+                    if faltan:
+                        self.skipTest(f"{run} sin productos: falta {faltan[0]}")
+                    fuera = self._entrada_fuera_del_run(slug, stage_dir)
+                    if fuera:
+                        self.skipTest(f"{slug}: entrada fuera del run sin disponer: {fuera}")
+                    if not path.exists():
+                        self.skipTest(f"{slug} no generado")
+                    self._reproduce_la_cadena(path, slug)
+
+    def _reproduce_la_cadena(self, path, slug):
+        """Ejecuta el notebook y exige que diga «sin deriva» e «IDÉNTICO»."""
+        import contextlib
+        import io
+        import os
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        namespace = {"__name__": "__main__"}
+        out = io.StringIO()
+        # Se ejecuta DESDE LA CARPETA DEL NOTEBOOK, que es el cwd real en
+        # Jupyter. Correrlo desde la raíz del repo escondía un fallo:
+        # musepipe resuelve rutas contra el cwd y `stage_xNN_config_from_run`
+        # buscaba el config bajo `notebooks/<obj>/debug/runs/...`.
+        cwd = os.getcwd()
+        try:
+            os.chdir(path.parent)
+            with contextlib.redirect_stdout(out):
+                for i, cell in enumerate(payload["cells"]):
+                    if cell["cell_type"] != "code":
+                        continue
+                    exec(compile("".join(cell["source"]), f"<{slug} celda {i}>", "exec"),
+                         namespace)
+        finally:
+            os.chdir(cwd)
+        text = out.getvalue()
+        self.assertIn("sin deriva", text, "la copia no coincide con musepipe")
+        self.assertIn("IDÉNTICO: la copia reproduce la cadena.", text,
+                      f"{slug} no reprodujo la cadena:\n{text[-1200:]}")
 
 
 if __name__ == "__main__":
