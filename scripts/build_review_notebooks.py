@@ -1852,7 +1852,7 @@ STAGES: list[dict] = [
     ),
     dict(
         id="A3", slug="A3_telluric", title="Corrección telúrica", block="A · Reducción",
-        spec="spec_A3_codex_telluric.md", run_override=None,
+        spec="spec_A3_v2_codex_telluric.md", run_override=None,
         what="Corrige absorción telúrica para producir `cube_telcorr.fits`.",
         inputs="Cubo (post-cielo)", outputs="`cube_telcorr.fits`",
         downstream="A4, B1",

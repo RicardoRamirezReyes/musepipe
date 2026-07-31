@@ -7,6 +7,12 @@
 > molecfit y **corroboró** STD_TELLURIC (|ΔT| 0.8 % por píxel en la banda B junto a Hα). Cada cifra citada lleva al lado la ruta del
 > QC de la que se tomó.
 >
+> **Nota 2026-07-31**: el argumento de §6 —que la banda A de O₂ es el rasgo telúrico con
+> mayor leverage— es lo que llevó a **meterla en la decisión de la etapa**. `TELLURIC_BANDS`
+> pasa de tres bandas a cuatro; en el cubo canónico O₂ A mide **1.254 %**, por debajo del
+> umbral del 3 %, así que ningún veredicto de este documento cambia. Ver
+> `docs/spec_A3_v2_codex_telluric.md` §3.4.
+>
 > Escrito: 2026-07-10; verificación A1a añadida 2026-07-19. Fuente principal:
 > `runs/ROXs12b_raw/stages/stage00t_qc.json`, `.../stage00r_qc.json → a1a_molecfit_crosscheck`.
 
