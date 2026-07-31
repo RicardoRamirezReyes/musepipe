@@ -27,8 +27,19 @@ STAGE_NAME = "00t_telluric"
 HALPHA_PROTECTED = (6540.0, 6590.0)
 NALGS_PROTECTED = (5780.0, 6050.0)
 PROTECTED_WINDOWS = (HALPHA_PROTECTED, NALGS_PROTECTED)
+#: Bandas sobre las que A3 mide profundidad y decide.
+#:
+#: O₂ A es la más profunda del rango de MUSE y hasta 2026-07-31 no estaba aquí:
+#: la etapa decidía sobre tres bandas que excluían justo la que más informa.
+#: `verify.DEFAULT_BAD_RANGES` ya la marcaba como mala, `telluric_lines` ya la
+#: cataloga `strong`, G3 ya la enmascara (`docs/g3_real_frozen_decisions.md`) y
+#: `a3_telluric_justification.md` §6 la llama «el rasgo telúrico con mayor
+#: leverage» — la etapa que decide era la única pieza que la ignoraba. Los
+#: bordes son los mismos 7590–7700 que usan esas otras piezas: no se introduce
+#: una cuarta definición del mismo intervalo.
 TELLURIC_BANDS = {
     "O2_B": (6864.0, 6960.0),
+    "O2_A": (7590.0, 7700.0),
     "H2O_7200": (7160.0, 7340.0),
     "H2O_8200": (8130.0, 8350.0),
 }
@@ -464,15 +475,27 @@ def stage00t_qc_skeleton(
     input_info: TelluricInputInfo,
     *,
     run_id: str,
+    primary_yx: Sequence[float],
+    aperture_radius_px: float,
     environment: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Esqueleto del QC de A3. `run_id` obligatorio (ver `stage00s_qc_skeleton`)."""
+    """Esqueleto del QC de A3. `run_id` obligatorio (ver `stage00s_qc_skeleton`).
+
+    `primary_yx` y `aperture_radius_px` también son obligatorios y sin default:
+    son la apertura con la que se midió la profundidad, y sin ellos el número
+    que publica este QC no se puede reproducir a partir del QC. El esquema
+    multi-noche los perdió, y recuperarlos costó un barrido a ciegas dentro del
+    notebook de análisis (traspaso §7.4). Que no exista la vía silenciosa.
+    """
     return {
         "stage": STAGE_NAME,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
         "environment": dict(environment or {}),
-        "input": {"cube": str(input_info.cube), "sha256": input_info.sha256, "upstream": input_info.upstream},
+        "input": {"cube": str(input_info.cube), "sha256": input_info.sha256,
+                  "upstream": input_info.upstream,
+                  "primary_yx": [float(primary_yx[0]), float(primary_yx[1])],
+                  "aperture_radius_px": float(aperture_radius_px)},
         "decision": {
             "depth_pct_by_band": {},
             "telluric_applied": False,
@@ -517,10 +540,12 @@ def decision_phase(args: argparse.Namespace) -> int:
         qc_path=args.qc,
         checksum=not args.skip_checksum,
     )
-    wave, spec = _read_primary_spectrum(input_info.cube, (args.primary_y, args.primary_x), args.radius_px)
+    primary_yx = (args.primary_y, args.primary_x)
+    wave, spec = _read_primary_spectrum(input_info.cube, primary_yx, args.radius_px)
     depths = measure_telluric_depths(wave, spec)
     decision = decide_telluric(depths, science_needs_red_continuum=args.science_needs_red_continuum)
-    qc = stage00t_qc_skeleton(input_info, run_id=args.run_id)
+    qc = stage00t_qc_skeleton(input_info, run_id=args.run_id,
+                              primary_yx=primary_yx, aperture_radius_px=args.radius_px)
     qc["decision"].update(
         {
             "depth_pct_by_band": decision.depth_pct_by_band,
