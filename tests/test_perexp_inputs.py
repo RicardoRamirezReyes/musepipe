@@ -18,7 +18,7 @@ def _fits(path: Path, tag: str, **header_values: str) -> Path:
 
 
 class PerExposureInputTests(unittest.TestCase):
-    def _manifest(self, root: Path, *, omit_one: bool = False) -> Path:
+    def _manifest(self, root: Path, *, omit_one: bool = False, merged_lsf: bool = False) -> Path:
         raw_a = _fits(root / "MUSE.2022-08-28T23:00:00.000.fits", "OBJECT", **{"DATE-OBS": "2022-08-28T23:00:00.000"})
         raw_b = _fits(root / "MUSE.2022-08-28T23:10:00.000.fits", "OBJECT", **{"DATE-OBS": "2022-08-28T23:10:00.000"})
         pixtables = []
@@ -42,7 +42,9 @@ class PerExposureInputTests(unittest.TestCase):
             },
             "products": {
                 "PIXTABLE_OBJECT": [str(path) for path in pixtables],
-                "LSF_PROFILE": [str(_fits(root / f"lsf_{ifu}.fits", "LSF_PROFILE")) for ifu in range(24)],
+                "LSF_PROFILE": [str(_fits(root / "lsf_merged.fits", "LSF_PROFILE"))]
+                if merged_lsf
+                else [str(_fits(root / f"lsf_{ifu}.fits", "LSF_PROFILE")) for ifu in range(24)],
                 "STD_RESPONSE": [str(_fits(root / "response.fits", "STD_RESPONSE"))],
                 "STD_TELLURIC": [str(_fits(root / "telluric.fits", "STD_TELLURIC"))],
             },
@@ -62,6 +64,14 @@ class PerExposureInputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(PerExposureInputError):
                 build_perexp_inputs([self._manifest(Path(tmp), omit_one=True)], run_id="test_run")
+
+    def test_accepts_one_merged_lsf_without_changing_ifu_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exposures, calibrations = build_perexp_inputs(
+                [self._manifest(Path(tmp), merged_lsf=True)], run_id="test_run"
+            )
+        self.assertEqual(exposures["expected_ifus"], 24)
+        self.assertEqual(len(calibrations["night_calibrations"]["2022-08-28"]["LSF_PROFILE"]), 1)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from typing import Callable, Mapping, Sequence
 import numpy as np
 from astropy.io import fits
 
+from ..config import load_run_config
 from ..stats import robust_sigma
 from .esorex_driver import parse_esorex_recipes
 from .verify import circular_aperture_mask, extract_aperture_spectrum
@@ -32,6 +33,59 @@ TELLURIC_BANDS = {
     "H2O_8200": (8130.0, 8350.0),
 }
 DEFAULT_FIT_REGIONS = tuple(TELLURIC_BANDS.values())
+
+
+def stage00t_config_from_run(
+    run_id: str | None = None,
+    *,
+    project_root: str | Path | None = None,
+    overrides: Mapping[str, object] | None = None,
+    allow_run_id_mismatch: bool = False,
+) -> dict:
+    """Resolve A3's knobs for a run, the way `stage_xNN_config_from_run` does.
+
+    A3 predates the `musepipe.stages` convention: it has no stage module, and
+    its knobs live half in the argparse defaults of `main` and half as literals
+    inside the numeric functions (the 3 % threshold, the continuum sidebands,
+    the band edges). Anything that wants to *reproduce* A3 — the debug notebook
+    above all — would otherwise have to copy those literals by hand, which is
+    exactly what once made the C3 notebook fail to reproduce the chain.
+
+    Two deliberate choices:
+
+    - ``a3_science_needs_red_continuum`` defaults to ``True``, unlike the
+      ``store_true`` flag in `main`. All three A3 QCs on disk record ``true``,
+      and `decide_telluric` short-circuits to ``not_needed_science`` when it is
+      false, contradicting every verdict on record: the flag was passed. This
+      resolver reproduces what ran. The argparse default is left alone — moving
+      it would move frozen numbers.
+    - Nothing calls this from `decision_phase`/`main`. It is read-only; wiring
+      it in would be a behaviour change on a stage with three frozen QCs.
+
+    ``a3_primary_yx`` has no default: A3 requires it on the command line, and
+    the multi-night QC does not record it (a schema gap the notebook surfaces).
+    """
+
+    run_config = load_run_config(
+        run_id,
+        project_root=project_root,
+        allow_run_id_mismatch=allow_run_id_mismatch,
+    )
+    cfg = dict(run_config.config)
+    if overrides:
+        cfg.update(overrides)
+    cfg["run_id"] = run_config.run_id
+    cfg["project_root"] = str(run_config.paths.project_root)
+    cfg.setdefault("a3_primary_yx", None)
+    cfg.setdefault("a3_radius_px", 8.0)
+    cfg.setdefault("a3_science_needs_red_continuum", True)
+    cfg.setdefault("a3_threshold_pct", 3.0)
+    cfg.setdefault("a3_bands_A", {name: list(band) for name, band in TELLURIC_BANDS.items()})
+    cfg.setdefault("a3_protected_windows_A", [list(win) for win in PROTECTED_WINDOWS])
+    cfg.setdefault("a3_side_width_A", 40.0)
+    cfg.setdefault("a3_gap_A", 10.0)
+    cfg.setdefault("a3_min_transmission", 0.05)
+    return cfg
 
 
 class TelluricError(RuntimeError):

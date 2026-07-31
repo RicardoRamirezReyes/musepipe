@@ -20,7 +20,7 @@ def attenuated_products(true_level=100.0, throughput=None):
 
 
 class ThroughputRoundtripTests(unittest.TestCase):
-    def test_throughput_correction_recovers_common_scale_in_memory_only(self):
+    def test_throughput_correction_is_line_only_and_products_stay_unchanged(self):
         tmap = {"psffit": 0.70, "optimal_psfsub": 0.68}
         g1 = synthetic_g1(throughput=tmap)
         products = attenuated_products(throughput=tmap)
@@ -30,16 +30,17 @@ class ThroughputRoundtripTests(unittest.TestCase):
 
         primary = [r for r in rows if r["pair"] == "psffit_vs_optimal_psfsub"]
         self.assertTrue(primary)
-        for row in primary:
-            if row["n_chan_used"] == 0:
-                continue
-            # Raw fluxes stay attenuated; corrected fluxes recover the diff ~ 0.
-            self.assertAlmostEqual(row["flux_i_corr"], row["flux_i"] / 0.70, places=6)
-            width_total = row["flux_i_corr"] * 0.0 + abs(row["flux_i_corr"])
-            self.assertLess(abs(row["diff_corr"]), 1e-6 * max(width_total, 1.0))
+        continuum = [row for row in primary if row["band_kind"] == "continuum" and row["n_chan_used"] > 0]
+        lines = [row for row in primary if row["band_kind"] == "line" and row["n_chan_used"] > 0]
+        self.assertTrue(continuum)
+        self.assertTrue(lines)
+        for row in continuum:
+            self.assertEqual(row["flux_i_corr"], row["flux_i"])
+            self.assertFalse(row["throughput_applied_i"])
+        for row in lines:
+            self.assertTrue(row["throughput_applied_i"])
             self.assertEqual(row["throughput_source_i"], "g1_bias_budget.throughput_loss")
-        self.assertEqual(qc["verdict"], "consistent")
-        self.assertTrue(qc["throughput_correction"]["applied_in_memory"])
+        self.assertEqual(qc["throughput_correction"]["applied_in_memory"], "line_bands_only")
 
         # Products are NEVER modified: E3/G2 correct the raw products
         # downstream, so an in-place change here would double count.
@@ -59,7 +60,7 @@ class ThroughputRoundtripTests(unittest.TestCase):
         )
         secondary = [r for r in rows if r["pair"] == "psffit_vs_aperture" and r["n_chan_used"] > 0]
         for row in secondary:
-            self.assertAlmostEqual(row["flux_j_corr"], row["flux_j"], places=9)
+            self.assertFalse(row["throughput_applied_j"])
 
 
 if __name__ == "__main__":

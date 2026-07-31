@@ -2,10 +2,23 @@ import unittest
 
 import numpy as np
 
-from musepipe.qc.cube_qc import measure_stat_factors
+from musepipe.qc.cube_qc import empty_aperture_centers, measure_stat_factors
 
 
 class CubeQcM5Tests(unittest.TestCase):
+    def test_empty_apertures_avoid_sources_and_invalid_pixels(self):
+        sources = np.zeros((40, 40), dtype=bool)
+        sources[10:20, 10:20] = True
+        valid = np.ones_like(sources)
+        valid[:5] = False
+        centers = empty_aperture_centers(
+            sources, valid, radius_px=2, spacing_px=5, max_apertures=20
+        )
+        self.assertGreaterEqual(len(centers), 10)
+        for y, x in centers:
+            self.assertFalse(sources[y - 2 : y + 3, x - 2 : x + 3].any())
+            self.assertTrue(valid[y - 2 : y + 3, x - 2 : x + 3].all())
+
     def test_stat_factor_13_is_recovered(self):
         rng = np.random.default_rng(11)
         n_wave, ny, nx = 40, 30, 30

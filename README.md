@@ -149,6 +149,7 @@ reprodujera la cadena.
 
 | notebook | qué rehace |
 |---|---|
+| `A3_telluric_debug` | la decisión telúrica entera —continuo local, profundidad por banda, umbral— sobre las tres reducciones del objeto, con el espectro **antes y después** de corregir y las tres hipótesis del salto O₂ B ~7 % → 0.59 % |
 | `C2_aperture_debug` | apertura box3, fondo de anillo, controles, error empírico y por STAT, apcorr |
 | `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa |
 | `C4_psffit_debug` | el ajuste simultáneo de **dos PSF** por canal (el método canónico): región de ajuste, matriz de diseño, χ²ᵣ y ρ(a,b), controles y los dos espectros. Trae perilla de submuestreo de canales |

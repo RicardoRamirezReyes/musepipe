@@ -1,4 +1,4 @@
-"""Stage H04/E4: Halpha injection-recovery throughput calibration."""
+"""Stage H04/E4 v2: Halpha injection-recovery with empirical null QC."""
 
 from __future__ import annotations
 
@@ -19,17 +19,24 @@ from ..injection import InjectionSource, create_run_clone, inject, tree_sha256
 from ..io import read_json, read_wavelength_axis, write_csv, write_json
 from ..paths import RunPaths
 from ..spectral import continuum_running_median as _CONTINUUM_RUNMED
+from ..stats import robust_sigma_axis0
+from .stage08c_look_elsewhere import empirical_fap
 from .stage_h01_detect import BAD_DETECTION_FLAGS, HALPHA_REST_A, matched_filter_point
 from .stage_x10_compare import METHOD_ORDER
 
 
 C_KMS = 299792.458
 H01_MATCHED_FILTER_POINT = matched_filter_point
+SPEC_VERSION = "E4_v2"
 DEFAULT_SNR_GRID = (0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0)
 DEFAULT_TEMPLATE_FACTORS = (1.0, 2.0)
 # sgf/lpm added in WP-H2 (docs/plan_integracion_halosub_julo2025.md): their
 # throughput feeds G1 validation and D1 v3 exactly like the spatial methods.
 DEFAULT_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
+CONTINUUM_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
+DEFAULT_CONTINUUM_SIDEBANDS_A = ((6500.0, 6540.0), (6585.0, 6625.0))
+DEFAULT_NULL_P = 0.0455
+DEFAULT_NULL_GATE_ALPHA = 0.01
 
 
 TABLE_FIELDS = [
@@ -149,6 +156,9 @@ def stage_h04_config_from_run(
     cfg.setdefault("h04_expected_seconds_per_case_method", DEFAULT_SECONDS_PER_CASE_METHOD)
     cfg.setdefault("h04_allow_long_run", False)
     cfg.setdefault("h04_detection_threshold_snr", 5.0)
+    cfg.setdefault("h04_continuum_sidebands_A", [list(band) for band in DEFAULT_CONTINUUM_SIDEBANDS_A])
+    cfg.setdefault("h04_null_p", DEFAULT_NULL_P)
+    cfg.setdefault("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)
     cfg.setdefault("h04_baseline_subtract_throughput", True)
     cfg.setdefault("h04_historic_expected_snr", 8.97)
     cfg.setdefault("h04_historic_tolerance_snr", 0.25)
@@ -171,6 +181,160 @@ def _read_optional_json(path):
     if not path.exists():
         return None
     return read_json(path)
+
+
+def resolve_continuum_injection(config, paths):
+    """Resolve the non-zero flat continuum required by E4 v2."""
+
+    configured = config.get("h04_continuum_flux_density")
+    bands = [
+        [float(lo), float(hi)]
+        for lo, hi in config.get("h04_continuum_sidebands_A", DEFAULT_CONTINUUM_SIDEBANDS_A)
+    ]
+    if configured is not None:
+        value = float(configured)
+        if not np.isfinite(value) or value <= 0:
+            raise RuntimeError("h04_continuum_flux_density must be finite and positive for E4 v2.")
+        return {
+            "value": value,
+            "scale": "normrad_flux_density",
+            "source": "config",
+            "bands_A": bands,
+            "by_method": {},
+            "products": {},
+        }
+
+    stage_dir = paths["paths"].stage_dir
+    product_paths = {
+        "aperture": stage_dir / "spec_aperture_object.fits",
+        "optimal_ls": stage_dir / "spec_optimal_object.fits",
+        "optimal_psfsub": stage_dir / "spec_optimal_psfsub_object.fits",
+        "psffit": stage_dir / "spec_psffit_object.fits",
+    }
+    by_method = {}
+    for method in CONTINUUM_METHODS:
+        path = product_paths[method]
+        if not path.exists():
+            raise FileNotFoundError(path)
+        product = SpectrumProduct.read(path)
+        wave = np.asarray(product.wave_A, dtype=np.float64)
+        flux = np.asarray(product.flux, dtype=np.float64)
+        apcorr = np.asarray(product.apcorr, dtype=np.float64)
+        flags = np.asarray(product.flags, dtype=np.int32)
+        sideband = np.zeros(wave.size, dtype=bool)
+        for lo, hi in bands:
+            sideband |= (wave >= lo) & (wave <= hi)
+        good = (
+            sideband
+            & np.isfinite(flux)
+            & np.isfinite(apcorr)
+            & (apcorr > 0)
+            & ((flags & BAD_DETECTION_FLAGS) == 0)
+        )
+        if not np.any(good):
+            raise RuntimeError(f"No usable E4 v2 continuum channels for {method}.")
+        value = float(np.nanmedian(flux[good] / apcorr[good]))
+        by_method[method] = value
+
+    usable = np.asarray([value for value in by_method.values() if np.isfinite(value) and value > 0], dtype=float)
+    if usable.size < 2:
+        raise RuntimeError(f"E4 v2 needs at least two finite positive continuum measurements: {by_method}.")
+    return {
+        "value": float(np.median(usable)),
+        "scale": "normrad_flux_density",
+        "source": "median_continuum_preserving_methods",
+        "bands_A": bands,
+        "by_method": by_method,
+        "products": {method: str(path) for method, path in product_paths.items()},
+    }
+
+
+def build_empirical_null_reference(config, paths, methods, *, lsf_fwhm_A):
+    """Matched-filter flux nulls from production controls in NORMRAD scale."""
+
+    stage_dir = paths["paths"].stage_dir
+    product_names = {
+        "aperture": "spec_aperture_object.fits",
+        "optimal_ls": "spec_optimal_object.fits",
+        "optimal_psfsub": "spec_optimal_psfsub_object.fits",
+        "psffit": "spec_psffit_object.fits",
+        "sgf": "spec_sgf_object.fits",
+        "lpm": "spec_lpm_object.fits",
+    }
+    control_names = {
+        "aperture": "spec_aperture_controls.npz",
+        "optimal_ls": "spec_optimal_controls.npz",
+        "optimal_psfsub": "spec_optimal_psfsub_controls.npz",
+        "psffit": "spec_psffit_controls.npz",
+        "sgf": "spec_sgf_controls.npz",
+        "lpm": "spec_lpm_controls.npz",
+    }
+    center_A = _line_center_from_config(config)
+    continuum_window_A = float(config.get("h04_continuum_window_A", config.get("h01_continuum_window_A", 80.0)))
+    width_factors = [float(value) for value in config.get("h04_template_width_factors", DEFAULT_TEMPLATE_FACTORS)]
+    reference = {}
+    for method in methods:
+        product_path = stage_dir / product_names[method]
+        control_path = stage_dir / control_names[method]
+        if not product_path.exists():
+            raise FileNotFoundError(product_path)
+        if not control_path.exists():
+            raise FileNotFoundError(control_path)
+        product = SpectrumProduct.read(product_path)
+        with np.load(control_path) as payload:
+            if "control_spectra_raw" in payload:
+                controls = np.asarray(payload["control_spectra_raw"], dtype=np.float64)
+                scale_source = "control_spectra_raw"
+            elif "control_spectra" in payload:
+                controls = np.asarray(payload["control_spectra"], dtype=np.float64)
+                controls = controls / np.asarray(product.apcorr, dtype=np.float64)[None, :]
+                scale_source = "control_spectra/apcorr"
+            else:
+                raise RuntimeError(f"No control spectra found in {control_path}.")
+        wave = np.asarray(product.wave_A, dtype=np.float64)
+        if controls.ndim != 2 or controls.shape[1] != wave.size or controls.shape[0] < 2:
+            raise RuntimeError(f"Invalid E4 v2 controls for {method}: {controls.shape}.")
+        flags = np.asarray(product.flags, dtype=np.int32)
+        good = np.isfinite(wave) & ((flags & BAD_DETECTION_FLAGS) == 0)
+        residuals = np.empty_like(controls)
+        min_pixels = max(3, min(15, int(np.count_nonzero(good))))
+        for index, spectrum in enumerate(controls):
+            finite = good & np.isfinite(spectrum)
+            continuum = _CONTINUUM_RUNMED(
+                wave,
+                spectrum,
+                finite,
+                window_A=continuum_window_A,
+                min_pixels=min_pixels,
+            )
+            residuals[index] = spectrum - continuum
+        error = robust_sigma_axis0(residuals).astype(np.float64)
+        error[~np.isfinite(error) | (error <= 0)] = np.nan
+        by_factor = {}
+        for factor in width_factors:
+            fluxes = []
+            for residual in residuals:
+                flux, _sigma, _snr = matched_filter_point(
+                    wave,
+                    residual,
+                    error,
+                    center_A,
+                    float(lsf_fwhm_A) * factor,
+                    good,
+                )
+                fluxes.append(flux)
+            values = np.asarray(fluxes, dtype=np.float64)
+            if np.count_nonzero(np.isfinite(values)) < 2:
+                raise RuntimeError(f"No finite E4 v2 empirical null for {method}, factor={factor:g}.")
+            by_factor[f"{factor:g}"] = values
+        reference[method] = {
+            "n_controls": int(controls.shape[0]),
+            "scale_source": scale_source,
+            "product": str(product_path),
+            "controls": str(control_path),
+            "by_factor": by_factor,
+        }
+    return reference
 
 
 def _source_pos_yx(qc, *keys):
@@ -751,10 +915,72 @@ def _completeness(rows, methods, threshold_snr):
     return out
 
 
-def _v2_nulls_clean(rows, threshold_snr):
-    nulls = [row for row in rows if row["variant"] == "nominal" and np.isclose(float(row["input_snr"]), 0.0)]
-    hits = [row for row in nulls if np.isfinite(float(row["recovered_snr"])) and float(row["recovered_snr"]) >= threshold_snr]
-    return {"status": "pass" if not hits else "fail", "n_nulls": len(nulls), "n_hits": len(hits)}
+def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_alpha=DEFAULT_NULL_GATE_ALPHA):
+    nulls = [
+        row
+        for row in rows
+        if row["variant"] == "nominal"
+        and np.isclose(float(row["input_snr"]), 0.0)
+        and str(row["position_label"]).startswith("control")
+    ]
+    diagnostics = []
+    for row in nulls:
+        factor_key = f"{float(row['template_factor']):g}"
+        reference = np.asarray(
+            empirical_reference[row["method"]]["by_factor"][factor_key],
+            dtype=np.float64,
+        )
+        observed = float(row["recovered_flux"])
+        fap = empirical_fap(observed, reference)
+        diagnostics.append(
+            {
+                "injection_id": row["injection_id"],
+                "method": row["method"],
+                "position_label": row["position_label"],
+                "template_factor": float(row["template_factor"]),
+                "continuum_mode": row["continuum_mode"],
+                "recovered_flux": observed,
+                "empirical_fap": _finite_or_none(fap),
+                "n_controls": int(np.count_nonzero(np.isfinite(reference))),
+            }
+        )
+    pvals = np.asarray(
+        [np.nan if row["empirical_fap"] is None else float(row["empirical_fap"]) for row in diagnostics],
+        dtype=np.float64,
+    )
+    extreme = np.isfinite(pvals) & (pvals < float(p_null))
+    n_extreme = int(np.count_nonzero(extreme))
+    if pvals.size:
+        from scipy import stats as scipy_stats
+
+        excess_p = float(scipy_stats.binom.sf(n_extreme - 1, pvals.size, float(p_null))) if n_extreme else 1.0
+    else:
+        excess_p = np.nan
+    passed = bool(pvals.size and np.isfinite(excess_p) and excess_p >= float(gate_alpha))
+    science = [
+        row
+        for row in rows
+        if row["variant"] == "nominal"
+        and np.isclose(float(row["input_snr"]), 0.0)
+        and row["position_label"] == "real"
+    ]
+    return {
+        "status": "pass" if passed else "fail",
+        "population": "control_positions_only",
+        "n_rows": int(pvals.size),
+        "n_extreme": n_extreme,
+        "p_null": float(p_null),
+        "excess_p": _finite_or_none(excess_p),
+        "gate_alpha": float(gate_alpha),
+        "rows": diagnostics,
+        "science_position_diagnostics": {
+            "n_rows": len(science),
+            "max_formal_snr": _finite_or_none(
+                np.nanmax([float(row["recovered_snr"]) for row in science]) if science else np.nan
+            ),
+            "note": "The real companion position is science data and has no veto power in V2.",
+        },
+    }
 
 
 def _v3_monotonic(rows, methods):
@@ -806,9 +1032,10 @@ def _v4_hierarchy(rows):
     return {"status": "pass" if not failures else "fail", "median_throughput": med, "failures": failures}
 
 
-def _v5_continuum(rows, methods):
+def _v5_continuum(rows, methods, continuum_info):
     out = {}
     failures = []
+    identical = []
     for method in methods:
         no_cont = [
             row["throughput"]
@@ -834,20 +1061,36 @@ def _v5_continuum(rows, methods):
             continue
         degradation = 100.0 * (base - cont) / abs(base)
         out[method] = degradation
+        if len(no_cont) == len(flat) and np.allclose(no_cont, flat, rtol=0.0, atol=0.0, equal_nan=True):
+            identical.append(method)
         if degradation > 20.0:
             failures.append(method)
-    return {"status": "pass" if not failures else "fail", "degradation_pct": out, "failures": failures}
+    continuum_positive = bool(float((continuum_info or {}).get("value", 0.0)) > 0)
+    ok = continuum_positive and not failures and not identical
+    return {
+        "status": "pass" if ok else "fail",
+        "continuum_positive": continuum_positive,
+        "flat_distinct_from_none": not identical,
+        "identical_methods": identical,
+        "degradation_pct": out,
+        "failures": failures,
+    }
 
 
-def _qc_from_rows(config, paths, rows, methods, cases, budget, regression):
+def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, continuum_info, null_reference):
     threshold = float(config.get("h04_detection_threshold_snr", 5.0))
     psf_pct = _psf_perturbation_pct(rows, methods)
     checks = {
         "v1_regression": {"status": regression["verdict"], **regression},
-        "v2_nulls_clean": _v2_nulls_clean(rows, threshold),
+        "v2_nulls_clean": _v2_nulls_clean(
+            rows,
+            null_reference,
+            p_null=float(config.get("h04_null_p", DEFAULT_NULL_P)),
+            gate_alpha=float(config.get("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)),
+        ),
         "v3_monotonic": _v3_monotonic(rows, methods),
         "v4_hierarchy": _v4_hierarchy(rows),
-        "v5_continuum": _v5_continuum(rows, methods),
+        "v5_continuum": _v5_continuum(rows, methods, continuum_info),
     }
     open_issues = []
     if regression["verdict"] != "pass":
@@ -857,6 +1100,7 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression):
             open_issues.append(f"{key} failed.")
     return {
         "stage": "h04_injection_recovery",
+        "spec_version": SPEC_VERSION,
         "run_id_base": str(config["run_id"]),
         "status": "complete",
         "clones_created": [],
@@ -875,6 +1119,16 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression):
             "methods": list(methods),
         },
         "runtime_budget": budget,
+        "continuum_injection": continuum_info,
+        "empirical_null_reference": {
+            method: {
+                "n_controls": int(reference["n_controls"]),
+                "scale_source": reference.get("scale_source", "configured_test_reference"),
+                "product": reference.get("product"),
+                "controls": reference.get("controls"),
+            }
+            for method, reference in null_reference.items()
+        },
         "throughput": {
             "per_method_at_snr5": _throughput_at_snr5(rows, methods),
             "psf_perturbation_pct": psf_pct,
@@ -894,6 +1148,7 @@ def _blocked_product(config, paths, positions, cases, methods, budget, reason):
     regression = historic_regression_check(config, paths)
     qc = {
         "stage": "h04_injection_recovery",
+        "spec_version": SPEC_VERSION,
         "run_id_base": str(config["run_id"]),
         "status": "blocked",
         "blocked_reason": reason,
@@ -1067,7 +1322,8 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
     line_center = _line_center_from_config(cfg)
     lsf_fwhm, _lsf_source = _lsf_fwhm_from_config_or_qc(cfg, paths)
     sigma_flux = _injection_sigma(cfg)
-    continuum_flux_density = float(cfg.get("h04_continuum_flux_density", 0.0))
+    continuum_info = resolve_continuum_injection(cfg, paths)
+    continuum_flux_density = float(continuum_info["value"])
     threshold = float(cfg.get("h04_detection_threshold_snr", 5.0))
     continuum_window_A = float(cfg.get("h04_continuum_window_A", cfg.get("h01_continuum_window_A", 80.0)))
 
@@ -1097,7 +1353,31 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
     regression = historic_regression_check(cfg, paths)
     if bool(cfg.get("h04_require_historic_regression", True)) and regression["verdict"] != "pass":
         raise RuntimeError("H04 historic regression V1 must pass before publishing throughput.")
-    qc = _qc_from_rows(cfg, paths, rows, methods, cases, budget, regression)
+    configured_null = cfg.get("h04_empirical_null_reference")
+    if configured_null is None:
+        null_reference = build_empirical_null_reference(cfg, paths, methods, lsf_fwhm_A=lsf_fwhm)
+    else:
+        null_reference = {
+            method: {
+                **reference,
+                "by_factor": {
+                    str(factor): np.asarray(values, dtype=np.float64)
+                    for factor, values in reference["by_factor"].items()
+                },
+            }
+            for method, reference in configured_null.items()
+        }
+    qc = _qc_from_rows(
+        cfg,
+        paths,
+        rows,
+        methods,
+        cases,
+        budget,
+        regression,
+        continuum_info,
+        null_reference,
+    )
     return StageH04Product(rows=_json_ready(rows), qc=_json_ready(qc))
 
 
@@ -1370,17 +1650,20 @@ def main(argv=None):
 __all__ = [
     "DEFAULT_METHODS",
     "DEFAULT_SNR_GRID",
+    "SPEC_VERSION",
     "H01_MATCHED_FILTER_POINT",
     "H04Case",
     "StageH04Product",
     "build_h04_cases",
     "clone_run_for_case",
     "compute_stage_h04_products",
+    "build_empirical_null_reference",
     "close_runtime_budget",
     "estimate_runtime_budget",
     "historic_regression_check",
     "measure_recovery_with_h01_estimator",
     "resolve_h04_positions",
+    "resolve_continuum_injection",
     "run_stage_h04",
     "stage_h04_config_from_run",
     "stage_h04_paths",

@@ -123,9 +123,11 @@ def _selected_records(records: list[RawRecord], science: list[RawRecord]) -> tup
     # classified from that header, so it remains valid for those persisted CSVs.
     archive_bias = [record for record in records if record.tag == "MASTER_BIAS"]
     bias = _single_nearest(archive_bias, reference)
+    archive_lsf = [record for record in records if record.tag == "LSF_PROFILE" and _same_setup(record, setup)]
+    lsf = _single_nearest(archive_lsf, reference) if archive_lsf else None
     static = [record for record in records if record.tag in STATIC_TAGS]
 
-    selected = [*science, *flats, *arcs, *stds, illum, *static]
+    selected = [*science, *flats, *arcs, *stds, illum, *static, *([lsf] if lsf else [])]
     association = {
         "observing_night": observing_night(science[0]),
         "reference_utc": reference.isoformat().replace("+00:00", "Z"),
@@ -136,6 +138,7 @@ def _selected_records(records: list[RawRecord], science: list[RawRecord]) -> tup
             "ARC": [str(record.path) for record in arcs],
             "ILLUM": [str(illum.path)],
             "STD": [str(record.path) for record in stds],
+            "LSF_PROFILE": [str(lsf.path)] if lsf else [],
             "static": [str(record.path) for record in static],
         },
         "bias_exception": {
@@ -343,6 +346,27 @@ def run_night(args: argparse.Namespace, night: str, records: list[RawRecord], as
         for step in STEP_ORDER:
             if STEP_ORDER.index(step) > STEP_ORDER.index(args.stop_after):
                 break
+            if step == "lsf" and association["calibrations"].get("LSF_PROFILE"):
+                reused = {"LSF_PROFILE": list(association["calibrations"]["LSF_PROFILE"])}
+                _validate_product_headers(reused)
+                products.update(reused)
+                manifest["checkpoints"][step] = {
+                    "fingerprint": hashlib.sha256(
+                        json.dumps(
+                            {
+                                "inventory_sha256": sha256_file(inventory),
+                                "products": _product_fingerprint(reused["LSF_PROFILE"]),
+                            },
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "status": "reused_archive_product",
+                    "gates": {"LSF_PROFILE": len(reused["LSF_PROFILE"])},
+                    "source": reused["LSF_PROFILE"],
+                }
+                manifest["products"] = products
+                _write_json(manifest_path, manifest)
+                continue
             recipe = "muse_scibasic" if step.startswith("scibasic") else f"muse_{step}"
             plan = build_recipe_plan(recipe, selected, products=products)
             if step == "scibasic_object":

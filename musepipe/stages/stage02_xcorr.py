@@ -56,6 +56,7 @@ def stage02_paths(run_id, project_root=None):
         "stage02_shifts_npy": paths.stage_dir / "stage02_xcorr_shifts.npy",
         "stage02_shiftmaps_fits": paths.stage_dir / "stage02_shiftmaps.fits",
         "stage02_qc_json": paths.stage_dir / "stage02_qc.json",
+        "stage02_xcorr_qc_json": paths.stage_dir / "stage02_xcorr_qc.json",
         "stage02_shift_csv": paths.table_dir / "stage02_xcorr_shift_summary.csv",
         "stage02_metric_csv": paths.table_dir / "stage02_stripe_metric.csv",
         "stage02_metric_plot": plot_dir / "stage02_stripe_metric.png",
@@ -580,6 +581,7 @@ def write_stage02_products(product: Stage02Product, config, paths_dict):
         "stage02_shifts_npy",
         "stage02_shiftmaps_fits",
         "stage02_qc_json",
+        "stage02_xcorr_qc_json",
         "stage02_shift_csv",
         "stage02_metric_csv",
     ):
@@ -631,6 +633,7 @@ def write_stage02_products(product: Stage02Product, config, paths_dict):
             Path("plots") / "stage02" / Path(paths_dict["stage02_metric_plot"]).name
         )
     write_json(paths_dict["stage02_qc_json"], product.qc)
+    write_json(paths_dict["stage02_xcorr_qc_json"], product.qc)
 
 
 def _write_csv(path, rows):

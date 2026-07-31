@@ -89,6 +89,25 @@ class PerExposurePlanTests(unittest.TestCase):
                     save="cube",
                 )
 
+    def test_plan_accepts_one_merged_lsf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exposure_payload, calibration = self._inputs(root)
+            calibration["night_calibrations"]["2022-08-28"]["LSF_PROFILE"] = [
+                str(_fits(root / "lsf_merged.fits", "LSF_PROFILE"))
+            ]
+            exposure_path = root / "exposures.json"
+            exposure_path.write_text(json.dumps(exposure_payload), encoding="utf-8")
+            expected_ifus, exposures = load_exposures(exposure_path, run_id="test_run")
+            plan = build_scipost_plans(
+                run_id="test_run",
+                exposures=exposures,
+                expected_ifus=expected_ifus,
+                calibration_payload=calibration,
+                save="cube",
+            )
+            validate_scipost_plan(plan)
+
     def test_alignment_review_requires_two_images(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

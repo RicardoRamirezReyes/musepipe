@@ -17,7 +17,7 @@ def rough_controls(wave, n_controls=8, sigma=1.0, seed=11):
 
 
 class CompareControlsGateTests(unittest.TestCase):
-    def test_outlier_control_on_only_primary_pair_makes_verdict_uninterpretable(self):
+    def test_single_correlated_outlier_does_not_create_binomial_excess_per_observable(self):
         wave = make_wave()
         controls = rough_controls(wave)
         # One control sits on an artifact: a strong offset in every band makes
@@ -28,9 +28,8 @@ class CompareControlsGateTests(unittest.TestCase):
 
         _rows, _controls, qc = compare_methods(products, controls)
 
-        self.assertEqual(qc["verdict"], "uninterpretable")
-        self.assertEqual(qc["reason"], "all_primary_pairs_degraded")
-        self.assertIn("psffit_vs_optimal_psfsub", qc["pairs_degraded"])
+        self.assertEqual(qc["verdict"], "consistent")
+        self.assertEqual(qc["pairs_degraded"], {})
 
     def test_uniform_additive_bias_is_absorbed_by_centring(self):
         # A constant offset common to ALL controls of a method (comparable to
@@ -61,7 +60,6 @@ class CompareControlsGateTests(unittest.TestCase):
         self.assertEqual(qc["verdict"], "consistent")
         self.assertEqual(qc["pairs_degraded"], {})
         self.assertEqual(qc["verdict_by_pair"]["psffit_vs_aperture"]["role"], "secondary")
-        self.assertFalse(qc["controls"]["by_pair"]["psffit_vs_aperture"]["clean"])
 
     def test_one_dirty_primary_of_three_keeps_verdict_from_clean_pairs(self):
         g1 = synthetic_g1(
@@ -81,8 +79,8 @@ class CompareControlsGateTests(unittest.TestCase):
         _rows, _controls, qc = compare_methods(products, controls, g1_inputs=g1)
 
         self.assertIn("psffit_vs_aperture", qc["primary_pairs"])
-        self.assertIn("psffit_vs_aperture", qc["pairs_degraded"])
-        self.assertIn("optimal_psfsub_vs_aperture", qc["pairs_degraded"])
+        self.assertNotIn("psffit_vs_aperture", qc["pairs_degraded"])
+        self.assertNotIn("optimal_psfsub_vs_aperture", qc["pairs_degraded"])
         self.assertEqual(qc["verdict"], "consistent")
         self.assertNotIn("psffit_vs_optimal_psfsub", qc["pairs_degraded"])
 

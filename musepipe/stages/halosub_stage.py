@@ -346,6 +346,17 @@ def lsf_fwhm_A_from_qc_or_config(paths, cfg, default=2.6):
     return value
 
 
+def expected_scaleref(cfg, *, knob):
+    """Return the FITS scale label required by the configured flux convention."""
+
+    convention = str(cfg.get(knob, cfg.get("flux_convention", "normrad"))).lower()
+    if convention in {"total", "empirical_total"}:
+        return "empirical_total_flux"
+    if convention in {"normrad", "norm_radius", "legacy"}:
+        return "normrad_total_flux"
+    raise ValueError(f"Unknown flux_convention={convention!r}; expected 'normrad' or 'total'.")
+
+
 __all__ = [
     "BOX3_APERTURE",
     "HalosubExposure",
@@ -353,6 +364,7 @@ __all__ = [
     "MIN_REFERENCE_SPAXELS",
     "base_qc_payload",
     "combine_residuals",
+    "expected_scaleref",
     "extract_halosub_product",
     "halosub_config_from_run",
     "halosub_paths",

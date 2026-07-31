@@ -80,7 +80,22 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
     amp, bck = res.flux_bck
     recon = amp * model(res.x, dx=res.dxdy[0], dy=res.dxdy[1]) + bck
     ring = _ring_residual(image, recon, companion_yx, mask_radius)
-    return list(map(float, res.x)), float(amp), float(bck), tuple(map(float, res.dxdy)), ring, recon
+    unchanged = bool(
+        np.allclose(np.asarray(res.x, dtype=float), np.asarray(x0, dtype=float), rtol=0.0, atol=1e-8)
+        and np.allclose(np.asarray(res.dxdy, dtype=float), 0.0, rtol=0.0, atol=1e-8)
+    )
+    # An exact solution may legitimately equal x0. Treat it as a stall only when
+    # the optimizer also stopped immediately without exploring the parameter space.
+    stalled = bool(unchanged and int(res.nfev) <= 2)
+    optimizer = {
+        "success": bool(res.success),
+        "status": int(res.status),
+        "message": str(res.message),
+        "nfev": int(res.nfev),
+        "cost": float(res.cost),
+        "stalled_at_initial": stalled,
+    }
+    return list(map(float, res.x)), float(amp), float(bck), tuple(map(float, res.dxdy)), ring, recon, optimizer
 
 
 def _ring_residual(image, model, companion_yx, mask_radius, width=1.5):
@@ -190,17 +205,31 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
         var = np.nanmedian(stat[sel], axis=0)
         samp = float(muse_nfm.samp(mid * 1e-10))
         try:
-            params, amp, bck, dxdy, ring, recon = fit_bin(
+            params, amp, bck, dxdy, ring, recon, optimizer = fit_bin(
                 img, var, samp, system, companion, mask_radius, fit_radius, x0, field_yx=field_yx
             )
         except Exception as exc:  # pragma: no cover - defensive
             rows.append({"lambda_A": mid, "status": f"fit_failed:{exc}"})
             continue
+        if optimizer["stalled_at_initial"]:
+            fit_status = "fit_stalled:initial_vector"
+        elif not optimizer["success"]:
+            fit_status = f"fit_failed:optimizer_status_{optimizer['status']}"
+        else:
+            fit_status = "ok"
         row = {"lambda_A": float(mid), "samp": samp, "amp": amp, "bck": bck,
-               "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring, "status": "ok"}
+               "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring,
+               "optimizer_success": optimizer["success"],
+               "optimizer_status": optimizer["status"],
+               "optimizer_message": optimizer["message"],
+               "optimizer_nfev": optimizer["nfev"],
+               "optimizer_cost": optimizer["cost"],
+               "optimizer_stalled_at_initial": optimizer["stalled_at_initial"],
+               "status": fit_status}
         row.update({name: params[i] for i, name in enumerate(PSFAO_PARAM_NAMES)})
         rows.append(row)
-        recons[float(mid)] = (img, recon)
+        if fit_status == "ok":
+            recons[float(mid)] = (img, recon)
     return rows, recons
 
 

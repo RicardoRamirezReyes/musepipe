@@ -44,7 +44,12 @@ def _products(output_dir: Path) -> dict[str, list[str]]:
 
 
 def _gate(products: dict[str, list[str]], exposure_id: str, save: str) -> None:
-    expected = {"PIXTABLE_REDUCED": 1} if save == "individual" else {"DATACUBE_FINAL": 1, "IMAGE_FOV": 1, "SKY_SPECTRUM": 1}
+    if save == "individual":
+        expected = {"PIXTABLE_REDUCED": 1}
+    elif save == "skymodel":
+        expected = {"SKY_SPECTRUM": 1}
+    else:
+        expected = {"DATACUBE_FINAL": 1, "IMAGE_FOV": 1, "SKY_SPECTRUM": 1}
     failures = [f"{tag}={len(products.get(tag, []))}" for tag, count in expected.items() if len(products.get(tag, [])) != count]
     if failures:
         raise PerExposureExecutionError(f"{exposure_id}: product gate failed ({', '.join(failures)})")
@@ -63,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", required=True)
     parser.add_argument("--output-dir", help="Execution root; defaults to the plan directory.")
     parser.add_argument("--esorex", default="esorex")
-    parser.add_argument("--save", choices=["cube,skymodel", "individual"], default="cube,skymodel")
+    parser.add_argument("--save", choices=["cube,skymodel", "individual", "skymodel"], default="cube,skymodel")
     parser.add_argument("--execute", action="store_true", help="Required to invoke EsoRex.")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--exclude", action="append", default=[], help="Exposure id approved for exclusion; repeat as needed.")
@@ -177,11 +182,21 @@ def main(argv: list[str] | None = None) -> int:
         excluded = [exposure_id for exposure_id, result in completed.items() if isinstance(result, dict) and result.get("status") == "excluded"]
         execution["status"] = "complete_with_exclusions" if excluded else "complete"
         execution["excluded_exposures"] = sorted(excluded)
-        execution["next_checkpoint"] = (
-            {"status": "awaiting_exp_combine", "reason": "All PIXTABLE_REDUCED products require a reviewed OFFSET_LIST before combination."}
-            if args.save == "individual"
-            else {"status": "awaiting_image_fov_review", "reason": "Validate and review all IMAGE_FOV products before exp_align, offsets, or combination."}
-        )
+        if args.save == "individual":
+            execution["next_checkpoint"] = {
+                "status": "awaiting_exp_combine",
+                "reason": "All PIXTABLE_REDUCED products require a reviewed OFFSET_LIST before combination.",
+            }
+        elif args.save == "skymodel":
+            execution["next_checkpoint"] = {
+                "status": "ready_for_sky_qc",
+                "reason": "All per-exposure SKY_SPECTRUM products passed their gates.",
+            }
+        else:
+            execution["next_checkpoint"] = {
+                "status": "awaiting_image_fov_review",
+                "reason": "Validate and review all IMAGE_FOV products before exp_align, offsets, or combination.",
+            }
         _write_json(execution_path, execution)
     finally:
         os.close(descriptor)

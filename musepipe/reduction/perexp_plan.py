@@ -123,7 +123,12 @@ def build_scipost_plans(
         entries.extend(SofEntry(path, "STD_TELLURIC") for path in _require_paths(calibrations, "STD_TELLURIC", 1))
         entries.extend(SofEntry(path, "EXTINCT_TABLE") for path in _require_paths(calibrations, "EXTINCT_TABLE", 1))
         entries.extend(SofEntry(path, "FILTER_LIST") for path in _require_paths(calibrations, "FILTER_LIST", 1))
-        entries.extend(SofEntry(path, "LSF_PROFILE") for path in _require_paths(calibrations, "LSF_PROFILE", expected_ifus))
+        lsf_paths = _require_paths(calibrations, "LSF_PROFILE")
+        if len(lsf_paths) not in {1, expected_ifus}:
+            raise PerExposurePlanError(
+                f"expected 1 merged or {expected_ifus} per-IFU LSF_PROFILE paths, got {len(lsf_paths)}"
+            )
+        entries.extend(SofEntry(path, "LSF_PROFILE") for path in lsf_paths)
         for optional_tag in ("ASTROMETRY_WCS", "SKY_LINES"):
             for path in _require_paths(calibrations, optional_tag) if optional_tag in calibrations else []:
                 entries.append(SofEntry(path, optional_tag))
@@ -150,7 +155,7 @@ def validate_scipost_plan(plan: PerExposureScipostPlan) -> None:
             raise PerExposurePlanError(f"{exposure_id}: response/telluric gate failed")
         if counts.get("EXTINCT_TABLE") != 1 or counts.get("FILTER_LIST") != 1:
             raise PerExposurePlanError(f"{exposure_id}: extinction/filter gate failed")
-        if counts.get("LSF_PROFILE") != plan.expected_ifus:
+        if counts.get("LSF_PROFILE") not in {1, plan.expected_ifus}:
             raise PerExposurePlanError(f"{exposure_id}: invalid LSF count")
 
 

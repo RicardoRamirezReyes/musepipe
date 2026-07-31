@@ -121,6 +121,7 @@ def _star_large_aperture_check(cube, star_yx, psf_model, star_product):
     _, ny, nx = cube.shape
     weights = aperture_weights(ny, nx, star_yx, {"kind": "circle", "radius_px": radius})
     aperture_flux = np.nansum(np.asarray(cube) * weights[None, :, :], axis=(1, 2))
+    aperture_flux = aperture_flux * np.asarray(star_product.apcorr, dtype=np.float64)
     ratio = _median_ratio(star_product.flux, aperture_flux)
     return {"vs_large_aperture_median_ratio": ratio}
 
@@ -331,16 +332,16 @@ def write_stage_x03_products(product: StageX03Product, config, paths):
             fits.ImageHDU(product.products.result.fit_mask.astype(np.uint8), name="FIT_MASK"),
         ]
     ).writeto(paths["cube_psffit_residual"], overwrite=True)
-    # Persist companion control spectra for D1 (empirical sigma_diff source).
-    # psffit amplitudes are already total NORMRAD flux (apcorr=1): calibrated
-    # and raw coincide; both keys kept for uniformity with x01/x02 (D1 v2 §3.1).
+    # Persist companion controls on the same physical scale as product.flux.
+    # The raw key removes the already-applied correction for parity with C2/C3.
     control_comp = np.asarray(product.products.control_comp_spectra, dtype=np.float64)
+    apcorr = np.asarray(product.products.companion.apcorr, dtype=np.float64)
     np.savez(
         paths["paths"].stage_dir / "spec_psffit_controls.npz",
         control_spectra=control_comp,
-        control_spectra_raw=control_comp,
+        control_spectra_raw=control_comp / apcorr[None, :],
         bkg_mode=np.asarray("psffit_plane"),
-        apcorr_median=np.asarray(1.0),
+        apcorr_median=np.asarray(float(np.nanmedian(apcorr))),
     )
     qc = dict(product.qc)
     qc["products"] = {

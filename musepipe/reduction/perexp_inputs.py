@@ -37,6 +37,23 @@ def _paths(payload: Mapping[str, object], tag: str, count: int) -> list[Path]:
     return paths
 
 
+def _paths_with_allowed_counts(
+    payload: Mapping[str, object], tag: str, counts: set[int]
+) -> list[Path]:
+    products = payload.get("products")
+    values = products.get(tag) if isinstance(products, dict) else None
+    if not isinstance(values, list) or len(values) not in counts or not all(isinstance(value, str) for value in values):
+        expected = " or ".join(str(count) for count in sorted(counts))
+        raise PerExposureInputError(f"missing {expected} {tag} products")
+    paths = [Path(value) for value in values]
+    for path in paths:
+        if not path.exists() or path.stat().st_size == 0:
+            raise PerExposureInputError(f"missing or empty {tag}: {path}")
+        if classify_fits(path, checksum=False).tag != tag:
+            raise PerExposureInputError(f"{path}: FITS tag is not {tag}")
+    return paths
+
+
 def _static_paths(payload: Mapping[str, object], tags: set[str]) -> dict[str, list[str]]:
     association = payload.get("association")
     calibrations = association.get("calibrations") if isinstance(association, dict) else None
@@ -76,13 +93,13 @@ def build_perexp_inputs(manifest_paths: Sequence[str | Path], *, run_id: str) ->
             raise PerExposureInputError(f"{manifest_path}: missing night or science association")
         if night in night_calibrations:
             raise PerExposureInputError(f"duplicate manifest for night {night}")
-        lsf_paths = _paths(payload, "LSF_PROFILE", 24)
+        lsf_paths = _paths_with_allowed_counts(payload, "LSF_PROFILE", {1, 24})
         response_paths = _paths(payload, "STD_RESPONSE", 1)
         telluric_paths = _paths(payload, "STD_TELLURIC", 1)
-        pixtable_paths = _paths(payload, "PIXTABLE_OBJECT", len(science) * len(lsf_paths))
+        pixtable_paths = _paths(payload, "PIXTABLE_OBJECT", len(science) * 24)
         if expected_ifus is None:
-            expected_ifus = len(lsf_paths)
-        elif expected_ifus != len(lsf_paths):
+            expected_ifus = 24
+        elif expected_ifus != 24:
             raise PerExposureInputError("nights disagree on the number of IFUs")
         by_raw_name: dict[str, list[Path]] = {Path(value).name: [] for value in science}
         for pixtable in pixtable_paths:
@@ -93,8 +110,8 @@ def build_perexp_inputs(manifest_paths: Sequence[str | Path], *, run_id: str) ->
         for raw in science:
             raw_path = Path(raw)
             group = sorted(by_raw_name[raw_path.name])
-            if len(group) != len(lsf_paths):
-                raise PerExposureInputError(f"{raw_path}: expected {len(lsf_paths)} pixtables, found {len(group)}")
+            if len(group) != expected_ifus:
+                raise PerExposureInputError(f"{raw_path}: expected {expected_ifus} pixtables, found {len(group)}")
             date_obs = fits.getheader(raw_path).get("DATE-OBS", "")
             exposure_rows.append(
                 {
