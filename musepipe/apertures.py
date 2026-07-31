@@ -59,6 +59,13 @@ def aperture_weights(ny, nx, center_yx, aperture) -> np.ndarray:
             weights[y, x] = 1.0
     elif kind == "box":
         size = int(aperture.get("size", 3))
+        if size < 1 or size % 2 == 0:
+            raise ValueError(
+                "box aperture size must be an odd positive integer, got "
+                f"size={size}. An even size has no integer-centred box: "
+                f"`half = size // 2` would silently return the {2 * (size // 2) + 1}x"
+                f"{2 * (size // 2) + 1} one under the wrong label."
+            )
         half = size // 2
         y = int(round(y0))
         x = int(round(x0))
@@ -81,7 +88,13 @@ def aperture_weights(ny, nx, center_yx, aperture) -> np.ndarray:
 
 
 def _box_bounds(ny, nx, yc, xc, box_size):
-    half = int(box_size) // 2
+    box_size = int(box_size)
+    if box_size < 1 or box_size % 2 == 0:
+        raise ValueError(
+            f"box_size must be an odd positive integer, got box_size={box_size}. "
+            "The run knob is `box_aperture_size_px`."
+        )
+    half = box_size // 2
     yc = int(yc)
     xc = int(xc)
     return (
