@@ -151,7 +151,7 @@ reprodujera la cadena.
 |---|---|
 | `A3_telluric_debug` | la decisión telúrica entera —continuo local, profundidad por banda, umbral— sobre las tres reducciones del objeto, con el espectro **antes y después** de corregir y las tres hipótesis del salto O₂ B ~7 % → 0.59 % |
 | `C2_aperture_debug` | apertura box3, fondo de anillo, controles, error empírico y por STAT, apcorr. Además, dos estudios: el **anillo** (8 aperturas repartidas sobre él, con el mismo proceso que el compañero, y el sesgo de su mediana medido contra los sectores a ±90°) y el **tamaño óptimo** por S/N empírica |
-| `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa |
+| `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa. Y el estudio del anillo **sobre los datos con el halo restado** (modelo de PSF frente a perfil radial medido): si restarlo aplana el gradiente azimutal y su sesgo |
 | `C4_psffit_debug` | el ajuste simultáneo de **dos PSF** por canal (el método canónico): región de ajuste, matriz de diseño, χ²ᵣ y ρ(a,b), controles y los dos espectros. Trae perilla de submuestreo de canales |
 | `C5_sgf_debug` | selección de spaxels de referencia, espectro estelar de referencia, filtrado Savitzky-Golay y apertura sobre el residual |
 | `C6_lpm_debug` | lo mismo, pero modelando con Legendre y **con las líneas enmascaradas del ajuste**: la base del diseño y la energía por grado |
