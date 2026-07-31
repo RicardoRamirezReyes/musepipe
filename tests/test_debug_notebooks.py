@@ -57,17 +57,53 @@ class InlinedSourceTests(unittest.TestCase):
                     actual = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
                     self.assertEqual(actual, sha, f"{rel}:{name}")
 
+    #: Lo que cada etapa TIENE que arrastrar. Por etapa y no en común: lo que
+    #: se fija aquí son regresiones concretas, y exigirle a A3 el
+    #: `FLAG_BAD_WINDOW` del bloque C solo mediría que la lista está mal.
+    ARRASTRA = {
+        # `warnings` lo usa robust_sigma_axis0 y `FLAG_BAD_WINDOW` channel_flags:
+        # sin detectarlos, el notebook fallaba al ejecutarse.
+        "C2": (["import warnings", "import numpy as np"], ["FLAG_BAD_WINDOW"]),
+        "C3": (["import warnings", "import numpy as np"], ["FLAG_BAD_WINDOW"]),
+        "C4": (["import warnings", "import numpy as np"], ["FLAG_BAD_WINDOW"]),
+        "C5": (["import warnings", "import numpy as np"], ["FLAG_BAD_WINDOW"]),
+        "C6": (["import warnings", "import numpy as np"], ["FLAG_BAD_WINDOW"]),
+        # A3: las dos ventanas protegidas solo aparecen DENTRO del valor de
+        # `PROTECTED_WINDOWS`, así que fijan el cierre transitivo de
+        # `needed_constants` — sin él la copia peta con NameError.
+        "A3": (["import numpy as np", "from dataclasses import dataclass"],
+               ["TELLURIC_BANDS", "PROTECTED_WINDOWS",
+                "HALPHA_PROTECTED", "NALGS_PROTECTED"]),
+    }
+
     def test_the_copy_carries_the_imports_and_constants_it_uses(self):
         for stage_id in self.bdn.INLINE_SOURCES:
             sources = self._sources(stage_id)
             imports = self.bdn.needed_imports(sources)
             constants = "\n".join(self.bdn.needed_constants(sources))
             with self.subTest(etapa=stage_id):
-                # `warnings` lo usa robust_sigma_axis0 y `FLAG_BAD_WINDOW`
-                # channel_flags: sin detectarlos, el notebook fallaba al ejecutarse.
-                self.assertIn("import warnings", imports)
-                self.assertIn("import numpy as np", imports)
-                self.assertIn("FLAG_BAD_WINDOW", constants)
+                self.assertIn(stage_id, self.ARRASTRA,
+                              "etapa nueva sin expectativa declarada en ARRASTRA")
+                esperados_imports, esperadas_constantes = self.ARRASTRA[stage_id]
+                for imp in esperados_imports:
+                    self.assertIn(imp, imports)
+                for cte in esperadas_constantes:
+                    self.assertIn(cte, constants)
+
+    def test_a_constant_never_precedes_what_it_is_written_in_terms_of(self):
+        """Las constantes salen en orden de módulo, no de descubrimiento.
+
+        `PROTECTED_WINDOWS = (HALPHA_PROTECTED, NALGS_PROTECTED)` se descubre
+        antes que sus dos operandos; emitirla antes que ellos daría un notebook
+        que compila y revienta al ejecutarse.
+        """
+        for stage_id in self.bdn.INLINE_SOURCES:
+            bloque = "\n".join(self.bdn.needed_constants(self._sources(stage_id)))
+            with self.subTest(etapa=stage_id):
+                try:
+                    exec(compile(bloque, f"<constantes {stage_id}>", "exec"), {})
+                except NameError as exc:
+                    self.fail(f"{stage_id}: la copia no define lo que usa ({exc})")
 
     def test_nothing_the_copy_calls_is_left_undefined(self):
         """Ninguna función copiada puede llamar a otra que no viaje con ella."""
@@ -104,7 +140,8 @@ class GeneratedNotebookTests(unittest.TestCase):
                     compile("".join(cell["source"]), f"<{stage_id} celda {i}>", "exec")
 
     def test_it_carries_the_drift_check_and_the_comparison(self):
-        productos = {"C2": ["spec_aperture_object.fits"],
+        productos = {"A3": ["stage00t_qc.json"],
+                     "C2": ["spec_aperture_object.fits"],
                      "C3": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
                      "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
                      "C5": ["spec_sgf_object.fits"],
@@ -160,12 +197,34 @@ class ReproducesTheChainTests(unittest.TestCase):
     OBJETO = "ROXs12b"
     #: notebook -> productos de la etapa que tienen que existir para compararlo
     CASOS = {
+        "A3_telluric_debug": ["stage00t_qc.json"],
         "C2_aperture_debug": ["spec_aperture_object.fits"],
         "C3_optimal_debug": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
         "C4_psffit_debug": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
         "C5_sgf_debug": ["spec_sgf_object.fits"],
         "C6_lpm_debug": ["spec_lpm_object.fits"],
     }
+
+    @staticmethod
+    def _entrada_fuera_del_run(slug, stage_dir):
+        """Ruta que falta, de las que NO viven bajo `runs/<RUN>/stages`.
+
+        Los notebooks del bloque C se comparan contra un producto del propio
+        run; A3 mide sobre los cubos de reducción, que están fuera del árbol
+        del run (y en otro disco). Sin esta comprobación el notebook se
+        ejecutaría y fallaría por falta de datos en vez de saltarse.
+        """
+        if slug != "A3_telluric_debug":
+            return None
+        qc = stage_dir / "stage00t_qc.json"
+        if not qc.exists():
+            return str(qc)
+        declarado = (json.loads(qc.read_text(encoding="utf-8"))
+                     .get("input", {}).get("cube", ""))
+        cubo = Path(declarado) if declarado else None
+        if cubo is not None and not cubo.is_absolute():
+            cubo = ROOT / cubo
+        return None if (cubo is not None and cubo.exists()) else str(declarado)
 
     def test_every_debug_notebook_reports_identical(self):
         import contextlib
@@ -181,6 +240,9 @@ class ReproducesTheChainTests(unittest.TestCase):
             with self.subTest(notebook=slug):
                 if faltan:
                     self.skipTest(f"{self.RUN} sin productos: falta {faltan[0]}")
+                fuera = self._entrada_fuera_del_run(slug, stage_dir)
+                if fuera:
+                    self.skipTest(f"{slug}: entrada fuera del run sin disponer: {fuera}")
                 if not path.exists():
                     self.skipTest(f"{slug} no generado")
                 payload = json.loads(path.read_text(encoding="utf-8"))

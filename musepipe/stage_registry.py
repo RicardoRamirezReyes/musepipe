@@ -83,12 +83,19 @@ STAGES: tuple[Stage, ...] = (
                         "--input-cube {cube} --provenance {provenance} "
                         "--output-dir {stage_dir} "
                         "--qc-output {stage_dir}/stage00s_qc.json")}),
+    # `--science-needs-red-continuum` no es opcional aunque lo parezca: es un
+    # `store_true`, y sin él `decide_telluric` cortocircuita a
+    # `not_needed_science`. Los tres QC de A3 en disco registran `true`, así que
+    # el comando de aquí, tal como estaba, NO reproducía el veredicto que
+    # documenta. El radio va explícito por lo mismo: el default es 8.0 y las
+    # reducciones históricas se lanzaron a mano con 6.0.
     Stage("A3", "A3_telluric", "A", None,
           qc_aliases=("stages/stage00t_qc.json", "stages/stage00t_realigned_qc.json"),
           exec_kind="launch",
           launch={"*": ("bash scripts/telluric.sh decision --run-id {run_id} "
                         "--input-cube {cube} --upstream A2 "
                         "--primary-y {primary_y} --primary-x {primary_x} "
+                        "--radius-px 8.0 --science-needs-red-continuum "
                         "--qc-output {stage_dir}/stage00t_qc.json")}),
     Stage("A4", "A4_cube_qc", "A", "stages/stage00q_qc.json", exec_kind="launch",
           launch={"*": ("python -m musepipe.qc.cube_qc m3-flux --run-id {run_id} "

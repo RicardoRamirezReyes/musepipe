@@ -1995,7 +1995,10 @@ STAGES: list[dict] = [
             "La cadena canónica de ROXs 12 b da `not_needed_shallow` con O₂ B **0.59 %**, mientras "
             "la primera auto-reducción daba **6.76 %** y su realineado **7.34 %**, ambos con "
             "corrección aplicada. Las tres decisiones están desdobladas más abajo; manda el QC que "
-            "imprime esta celda."
+            "imprime esta celda. **La diferencia entre esos números ya está explicada** (el DRS "
+            "corrige el telúrico por exposición en la cadena multi-noche y no lo hacía en las "
+            "antiguas): la medida está en `debug/A3_telluric_debug.ipynb` y el resumen, en "
+            "«Decisiones y notas»."
         ),
         plot_code=(
             "MAKE_PLOT = True   # archivo pequeño; requiere kernel MUSE (astropy)\n"
@@ -2125,10 +2128,20 @@ STAGES: list[dict] = [
              "en `/mnt/2TB/MUSE_work/ROXs12b_realigned/TELLURIC_TRANS.fits`, **fuera** del run. "
              "**(c) Multi-noche del 2026-07-28** (la cadena canónica de hoy): O₂ B **0.586 %** → "
              "`not_needed_shallow`, **no aplicado**, sin curva emitida.", None),
-            ("**Abierto:** que la banda O₂ B pase de ~7 % en las reducciones antiguas a 0.59 % al "
-             "combinar las 29 exposiciones multi-noche **no está explicado**. Hasta cerrarlo, la "
-             "corrección telúrica de la cadena canónica no es citable como «medida y descartada»: "
-             "lo medido es que en *ese* cubo la banda es superficial.", None),
+            ("**Cerrado (2026-07-30):** que la banda O₂ B pase de ~7 % en las reducciones antiguas "
+             "a 0.59 % en la multi-noche **no es una banda más superficial: es el residuo de una "
+             "corrección ya aplicada**. La cadena multi-noche le pasa `STD_TELLURIC` a "
+             "`muse_scipost` en cada una de las 29 exposiciones —lo exige "
+             "`musepipe/reduction/perexp_plan.py`, que aborta si no hay exactamente una por "
+             "exposición— y los SOF de las reducciones antiguas **no lo llevaban** (16 SOF con "
+             "`STD_RESPONSE` y cero `STD_TELLURIC`). La prueba independiente es **O₂ A "
+             "(7590–7700 Å)**, que A3 no mide y que cae de **28.8 %** a **1.25 %** entre una "
+             "reducción y la otra. La masa de aire no lo explica: con las 29 exposiciones reales "
+             "(X = 1.02–1.54, peso `EXPTIME`) Beer–Lambert da un factor **1.03×**, y del signo "
+             "contrario. Luego la corrección telúrica del cubo canónico **está hecha, por el DRS, "
+             "exposición a exposición y cada una a su propia masa de aire** — mejor que aplicar "
+             "una curva única al cubo ya combinado. Medida y trazada en "
+             "`notebooks/<objeto>/debug/A3_telluric_debug.ipynb`.", None),
         ],
         checks=None,
         conclusion_md=(
