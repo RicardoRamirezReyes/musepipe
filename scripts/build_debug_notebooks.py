@@ -240,12 +240,11 @@ def needed_imports(sources):
     return sorted(used)
 
 
-def needed_constants(sources):
-    """Constantes de módulo que usa la copia (`FLAG_BAD_WINDOW`, umbrales…).
+def selected_constants(sources):
+    """`[(modulo, (nombres,), fuente)]` de las constantes que la copia necesita.
 
-    Misma idea que `needed_imports`: se deducen del código copiado. Son parte
-    del contrato de la etapa (los bits de `flags`, por ejemplo), así que viajan
-    con la copia en vez de importarse a escondidas.
+    Separado de `needed_constants` porque el chequeo de deriva necesita saber
+    de QUÉ módulo y con qué nombre viene cada bloque, no solo su texto.
     """
     out, seen = [], set()
     for rel, _name, src, _sha in sources:
@@ -283,8 +282,36 @@ def needed_constants(sources):
             if key in seen:
                 continue
             seen.add(key)
-            out.append("".join(lines[node.lineno - 1:node.end_lineno]).rstrip("\n"))
+            src = "".join(lines[node.lineno - 1:node.end_lineno]).rstrip("\n")
+            out.append((rel, targets, src))
     return out
+
+
+def needed_constants(sources):
+    """Constantes de módulo que usa la copia (`FLAG_BAD_WINDOW`, umbrales…).
+
+    Misma idea que `needed_imports`: se deducen del código copiado. Son parte
+    del contrato de la etapa (los bits de `flags`, por ejemplo), así que viajan
+    con la copia en vez de importarse a escondidas.
+    """
+    return [src for _rel, _targets, src in selected_constants(sources)]
+
+
+def constant_shas(sources):
+    """Los sha de las constantes copiadas, con la misma clave `ruta:NOMBRE`.
+
+    Sin esto el chequeo de deriva solo vigilaba funciones y clases: las
+    constantes viajaban copiadas pero **sin hash**, así que añadir una banda a
+    `TELLURIC_BANDS` dejaba al notebook ejecutando el diccionario viejo mientras
+    imprimía «sin deriva». Un fallback silencioso en el guardia contra fallbacks
+    silenciosos.
+    """
+    shas = {}
+    for rel, targets, src in selected_constants(sources):
+        sha = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+        for name in targets:
+            shas[f"{rel}:{name}"] = sha
+    return shas
 
 
 
@@ -298,19 +325,35 @@ def drift_cell(code, shas, stage_id):
     return code(
         "import ast as _ast, hashlib as _hashlib\n\n"
         f"_SHAS = {json.dumps(shas, indent=4)}\n\n"
+        "def _pieza(cuerpo, name):\n"
+        "    \"\"\"El nodo que define `name`: def/class, o la asignación de una constante.\n\n"
+        "    Las constantes también se vigilan: viajan copiadas igual que las\n"
+        "    funciones, y hasta ahora nadie comprobaba que siguieran siendo las de\n"
+        "    `musepipe` — añadir una banda a un diccionario dejaba esta copia atrás\n"
+        "    sin que nada lo dijera.\n"
+        "    \"\"\"\n"
+        "    for n in cuerpo:\n"
+        "        if isinstance(n, (_ast.FunctionDef, _ast.ClassDef)) and n.name == name:\n"
+        "            inicio = min([n.lineno] + [d.lineno for d in n.decorator_list])\n"
+        "            return inicio, n.end_lineno\n"
+        "        if isinstance(n, _ast.Assign) and any(\n"
+        "                isinstance(t, _ast.Name) and t.id == name for t in n.targets):\n"
+        "            return n.lineno, n.end_lineno\n"
+        "        if (isinstance(n, _ast.AnnAssign) and isinstance(n.target, _ast.Name)\n"
+        "                and n.target.id == name):\n"
+        "            return n.lineno, n.end_lineno\n"
+        "    return None\n\n"
         "def chequeo_de_deriva(shas=_SHAS, root=ROOT):\n"
         "    problemas = []\n"
         "    for key, sha in shas.items():\n"
         "        rel, name = key.rsplit(':', 1)\n"
         "        text = (root / rel).read_text(encoding='utf-8')\n"
         "        lines = text.splitlines(keepends=True)\n"
-        "        node = next((n for n in _ast.parse(text).body\n"
-        "                     if isinstance(n, (_ast.FunctionDef, _ast.ClassDef)) and n.name == name),\n"
-        "                    None)\n"
-        "        if node is None:\n"
+        "        sitio = _pieza(_ast.parse(text).body, name)\n"
+        "        if sitio is None:\n"
         "            problemas.append(f'{key}: ya no existe en musepipe'); continue\n"
-        "        start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1\n"
-        "        src = ''.join(lines[start:node.end_lineno]).rstrip('\\n')\n"
+        "        inicio, fin = sitio\n"
+        "        src = ''.join(lines[inicio - 1:fin]).rstrip('\\n')\n"
         "        actual = _hashlib.sha256(src.encode('utf-8')).hexdigest()[:12]\n"
         "        if actual != sha:\n"
         "            problemas.append(f'{key}: la copia es {sha}, musepipe tiene {actual}')\n"
@@ -340,13 +383,14 @@ def build_a3_cells(mb, target, run_id):
     sources = extract_sources("A3")
     inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
     shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
 
     cells = [
         md(
             f"# A3 · corrección telúrica — notebook de análisis (`debug`)\n\n"
             f"**Objeto:** {target}  |  **Run:** `{run_id}`  |  "
-            f"**Spec:** [`docs/spec_A3_codex_telluric.md`]"
-            f"(../../../docs/spec_A3_codex_telluric.md)\n\n"
+            f"**Spec:** [`docs/spec_A3_v2_codex_telluric.md`]"
+            f"(../../../docs/spec_A3_v2_codex_telluric.md)\n\n"
             "Este notebook **no llama a la cadena**: rehace la decisión de A3 aquí dentro, con "
             "el código a la vista, para que puedas **probar, cambiar y ajustar sin tocar "
             "`musepipe`**. El notebook de auditoría equivalente es "
@@ -448,10 +492,12 @@ def build_a3_cells(mb, target, run_id):
             "PROTECTED_A    = [tuple(w) for w in X00T['a3_protected_windows_A']]\n"
             "SIDE_WIDTH_A   = float(X00T['a3_side_width_A'])\n"
             "GAP_A          = float(X00T['a3_gap_A'])\n\n"
-            "# La banda que A3 NO mide y que resulta ser el discriminante de §7: O₂ A es la\n"
-            "# más profunda del rango de MUSE y no está en `TELLURIC_BANDS` de la etapa.\n"
-            "O2_A_BAND = (7590.0, 7700.0)\n"
-            "BANDAS_MAS = dict(BANDS_A); BANDAS_MAS['O2_A'] = O2_A_BAND\n\n"
+            "# O₂ A, la más profunda del rango de MUSE y el discriminante de §7. Este\n"
+            "# notebook la midió cuando la etapa NO la medía; desde 2026-07-31 está en\n"
+            "# `TELLURIC_BANDS`, así que sale del config resuelto como las demás — nunca\n"
+            "# como literal, que es lo que hace que un notebook deje de reproducir la cadena.\n"
+            "O2_A_BAND  = BANDS_A['O2_A']\n"
+            "BANDAS_MAS = dict(BANDS_A)   # se conserva el nombre: lo usan §5, §6, §9 y §10\n\n"
             "# ---- a partir de aquí, cambia lo que quieras probar ----\n\n"
             "_del_run = [k for k in X00T if k.startswith('a3_') and k in CFG]\n"
             "for _k, _v in {'radio apertura (px)': RADIUS_PX, 'umbral (%)': THRESHOLD_PCT,\n"
@@ -681,12 +727,14 @@ def build_a3_cells(mb, target, run_id):
             "    print('ninguna reducción de este objeto aplicó corrección: no hay antes/después que enseñar')"
         ),
         md(
-            "## 6 · El cubo canónico, y la apertura que su QC no declara\n\n"
-            "El QC multi-noche **no registra ni `primary_yx` ni `aperture_radius_px`** — el "
-            "esquema nuevo los perdió. Sin ellos su 0.586 % no se puede reproducir sin adivinar, "
-            "así que en vez de esconder el hueco se barre: posiciones candidatas (el centro del "
-            "recorte de B1 redondeado, el centro sin redondear, el pico de luz blanca) × radios, "
-            "y se marca la celda que da el número del QC.\n\n"
+            "## 6 · El cubo canónico y su apertura\n\n"
+            "**Si el QC declara `primary_yx` y `aperture_radius_px`, se usan y punto** — es la "
+            "procedencia, y desde 2026-07-31 el esquema los escribe. Si no los trae (los QC "
+            "anteriores a esa fecha, y los dos históricos escritos a mano) se cae al **barrido** "
+            "que hubo que inventar para recuperarlos: posiciones candidatas (el centro del recorte "
+            "de B1 redondeado, el centro sin redondear, el pico de luz blanca) × radios, marcando "
+            "la celda que reproduce el número del QC. La celda dice por cuál de los dos caminos "
+            "fue: adivinar y saber no son lo mismo, y el QC no debería obligar a lo primero.\n\n"
             "Ojo con el marco: la primaria de B3 está en coordenadas del **cubo recortado** "
             "(170 px), y el cubo canónico es el de 200 px. El desfase lo declara "
             "`stage01_qc.json:crop_bounds_per_cube` y confundirlos mueve la apertura 15 px.\n\n"
@@ -712,28 +760,34 @@ def build_a3_cells(mb, target, run_id):
             "    _med = np.nanmedian(_w, axis=0)\n"
             "    _pk = np.unravel_index(np.nanargmax(_med), _med.shape)\n"
             "    pico = (_cy - 30 + int(_pk[0]), _cx - 30 + int(_pk[1]))\n\n"
-            "    CAN_YX = (round(centro[0]), round(centro[1]))\n"
             "    objetivo = CAN['profundidades'].get('O2_B')\n"
-            "    print(f'\\nbarrido de O₂ B (%). Objetivo del QC: {objetivo!r}\\n')\n"
-            "    radios = [4.0, 6.0, 8.0, 10.0, 12.0]\n"
-            "    print('  posición'.ljust(34) + ''.join(f'r={r:<9.0f}' for r in radios))\n"
-            "    for pos, etq in ((CAN_YX, 'round(centro)'), (tuple(centro), 'centro'), (pico, 'pico luz blanca')):\n"
-            "        fila = ''\n"
-            "        for r_ in radios:\n"
-            "            _, sp = espectro(CAN['pre'], pos, r_)\n"
-            "            v = measure_telluric_depths(_, sp, bands=BANDS_A)['O2_B']\n"
-            "            marca = ' <=' if (objetivo is not None and np.isclose(v, objetivo, rtol=1e-9)) else '   '\n"
-            "            fila += f'{v:8.4f}{marca}'\n"
-            "        print(f'  {etq:16s} {str(tuple(round(float(c), 2) for c in pos)):15s}' + fila)\n\n"
-            "    WAVE_CAN, SPEC_CAN = espectro(CAN['pre'], CAN_YX, RADIUS_PX)\n"
-            "    print(f'\\napertura recuperada: yx={CAN_YX} r={RADIUS_PX}  '\n"
-            "          f'(el QC no declara ninguna de las dos)')\n"
+            "    if CAN['yx'] is not None and CAN['radio'] is not None:\n"
+            "        CAN_YX, CAN_R, origen = tuple(CAN['yx']), CAN['radio'], 'DECLARADA en el QC'\n"
+            "    else:\n"
+            "        CAN_YX, CAN_R, origen = (round(centro[0]), round(centro[1])), RADIUS_PX, 'ADIVINADA por barrido'\n"
+            "        print(f'\\nel QC no declara la apertura: barrido de O₂ B (%). Objetivo: {objetivo!r}\\n')\n"
+            "        radios = [4.0, 6.0, 8.0, 10.0, 12.0]\n"
+            "        print('  posición'.ljust(34) + ''.join(f'r={r:<9.0f}' for r in radios))\n"
+            "        for pos, etq in ((CAN_YX, 'round(centro)'), (tuple(centro), 'centro'), (pico, 'pico luz blanca')):\n"
+            "            fila = ''\n"
+            "            for r_ in radios:\n"
+            "                _, sp = espectro(CAN['pre'], pos, r_)\n"
+            "                v = measure_telluric_depths(_, sp, bands=BANDS_A)['O2_B']\n"
+            "                marca = ' <=' if (objetivo is not None and np.isclose(v, objetivo, rtol=1e-9)) else '   '\n"
+            "                fila += f'{v:8.4f}{marca}'\n"
+            "            print(f'  {etq:16s} {str(tuple(round(float(c), 2) for c in pos)):15s}' + fila)\n\n"
+            "    WAVE_CAN, SPEC_CAN = espectro(CAN['pre'], CAN_YX, CAN_R)\n"
+            "    print(f'\\napertura: yx={CAN_YX} r={CAN_R}   ({origen})')\n"
+            "    if objetivo is not None:\n"
+            "        _repro = measure_telluric_depths(WAVE_CAN, SPEC_CAN, bands=BANDS_A)['O2_B']\n"
+            "        _ok = 'reproduce' if np.isclose(_repro, objetivo, rtol=1e-9) else 'NO reproduce'\n"
+            "        print(f'  O₂ B con esta apertura: {_repro!r}  →  {_ok} el {objetivo!r} del QC')\n"
             "    print('profundidades SIN recortar a cero:')\n"
             "    for nombre, banda in BANDAS_MAS.items():\n"
             "        cruda = profundidad_cruda(WAVE_CAN, SPEC_CAN, banda)\n"
             "        publicada = CAN['profundidades'].get(nombre)\n"
             "        nota = '  <- negativa, el QC publica 0.0' if cruda < 0 else ''\n"
-            "        extra = '' if publicada is not None else '  (no la mide la etapa)'\n"
+            "        extra = '' if publicada is not None else '  (este QC es anterior a que la etapa la midiera)'\n"
             "        print(f'  {nombre:9s} {cruda:8.3f} %   publicada: {publicada}{extra}{nota}')"
         ),
         md(
@@ -783,8 +837,9 @@ def build_a3_cells(mb, target, run_id):
             "divide por ella; si no está, no. La cadena multi-noche la **exige** — "
             "`musepipe/reduction/perexp_plan.py` la añade al plan y levanta "
             "`PerExposurePlanError` si las cuentas no salen 1/1 por exposición.\n\n"
-            "El número que decide es **O₂ A**, la banda que `decide_telluric` no mira. Es la más "
-            "profunda del rango: si las bandas siguieran ahí, ahí se vería."
+            "El número que decide es **O₂ A**, la más profunda del rango: si las bandas siguieran "
+            "ahí, ahí se vería. Cuando esta sección se escribió, `decide_telluric` no la miraba; "
+            "que ahora sí lo haga sale en parte de lo que se midió aquí."
         ),
         code(
             "def censo_sof(carpeta, patron='muse_scipost*.sof'):\n"
@@ -819,7 +874,8 @@ def build_a3_cells(mb, target, run_id):
             "            break\n"
             "    else:\n"
             "        print(f\"  {r['etiqueta']:44s} sin SOF en disco (workdir borrado)\")\n\n"
-            "print('\\n=== O₂ A (7590-7700 Å), la banda que A3 NO mide ===')\n"
+            "print(f'\\n=== O₂ A {tuple(O2_A_BAND)}, la más profunda del rango ===')\n"
+            "print('   (esta sección la midió cuando la etapa no la medía; desde 2026-07-31 A3 sí)')\n"
             "for etiqueta, (w, a, d) in PARES.items():\n"
             "    print(f'  {etiqueta:44s} antes {profundidad_cruda(w, a, O2_A_BAND):7.3f} %'\n"
             "          f'   después {profundidad_cruda(w, d, O2_A_BAND):7.3f} %')\n"
@@ -1041,6 +1097,7 @@ def build_c2_cells(mb, target, run_id):
     sources = extract_sources("C2")
     inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
     shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
 
     cells = [
         md(
@@ -2421,11 +2478,14 @@ def build_c2_cells(mb, target, run_id):
             "de controles. Y como `apcorr` normaliza al flujo total, el numerador es comparable "
             "entre tamaños: lo que cambia con `N` es cuánta señal y cuánto ruido entran.\n\n"
             "**Solo tamaños impares, y esto importa.** `aperture_weights` hace `half = size // 2` "
-            "y recorta de `y-half` a `y+half` **inclusive**: pedir `size=4` devuelve un **5×5** — "
-            "la caja de al lado, con la etiqueta `box4` en la cabecera `APERTURE`, en el QC y en "
-            "los nombres de fichero. Una caja par de verdad necesitaría el centro a medio píxel, "
-            "que ese código no puede expresar. Por eso el «4×4» se estudia aquí **como `box5`**, "
-            "que es exactamente lo que la cadena entrega hoy si le pides 4.\n\n"
+            "y recorta de `y-half` a `y+half` **inclusive**, así que un tamaño par no tiene caja: "
+            "una de verdad necesitaría el centro a medio píxel, que ese código no puede expresar. "
+            "Hasta esta sesión, pedir `size=4` devolvía **calladamente un 5×5** con la etiqueta "
+            "`box4` en la cabecera `APERTURE`, en el QC y en los nombres de fichero — la caja de "
+            "al lado bajo el nombre equivocado. **Ahora `aperture_weights` falla** ante un tamaño "
+            "par o no positivo, y `aperture_label` rechaza un nombre `boxN` que contradiga a "
+            "`size`. Por eso el «4×4» se estudia aquí **como `box5`**: es la caja que de verdad "
+            "se medía, y ahora hay que pedirla por su nombre.\n\n"
             "> El resultado **informa, no cambia la cadena**: D1 exige `box3`\n"
             "> (`musepipe/stages/stage_x10_compare.py` levanta error si el producto no lo es), y "
             "> el tamaño canónico es una decisión congelada. Lo que esta sección aporta es el "
@@ -2565,6 +2625,7 @@ def build_c3_cells(mb, target, run_id):
     sources = extract_sources("C3")
     inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
     shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
 
     return [
         md(
@@ -3980,6 +4041,7 @@ def build_c4_cells(mb, target, run_id):
     sources = extract_sources("C4")
     inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
     shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
 
     return [
         md(
@@ -4591,6 +4653,7 @@ def build_halosub_cells(mb, target, run_id, stage_id):
     sources = extract_sources(stage_id)
     inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
     shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
     pref = meta["prefijo"]
 
     return [

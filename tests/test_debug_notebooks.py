@@ -90,6 +90,31 @@ class InlinedSourceTests(unittest.TestCase):
                 for cte in esperadas_constantes:
                     self.assertIn(cte, constants)
 
+    def test_the_constants_are_watched_by_the_drift_check_too(self):
+        """Cada constante copiada tiene su sha, y el sha es el de `musepipe`.
+
+        El guardia solo hasheaba `FunctionDef`/`ClassDef`: las constantes
+        viajaban sin vigilar, así que tocar `TELLURIC_BANDS` dejaba la copia
+        atrás mientras el notebook imprimía «sin deriva».
+        """
+        import hashlib
+        for stage_id in self.bdn.INLINE_SOURCES:
+            sources = self._sources(stage_id)
+            shas = self.bdn.constant_shas(sources)
+            seleccion = self.bdn.selected_constants(sources)
+            with self.subTest(etapa=stage_id):
+                self.assertTrue(seleccion, "ninguna constante copiada: ¿se rompió la detección?")
+                _imports, esperadas = self.ARRASTRA[stage_id]
+                for cte in esperadas:
+                    self.assertTrue(any(k.endswith(f":{cte}") for k in shas),
+                                    f"{stage_id}: {cte} viaja copiada pero sin sha")
+            for rel, targets, src in seleccion:
+                with self.subTest(etapa=stage_id, constante=targets):
+                    esperado = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+                    for name in targets:
+                        self.assertEqual(shas[f"{rel}:{name}"], esperado)
+                    self.assertIn(src, (ROOT / rel).read_text(encoding="utf-8"))
+
     def test_a_constant_never_precedes_what_it_is_written_in_terms_of(self):
         """Las constantes salen en orden de módulo, no de descubrimiento.
 
