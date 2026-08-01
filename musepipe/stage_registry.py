@@ -89,11 +89,16 @@ STAGES: tuple[Stage, ...] = (
     # el comando de aquí, tal como estaba, NO reproducía el veredicto que
     # documenta. El radio va explícito por lo mismo: el default es 8.0 y las
     # reducciones históricas se lanzaron a mano con 6.0.
+    # `{upstream}`/`{upstream_qc}` tampoco son adorno: A3 rechaza un cubo sin
+    # procedencia, y CUÁL es la procedencia depende del objeto (ROXs 42B b nunca
+    # corrió A2). Con `--upstream A2` escrito a mano, y sin `--qc`, el comando
+    # publicado no se podía ejecutar en ningún objeto — se resuelven en
+    # `notebooks/_nbcommon._upstream_evidence`.
     Stage("A3", "A3_telluric", "A", None,
           qc_aliases=("stages/stage00t_qc.json", "stages/stage00t_realigned_qc.json"),
           exec_kind="launch",
           launch={"*": ("bash scripts/telluric.sh decision --run-id {run_id} "
-                        "--input-cube {cube} --upstream A2 "
+                        "--input-cube {cube} --upstream {upstream} --qc {upstream_qc} "
                         "--primary-y {primary_y} --primary-x {primary_x} "
                         "--radius-px 8.0 --science-needs-red-continuum "
                         "--qc-output {stage_dir}/stage00t_qc.json")}),

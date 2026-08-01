@@ -73,6 +73,41 @@ class NotebookQcResolutionTests(unittest.TestCase):
                     + "\n  ".join(problems),
                 )
 
+    def test_the_launch_command_points_at_the_primary_not_15px_off(self):
+        """La posición de las plantillas está en el marco del cubo que reciben.
+
+        `stage01c_qc.json` mide la primaria en el marco RECORTADO de B1 (170 px),
+        y `{cube}` de las plantillas es el cubo SIN recortar (200 px). Sin sumar
+        el desfase del recorte, el comando de A3 apunta 15 px fuera de la
+        estrella — medía sobre vacío y nadie lo veía porque A3 se lanzó a mano.
+        """
+        import json
+        import _nbcommon as nb
+
+        if not self.object_dirs:
+            self.skipTest("no hay notebooks/<obj>/ poblados")
+        for obj_dir in self.object_dirs:
+            run_id = self._run_for(obj_dir.name)
+            if run_id is None:
+                continue
+            stages = ROOT / "runs" / run_id / "stages"
+            if not (stages / "stage01c_qc.json").exists() or not (stages / "stage01_qc.json").exists():
+                continue  # B1/B3 sin correr para este objeto
+            with self.subTest(objeto=obj_dir.name):
+                nb.resolve_run_id(run_id)
+                ctx = nb._launch_context(run_id)
+                centro = json.loads((stages / "stage01_qc.json").read_text(
+                    encoding="utf-8"))["crop"]["center_yx"]
+                self.assertIsNotNone(ctx["primary_y"], "sin posición de primaria")
+                dist = ((ctx["primary_y"] - centro[0]) ** 2
+                        + (ctx["primary_x"] - centro[1]) ** 2) ** 0.5
+                self.assertLess(
+                    dist, 1.0,
+                    f"{obj_dir.name}: el comando apunta a "
+                    f"({ctx['primary_y']:.2f}, {ctx['primary_x']:.2f}) y la primaria "
+                    f"está en ({centro[0]:.2f}, {centro[1]:.2f}) — {dist:.1f} px fuera",
+                )
+
     def _run_for(self, obj: str) -> str | None:
         """Run por defecto de la cadena del objeto (o None si no existe en disco)."""
         for candidate in (f"{obj}_realigned", obj):

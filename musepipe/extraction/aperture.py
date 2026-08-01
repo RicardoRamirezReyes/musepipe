@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import math
 from pathlib import Path
+import re
 from typing import Sequence
 import warnings
 
@@ -52,8 +53,30 @@ def sha256_file(path: str | Path) -> str:
 
 
 def aperture_label(aperture: dict) -> str:
-    if aperture.get("name"):
-        return str(aperture["name"])
+    """Label that travels into `APERTURE`, the QC and the product filenames.
+
+    A declared ``name`` wins, but it may not *contradict* the geometry: this
+    label is what D1 gates on (`stage_x10_compare` requires `APERTURE=box3`)
+    and what names the FITS on disk, so a `box4` label on a 5x5 aperture is a
+    lie the whole chain then believes. Free-form names (`box3_sum`, `pixel`,
+    `circle_r1p5_sum`) stay valid — only a `boxN` prefix whose N disagrees with
+    ``size`` is rejected.
+    """
+
+    name = aperture.get("name")
+    if name:
+        name = str(name)
+        match = re.match(r"^box(\d+)", name)
+        if match and str(aperture.get("kind", "box")) == "box":
+            declared = int(match.group(1))
+            size = int(aperture.get("size", 3))
+            if declared != size:
+                raise ValueError(
+                    f"aperture name {name!r} claims a {declared}x{declared} box but "
+                    f"size={size}. The label names the FITS, the QC and the "
+                    "`APERTURE` keyword: it may not contradict the geometry."
+                )
+        return name
     kind = str(aperture.get("kind", "box"))
     if kind == "box":
         return f"box{int(aperture.get('size', 3))}"

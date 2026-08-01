@@ -471,13 +471,59 @@ def _launch_context(run_id: str) -> dict:
     }
     cubes = cfg.get("cube_files") or []
     ctx["cube"] = str(cubes[0]) if cubes else None
-    # posición de la primaria: la mide B3 y queda en su QC
+    # Posición de la primaria: la mide B3 y queda en su QC, pero **en el marco
+    # RECORTADO de B1** (`stage01c_qc.json` lo declara: su `input_cube` es el
+    # stack de B2, 170x170). El `{cube}` de estas plantillas es `cube_files[0]`,
+    # el cubo SIN recortar de 200 px, así que hay que sumar el desfase del
+    # recorte o el comando apunta 15 px fuera de la estrella — que es lo que
+    # hacía, y por eso A3 se lanzó a mano en ROXs 12 b.
     try:
         pos = load_qc("stages/stage01c_qc.json", run_id)["primary"]["pos_yx"]
-        ctx["primary_y"], ctx["primary_x"] = pos[0], pos[1]
+        bounds = (load_qc("stages/stage01_qc.json", run_id)
+                  .get("crop_bounds_per_cube") or [{}])[0]
+        dy, dx = float(bounds["y1"]), float(bounds["x1"])
+        ctx["primary_y"], ctx["primary_x"] = float(pos[0]) + dy, float(pos[1]) + dx
     except (FileNotFoundError, KeyError, TypeError, IndexError):
+        # Sin el desfase NO se emite la posición sin corregir: un número
+        # plausible y falso es peor que no tener número. (`ValueError` no se
+        # captura a propósito: es «no hay run activo», y eso sí hay que verlo.)
         ctx["primary_y"] = ctx["primary_x"] = None
+    ctx["upstream"], ctx["upstream_qc"] = _upstream_evidence(run_id)
     return ctx
+
+
+def _upstream_evidence(run_id: str) -> tuple[str | None, str | None]:
+    """La etapa de la que viene el cubo y el QC que la avala, para A3.
+
+    A3 no acepta un cubo sin procedencia: pide el QC de A2, o el de A1. Cuál de
+    los dos existe **depende del objeto** —ROXs 42B b nunca corrió A2— así que la
+    plantilla no puede llevar `--upstream A2` escrito a mano: para ese objeto no
+    hay tal QC y el comando publicado no se puede ejecutar.
+
+    En A1 hay dos ficheros posibles y **los elige el perfil**, que es lo que
+    declara `Stage.qc_schema_variant`: en `cascade` la evidencia es el
+    `cube_telcorr_qc.json` del combine (esquema `stream_combine_v1`), no el
+    `stage00r_qc.json` de fases, que en cascada se queda como esqueleto vacío.
+    """
+
+    reg = _registry()
+    if reg is None:
+        return None, None
+    profile = chain_of(run_id).get("reduction_profile", "*")
+    for stage_id in ("A2", "A1"):
+        stage = reg.by_id(stage_id)
+        if stage is None:
+            continue
+        rutas = list(stage.qc_paths)
+        if stage_id == "A1" and profile == "cascade":
+            rutas.sort(key=lambda p: p != "cube_telcorr_qc.json")
+        for rel in rutas:
+            try:
+                path, _run, _why = resolve_qc(rel, run_id)
+            except FileNotFoundError:
+                continue
+            return stage_id, str(path)
+    return None, None
 
 
 def launch_command(stage_id: str, run_id: str | None = None) -> tuple[str, str, list[str]]:

@@ -25,16 +25,25 @@ Comprobado sobre el cubo: en esa posicion hay un exceso de 2.4 sigma (azul) y
 sigma en un punto al azar de ese mismo anillo. Es compatible, no una deteccion:
 a 15 px de una estrella brillante manda el speckle.
 
-**Y esto explica lo de Moffat.** C1 ajusta la PSF con `psf_fit_radius_px = 28`
-y solo enmascara al companero (que esta a 46.6 px). cc1 cae a 15.1 px, **dentro
-del radio de ajuste y sin enmascarar**, sesgando los parametros del halo: es la
-explicacion mas probable de que C1 eligiera `moffat` sobre `psfao` en este
-objeto (residuo de anillo 8.38% vs 9.80%, empate a favor de moffat).
+**Lo de Moffat NO lo explica cc1 — comprobado el 2026-07-31.** La sospecha era
+que cc1, al caer dentro del radio de ajuste de C1 y sin enmascarar, sesgaba el
+halo y por eso C1 elegia `moffat` sobre `psfao`. Se puso a prueba re-corriendo C1
+con la fuente ya declarada, y **no es asi**: el residuo de anillo de moffat sale
+identico (6.878 %) y psfao sigue peor (9.93 %), asi que la eleccion de moffat es
+del dato, no del sesgo. La hipotesis queda falsada; se conserva escrita porque
+saber lo que YA se descarto vale tanto como saber lo que falta.
 
 La cadena ya sabia manejarlo y nadie se lo habia dicho: B3 acepta
-`stage01c_field_source_approx_yx`, lo mide, y C1 lo enmascara via `field_yx`.
-El QC de B3 llevaba desde siempre el aviso "No field-source approximate position
-configured". Declarado ahora en el config del run.
+`stage01c_field_source_approx_yx`, lo mide (`field_source.pos_yx`, SNR 9.4), y C1
+lo enmascara via `field_yx` (`stage_e01_psf._fit_source_mask`). El QC de B3
+llevaba desde siempre el aviso "No field-source approximate position configured".
+Declarado en el config del run desde el 07-27 — o sea que el ajuste de esa fecha
+**ya la enmascaraba**, y por eso re-correr C1 no movio nada.
+
+**Hueco de procedencia que queda:** el bloque `masks` del QC de C1 solo declara
+`companion_radius_px`. La mascara de la fuente de campo **se aplica y no se
+declara**, asi que desde el QC no se puede saber si estaba puesta — el mismo tipo
+de agujero que tenia A3 con su apertura.
 """
 
 from __future__ import annotations
@@ -57,9 +66,18 @@ REASON = (
 FIELD_SOURCES_YX: list[tuple[float, float]] = [(77.7, 98.3)]
 
 
+#: Como se llama el cubo crudo en el notebook de cada etapa. NO es el mismo
+#: nombre: C2 lo llama `CUBE` y C3 `LS_CUBE` (tiene dos, y este es del que
+#: extrae `optimal_ls`). Esta celda se escribio mirando C2 y se aplicaba tal cual
+#: a C3, donde `CUBE` no existe: el notebook de C3 de ROXs 42B b reventaba con
+#: `NameError` y no lo veia nadie porque la suite solo ejecutaba los de ROXs 12 b.
+CUBO_POR_ETAPA = {"C2": "CUBE", "C3": "LS_CUBE"}
+
+
 def apply(stage_id, cells, ctx):
     md, code = ctx["md"], ctx["code"]
     seccion = "## 5 " if stage_id == "C2" else "## 3 "
+    cubo = CUBO_POR_ETAPA[stage_id]
     return insert_after_markdown(
         cells,
         seccion,
@@ -84,15 +102,15 @@ def apply(stage_id, cells, ctx):
             "# ROXs 42B cc1 (Bryan+2016) extrapolado a 2022.6654: 0.381\", PA 241.4 deg.\n"
             "FUENTES_CAMPO = [(77.7, 98.3)]\n"
             "RADIO_MASCARA_PX = 6.0\n\n"
-            "_luz = np.nanmedian(CUBE[::20], axis=0)\n"
+            "_luz = np.nanmedian(" + cubo + "[::20], axis=0)\n"
             "_hp = _luz - ndimage.median_filter(np.nan_to_num(_luz), size=15)\n"
             "_sig = 1.4826 * np.nanmedian(np.abs(_hp - np.nanmedian(_hp)))\n"
             "_yy, _xx = np.indices(_luz.shape, dtype=float)\n"
             "_r = np.hypot(_yy - STAR_YX[0], _xx - STAR_YX[1])\n"
             "_rc = np.hypot(_yy - OBJECT_YX[0], _xx - OBJECT_YX[1])\n"
             "_lab, _n = ndimage.label((_r > 15) & (_rc > 6) & (_hp > 8 * _sig))\n"
-            "_azul = np.nanmedian(CUBE[WAVE < 6000][::10], axis=0)\n"
-            "_rojo = np.nanmedian(CUBE[WAVE > 8000][::10], axis=0)\n"
+            "_azul = np.nanmedian(" + cubo + "[WAVE < 6000][::10], axis=0)\n"
+            "_rojo = np.nanmedian(" + cubo + "[WAVE > 8000][::10], axis=0)\n"
             "print(f'sigma del pasa-altos = {_sig:.4f} | fuentes a >8 sigma, sin primaria ni companero:')\n"
             "print(f\"  {'y':>7s} {'x':>7s} {'r[px]':>7s} {'pico/s':>8s} {'rojo/azul':>10s} {'n_px':>6s}\")\n"
             "_filas = []\n"
@@ -112,13 +130,13 @@ def apply(stage_id, cells, ctx):
             "    print(f'  {_my:7.1f} {_mx:7.1f} {_rr:7.1f} {_pk:8.1f} {_col:10.2f} {_npx:6d}')\n"
             "if not _filas:\n"
             "    print('  (ninguna)')\n"
-            "print(f'\\ncampo del cubo: {CUBE.shape[1]}x{CUBE.shape[2]} px'\n"
-            "      f' = {CUBE.shape[1] * 0.0252:.2f}\" — una fuente mas lejos NO saldria aqui')\n\n"
+            "print(f'\\ncampo del cubo: {" + cubo + ".shape[1]}x{" + cubo + ".shape[2]} px'\n"
+            "      f' = {" + cubo + ".shape[1] * 0.0252:.2f}\" — una fuente mas lejos NO saldria aqui')\n\n"
             "if FUENTES_CAMPO:\n"
             "    _m = np.zeros(_luz.shape, dtype=bool)\n"
             "    for _fy, _fx in FUENTES_CAMPO:\n"
             "        _m |= np.hypot(_yy - _fy, _xx - _fx) <= RADIO_MASCARA_PX\n"
-            "    CUBE = np.where(_m[None, :, :], np.nan, CUBE)\n"
+            "    " + cubo + " = np.where(_m[None, :, :], np.nan, " + cubo + ")\n"
             "    print(f'\\nENMASCARADAS {len(FUENTES_CAMPO)} fuentes ({int(_m.sum())} spaxels):'\n"
             "          ' el resto del notebook usa el cubo ya limpio.')\n"
             "else:\n"

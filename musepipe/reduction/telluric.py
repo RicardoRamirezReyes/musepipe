@@ -27,8 +27,19 @@ STAGE_NAME = "00t_telluric"
 HALPHA_PROTECTED = (6540.0, 6590.0)
 NALGS_PROTECTED = (5780.0, 6050.0)
 PROTECTED_WINDOWS = (HALPHA_PROTECTED, NALGS_PROTECTED)
+#: Bandas sobre las que A3 mide profundidad y decide.
+#:
+#: O₂ A es la más profunda del rango de MUSE y hasta 2026-07-31 no estaba aquí:
+#: la etapa decidía sobre tres bandas que excluían justo la que más informa.
+#: `verify.DEFAULT_BAD_RANGES` ya la marcaba como mala, `telluric_lines` ya la
+#: cataloga `strong`, G3 ya la enmascara (`docs/g3_real_frozen_decisions.md`) y
+#: `a3_telluric_justification.md` §6 la llama «el rasgo telúrico con mayor
+#: leverage» — la etapa que decide era la única pieza que la ignoraba. Los
+#: bordes son los mismos 7590–7700 que usan esas otras piezas: no se introduce
+#: una cuarta definición del mismo intervalo.
 TELLURIC_BANDS = {
     "O2_B": (6864.0, 6960.0),
+    "O2_A": (7590.0, 7700.0),
     "H2O_7200": (7160.0, 7340.0),
     "H2O_8200": (8130.0, 8350.0),
 }
@@ -99,6 +110,10 @@ class TelluricInputInfo:
     sha256: str
     has_data: bool
     has_stat: bool
+    #: Avisos NO fatales del QC de aguas arriba (hoy, los del combine en cascada).
+    #: Viajan hasta `open_issues` del QC de A3: quien lea el veredicto tiene que
+    #: ver lo que el combine dejo dicho, no perderlo en el camino.
+    upstream_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -157,6 +172,54 @@ def check_molecfit_environment(
     }
 
 
+#: Suelo de voxeles finitos para aceptar un combine en cascada como entrada de A3.
+#: No es un umbral de calidad cientifica: es un cortafuegos contra un cubo medio
+#: vacio. El combine de ROXs 42B b mide 0.94.
+MIN_FINITE_FRACTION = 0.5
+
+
+def _check_a1_upstream(qc: Mapping[str, object], cube: Path, qc_path) -> tuple[str, ...]:
+    """Puerta de A1, que tiene DOS esquemas segun `chain.reduction_profile`.
+
+    En perfil `monolithic` A1 emite `stage00r_qc.json` con sus fases, y la puerta
+    es que esten las cuatro. En `cascade` no hay fases: A1 es la reduccion por
+    exposicion mas un combine por voxel, y su QC (`cube_telcorr_qc.json`, esquema
+    `stream_combine_v1`) no tiene `gates_passed` **porque no tiene fases**.
+    Exigirselas rechazaba todo objeto reducido en cascada — es lo que impedia
+    lanzar A3 sobre ROXs 42B b.
+
+    Para ese esquema la puerta fuerte es de **identidad**: que el QC describa
+    exactamente el cubo que se va a medir. Es mejor garantia que una lista de
+    fases, porque ata el QC al dato en vez de a un tramite.
+
+    Devuelve los `warnings` del combine, que **no son fatales** (el combine ya
+    decidio sobre ellos) pero tienen que llegar al QC de A3 en vez de perderse.
+    """
+
+    if qc.get("stage") == "stream_combine":
+        declarado = str(qc.get("output") or "")
+        if not declarado:
+            raise TelluricError(f"A1 cascade QC declares no output cube: {qc_path}")
+        if Path(declarado).resolve() != cube.resolve():
+            raise TelluricError(
+                "A1 cascade QC describes another cube; A3 would measure a cube nobody "
+                f"vouched for. QC output={declarado}, input cube={cube}."
+            )
+        if int(qc.get("n_exposures", 0)) < 1:
+            raise TelluricError("A1 cascade QC declares no exposures.")
+        finite = float(qc.get("finite_fraction", 0.0))
+        if finite < MIN_FINITE_FRACTION:
+            raise TelluricError(
+                f"A1 cascade QC finite_fraction={finite:.4f} < {MIN_FINITE_FRACTION}: "
+                "the combined cube is mostly empty."
+            )
+        return tuple(str(w) for w in (qc.get("warnings") or ()))
+
+    if not {"fase0", "fase1", "fase2", "fase3"} <= set(qc.get("gates_passed", []) or ()):
+        raise TelluricError("A1 gates are incomplete.")
+    return ()
+
+
 def resolve_input_cube(
     cube_path: str | Path,
     *,
@@ -177,6 +240,7 @@ def resolve_input_cube(
     if not has_data or not has_stat:
         raise TelluricError(f"Input cube must contain DATA and STAT; got DATA={has_data}, STAT={has_stat}.")
 
+    upstream_warnings: tuple[str, ...] = ()
     if upstream_norm in {"A1", "A2"}:
         if qc_path is None:
             raise TelluricError(f"QC path is required for upstream={upstream_norm}.")
@@ -184,10 +248,8 @@ def resolve_input_cube(
             qc = json.load(handle)
         if qc.get("open_issues"):
             raise TelluricError(f"{upstream_norm} QC has open issues; stop before A3.")
-        if upstream_norm == "A1" and not set(("fase0", "fase1", "fase2", "fase3")).issubset(
-            set(qc.get("gates_passed", []))
-        ):
-            raise TelluricError("A1 gates are incomplete.")
+        if upstream_norm == "A1":
+            upstream_warnings = _check_a1_upstream(qc, cube, qc_path)
         if upstream_norm == "A2" and "decision" not in qc:
             raise TelluricError("A2 QC does not contain a decision block.")
 
@@ -197,6 +259,7 @@ def resolve_input_cube(
         sha256=sha256_file(cube) if checksum else "",
         has_data=has_data,
         has_stat=has_stat,
+        upstream_warnings=upstream_warnings,
     )
 
 
@@ -464,18 +527,43 @@ def stage00t_qc_skeleton(
     input_info: TelluricInputInfo,
     *,
     run_id: str,
+    primary_yx: Sequence[float],
+    aperture_radius_px: float,
     environment: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Esqueleto del QC de A3. `run_id` obligatorio (ver `stage00s_qc_skeleton`)."""
+    """Esqueleto del QC de A3. `run_id` obligatorio (ver `stage00s_qc_skeleton`).
+
+    `primary_yx` y `aperture_radius_px` también son obligatorios y sin default:
+    son la apertura con la que se midió la profundidad, y sin ellos el número
+    que publica este QC no se puede reproducir a partir del QC. El esquema
+    multi-noche los perdió, y recuperarlos costó un barrido a ciegas dentro del
+    notebook de análisis (traspaso §7.4). Que no exista la vía silenciosa.
+    """
     return {
         "stage": STAGE_NAME,
         "run_id": run_id,
         "timestamp_utc": utc_now_iso(),
         "environment": dict(environment or {}),
-        "input": {"cube": str(input_info.cube), "sha256": input_info.sha256, "upstream": input_info.upstream},
+        "input": {"cube": str(input_info.cube), "sha256": input_info.sha256,
+                  "upstream": input_info.upstream,
+                  "primary_yx": [float(primary_yx[0]), float(primary_yx[1])],
+                  "aperture_radius_px": float(aperture_radius_px),
+                  # Avisos NO fatales del QC de aguas arriba. Van aqui, junto a la
+                  # procedencia que describen, y NO en `open_issues`: en este repo
+                  # `open_issues` es el canal BLOQUEANTE (lo miran esta misma
+                  # `resolve_input_cube` y `sky_zap`), y meter ahi un aviso
+                  # informativo del combine bloquearia la cadena por nada.
+                  "upstream_warnings": list(input_info.upstream_warnings)},
         "decision": {
             "depth_pct_by_band": {},
             "telluric_applied": False,
+            # `telluric_applied` significa «la decision es aplicarla», no «esta
+            # aplicada»: la fase de decision lo pone a True en cuanto el veredicto
+            # es `needed`, con el cubo todavia sin tocar. Los dos QC historicos de
+            # ROXs 12 b lo tienen a True **y** aplicada, asi que el campo solo no
+            # distingue los dos estados. Este si: lo pone a True la fase de
+            # aplicacion, y hasta entonces la correccion esta DECIDIDA y pendiente.
+            "applied_to_cube": False,
             "science_needs_red_continuum": True,
             "user_checkpoint": "",
         },
@@ -517,10 +605,12 @@ def decision_phase(args: argparse.Namespace) -> int:
         qc_path=args.qc,
         checksum=not args.skip_checksum,
     )
-    wave, spec = _read_primary_spectrum(input_info.cube, (args.primary_y, args.primary_x), args.radius_px)
+    primary_yx = (args.primary_y, args.primary_x)
+    wave, spec = _read_primary_spectrum(input_info.cube, primary_yx, args.radius_px)
     depths = measure_telluric_depths(wave, spec)
     decision = decide_telluric(depths, science_needs_red_continuum=args.science_needs_red_continuum)
-    qc = stage00t_qc_skeleton(input_info, run_id=args.run_id)
+    qc = stage00t_qc_skeleton(input_info, run_id=args.run_id,
+                              primary_yx=primary_yx, aperture_radius_px=args.radius_px)
     qc["decision"].update(
         {
             "depth_pct_by_band": decision.depth_pct_by_band,
