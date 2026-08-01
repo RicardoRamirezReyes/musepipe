@@ -72,10 +72,22 @@ métodos (D1) y el modelado (Stage 08).
    (mismo canal que el pipeline MUSE de A1) y esperar confirmación.
 2. Resolver el cubo de entrada desde config/CLI y registrar `upstream`:
    - `A2`: verificar QC A2 en verde (aplicada o saltada con veredicto);
-   - `A1`: verificar QC A1 en verde;
+   - `A1`: verificar QC A1 en verde. **A1 tiene DOS esquemas y los elige
+     `chain.reduction_profile`** (v2):
+     - `monolithic` → `stages/stage00r_qc.json`, y la puerta son sus cuatro
+       fases (`gates_passed ⊇ {fase0..fase3}`);
+     - `cascade` → `cube_telcorr_qc.json` (esquema `stream_combine_v1`), que
+       **no tiene fases porque no las hay**: es reducción por exposición más
+       combine por voxel. Su puerta es de **identidad** —que el QC declare como
+       `output` exactamente el cubo que se va a medir— más `n_exposures ≥ 1` y
+       `finite_fraction ≥ 0.5`. Atar el QC al dato es mejor garantía que una
+       lista de fases. Exigirle las fases rechazaba todo objeto en cascada, y es
+       lo que impedía lanzar A3 sobre ROXs 42B b.
    - `ADP`: verificar DATA+STAT y registrar que A1/A2 no aplican para esta
      entrada.
-   En todos los casos registrar sha256 del cubo.
+   En todos los casos registrar sha256 del cubo. Los `warnings` **no fatales**
+   del QC de aguas arriba se copian a `input.upstream_warnings`, **nunca a
+   `open_issues`**: ese campo es el canal bloqueante del bloque A.
 3. **Punto de atención — GDAS/atmósfera**: molecfit puede requerir perfiles
    atmosféricos (GDAS) descargables; si la máquina no tiene red o el perfil de
    la fecha no está disponible, usar el perfil estándar equatorial documentado
@@ -166,8 +178,10 @@ Lo que sí cambia y hay que saber:
   "timestamp_utc": "...",
   "environment": {"molecfit_version": "...", "gdas_profile": "date|standard"},
   "input": {"cube": "...", "sha256": "...", "upstream": "A2|A1|ADP",
-             "primary_yx": [100.0, 100.0], "aperture_radius_px": 8.0},
+             "primary_yx": [100.0, 100.0], "aperture_radius_px": 8.0,
+             "upstream_warnings": []},
   "decision": {"depth_pct_by_band": {}, "telluric_applied": false,
+                "applied_to_cube": false,
                 "science_needs_red_continuum": true,
                 "user_checkpoint": "approved|not_needed"},
   "fit": {"molecules": ["O2", "H2O"], "regions_A": [], "excluded_subregions_A": [],
@@ -180,6 +194,12 @@ Lo que sí cambia y hay que saber:
   "open_issues": []
 }
 ```
+
+**`telluric_applied` es la DECISIÓN, no el hecho** (v2). Con veredicto `needed` sale
+`true` con el cubo todavía sin tocar, y los dos QC históricos de ROXs 12 b lo tienen
+`true` **habiéndola aplicado**: el campo solo no distingue los dos estados. El que sí
+es **`decision.applied_to_cube`**, que nace en `false` y lo pone la fase de aplicación.
+`telluric_applied` se deja como está para no mover el significado de lo congelado.
 
 **`input.primary_yx` y `input.aperture_radius_px` son obligatorios** (v2):
 `stage00t_qc_skeleton` los pide sin default, así que no existe la vía silenciosa
