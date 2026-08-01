@@ -3,7 +3,7 @@
 Fecha: 2026-07-14. Revisión formal de
 `docs/spec_D1_v2_codex_method_comparison.md` (2026-07-09), que queda como
 histórico vigente para los QC con `spec_version="D1_v2"`. Motivada por el plan
-`docs/plan_integracion_halosub_julo2025.md` (WP-H3): incorporar los métodos de
+`docs/2026-07-15_plan_integracion_halosub.md` (WP-H3): incorporar los métodos de
 diversidad espectral C5 (`sgf`) y C6 (`lpm`) de Julo et al. 2025 a la
 comparación inter-método.
 

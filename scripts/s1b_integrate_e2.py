@@ -145,7 +145,7 @@ def main(argv=None) -> int:
                  "slicer signature; the near-equal transverse correlation confirms it. Also "
                  "P is not constant (P_cov~1), unlike Xie Fig.3's instrumental-LSF case. "
                  "Numbers only; ghost-vs-instrumental is a per-exposure/human call."),
-        "doc": "docs/decision_g1_wavesol_2026-07-17.md",
+        "doc": "docs/2026-07-17_decision_g1_wavesol.md",
     }
 
     fig_path = run / "plots" / "s1_halpha" / "s1b_stripe_vs_halpha.png"

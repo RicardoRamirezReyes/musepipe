@@ -162,8 +162,14 @@ telluric bands and accretion lines) and its ECSV export.
   (`_A`, `_kms`, `_px`, `_arcsec`). Preserve deterministic seeds, sha256 hash chains, spec
   versions, QC schemas, and provenance fields — F1/G0/G5 verify them.
 - Frozen thresholds, the canonical extraction method, and scientific decisions
-  (`docs/*_decision*.md`, `docs/g3_real_frozen_decisions.md`) change only with explicit
+  (`docs/*_decision*.md`, `docs/2026-07-16_g3_real_frozen_decisions.md`) change only with explicit
   approval.
+- `docs/` has two naming conventions and the difference is load-bearing: **contracts and
+  standing references carry no date** (`spec_<ID>_codex_*.md` — read the highest version —
+  plus `noise_model.md`, `a3_telluric_justification.md`, `00_config_parameters.md`,
+  `setup_ubuntu.md`), while **states and procedures are `YYYY-MM-DD_<subject>.md`**
+  (handoffs, plans, execution logs, audits), dated by the work, newest wins. Start any
+  session at the newest `docs/*_handoff.md`.
 
 ## Safety
 

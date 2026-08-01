@@ -1,7 +1,7 @@
 # Especificación C5 · `X04_sgf` — sustracción de halo por diversidad espectral (SGF)
 
 Fecha: 2026-07-14. Etapa C5 del plan
-`docs/plan_integracion_halosub_julo2025.md` (WP-H1). Método de referencia de
+`docs/2026-07-15_plan_integracion_halosub.md` (WP-H1). Método de referencia de
 literatura: Haffert et al. 2019 / Xie et al. 2020, formalizado y analizado en
 Julo et al. 2025 (arXiv:2509.09878, App. A.3). Infraestructura: WP-H0
 (`musepipe/halosub.py`, oráculos en `tests/test_halosub_toy.py`).

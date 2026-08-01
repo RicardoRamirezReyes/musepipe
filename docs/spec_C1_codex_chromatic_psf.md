@@ -1,7 +1,7 @@
 # Especificación C1 · `E01_chromatic_psf` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa C1 (ESENCIAL, nueva) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: B2 (cubo), B3
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: B2 (cubo), B3
 (posiciones y veredicto cromático), A4 (LSF, factores).
 
 Es la etapa de mayor riesgo técnico de todo el plan: la extracción óptima (C3)

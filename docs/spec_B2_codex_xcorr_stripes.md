@@ -1,6 +1,6 @@
 # Especificación B2 · `02_xcorr_stripes` — brief de ejecución para Codex (ChatGPT 5.5)
 
-Fecha: 2026-07-01. Etapa B2 del plan `docs/plan_roxs12_reduccion_multimetodo.md`.
+Fecha: 2026-07-01. Etapa B2 del plan `docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`.
 Alcance deliberadamente pequeño: la maquinaria de stripes YA está centralizada
 en `musepipe/stripes.py` (625 líneas, con tests) y diagnosticada en
 02b/02c. B2 NO la reimplementa. Son tres añadidos acotados.

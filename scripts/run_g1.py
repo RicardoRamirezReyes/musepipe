@@ -41,7 +41,7 @@ from musepipe.covariance import (
 
 BIAS_BOUNDED_MIN_THROUGHPUT = 0.4
 BIAS_THRESHOLD = 0.05
-# sgf/lpm added in WP-H2 (docs/plan_integracion_halosub_julo2025.md). Methods
+# sgf/lpm added in WP-H2 (docs/2026-07-15_plan_integracion_halosub.md). Methods
 # with no rows in the E4 table (historical runs) get verdict "absent": never
 # validated, never mistaken for "rejected".
 METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")

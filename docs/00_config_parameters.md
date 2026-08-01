@@ -183,7 +183,7 @@ cambie el crop, el centrado de Stage01 o la estructura de stripes.
 ## Sustraccion De Halo Espectral (musepipe C5 SGF / C6 LPM)
 
 Claves consumidas por `musepipe.halosub` y las etapas C5 (`stage_x04_sgf`) y
-C6 (`stage_x05_lpm`) del plan `docs/plan_integracion_halosub_julo2025.md`.
+C6 (`stage_x05_lpm`) del plan `docs/2026-07-15_plan_integracion_halosub.md`.
 Defaults congelados del paper Julo et al. 2025 (Tabla 1); cambiarlos en un run
 real exige revision de la spec C5/C6 correspondiente.
 

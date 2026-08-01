@@ -30,7 +30,7 @@ H01_MATCHED_FILTER_POINT = matched_filter_point
 SPEC_VERSION = "E4_v2"
 DEFAULT_SNR_GRID = (0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0)
 DEFAULT_TEMPLATE_FACTORS = (1.0, 2.0)
-# sgf/lpm added in WP-H2 (docs/plan_integracion_halosub_julo2025.md): their
+# sgf/lpm added in WP-H2 (docs/2026-07-15_plan_integracion_halosub.md): their
 # throughput feeds G1 validation and D1 v3 exactly like the spatial methods.
 DEFAULT_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 CONTINUUM_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")

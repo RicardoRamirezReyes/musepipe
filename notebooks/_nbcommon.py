@@ -33,7 +33,7 @@ alias del QC (p.ej. `cube_telcorr_qc.json` para A1 en el perfil cascade). Cuando
 resuelve en un run distinto del activo lo **dice**; y si ese run pertenece a otro
 objeto, avisa en rojo (contaminación cross-object).
 
-Plan y contexto: `docs/plan_multiobjeto_notebooks_2026-07-24.md`.
+Plan y contexto: `docs/2026-07-24_plan_multiobjeto_notebooks.md`.
 """
 from __future__ import annotations
 
@@ -283,7 +283,7 @@ def resolve_qc(relpath: str, run_id: str | None = None) -> tuple[Path, str, str]
                 f"{active} (objeto {run_target(active) or chain_of(active).get('target') or '?'}).\n"
                 f"    Ruta: {path}\n"
                 f"    Los números de abajo NO son de este objeto. Ver H1 en "
-                f"docs/plan_multiobjeto_notebooks_2026-07-24.md.\n"
+                f"docs/2026-07-24_plan_multiobjeto_notebooks.md.\n"
             )
         elif run != active:
             note = "override explícito" if explicit_override else why
@@ -599,7 +599,7 @@ class evidence_guard:
             f"    El QC de {run} existe pero no tiene la forma que esta celda espera:\n"
             f"    la evidencia se escribió contra el QC de otro objeto o de otra variante\n"
             f"    de la etapa. No es un hueco de ejecución, es una diferencia de esquema.\n"
-            f"    Ver H4 en docs/plan_multiobjeto_notebooks_2026-07-24.md.\n"
+            f"    Ver H4 en docs/2026-07-24_plan_multiobjeto_notebooks.md.\n"
         )
         return True
 

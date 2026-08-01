@@ -12,7 +12,7 @@ Este test hace ejecutable la línea base de la Fase 0. Falla si:
 
 `skipif` cuando `runs/` no está poblado, para no atar la suite al disco.
 
-Contexto: `docs/plan_multiobjeto_notebooks_2026-07-24.md` (WP L3).
+Contexto: `docs/2026-07-24_plan_multiobjeto_notebooks.md` (WP L3).
 """
 from __future__ import annotations
 

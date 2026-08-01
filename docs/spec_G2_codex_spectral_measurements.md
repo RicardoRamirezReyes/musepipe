@@ -1,7 +1,7 @@
 # Especificación G2 · `spectral_measurements` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-06. Fase G2 del plan
-`docs/00_plan_caracterizacion_espectroscopica.md`. El desarrollo del módulo
+`docs/2026-07-08_plan_caracterizacion_espectroscopica.md`. El desarrollo del módulo
 puede correr en paralelo con G0/G1 (validación sintética); la aplicación al
 espectro real exige el canónico de X11 (G0) y los factores de G1. Aplica §7
 del índice.

@@ -13,7 +13,7 @@ Consumidores:
 
 **Solo stdlib**: los notebooks lo importan sin la pila científica.
 
-Motivación (problema P2 del plan `docs/plan_multiobjeto_notebooks_2026-07-24.md`):
+Motivación (problema P2 del plan `docs/2026-07-24_plan_multiobjeto_notebooks.md`):
 los nombres de QC pertenecían al *productor*, no a la *etapa*. A1 emite
 ``stages/stage00r_qc.json`` por la vía monolítica (``reduce_raw.sh``) y
 ``cube_telcorr_qc.json`` por la vía cascade (``reduce_cascade.py``), con

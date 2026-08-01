@@ -1,7 +1,7 @@
 # Especificación E1 · `H01_halpha_detection` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa E1 (ESENCIAL) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D2 (espectros
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D2 (espectros
 calibrados de todos los métodos), E4 al menos planificada (el criterio usa su
 throughput a posteriori para flujos, no para la significancia).
 

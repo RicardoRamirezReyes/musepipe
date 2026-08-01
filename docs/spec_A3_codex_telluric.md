@@ -1,7 +1,7 @@
 # Especificación A3 · `00t_telluric` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa A3 (OPCIONAL) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisito operativo: un cubo
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisito operativo: un cubo
 de entrada con DATA+STAT y procedencia explícita (`ADP`, `A1` o `A2`). Si el
 cubo viene del ADP histórico usado por la cadena anterior, A1/A2 no se
 falsifican: el QC registra `upstream="ADP"` y el hash del cubo.

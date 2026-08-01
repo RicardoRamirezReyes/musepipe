@@ -1,6 +1,6 @@
 # Especificación B1 · `01_load_align_crop` — brief de ejecución para Codex (ChatGPT 5.5)
 
-Fecha: 2026-07-01. Etapa B1 del plan `docs/plan_roxs12_reduccion_multimetodo.md`.
+Fecha: 2026-07-01. Etapa B1 del plan `docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`.
 A diferencia del bloque A (código nuevo), B1 es una **migración por
 equivalencia + extensión**: la lógica ya existe y está validada en
 `01_load_align_crop.ipynb` / `01_lowMemory_load_align_crop.ipynb`; el trabajo
@@ -57,7 +57,7 @@ gate. Prohibido mezclarlas en un mismo commit o fase:
 
 ## 2. Contexto que debes leer antes de escribir código
 
-- `docs/refactor_plan_far_objects.md`: el patrón de migración por equivalencia
+- `docs/2026-06-17_refactor_plan_far_objects.md`: el patrón de migración por equivalencia
   ya ejecutado para 04b/06/07/07b/08 — B1 replica ese proceso.
 - Config relevante del run (`runs/ROXs12b/config/config.json`):
   `cube_files` (para ROXs12b: UN solo cubo), `data_ext=1`, `crop_npix=170`,

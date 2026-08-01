@@ -13,7 +13,7 @@
     "extinction": "Currie et al. 2014 (Cardelli R_V=3.1)",
     "membership": "Currie et al. 2014: ROXs 42B miembro de rho Oph, ~3 Myr"
   },
-  "note": "Segundo objeto. Ver docs/plan_roxs42bb_execution_2026-07-20.md. Ajustes propios del objeto en scripts/target_overrides/ROXs42Bb.py.",
+  "note": "Segundo objeto. Ver docs/2026-07-20_plan_roxs42bb_execution.md. Ajustes propios del objeto en scripts/target_overrides/ROXs42Bb.py.",
   "field_notes": {
     "background_source": {
       "reported": "Fuente de fondo brillante en un costado del campo, citada a veces como ROXs 42B c.",

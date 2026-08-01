@@ -15,7 +15,7 @@
 > Ninguno de los dos mueve un veredicto: ver §3.4.
 
 Fecha: 2026-07-01 (v1) · 2026-07-31 (v2). Etapa A3 (OPCIONAL) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisito operativo: un cubo
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisito operativo: un cubo
 de entrada con DATA+STAT y procedencia explícita (`ADP`, `A1` o `A2`). Si el
 cubo viene del ADP histórico usado por la cadena anterior, A1/A2 no se
 falsifican: el QC registra `upstream="ADP"` y el hash del cubo.
@@ -116,7 +116,7 @@ Es la banda más profunda del rango de MUSE, y **todo el resto del repo ya la
 trataba como tal** mientras la etapa que decide era la única pieza que la
 ignoraba: `reduction/verify.py:DEFAULT_BAD_RANGES` la marca mala,
 `telluric_lines.py` la cataloga `strong`, `qc/noise_decomposition.py` la excluye,
-`docs/g3_real_frozen_decisions.md` la enmascara en G3, y
+`docs/2026-07-16_g3_real_frozen_decisions.md` la enmascara en G3, y
 `docs/a3_telluric_justification.md` §6 la llama «el rasgo telúrico con mayor
 leverage» (73 % de profundidad máxima en el intento con molecfit).
 

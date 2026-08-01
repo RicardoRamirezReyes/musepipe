@@ -156,7 +156,7 @@ ACCEPTED_LIMITATIONS = {
         ),
     },
     "D2_calibrate": {
-        # Accepted ONLY after full diagnosis (docs/d2_red_continuum_diagnosis.md):
+        # Accepted ONLY after full diagnosis (docs/2026-07-10_d2_red_continuum_diagnosis.md):
         # the flag is a real, characterized, non-removable inter-method systematic,
         # not a defect and not a mislabel of real signal (v3 now gates on the
         # signal-free inter-method metric, not |runmed-poly|).
@@ -166,7 +166,7 @@ ACCEPTED_LIMITATIONS = {
             "the faint companion, at the PSF floor (Psfao, ~4.4% red ring residual). The red "
             "spectral SHAPE is real and method-consistent (corr 0.957); only the LEVEL disagrees. "
             "Does NOT affect the Halpha emission-line non-detection or the Mdot limit. Fully "
-            "diagnosed in docs/d2_red_continuum_diagnosis.md."
+            "diagnosed in docs/2026-07-10_d2_red_continuum_diagnosis.md."
         ),
     },
 }
@@ -836,7 +836,7 @@ def _executive_summary(summary):
         lines.append(
             "- Red-band continuum: diagnosed as real cool-dwarf signal + an inter-method halo "
             "systematic (not a PSF defect; C1 is already Psfao). Full diagnosis: "
-            "docs/d2_red_continuum_diagnosis.md"
+            "docs/2026-07-10_d2_red_continuum_diagnosis.md"
         )
     return "\n".join(lines)
 

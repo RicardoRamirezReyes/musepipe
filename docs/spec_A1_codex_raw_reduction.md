@@ -1,6 +1,6 @@
 # Especificación A1 · `00r_raw_reduction` — brief de ejecución para Codex (ChatGPT 5.5)
 
-Fecha: 2026-07-01. Etapa A1 del plan `docs/plan_roxs12_reduccion_multimetodo.md`.
+Fecha: 2026-07-01. Etapa A1 del plan `docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`.
 Este documento es la instrucción completa para el agente. Léelo entero antes de
 ejecutar nada.
 
@@ -75,7 +75,7 @@ post-calibración, QC JSON y figuras de verificación.
   (`HIERARCH ESO INS MODE`) en la Fase 1 y se registra en QC. Toda la
   asociación de calibraciones depende de ese valor.
 - El repositorio ya tiene un contrato de etapas (ver README y
-  `docs/plan_roxs12_reduccion_multimetodo.md` §2.2): módulo + QC JSON + figuras
+  `docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md` §2.2): módulo + QC JSON + figuras
   + notebook fino. A1 lo cumple igual que las etapas migradas.
 
 ---

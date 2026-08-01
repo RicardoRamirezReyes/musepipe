@@ -1,7 +1,7 @@
 # Especificación B3 · `01c_target_localization` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa B3 (ESENCIAL, nueva) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisito: B2 (cubo apilado y
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisito: B2 (cubo apilado y
 corregido de stripes). Sustituye las coordenadas hardcodeadas del target por
 coordenadas medidas, validadas contra la astrometría publicada.
 

@@ -1,5 +1,5 @@
 """Fetch, convert and manifest the five external libraries of the G3 real plan
-(docs/plan_g3_real_2026-07-16.md, WP-G3R-2). Pure mechanics — no science.
+(docs/2026-07-16_plan_g3_real.md, WP-G3R-2). Pure mechanics — no science.
 
 Each family is a subcommand. A subcommand either downloads a directly-available
 public source and converts it to the frozen internal cache format

@@ -1,7 +1,7 @@
 # Especificación F1 · `R01_final_products` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa F1 (ESENCIAL, cierre) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D1, D2, E1, E2 y
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D1, D2, E1, E2 y
 (E3 o flujos medidos) terminadas; E4 terminada.
 
 ---

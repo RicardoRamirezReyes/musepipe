@@ -1,7 +1,7 @@
 # Especificación G1 · `extraction_validation` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-06. Fase G1 del plan
-`docs/00_plan_caracterizacion_espectroscopica.md`. Prerrequisito: G0 cerrada
+`docs/2026-07-08_plan_caracterizacion_espectroscopica.md`. Prerrequisito: G0 cerrada
 (run real completo con QCs). Aplica §7 del índice.
 
 **Propósito científico**: convertir los productos de G0 en un espectro con
@@ -56,7 +56,7 @@ patrón de referencia y los controles al mismo radio como población nula.
 
 ## 2. Precondiciones e inspección obligatoria
 
-1. Leer: auditoría, índice G, bitácora G0 (`docs/g0_execution_log.md`) e
+1. Leer: auditoría, índice G, bitácora G0 (`docs/2026-07-08_g0_execution_log.md`) e
    issues abiertos, specs C1–C4, D1, E4 y sus QC del run G0.
 2. Verificar precondiciones: QCs de B3, E01, X01–X03, X10, X11, H04 del run
    G0 existentes y en verde (o con issues aceptados); clones de inyección de

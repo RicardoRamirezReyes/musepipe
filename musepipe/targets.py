@@ -3,7 +3,7 @@
 Separa *quién* es el objeto (nombre para mostrar, alias, referencias) de *cómo*
 se procesa (parámetros de etapa, que viven en ``runs/<run>/config/config.json``).
 
-Motivación (problema P4c del plan `docs/plan_multiobjeto_notebooks_2026-07-24.md`):
+Motivación (problema P4c del plan `docs/2026-07-24_plan_multiobjeto_notebooks.md`):
 la prosa de los informes tenía el nombre del primer objeto incrustado en el
 código, así que `runs/ROXs42Bb_realigned/report/report.md` afirmaba hablar de
 "ROXs 12 B". El nombre debe venir del perfil del objeto, no de un literal.

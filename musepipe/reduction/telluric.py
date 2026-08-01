@@ -32,7 +32,7 @@ PROTECTED_WINDOWS = (HALPHA_PROTECTED, NALGS_PROTECTED)
 #: O₂ A es la más profunda del rango de MUSE y hasta 2026-07-31 no estaba aquí:
 #: la etapa decidía sobre tres bandas que excluían justo la que más informa.
 #: `verify.DEFAULT_BAD_RANGES` ya la marcaba como mala, `telluric_lines` ya la
-#: cataloga `strong`, G3 ya la enmascara (`docs/g3_real_frozen_decisions.md`) y
+#: cataloga `strong`, G3 ya la enmascara (`docs/2026-07-16_g3_real_frozen_decisions.md`) y
 #: `a3_telluric_justification.md` §6 la llama «el rasgo telúrico con mayor
 #: leverage» — la etapa que decide era la única pieza que la ignoraba. Los
 #: bordes son los mismos 7590–7700 que usan esas otras piezas: no se introduce

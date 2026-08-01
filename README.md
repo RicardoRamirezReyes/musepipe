@@ -1,5 +1,10 @@
 # MUSE accretion pipeline
 
+> **Ultima modificacion: 2026-08-01.** Objetos con cadena completa: **ROXs 12 b**
+> (A1→G4, con F1 y el bloque G pendientes de re-correr tras el cambio de convencion
+> de flujo) y **ROXs 42B b** (A1→G4 al dia; A2, B2, E1b, S0, S1 y G5 sin ejecutar).
+> Estado detallado y pendiente vigente: `docs/2026-08-01_handoff.md`.
+
 Pipeline por etapas para reduccion, diagnostico y extraccion espectral de
 cubos MUSE. Los productos de cada ejecucion viven en
 `runs/<RUN_ID>/{config,stages,tables,plots,logs}` y no se versionan en Git.
@@ -119,7 +124,7 @@ se pueden lanzar desde el propio notebook. Índice y uso en
 `python scripts/build_review_notebooks.py --target <objeto>` (`--check` valida que
 cada QC resuelve). Añadir un objeto = crear su run+config y su
 `targets/<slug>.json`, sin tocar código. Ver
-[`docs/plan_multiobjeto_notebooks_2026-07-24.md`](docs/plan_multiobjeto_notebooks_2026-07-24.md).
+[`docs/2026-07-24_plan_multiobjeto_notebooks.md`](docs/2026-07-24_plan_multiobjeto_notebooks.md).
 
 ### Notebooks de análisis (`debug/`)
 
@@ -240,7 +245,7 @@ MPLBACKEND=Agg python -c "from musepipe.stages import run_stage06_pca_c2_summary
 (`stage_h04_injection`, throughput y curva de recuperacion) y, si se quieren
 curvas, E5 (contraste) y E6 (ROC). LkCa 15 ya se corrio por la cadena moderna el
 2026-07-15 (B1→B2→B3→C1→C5→C6→E1b, ver
-[`docs/smoke_lkca15_2026-07-15.md`](docs/smoke_lkca15_2026-07-15.md)).
+[`docs/2026-07-15_smoke_lkca15.md`](docs/2026-07-15_smoke_lkca15.md)).
 
 ## Estructura
 
@@ -297,7 +302,8 @@ por pico.
 Desde la raiz del proyecto:
 
 ```bash
-python -m pytest tests/ -q                         # suite completa (699 pruebas)
+python -m pytest tests/ -q                         # suite completa (898 pruebas + 429 subtests, ~24 min)
+python -m pytest tests/ -q -m "not slow"           # sin los notebooks de analisis (~2 min)
 python -m pytest tests/test_h03_chain.py -q        # un solo archivo
 python -m pytest tests/ -q -m "not external_data"  # sin las que piden bibliotecas externas
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
@@ -310,15 +316,40 @@ No hay linter ni formateador configurado. El entorno reproducible esta fijado en
 
 ## Documentacion
 
-- `docs/roxs12b_clean_spectrum_pipeline.md`: uso operativo y productos de la
-  cadena local para ROXs12b.
-- `docs/refactor_plan_far_objects.md`: fases, decisiones y criterios del
-  refactor.
-- `docs/plan_mejora_y_sugerencias.md`: diagnostico cientifico y prioridades
-  posteriores.
-- `docs/00_config_parameters.md`: referencia de configuracion existente.
+`docs/` sigue dos convenciones distintas, y la diferencia importa:
+
+**Contratos y referencias permanentes** — sin fecha en el nombre, porque no
+describen un momento sino una regla vigente:
+
+- `docs/spec_<ID>_codex_*.md`: el contrato congelado de cada etapa. Cuando hay
+  varias versiones, **lee la mas alta** (`spec_D1_v4_*`, `spec_A3_v2_*`).
 - `docs/noise_model.md`: modelo de ruido canonico (STAT subestima ~4x, inflacion
-  espacial en apertura, correlacion espectral, origen en el shift subpixel de stage01;
-  regla control=objeto). Toda etapa debe citarlo en vez de re-derivar sigma.
+  espacial en apertura, correlacion espectral, regla control=objeto). Toda etapa
+  debe citarlo en vez de re-derivar sigma.
 - `docs/a3_telluric_justification.md`: justificacion de la correccion telurica por
-  STD_TELLURIC (molecfit no convergio) para el paper.
+  STD_TELLURIC para el paper.
+- `docs/00_config_parameters.md`: referencia de los parametros de configuracion.
+- `docs/setup_ubuntu.md`: montaje del entorno.
+
+**Estados y procedimientos** — nombre `AAAA-MM-DD_<asunto>.md`, con la fecha del
+trabajo delante, de modo que `ls docs/` los ordena cronologicamente. Son
+instantaneas: describen lo que se sabia ese dia, y los mas nuevos ganan a los
+viejos. Los mas utiles hoy:
+
+- `docs/2026-08-01_handoff.md`: **empieza por aqui.** Estado al cierre y pendiente
+  vigente.
+- `docs/2026-07-29_handoff.md`: las cinco sesiones que van del anillo de fondo a la
+  cadena de ROXs 42B b al dia (§10 a §14).
+- `docs/2026-07-27_handoff.md`, `docs/2026-07-25_handoff_espectros_definitivos.md`.
+- `docs/2026-07-23_handoff_roxs42bb.md` y `docs/2026-07-22_handoff_roxs42bb.md`:
+  la reduccion del segundo objeto.
+- `docs/2026-07-24_plan_multiobjeto_notebooks.md`: por que los notebooks viven en
+  `notebooks/<objeto>/` y como se resuelve un QC por la cadena.
+- `docs/2026-07-16_g3_real_frozen_decisions.md` y
+  `docs/2026-07-09_d1_canonical_method_decision.md`: decisiones congeladas.
+- `docs/2026-06-18_roxs12b_clean_spectrum_pipeline.md`,
+  `docs/2026-06-17_refactor_plan_far_objects.md`,
+  `docs/2026-06-18_plan_mejora_y_sugerencias.md`: el origen del refactor.
+
+`reports/` guarda instantaneas fechadas de auditorias; **no se re-escriben**, asi
+que sus rutas pueden citar nombres anteriores a este renombrado.

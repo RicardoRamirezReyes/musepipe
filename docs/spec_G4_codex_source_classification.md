@@ -1,7 +1,7 @@
 # Especificación G4 · `source_classification` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-06. Fase G4 del plan
-`docs/00_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: G2 cerrada;
+`docs/2026-07-08_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: G2 cerrada;
 G3 cerrada (la parte astrométrica/morfológica puede desarrollarse con
 G0+G1). Aplica §7 del índice.
 

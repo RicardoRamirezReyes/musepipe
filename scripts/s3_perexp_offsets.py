@@ -5,7 +5,7 @@ estimators + consistency gate.
 S3a (airglow, absolute): runs `cube_qc m1m2-sky` on each per-exposure
 SKY_SPECTRUM. Airglow lines are at rest topocentric, so the fit is that
 exposure's wavelength-solution residual; the SPREAD between exposures tests the
-TEMPORAL branch of the G1 closure (docs/decision_g1_wavesol_2026-07-17.md).
+TEMPORAL branch of the G1 closure (docs/2026-07-17_decision_g1_wavesol.md).
 
 S3b (stellar continuum, relative): cross-correlates each exposure's field-median
 stellar spectrum against the 7-exposure template over the wavesol absorption

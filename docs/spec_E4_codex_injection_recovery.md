@@ -1,7 +1,7 @@
 # Especificación E4 · `H04_injection_recovery` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa E4 (ESENCIAL) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C1 (PSF), C2–C4
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C1 (PSF), C2–C4
 (extractores), B2/B3. Es el árbitro de throughput de D1 y el insumo
 obligatorio de E3. Se especifica ANTES que E3 porque E3 la consume.
 

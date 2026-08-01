@@ -2,7 +2,7 @@
 
 Fecha: 2026-07-09. Revisión formal de `docs/spec_D1_codex_method_comparison.md`
 (v1, 2026-07-01), que queda como histórico. Etapa D1 del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Rama: `stage-d1-v2`.
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Rama: `stage-d1-v2`.
 
 ## 0. Por qué existe una v2 (protocolo de revisión)
 
