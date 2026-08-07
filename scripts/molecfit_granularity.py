@@ -29,6 +29,18 @@ TRES PARÁMETROS SIN LOS CUALES ESTO NO CONVERGE, medidos el 2026-08-06
   que el valor de inicio no represente a la exposición.
 * La **humedad**. El cubo no la trae; se lee del crudo de esa exposición.
 
+Y uno que se aprendió midiendo: **`FIT_WLC=1`**. Con el ajuste de longitud de onda
+apagado, el modelo queda corrido respecto al dato —y no por igual en cada banda,
+o sea que no es un desplazamiento de marco sino escala—: −1.00 canales en O₂ B y
+−0.25 en O₂ A. Encendido, el corrimiento se va a +0.00 en las dos, el χ²ᵣ baja de
+25.05 a 15.73 y el rms dato-modelo cae un 20–29 %. `WLC_CONST=0` sigue siendo el
+punto de partida.
+
+Aviso de marco, para quien lea los productos a mano: `MOLECFIT_DATA.lambda` sale
+en **vacío** (comprobado contra Edlén sobre el eje de entrada, a 0.00000 Å). Las
+filas van 1:1 con la entrada, así que `curvas.npz` guarda el eje en **aire** como
+`wave_A` y el de vacío aparte.
+
 Uso:
 
     python scripts/molecfit_granularity.py --out <dir> \
@@ -133,7 +145,7 @@ def escribe_science(wave, flux, cabecera, destino):
                   fits.BinTableHDU.from_columns(columnas)]).writeto(destino, overwrite=True)
 
 
-def ajusta(etiqueta, cube, out_root, radius, raw_dir, reutiliza, prep_dir):
+def ajusta(etiqueta, cube, out_root, radius, raw_dir, reutiliza, prep_dir, fit_wlc):
     destino = Path(out_root) / etiqueta
     (destino / "out").mkdir(parents=True, exist_ok=True)
     inicio = time.time()
@@ -170,7 +182,7 @@ def ajusta(etiqueta, cube, out_root, radius, raw_dir, reutiliza, prep_dir):
             "--LIST_MOLEC=O2,H2O", "--FIT_MOLEC=1,0", "--REL_COL=1.0,1.0",
             "--COLUMN_LAMBDA=WAVE", "--COLUMN_FLUX=FLUX", "--WLG_TO_MICRON=0.0001",
             "--WAVELENGTH_FRAME=AIR", "--FIT_CONTINUUM=1", "--CONTINUUM_N=1",
-            "--FIT_WLC=0", "--WLC_CONST=0",          # <- sin esto el ajuste se congela
+            f"--FIT_WLC={int(fit_wlc)}", "--WLC_CONST=0",   # <- sin el CONST el ajuste se congela
             "--TELESCOPE_ANGLE_KEYWORD=NONE", f"--TELESCOPE_ANGLE_VALUE={altitud:.4f}",
             "--RELATIVE_HUMIDITY_KEYWORD=NONE", f"--RELATIVE_HUMIDITY_VALUE={humedad}",
             str(destino / "model.sof"),
@@ -206,18 +218,26 @@ def main(argv=None):
     parser.add_argument("--raw-dir", default=None, help="crudos, para leer la humedad real")
     parser.add_argument("--prep-dir", required=True,
                         help="carpeta molecfit_a1a de la reduccion historica: prep.py + wave_include2.fits")
+    parser.add_argument("--fit-wlc", type=int, choices=(0, 1), default=1,
+                        help="ajustar la correccion de longitud de onda (por defecto si)")
     parser.add_argument("--reuse", action="store_true",
                         help="no re-ajustar lo que ya tenga BEST_FIT_PARAMETERS")
     args = parser.parse_args(argv)
 
-    out = Path(args.out)
+    # TODO absoluto antes de nada: `esorex` se lanza con el cwd dentro del
+    # directorio del ajuste, asi que una ruta relativa aqui llega alli rota y el
+    # fallo es opaco («--output-dir no es un directorio valido»).
+    out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    trabajos = [("combinado", args.combined)]
-    trabajos += [(f"exp{i}", c) for i, c in enumerate(args.exposures, start=1)]
+    prep_dir = Path(args.prep_dir).resolve()
+    trabajos = [("combinado", str(Path(args.combined).resolve()))]
+    trabajos += [(f"exp{i}", str(Path(c).resolve()))
+                 for i, c in enumerate(args.exposures, start=1)]
 
     filas, curvas = [], {}
     for etiqueta, cube in trabajos:
-        fila = ajusta(etiqueta, cube, out, args.radius, args.raw_dir, args.reuse, args.prep_dir)
+        fila = ajusta(etiqueta, cube, out, args.radius, args.raw_dir, args.reuse,
+                      prep_dir, args.fit_wlc)
         filas.append(fila)
         print(json.dumps(fila, ensure_ascii=False), flush=True)
         datos = Path(out) / etiqueta / "out" / "MOLECFIT_DATA.fits"
