@@ -1,7 +1,7 @@
 # Especificación G5 · `final_synthesis` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-06. Fase G5 (cierre) del plan
-`docs/00_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: G0–G4
+`docs/2026-07-08_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: G0–G4
 cerradas (o con issues aceptados explícitamente por el humano). Aplica §7 del
 índice. **Extiende la maquinaria de F1 (`musepipe/report.py`,
 `scripts/build_report.py`, spec_F1) — no la reemplaza ni la duplica.**

@@ -1,7 +1,7 @@
 # Especificación C3 · `X02_optimal` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa C3 (ESENCIAL, nueva) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C1 (`psf_model`),
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C1 (`psf_model`),
 C2 (formato `SpectrumProduct` congelado), B3 (posiciones), A4/B1 (factores de
 varianza).
 

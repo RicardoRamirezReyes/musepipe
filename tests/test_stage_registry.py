@@ -4,7 +4,7 @@ El registro es la fuente única de la parte machine-readable de cada etapa. Esto
 tests impiden que vuelva a divergir de sus dos consumidores: el generador de
 notebooks y `notebooks/_nbcommon.py`.
 
-Contexto: plan `docs/plan_multiobjeto_notebooks_2026-07-24.md` (WP F1/F3).
+Contexto: plan `docs/2026-07-24_plan_multiobjeto_notebooks.md` (WP F1/F3).
 """
 from __future__ import annotations
 

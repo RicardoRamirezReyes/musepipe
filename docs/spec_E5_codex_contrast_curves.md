@@ -1,7 +1,7 @@
 # Especificación E5 · `H05_contrast` — curvas de contraste por inyección en anillos
 
 Fecha: 2026-07-14. Etapa E5 del plan
-`docs/plan_integracion_halosub_julo2025.md` (WP-H5). Método: Julo et al. 2025
+`docs/2026-07-15_plan_integracion_halosub.md` (WP-H5). Método: Julo et al. 2025
 §3.3.2 (Fig. 10), inyecciones en anillos concéntricos (Andres 1994).
 
 Protocolo spec-first: commiteada antes de ejecutar sobre datos reales. QC con

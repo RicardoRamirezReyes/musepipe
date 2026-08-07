@@ -1,7 +1,7 @@
 # Especificación E2 · `H02_artifact_tests` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa E2 (ESENCIAL) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: E1 (veredicto y,
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: E1 (veredicto y,
 si lo hay, la señal candidata); B2 (métrica de stripes); cubos residuales de
 C2/C4.
 

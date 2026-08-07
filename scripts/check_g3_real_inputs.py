@@ -1,4 +1,4 @@
-"""Gate de insumos del plan G3 real (docs/plan_g3_real_2026-07-16.md, WP-G3R-0).
+"""Gate de insumos del plan G3 real (docs/2026-07-16_plan_g3_real.md, WP-G3R-0).
 
 Verifica que el run canonico tiene todos los insumos que las fases WP-G3R-6..12
 consumen, con el esquema exacto documentado en el plan (§0.2-§0.3). Cada item

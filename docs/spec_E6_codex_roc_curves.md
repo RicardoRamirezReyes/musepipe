@@ -1,7 +1,7 @@
 # Especificación E6 · `H06_roc` — curvas ROC del detector matched-filter
 
 Fecha: 2026-07-15. Etapa E6 del plan
-`docs/plan_integracion_halosub_julo2025.md` (WP-H6). Método: Julo et al. 2025
+`docs/2026-07-15_plan_integracion_halosub.md` (WP-H6). Método: Julo et al. 2025
 §3.3.3 (Fig. 11): DP vs FAP variando el umbral del matched filter, con
 inyecciones a contraste tipo límite-de-detección y realizaciones de ruido de
 los cubos residuales y de canales fuera de las líneas.

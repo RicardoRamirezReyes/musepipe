@@ -1,7 +1,7 @@
 # Especificación G0 · `real_cube_execution` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-06. Fase G0 (BLOQUEANTE) del plan
-`docs/00_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: specs
+`docs/2026-07-08_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: specs
 A2–A4, B3, C1–C4, D1–D2, E1–E4 implementadas (verificado en auditoría);
 cubo ADP disponible. Aplica §7 del índice (reglas obligatorias).
 
@@ -25,7 +25,7 @@ autor de ciencia nueva ni de refactors.
    con productos y QC de: A4 → (A2 condicional, A3 opcional según sus
    decisiones automáticas ya implementadas) → B3 → E01 → X01 → X02 → X03 →
    X10 → X11 → H04 → H01 → H02 → H03.
-2. `docs/g0_execution_log.md`: bitácora etapa por etapa — comando exacto,
+2. `docs/2026-07-08_g0_execution_log.md`: bitácora etapa por etapa — comando exacto,
    duración, verificaciones de la spec original en verde/rojo, fallos con
    traza completa, y correcciones aplicadas (diff mínimo, justificación).
 3. Comparación cuantitativa contra la cadena histórica local-surface (§5.3).
@@ -205,7 +205,7 @@ tiempo de H04 proyectado supera 4 h (límite de la spec E4).
 
 ## 10. Reporte final de Codex
 
-Bitácora completa (`docs/g0_execution_log.md`), QC de fase §5.2, tabla legacy
+Bitácora completa (`docs/2026-07-08_g0_execution_log.md`), QC de fase §5.2, tabla legacy
 §5.3, verificaciones V1–V6 con figuras, lista de fixes con commits, tests
 antes/después, issues abiertos priorizados (bloqueante/mayor/menor para G1),
 y comando(s) exactos de reproducción del run completo.

@@ -3,7 +3,7 @@
 Shared infrastructure for stages C5 (``stage_x04_sgf``) and C6
 (``stage_x05_lpm``), implementing the two methods analyzed in
 Julo et al. 2025 (arXiv:2509.09878), plan
-``docs/plan_integracion_halosub_julo2025.md`` (WP-H0):
+``docs/2026-07-15_plan_integracion_halosub.md`` (WP-H0):
 
 * **SGF** — the state-of-the-art Savitzky-Golay filtering method
   (Haffert et al. 2019): each spaxel is divided by a stellar reference

@@ -1,6 +1,6 @@
 # Especificación A2 · `00s_sky_zap` — brief de ejecución para Codex (ChatGPT 5.5)
 
-Fecha: 2026-07-01. Etapa A2 del plan `docs/plan_roxs12_reduccion_multimetodo.md`.
+Fecha: 2026-07-01. Etapa A2 del plan `docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`.
 Esta etapa acepta dos puntos de entrada:
 
 1. `provenance="raw_reduction"`: A1 terminada según

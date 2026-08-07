@@ -9,7 +9,7 @@ los datos o la prosa del primero — que es exactamente cómo llegó a decir
 Cobertura: `musepipe/`, `scripts/` y los notebooks generados (`notebooks/**`),
 porque los tres literales más dañinos vivían en notebooks.
 
-Contexto: `docs/plan_multiobjeto_notebooks_2026-07-24.md` (WP P6w/P6b).
+Contexto: `docs/2026-07-24_plan_multiobjeto_notebooks.md` (WP P6w/P6b).
 
 Para añadir una excepción hay que escribir el motivo en `ALLOWLIST`. Si el
 motivo no se puede escribir en una línea, probablemente no sea una excepción.

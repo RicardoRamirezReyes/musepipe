@@ -1233,7 +1233,7 @@ def _spectrum_row(name, role, cal, *, canonical=False, red_reference=None):
         # compatible con cero (sgf/lpm filtran el continuo) no es sobre-sustraccion.
         row["caveat"] = (
             "continuo negativo en el rojo: sobre-sustraccion del halo AO cromatico "
-            "(docs/d2_red_continuum_diagnosis.md), emparejada en los controles. El cociente "
+            "(docs/2026-07-10_d2_red_continuum_diagnosis.md), emparejada en los controles. El cociente "
             "al canonico sale negativo por eso."
         )
     return row

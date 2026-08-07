@@ -1,7 +1,7 @@
 # Especificación C4 · `X03_psf_fitting` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa C4 (ESENCIAL, nueva) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C1, C2 (formato),
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C1, C2 (formato),
 C3 (deseable para comparar), B3, A4/B1.
 
 Es el **método primario** recomendado por la literatura para un compañero a

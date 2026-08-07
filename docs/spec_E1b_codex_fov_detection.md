@@ -1,7 +1,7 @@
 # Especificación E1b · `H01b_fovmap` — detección ciega por matched filter espacio-espectral
 
 Fecha: 2026-07-14. Etapa E1b del plan
-`docs/plan_integracion_halosub_julo2025.md` (WP-H4). Método: Julo et al. 2025
+`docs/2026-07-15_plan_integracion_halosub.md` (WP-H4). Método: Julo et al. 2025
 §3.3.1 (Fig. 9) + estadística de ruido por anillos (App. G).
 
 Protocolo spec-first: commiteada antes de ejecutar sobre datos reales. QC con

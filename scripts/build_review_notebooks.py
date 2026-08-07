@@ -329,7 +329,7 @@ def runs_referenced(cmd: str) -> list[str]:
     fijadas al run para el que se escribió el comando. Detectarlas permite
     bloquear la ejecución desde el set de notebooks de otro objeto, que
     sobrescribiría productos ajenos (hallazgo H2, Fase 0 del plan
-    `docs/plan_multiobjeto_notebooks_2026-07-24.md`).
+    `docs/2026-07-24_plan_multiobjeto_notebooks.md`).
     """
     found = re.findall(r"(?:runs|MUSE_work)/([A-Za-z0-9_]+)/", cmd)
     return sorted(set(found))
@@ -668,7 +668,7 @@ def build_cells(s: dict) -> list[dict]:
             "`runs/<run>/config/config.json` (clave `stage_runs`); una etapa marcada "
             "`no ejecutada` no es un error, es trabajo pendiente para este objeto. "
             "Un `!` (CROSS-OBJECT) sí es un problema: se estaría leyendo otro objeto.\n\n"
-            "Ver `docs/plan_multiobjeto_notebooks_2026-07-24.md`."
+            "Ver `docs/2026-07-24_plan_multiobjeto_notebooks.md`."
         ))
         cells.append(code("nb.show_chain(RUN_ID)"))
 
@@ -726,7 +726,7 @@ def build_cells(s: dict) -> list[dict]:
                     "        f'BLOQUEADO: el comando de esta etapa tiene rutas fijas a {_CMD_RUNS} '\n"
                     "        f'pero el run activo es {RUN_ID!r}. Ejecutarlo leería y sobrescribiría '\n"
                     "        'productos de otro objeto. Pendiente de parametrizar: WP-E4 de '\n"
-                    "        'docs/plan_multiobjeto_notebooks_2026-07-24.md.'\n"
+                    "        'docs/2026-07-24_plan_multiobjeto_notebooks.md.'\n"
                     "    )\n\n"
                 )
         cells.append(code(
@@ -2804,7 +2804,7 @@ STAGES: list[dict] = [
             "**El nexo con B6/D1 (importante):** aun con Psfao, el **p90** del residuo del anillo es "
             "~31 % (17 bins por encima del 5 %) — los bins del **rojo lejano** no cierran. Ese es el "
             "sistemático **B6** que reaparece en D1 como `divergent_continuum` y se acepta como "
-            "presupuestado ([`docs/d1_canonical_method_decision.md`](../docs/d1_canonical_method_decision.md)). "
+            "presupuestado ([`docs/2026-07-09_d1_canonical_method_decision.md`](../docs/2026-07-09_d1_canonical_method_decision.md)). "
             "La PSF física **no** lo elimina — es el piso a esta geometría.\n\n"
             "**Producto:** `psf_model.json` con los parámetros Psfao (`r0`, `beta`, …) por bin, "
             "suavizados con un polinomio; lo consumen C3/C4/E4."
@@ -2886,10 +2886,10 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Blocker #8 CERRADO**: C1 ajusta Moffat **y** Psfao por bin y selecciona por menor residuo del anillo (empate→Moffat).", "d1_canonical_method_decision.md"),
+            ("**Blocker #8 CERRADO**: C1 ajusta Moffat **y** Psfao por bin y selecciona por menor residuo del anillo (empate→Moffat).", "2026-07-09_d1_canonical_method_decision.md"),
             ("**Forma elegida = psfao** (residuo de anillo mediano 4.44% vs 15.65% Moffat). `psf_model.json` byte-idéntico a la etapa lateral: consolidación neutra.", None),
             ("Híbrido azimutal **descartado**: con Psfao empeoraba (la escala venía de la FWHM inflada del Moffat).", None),
-            ("**Residuo B6 del rojo lejano NO se cierra** (p90 ~31%, 17 bins >5%): es el piso a esta geometría → sistemática presupuestada que reaparece en D1 (`divergent_continuum`).", "d1_canonical_method_decision.md"),
+            ("**Residuo B6 del rojo lejano NO se cierra** (p90 ~31%, 17 bins >5%): es el piso a esta geometría → sistemática presupuestada que reaparece en D1 (`divergent_continuum`).", "2026-07-09_d1_canonical_method_decision.md"),
         ],
         checks=None,
         conclusion_md=(
@@ -3020,7 +3020,7 @@ STAGES: list[dict] = [
             "        print('No se pudo generar el plot:', type(e).__name__, e)"
         ),
         decisions=[
-            ("**Sustracción de plano local en anillo (3–12 px)** alrededor del compañero, canal por canal, en modo `native_stage02`: quita el gradiente del halo estelar localmente.", "roxs12b_clean_spectrum_pipeline.md"),
+            ("**Sustracción de plano local en anillo (3–12 px)** alrededor del compañero, canal por canal, en modo `native_stage02`: quita el gradiente del halo estelar localmente.", "2026-06-18_roxs12b_clean_spectrum_pipeline.md"),
             ("Enmascara el núcleo del compañero (3 px) y otros objetos (estrella); plano con sigma-clip 3σ.", None),
             ("Es la rama **local-surface** (`optimal_ls` / cadena de objetos lejanos); D1 mostró que `optimal_ls` arrastraba este pedestal → el canónico es **psffit**, no optimal_ls.", None),
         ],
@@ -3608,7 +3608,7 @@ STAGES: list[dict] = [
         ],
         decisions=[
             ("**Ajuste lineal por canal** `a·P_estrella + b·P_compañero + plano`: toda la no-linealidad se resuelve aguas arriba (C1/B3). Es el método primario de la literatura.", None),
-            ("**Simultáneo estrella+compañero+plano**: maneja el gradiente del halo de frente, sin sobre-sustracción; positivo y físico en el borde → **método canónico**.", "d1_canonical_method_decision.md"),
+            ("**Simultáneo estrella+compañero+plano**: maneja el gradiente del halo de frente, sin sobre-sustracción; positivo y físico en el borde → **método canónico**.", "2026-07-09_d1_canonical_method_decision.md"),
             ("Ajuste sano: χ²ᵣ≈1.03, cond 10.7, rho_ab 0.17 (separables), estrella recuperada 1.014, crosstalk 0.03.", None),
             ("Salvedad: `rho_bc`≈0.45 (1303 canales >0.5), compañero débil parcialmente degenerado con el plano; errores empíricos (M5 rojo).", None),
         ],
@@ -3753,7 +3753,7 @@ STAGES: list[dict] = [
         ],
         decisions=[
             ("**Fiel a la literatura** (SavGol d=1, W̆=101, sin máscara de líneas, sin PCA): línea base cuyos sesgos se miden, no se ocultan.", "spec_C5_codex_sgf_subtraction.md"),
-            ("Predictor Ec. 1 por línea en el QC; la corrección práctica de la auto-sustracción es el throughput E4/E3.", "plan_integracion_halosub_julo2025.md"),
+            ("Predictor Ec. 1 por línea en el QC; la corrección práctica de la auto-sustracción es el throughput E4/E3.", "2026-07-15_plan_integracion_halosub.md"),
             ("Sustracción por exposición; residuos combinados con el mismo combinador que el cubo madre (comparabilidad D1).", None),
         ],
         checks=(
@@ -3906,7 +3906,7 @@ STAGES: list[dict] = [
         decisions=[
             ("**Grado 4 congelado** (tres vías independientes del paper §3.2); diagnósticos de grado como QC con warnings, nunca ajuste al vuelo.", "spec_C6_codex_lpm_subtraction.md"),
             ("Máscara de líneas por target (`lpm_masked_lines_A`); una línea de ciencia sin enmascarar = auto-sustracción parcial silenciosa → el notebook la audita contra el catálogo G2.", None),
-            ("Sin pesos por varianza en v1 (OLS plano, como el paper); ponderación por precisión es trabajo futuro explícito.", "plan_integracion_halosub_julo2025.md"),
+            ("Sin pesos por varianza en v1 (OLS plano, como el paper); ponderación por precisión es trabajo futuro explícito.", "2026-07-15_plan_integracion_halosub.md"),
         ],
         checks=(
             "q = nb.load_qc('stages/spec_lpm_qc.json', RUN_ID)\n"
@@ -4169,7 +4169,7 @@ STAGES: list[dict] = [
             ("**El throughput de Hα ya no toca B1–B6.** Aplicarlo a bandas de continuo era una extrapolación cromática no medida que podía fabricar divergencias; ahora se aplica exactamente una vez y solo al residual de línea.", "spec_D1_v4_codex_method_comparison.md"),
             ("**METHOD_ORDER de 6** con la familia espectral (Julo+25); pares primarios = validados por G1; bandas, umbrales, scale-check y protocolo anti cherry-picking **sin cambios** desde v2/v3.", "spec_D1_v3_codex_method_comparison.md"),
             ("**optimal_psfsub → rejected** (histórico v3): su T venía de un E4 pre-consolidación Psfao; verificado con worktree HEAD que el cambio no provenía del código nuevo. Revisar contra el E4 v2 actual al re-ejecutar.", None),
-            ("**El usuario mantuvo psffit como canónico** (2026-07-15). Esa decisión sigue en pie y D1 no la toca: el árbol solo recomienda con veredicto `consistent` y la elección canónica es humana.", "d1_canonical_method_decision.md"),
+            ("**El usuario mantuvo psffit como canónico** (2026-07-15). Esa decisión sigue en pie y D1 no la toca: el árbol solo recomienda con veredicto `consistent` y la elección canónica es humana.", "2026-07-09_d1_canonical_method_decision.md"),
         ],
         checks=None,
         conclusion_md=(
@@ -4225,8 +4225,8 @@ STAGES: list[dict] = [
             "- **Continuo:** running-median y polinomio; su diferencia es el término `sys_continuum`.\n"
             "- **Error:** `stat` (empírico, M5 rojo) + sistemáticos (flujo-cal, psf, cielo, telúrico, "
             "continuo). El total está **dominado por el stat**.\n\n"
-            "**Diagnóstico del 'continuo rojo inestable'** ([`docs/d2_red_continuum_diagnosis.md`]"
-            "(../docs/d2_red_continuum_diagnosis.md)): son 3 cosas reales (señal de enana fría + "
+            "**Diagnóstico del 'continuo rojo inestable'** ([`docs/2026-07-10_d2_red_continuum_diagnosis.md`]"
+            "(../docs/2026-07-10_d2_red_continuum_diagnosis.md)): son 3 cosas reales (señal de enana fría + "
             "sistemático de nivel inter-método + rigidez del polinomio), **no** un defecto de PSF.\n\n"
             "**El chequeo de continuo estable (`v3_continuum_stable`)** pregunta, en físico: *¿el "
             "continuo que llamamos «del compañero» es suyo, o es lo que quedó del halo de la "
@@ -4473,8 +4473,8 @@ STAGES: list[dict] = [
                     "- **No afecta a Hα** (E1) ni al límite de Ṁ (E3): la línea es estrecha y se mide "
                     "contra su continuo local, con controles procesados igual que el objeto.\n\n"
                     "No es un defecto de PSF — C1 ya usa Psfao. El diagnóstico completo, con las tres "
-                    "causas reales, está en [`docs/d2_red_continuum_diagnosis.md`]"
-                    "(../../docs/d2_red_continuum_diagnosis.md).\n\n"
+                    "causas reales, está en [`docs/2026-07-10_d2_red_continuum_diagnosis.md`]"
+                    "(../../docs/2026-07-10_d2_red_continuum_diagnosis.md).\n\n"
                     "*(La métrica original de la spec era |runmed − poly| sobre un solo espectro; se "
                     "sustituyó porque confunde la estructura molecular **real** de una enana fría con el "
                     "sistemático. Se conserva como `legacy_runmed_poly_fraction`.)*\n\n"
@@ -4617,8 +4617,8 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Los espectros definitivos (6 métodos + primaria) son el entregable de D2**, antes del estudio de Hα: todos con `BUNIT` declarado y error total; la tabla vive en `qc['spectra']` y la figura en `plots/stage_x11_spectra.png`.", "espectros_definitivos_handoff_2026-07-25.md"),
-            ("**Diagnóstico honesto del 'continuo rojo inestable'**: 3 cosas reales (señal de enana fría + sistemático de nivel inter-método + rigidez del polinomio). NO es defecto de PSF.", "d2_red_continuum_diagnosis.md"),
+            ("**Los espectros definitivos (6 métodos + primaria) son el entregable de D2**, antes del estudio de Hα: todos con `BUNIT` declarado y error total; la tabla vive en `qc['spectra']` y la figura en `plots/stage_x11_spectra.png`.", "2026-07-25_handoff_espectros_definitivos.md"),
+            ("**Diagnóstico honesto del 'continuo rojo inestable'**: 3 cosas reales (señal de enana fría + sistemático de nivel inter-método + rigidez del polinomio). NO es defecto de PSF.", "2026-07-10_d2_red_continuum_diagnosis.md"),
             ("**Referenciación a controles integrada** (2026-07-11): el chequeo de continuo estable (V3) gatea sobre la métrica referenciada — a cada método se le resta su propio nivel en controles, para no contar dos veces el pedestal de halo que ambos comparten. Columna `cont_runmed_biasref` entregada para G3.", None),
             ("D1 **ya era control-centrado** (su veredicto refleja el sistemático genuino); esto solo puso a D2 al mismo nivel. Lo que V3 sigue midiendo por debajo del umbral es sistemático cromático **genuino** (no el pedestal): limitación aceptada en F1, que afecta a la forma del continuo (G3) y no al endpoint de Hα.", None),
             ("El sistemático rojo NO afecta la línea Hα ni el límite de Ṁ; escala de flujo 1.0 validada vs Gaia; error total dominado por el stat.", None),
@@ -4942,7 +4942,7 @@ STAGES: list[dict] = [
         ],
         decisions=[
             ("Umbral 5σ y r_min=3px congelados; la promoción de candidatos a `companion` (B3) es checkpoint del usuario, nunca automática.", "spec_E1b_codex_fov_detection.md"),
-            ("Normalización por anillos con μ/σ robustos (Andres 1994); no-gaussianidad registrada, no bloqueante.", "plan_integracion_halosub_julo2025.md"),
+            ("Normalización por anillos con μ/σ robustos (Andres 1994); no-gaussianidad registrada, no bloqueante.", "2026-07-15_plan_integracion_halosub.md"),
         ],
         checks=(
             "q = nb.load_qc('stages/stage_h01b_qc.json', RUN_ID)\n"
@@ -5137,7 +5137,7 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**S1b (wavesol/stripes):** los mapas Hα a/σ NO están alineados con slicers (estructura ≤ control transversal ⇒ radial, núcleo vs halo); la fuerte correlación por columna stripe↔σ es un confundido radial (transversal ≈ igual). Consistente con G1 (cubo combinado ciego a stripes). Sin interpretar ghost-vs-instrumental (humano/por-exposición).", "decision_g1_wavesol_2026-07-17.md"),
+            ("**S1b (wavesol/stripes):** los mapas Hα a/σ NO están alineados con slicers (estructura ≤ control transversal ⇒ radial, núcleo vs halo); la fuerte correlación por columna stripe↔σ es un confundido radial (transversal ≈ igual). Consistente con G1 (cubo combinado ciego a stripes). Sin interpretar ghost-vs-instrumental (humano/por-exposición).", "2026-07-17_decision_g1_wavesol.md"),
             ("**T2 reinterpretado para no-detección** (spec §2): el máximo global NO tiene forma de PSF (chi2_ratio 1.007, elongación 1.54) → *apoya* la no-detección. `overall_raw=fails` → `overall=survives`. Limitación aceptada en F1.", None),
             ("**T5 placebos PASS**: buscar en λ off-line no fabrica detecciones (max_fap 0.029, ninguno <0.01) → método limpio.", None),
             ("T1/T3/T4 `unavailable` por la exposición única (sin stripe QC, sin split, sin variantes de knobs).", None),
@@ -5189,8 +5189,8 @@ STAGES: list[dict] = [
             "menos fiable si su ruido está subestimado en ese borde. **Scatter inter-método "
             "{{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%** (la celda de evidencia y "
             "el Plot 1 dan el valor de cada método).\n\n"
-            "**Nota de definición** ([`docs/mdot_limit_definition_note.md`]"
-            "(../docs/mdot_limit_definition_note.md)): E3 usa Gumbel 99% **sin** el factor R_in 1.25; "
+            "**Nota de definición** ([`docs/2026-07-10_mdot_limit_definition_note.md`]"
+            "(../docs/2026-07-10_mdot_limit_definition_note.md)): E3 usa Gumbel 99% **sin** el factor R_in 1.25; "
             "G3 usa 5σ **con** R_in → G3 da "
             "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (`n/d` = G3 no ha calculado acreción "
             "para este objeto; ver su notebook). Misma cadena física; la diferencia "
@@ -5215,10 +5215,10 @@ STAGES: list[dict] = [
             "print(f\"relación: {pin['lacc_lha_relation']} (scatter {pin['relation_scatter_dex']} dex)\")\n"
             # `limit_definition_note` NO la emite ningún productor (verificado
             # 2026-07-24). La diferencia de definición E3-vs-G3 está en
-            # docs/mdot_limit_definition_note.md, y aquí se muestra lo que el QC
+            # docs/2026-07-10_mdot_limit_definition_note.md, y aquí se muestra lo que el QC
             # sí trae: el límite dual Alcala / Aoyama+21 que añadió R1.
             "print('\\ndefinición: E3 usa Gumbel 99% SIN el factor R_in 1.25 '\n"
-            "      '(G3 usa 5 sigma CON el factor) -> docs/mdot_limit_definition_note.md')\n"
+            "      '(G3 usa 5 sigma CON el factor) -> docs/2026-07-10_mdot_limit_definition_note.md')\n"
             "alt = lim[q['canonical_method']].get('mdot_aoyama21')\n"
             "if alt:\n"
             "    print(f\"\\nrelación dual (R1): Alcala+17 {lim[q['canonical_method']]['mdot']:.2e}\"\n"
@@ -5302,7 +5302,7 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Ṁ(99%) = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** (canónico {{qc:stages/stage_h03_qc.json:canonical_method}}; Gumbel 99%, L_Hα deredden, throughput {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}, d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}}pc, A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}, {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}).", "mdot_limit_definition_note.md"),
+            ("**Ṁ(99%) = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** (canónico {{qc:stages/stage_h03_qc.json:canonical_method}}; Gumbel 99%, L_Hα deredden, throughput {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}, d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}}pc, A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}, {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}).", "2026-07-10_mdot_limit_definition_note.md"),
             ("Dependencia del método = throughput; **`{{qc:stages/stage_h03_qc.json:canonical_method}}` canónico citable** por robustez, no por dar el límite más bajo; scatter inter-método {{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%.", None),
             ("Difiere de G3 ({{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}) solo por DEFINICIÓN (Gumbel99 sin R_in vs 5σ con R_in); cadena física idéntica. Ninguna elegida canónica aún.", None),
             ("Knob `h03_flux_unit_cgs=1e-20` (unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos.", None),
@@ -5624,7 +5624,7 @@ STAGES: list[dict] = [
         ],
         decisions=[
             ("Detección con la cadena E1b real (no un detector ad-hoc); grillas congeladas en la spec.", "spec_E5_codex_contrast_curves.md"),
-            ("Camino delta lineal exacto (verificado contra fuerza bruta en tests); psfsub opcional con re-sustracción completa.", "plan_integracion_halosub_julo2025.md"),
+            ("Camino delta lineal exacto (verificado contra fuerza bruta en tests); psfsub opcional con re-sustracción completa.", "2026-07-15_plan_integracion_halosub.md"),
         ],
         checks=(
             "q = nb.load_qc('stages/stage_h05_qc.json', RUN_ID)\n"
@@ -5858,7 +5858,7 @@ STAGES: list[dict] = [
         ],
         decisions=[
             ("**Gate `overall_status: yellow`, 0 rojos bloqueantes** en el realineado (era rojo en ADP): 15 yellow, 1 green (B1), 1 not_run (A3).", None),
-            ("Política de gate **congelada** (hash e4478990): SOLO 4 rojos específicos (A4/M5, D2/v3, E2/T2, E4/hierarchy) bajan a 'limitación aceptada'; cualquier OTRO rojo bloquea.", "d2_red_continuum_diagnosis.md"),
+            ("Política de gate **congelada** (hash e4478990): SOLO 4 rojos específicos (A4/M5, D2/v3, E2/T2, E4/hierarchy) bajan a 'limitación aceptada'; cualquier OTRO rojo bloquea.", "2026-07-10_d2_red_continuum_diagnosis.md"),
             ("Las limitaciones aceptadas se **conservan y anotan** (no se esconden); `hash_chain` pass (proveniencia trazable).", None),
             ("F1 se niega correctamente a dar **luz verde de paper** mientras el A-block siga provisional (yellow, no green).", None),
         ],
@@ -5982,7 +5982,7 @@ STAGES: list[dict] = [
             "    print('No se pudo generar el plot:', type(e).__name__, e)"
         ),
         decisions=[
-            ("G0 cerrado **retroactivamente** (`hash_chain_ok=True`, criterios congelados intactos); ejecución real-cube verificada.", "g0_execution_log.md"),
+            ("G0 cerrado **retroactivamente** (`hash_chain_ok=True`, criterios congelados intactos); ejecución real-cube verificada.", "2026-07-08_g0_execution_log.md"),
             ("Comparación legacy = calibración de flujo distinta entre reducciones (esperado); {{qc:stages/stage_g0_qc.json:legacy_comparison.n_flagged}}/{{qc:stages/stage_g0_qc.json:legacy_comparison.n_bands}} bandas flagged, documentario (continuo negativo). `n/d` = sin ADP de archivo para este objeto.", None),
             ("M5 STAT red → ruido empírico aguas abajo (consistente con A4).", "noise_model.md"),
         ],
@@ -6395,8 +6395,8 @@ STAGES: list[dict] = [
             "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (G3) y "
             "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} (E3) es de "
             "**definición**, no de física. Canónica **sin decidir** (usuario diferido, "
-            "[`docs/mdot_limit_definition_note.md`]"
-            "(../docs/mdot_limit_definition_note.md)).\n\n"
+            "[`docs/2026-07-10_mdot_limit_definition_note.md`]"
+            "(../docs/2026-07-10_mdot_limit_definition_note.md)).\n\n"
             "**Diferido → `not_constrained`:** atmósfera (BT-Settl), tracks (BHAC15/ATMO2020), "
             "plantillas (Luhman/Bonnefoy) — SpT/Teff/masa necesitan datos externos. **Por eso la "
             "clasificación de G4 es ambigua.** Provisional."
@@ -6485,7 +6485,7 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Ṁ p50 = {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 ({{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}}) solo por DEFINICIÓN; canónica sin decidir.", "mdot_limit_definition_note.md"),
+            ("**Ṁ p50 = {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 ({{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}}) solo por DEFINICIÓN; canónica sin decidir.", "2026-07-10_mdot_limit_definition_note.md"),
             ("L_acc {{qc:stages/stage_g3_qc.json:combined_accretion.kind}} = {{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉ de `{{qc:stages/stage_g3_qc.json:combined_accretion.from_line}}` (regla `{{qc:stages/stage_g3_qc.json:combined_accretion.rule}}`).", None),
             ("Plantilla/atmósfera/tracks = `not_constrained` (pending_libraries: BT-Settl/BHAC15/Luhman-Bonnefoy diferidas) → G4 ambigua.", None),
         ],
@@ -6860,7 +6860,7 @@ STAGES: list[dict] = [
     dict(
         id="S0", slug="S0_wavesol_map",
         title="Mapa de offsets de λ por spaxel (checklist G1)", block="S · wavesol/stripes",
-        spec="plan_wavesol_stripes_2026-07-17.md", run_override=None,
+        spec="2026-07-17_plan_wavesol_stripes.md", run_override=None,
         what=(
             "Mide, spaxel a spaxel, el corrimiento espectral de las líneas de absorción de la "
             "primaria contra un espectro de referencia de campo (Xie+20 §4.2.2). Estructura "
@@ -7066,7 +7066,7 @@ STAGES: list[dict] = [
                     "Se hace para **los 7 cubos por exposición + combinado + ADP** (full vs crop), "
                     "midiendo el stripe **en la orientación real del slicer de cada caso** según "
                     "`INS DROT POSANG` (vertical para 0/180, horizontal para 90 — exp3/exp4; "
-                    "corrección 2026-07-19, ver `decision_g1_wavesol_2026-07-17.md`). Dos "
+                    "corrección 2026-07-19, ver `2026-07-17_decision_g1_wavesol.md`). Dos "
                     "lecturas: (1) el **offset medio del crop por exposición** traza la **deriva "
                     "temporal** de zero-point (modo TEMPORAL de G1/S3); (2) `stripe_sig` ≤ el "
                     "control perpendicular en todos ⇒ **ningún stripe de slicer** aun al máximo "
@@ -7167,11 +7167,11 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("S0a/S0b: núcleo target-agnostic (`musepipe/qc/wavesol_map.py`) + CLI, normalización vectorizada (gate de equivalencia <1e-9) y corte S/N por spaxel; 14 tests verdes.", "plan_wavesol_stripes_pasos_agente.md"),
-            ("El offset map es diagnóstico del instrumento/reducción: realineado ≈ ADP (control cruzado).", "plan_wavesol_stripes_2026-07-17.md"),
-            ("**Gate G1 (humano):** con este producto se decide entrar o no a la Fase 2 (S2–S5, re-reducción por exposición). La recomendación automática se imprime en Checks.", "plan_wavesol_stripes_2026-07-17.md"),
-            ("**DECIDIDO 2026-07-17:** cerrar como sistemático acotado (interpretación temporal); Fase 2 NO disparada; confirmación diferida (S0 por exposición cuando existan los 7 cubos). Anula la recomendación automática.", "decision_g1_wavesol_2026-07-17.md"),
-            ("**Corrección POSANG 2026-07-19 (hallazgo del usuario):** `INS DROT POSANG` = 0/0/90/90/180/180/0 en modo SKY (el ABSROT −16→+6° es el ángulo físico del derotador, no rotación de campo). exp3/exp4 tienen el slicer HORIZONTAL en el cubo norte-arriba: sus métricas stripe/control estaban intercambiadas. Con la orientación correcta el veredicto NO cambia (0/7 sin stripes); la ceguera del combinado se refuerza (scrambling total, no smear de 5.9°). Tabla corregida: `tables/s0_perexp_summary_posang.csv`.", "decision_g1_wavesol_2026-07-17.md"),
+            ("S0a/S0b: núcleo target-agnostic (`musepipe/qc/wavesol_map.py`) + CLI, normalización vectorizada (gate de equivalencia <1e-9) y corte S/N por spaxel; 14 tests verdes.", "2026-07-17_plan_wavesol_stripes_pasos_agente.md"),
+            ("El offset map es diagnóstico del instrumento/reducción: realineado ≈ ADP (control cruzado).", "2026-07-17_plan_wavesol_stripes.md"),
+            ("**Gate G1 (humano):** con este producto se decide entrar o no a la Fase 2 (S2–S5, re-reducción por exposición). La recomendación automática se imprime en Checks.", "2026-07-17_plan_wavesol_stripes.md"),
+            ("**DECIDIDO 2026-07-17:** cerrar como sistemático acotado (interpretación temporal); Fase 2 NO disparada; confirmación diferida (S0 por exposición cuando existan los 7 cubos). Anula la recomendación automática.", "2026-07-17_decision_g1_wavesol.md"),
+            ("**Corrección POSANG 2026-07-19 (hallazgo del usuario):** `INS DROT POSANG` = 0/0/90/90/180/180/0 en modo SKY (el ABSROT −16→+6° es el ángulo físico del derotador, no rotación de campo). exp3/exp4 tienen el slicer HORIZONTAL en el cubo norte-arriba: sus métricas stripe/control estaban intercambiadas. Con la orientación correcta el veredicto NO cambia (0/7 sin stripes); la ceguera del combinado se refuerza (scrambling total, no smear de 5.9°). Tabla corregida: `tables/s0_perexp_summary_posang.csv`.", "2026-07-17_decision_g1_wavesol.md"),
         ],
         checks=(
             "q = nb.load_qc('stages/stageS0_qc.json', RUN_ID)\n"
@@ -7225,7 +7225,7 @@ STAGES: list[dict] = [
             "**Confirmación (HECHA 2026-07-18):** se regeneraron los 7 cubos por exposición "
             "(S2) y se corrió **S0 por exposición** (0/7 con estructura de slicer) **+ S3** "
             "(deriva temporal ~0.04 Å std). Ambas ramas cerradas ⇒ **GATE G1 CERRADO** "
-            "(`gate_g1.decision=closed`). Detalle en `docs/decision_g1_wavesol_2026-07-17.md`.\n\n"
+            "(`gate_g1.decision=closed`). Detalle en `docs/2026-07-17_decision_g1_wavesol.md`.\n\n"
             "**Corroboración con el crop 100×100 en la estrella (paso extra):** al restringir a "
             "la región de máxima S/N, el `median|offset|` cae de ~0.8 Å a ~0.11 Å (era ruido de "
             "bordes) y el offset medio con signo se resuelve a **unas decenas de mÅ** "
@@ -7240,7 +7240,7 @@ STAGES: list[dict] = [
         id="S1", slug="S1_halpha_map",
         title="Mapas Hα line-to-continuum por spaxel (LSF/ghost, Xie Ec.1)",
         block="S · wavesol/stripes",
-        spec="plan_wavesol_stripes_2026-07-17.md", run_override=None,
+        spec="2026-07-17_plan_wavesol_stripes.md", run_override=None,
         what=(
             "Ajusta el Hα de la primaria por spaxel del halo con `phi=b(1+a·exp(−(λ−μ)²/2σ²))` "
             "(Xie+20 §4.1, Ec.1) y mapea a (line/continuo), σ, μ y P=a·b·σ·√(2π). Test de Xie "
@@ -7335,8 +7335,8 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("Núcleo S1a target-agnostic + 8 tests; S1b integra en E2 (aditivo) con control transversal.", "plan_wavesol_stripes_pasos_agente.md"),
-            ("a/σ NO alineados con slicers (radial); apoya el cierre G1 (sin stripes en el combinado).", "decision_g1_wavesol_2026-07-17.md"),
+            ("Núcleo S1a target-agnostic + 8 tests; S1b integra en E2 (aditivo) con control transversal.", "2026-07-17_plan_wavesol_stripes_pasos_agente.md"),
+            ("a/σ NO alineados con slicers (radial); apoya el cierre G1 (sin stripes en el combinado).", "2026-07-17_decision_g1_wavesol.md"),
         ],
         checks=(
             "q = nb.load_qc('stages/stageS1_qc.json', RUN_ID)['halpha_map']\n"

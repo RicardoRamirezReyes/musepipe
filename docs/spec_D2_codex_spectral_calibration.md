@@ -1,7 +1,7 @@
 # Especificación D2 · `X11_spectral_calibration` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa D2 (ESENCIAL, nueva) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D1 cerrada con
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: D1 cerrada con
 método canónico ELEGIDO por el usuario; QC de A4 (factores); C1 (sistemático
 PSF); A2/A3 (sistemáticos de cielo/telúricas, si corrieron).
 
@@ -213,7 +213,7 @@ flujo ni error se movió.
    (`musepipe.stages.definitive_spectra_figure`, compartida con el notebook).
    Avisos automáticos: `sgf` filtra el continuo por construcción, y un continuo
    rojo negativo que supera el error total es sobre-sustracción del halo AO
-   cromático (`docs/d2_red_continuum_diagnosis.md`), no un error de signo.
+   cromático (`docs/2026-07-10_d2_red_continuum_diagnosis.md`), no un error de signo.
 4. **`sys_fluxcal` era idénticamente cero** porque A4/M3 publica `flux_factor`
    **sin barra de error** y en una sola banda (RP), así que §3.3 no tenía de
    dónde sacar el sistemático. Decisión del usuario (2026-07-25): **declararlo

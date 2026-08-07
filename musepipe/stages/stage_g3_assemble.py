@@ -96,7 +96,7 @@ def _frozen_commit(project_root):
     try:
         out = subprocess.run(
             ["git", "-C", str(project_root), "log", "--follow", "--format=%H",
-             "docs/g3_real_frozen_decisions.md"],
+             "docs/2026-07-16_g3_real_frozen_decisions.md"],
             capture_output=True, text=True, timeout=15)
         commits = [c for c in out.stdout.split() if c]
         return commits[-1] if commits else "unknown"

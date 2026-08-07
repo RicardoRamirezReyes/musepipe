@@ -1,7 +1,7 @@
 # Especificación C2 · `X01_aperture` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa C2 (ESENCIAL) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: B2, B3; C1 solo
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: B2, B3; C1 solo
 para la corrección de apertura (puede correr en modo provisional sin ella).
 
 C2 tiene doble papel: (a) envolver la cadena 04b ya validada como el método de

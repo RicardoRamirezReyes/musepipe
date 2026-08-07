@@ -24,7 +24,7 @@ con el producto real de la etapa. Ver el README raíz.
 Los dos sets son **idénticos en estructura**: ningún objeto es "el canónico".
 Cada set audita la cadena de SU objeto, declarada en la clave `chain` de
 `runs/<run>/config/config.json` (qué etapa vive en qué run). Ver el plan
-[`docs/plan_multiobjeto_notebooks_2026-07-24.md`](../docs/plan_multiobjeto_notebooks_2026-07-24.md).
+[`docs/2026-07-24_plan_multiobjeto_notebooks.md`](../docs/2026-07-24_plan_multiobjeto_notebooks.md).
 
 ## Generar / regenerar
 

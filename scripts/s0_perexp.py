@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """S0 per-exposure: run the wavesol offset map on each of the 7 per-exposure
-cubes to CONFIRM the G1 closure (docs/decision_g1_wavesol_2026-07-17.md).
+cubes to CONFIRM the G1 closure (docs/2026-07-17_decision_g1_wavesol.md).
 
 The combined cube is blind to slicer stripes because the field rotates ~5.9 deg
 between the 7 exposures (S0 combined showed no structure). Each single-exposure

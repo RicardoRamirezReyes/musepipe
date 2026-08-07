@@ -7,7 +7,7 @@
 > reglas vigentes son los de la v2.
 
 Fecha: 2026-07-01. Etapa D1 (ESENCIAL, nueva) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C2, C3, C4
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: C2, C3, C4
 terminadas (productos `SpectrumProduct` válidos). Opcionalmente consume
 también la rama local-surface histórica vía C2 y las variantes de C3.
 

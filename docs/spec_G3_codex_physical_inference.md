@@ -1,7 +1,7 @@
 # Especificación G3 · `physical_inference` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-06. Fase G3 del plan
-`docs/00_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: G1 cerrada
+`docs/2026-07-08_plan_caracterizacion_espectroscopica.md`. Prerrequisitos: G1 cerrada
 (presupuesto de sesgos + covarianza), G2 cerrada (tabla de líneas). Aplica §7
 del índice.
 

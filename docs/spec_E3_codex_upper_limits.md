@@ -1,7 +1,7 @@
 # Especificación E3 · `H03_upper_limits` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa E3 (ESENCIAL si E1+E2 concluyen no-detección) del
-plan `docs/plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: E1
+plan `docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Prerrequisitos: E1
 (no-detección), E2 (`overall: survives` para la no-detección), E4 (throughput
 con incertidumbre — insumo OBLIGATORIO).
 

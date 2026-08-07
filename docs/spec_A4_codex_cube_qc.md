@@ -1,7 +1,7 @@
 # Especificación A4 · `00q_cube_qc` — brief de ejecución para Codex (ChatGPT 5.5)
 
 Fecha: 2026-07-01. Etapa A4 (ESENCIAL, todos los entry points) del plan
-`docs/plan_roxs12_reduccion_multimetodo.md`. Es la **puerta de entrada común**:
+`docs/2026-07-10_plan_roxs12_reduccion_multimetodo.md`. Es la **puerta de entrada común**:
 todo cubo — re-reducido (A1–A3), ADP del archivo, o histórico — pasa por aquí
 antes de la cadena B–F.
 

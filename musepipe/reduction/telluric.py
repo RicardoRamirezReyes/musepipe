@@ -32,7 +32,7 @@ PROTECTED_WINDOWS = (HALPHA_PROTECTED, NALGS_PROTECTED)
 #: O₂ A es la más profunda del rango de MUSE y hasta 2026-07-31 no estaba aquí:
 #: la etapa decidía sobre tres bandas que excluían justo la que más informa.
 #: `verify.DEFAULT_BAD_RANGES` ya la marcaba como mala, `telluric_lines` ya la
-#: cataloga `strong`, G3 ya la enmascara (`docs/g3_real_frozen_decisions.md`) y
+#: cataloga `strong`, G3 ya la enmascara (`docs/2026-07-16_g3_real_frozen_decisions.md`) y
 #: `a3_telluric_justification.md` §6 la llama «el rasgo telúrico con mayor
 #: leverage» — la etapa que decide era la única pieza que la ignoraba. Los
 #: bordes son los mismos 7590–7700 que usan esas otras piezas: no se introduce
@@ -323,8 +323,26 @@ def measure_telluric_depths(
     spectrum: Sequence[float],
     *,
     bands: Mapping[str, tuple[float, float]] = TELLURIC_BANDS,
+    continuum: Callable[..., np.ndarray] | None = None,
+    side_width_A: float = 40.0,
+    gap_A: float = 10.0,
+    clip_negative: bool = True,
 ) -> dict[str, float]:
-    """Measure telluric depth as percent drop relative to local continuum."""
+    """Measure telluric depth as percent drop relative to local continuum.
+
+    The defaults reproduce the frozen stage behaviour bit for bit: `continuum=None`
+    means `local_continuum_linear` with its own defaults, and `clip_negative=True`
+    keeps the `max(0.0, ...)` floor. The keywords exist so a *diagnostic* can vary
+    what the stage keeps fixed, which until now was impossible from above — the
+    sideband knobs resolved by `stage00t_config_from_run` could not reach this
+    function at all, so the A3 analysis notebook could only redraw the continuum it
+    plotted, never the number it compared. Nothing in the chain passes them; see
+    `docs/spec_A3_v2_codex_telluric.md` §1.5.
+
+    `clip_negative=False` matters for a band that is *already corrected*: the floor
+    turns a negative depth into 0.0, so the sign — the evidence that the DRS
+    over-shot rather than under-shot — is destroyed before any caller can see it.
+    """
 
     wave_arr = np.asarray(wave, dtype=np.float64)
     spec = np.asarray(spectrum, dtype=np.float64)
@@ -334,14 +352,19 @@ def measure_telluric_depths(
         if not mask.any():
             depths[name] = float("nan")
             continue
-        continuum = local_continuum_linear(wave_arr, spec, band)
-        valid = mask & np.isfinite(spec) & np.isfinite(continuum) & (continuum != 0)
+        if continuum is None:
+            model = local_continuum_linear(
+                wave_arr, spec, band, side_width_A=side_width_A, gap_A=gap_A
+            )
+        else:
+            model = np.asarray(continuum(wave_arr, spec, band), dtype=np.float64)
+        valid = mask & np.isfinite(spec) & np.isfinite(model) & (model != 0)
         if not valid.any():
             depths[name] = float("nan")
             continue
-        ratio = spec[valid] / continuum[valid]
+        ratio = spec[valid] / model[valid]
         depth = 100.0 * (1.0 - float(np.nanmedian(ratio)))
-        depths[name] = max(0.0, depth)
+        depths[name] = max(0.0, depth) if clip_negative else depth
     return depths
 
 

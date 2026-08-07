@@ -4,7 +4,7 @@
 Rebuilds the pruned reduction intermediates and produces one DATACUBE_FINAL +
 SKY_SPECTRUM per science exposure on the SHARED (plan-B manual OFFSET_LIST) WCS
 grid, so S0 and S3 can be run per exposure to confirm the G1 closure
-(docs/decision_g1_wavesol_2026-07-17.md).
+(docs/2026-07-17_decision_g1_wavesol.md).
 
 This replaces the lost scratchpad `run_cascade.py`: it re-runs esorex directly
 against the SOFs that survived under `runs/ROXs12b_raw/raw_reduction/sof/`
