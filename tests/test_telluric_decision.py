@@ -50,6 +50,63 @@ class TelluricDecisionTests(unittest.TestCase):
             decide_telluric(depths, science_needs_red_continuum=True).decision, "needed"
         )
 
+    def test_the_new_knobs_do_not_move_the_frozen_default(self):
+        # Los otros dos tests de profundidad usan un continuo PLANO, donde la recta,
+        # la parabola y la cubica dan lo mismo: no prueban nada del estimador. Este
+        # usa uno CURVADO, que es justo el caso en que la cuerda recta de
+        # `local_continuum_linear` fabrica profundidad.
+        wave = np.linspace(7450, 7850, 401)
+        # Convexo: la cuerda entre las dos bandas laterales queda POR ENCIMA del
+        # continuo real en el centro de la banda, que es el sentido en que el
+        # estimador fabrica profundidad de mas.
+        curvatura = 1.0 + 3.0e-4 * (wave - 7650.0) + 2.5e-6 * (wave - 7650.0) ** 2
+        spec = curvatura.copy()
+        spec[(wave >= 7590) & (wave <= 7700)] *= 0.95
+        solo_o2a = {"O2_A": TELLURIC_BANDS["O2_A"]}
+
+        por_defecto = measure_telluric_depths(wave, spec, bands=solo_o2a)
+        explicito = measure_telluric_depths(
+            wave, spec, bands=solo_o2a,
+            continuum=None, side_width_A=40.0, gap_A=10.0, clip_negative=True,
+        )
+        # Bit a bit: los defaults nuevos son la llamada congelada, no una equivalente.
+        self.assertEqual(por_defecto, explicito)
+
+        # Y la banda sale mas profunda que el 5 % inyectado: la diferencia es el
+        # sesgo del estimador sobre un continuo curvado, no absorcion.
+        self.assertGreater(por_defecto["O2_A"], 5.0)
+
+    def test_an_already_corrected_band_keeps_its_negative_sign(self):
+        # `max(0.0, depth)` convierte en 0.0 la firma de una banda sobre-corregida.
+        # Con `clip_negative=False` el signo sobrevive, que es lo unico que permite
+        # distinguir "sin corregir" de "corregida de mas".
+        wave = np.linspace(6800, 7000, 201)
+        spec = np.ones_like(wave)
+        spec[(wave >= 6864) & (wave <= 6960)] *= 1.03  # emision aparente: sobre-correccion
+
+        self.assertEqual(measure_telluric_depths(wave, spec)["O2_B"], 0.0)
+        sin_clip = measure_telluric_depths(wave, spec, clip_negative=False)["O2_B"]
+        self.assertLess(sin_clip, 0.0)
+
+    def test_a_custom_continuum_is_honoured(self):
+        # El seam que hace expresable el experimento del continuo: un estimador
+        # ajeno recibe (wave, spec, band) y su salida manda.
+        wave = np.linspace(7450, 7850, 401)
+        spec = np.full_like(wave, 2.0)
+        spec[(wave >= 7590) & (wave <= 7700)] *= 0.90
+
+        llamadas = []
+
+        def continuo_plano(w, s, banda):
+            llamadas.append(tuple(banda))
+            return np.full_like(np.asarray(w, dtype=np.float64), 2.0)
+
+        depths = measure_telluric_depths(
+            wave, spec, bands={"O2_A": TELLURIC_BANDS["O2_A"]}, continuum=continuo_plano
+        )
+        self.assertEqual(llamadas, [TELLURIC_BANDS["O2_A"]])
+        self.assertAlmostEqual(depths["O2_A"], 10.0, places=6)
+
     def test_o2_a_is_one_of_the_bands_the_stage_declares(self):
         self.assertEqual(TELLURIC_BANDS["O2_A"], (7590.0, 7700.0))
         # Los mismos bordes que el catálogo de `telluric_lines`, G3 y el QC de

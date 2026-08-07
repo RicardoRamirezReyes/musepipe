@@ -154,7 +154,7 @@ reprodujera la cadena.
 
 | notebook | qué rehace |
 |---|---|
-| `A3_telluric_debug` | la decisión telúrica entera —continuo local, profundidad por banda, umbral— sobre las tres reducciones del objeto, con el espectro **antes y después** de corregir y las tres hipótesis del salto O₂ B ~7 % → 0.59 % |
+| `A3_telluric_debug` | la decisión telúrica entera —continuo local, profundidad por banda, umbral— sobre las reducciones que tenga el objeto, con el espectro **antes y después** de corregir y cuatro hipótesis sobre por qué una banda mide lo que mide. La cuarta mide **cuánta profundidad fabrica el propio estimador**, corriéndolo sobre ventanas de control sin telúrico de la misma geometría, con control positivo al lado; y cuantifica el condicionamiento del ajuste polinómico sobre los laterales. Resultados en [`docs/2026-08-02_a3_continuo_sesgo.md`](docs/2026-08-02_a3_continuo_sesgo.md) |
 | `C2_aperture_debug` | apertura box3, fondo de anillo, controles, error empírico y por STAT, apcorr. Además, dos estudios: el **anillo** (8 aperturas repartidas sobre él, con el mismo proceso que el compañero, y el sesgo de su mediana medido contra los sectores a ±90°) y el **tamaño óptimo** por S/N empírica |
 | `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa. Y el estudio del anillo **sobre los datos con el halo restado** (modelo de PSF frente a perfil radial medido): si restarlo aplana el gradiente azimutal y su sesgo |
 | `C4_psffit_debug` | el ajuste simultáneo de **dos PSF** por canal (el método canónico): región de ajuste, matriz de diseño, χ²ᵣ y ρ(a,b), controles y los dos espectros. Trae perilla de submuestreo de canales |
