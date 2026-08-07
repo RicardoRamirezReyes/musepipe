@@ -223,7 +223,21 @@ def main(argv=None):
         datos = Path(out) / etiqueta / "out" / "MOLECFIT_DATA.fits"
         if datos.exists():
             tabla = fits.getdata(datos, 1)
-            curvas.setdefault("wave_A", np.asarray(tabla["lambda"], dtype=np.float64) * 1e4)
+            # OJO CON EL MARCO. `MOLECFIT_DATA.lambda` sale en VACIO: comprobado el
+            # 2026-08-06 contra Edlen(1966) sobre el eje de entrada, coincide a
+            # 0.00000 A. A 7600 A eso son 2.09 A = 1.67 canales de corrimiento al
+            # rojo respecto al eje de MUSE, que es AIRE — y todas las bandas de A3
+            # estan definidas en aire. Guardar esa lambda como `wave_A` seria
+            # sembrar un error de ~1.7 canales en cualquier mascara por banda.
+            #
+            # Las filas de la salida estan en correspondencia 1:1 con las de la
+            # entrada, asi que el eje bueno es el del propio espectro: exacto, no
+            # aproximado. El de vacio se guarda aparte, por procedencia.
+            science = Path(out) / etiqueta / "science.fits"
+            if "wave_A" not in curvas and science.exists():
+                with fits.open(science) as h:
+                    curvas["wave_A"] = np.asarray(h[1].data["WAVE"], dtype=np.float64)
+            curvas.setdefault("wave_vac_A", np.asarray(tabla["lambda"], dtype=np.float64) * 1e4)
             curvas[f"mtrans_{etiqueta}"] = np.asarray(tabla["mtrans"], dtype=np.float64)
             curvas[f"mrange_{etiqueta}"] = np.asarray(tabla["mrange"], dtype=np.float64)
 
