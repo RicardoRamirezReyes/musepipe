@@ -129,6 +129,55 @@ def interior_bump(values):
     return max(0.0, float(np.max(vals)) / borde - 1.0)
 
 
+def interior_dip(values):
+    """Cuanto sube la curva desde un minimo INTERIOR hasta su extremo final.
+
+    El espejo de `interior_bump`, y hace falta porque `interior_bump` **no ve
+    este caso**: una curva que baja, toca fondo dentro del rango y vuelve a
+    subir tiene su maximo en un extremo, asi que `interior_bump` devuelve 0.0 y
+    el diagnostico la declara «monotona». Sobre `ROXs12b_realigned` la parabola
+    de `factor_at_wavelengths` toca fondo en 7978 A y repunta un 3.15% hasta
+    9350 A, mientras la curva medida entre 8487 y 9062 A sube 0.37%: el
+    repunte lo fabrica el ajuste, y `interior_bump` daba 0.00%.
+
+    0.0 si la curva es monotona (el minimo cae en un extremo).
+    """
+
+    vals = np.asarray(values, dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 3:
+        return 0.0
+    i = int(np.argmin(vals))
+    if i in (0, vals.size - 1):
+        return 0.0
+    fondo = float(vals[i])
+    if fondo <= 0:
+        return 0.0
+    # Solo cuenta lo que sube DESPUES del minimo: el tramo de bajada anterior
+    # es justo lo que la curva debe hacer.
+    return max(0.0, float(np.max(vals[i:])) / fondo - 1.0)
+
+
+def polynomial_misfit(growth_qc, *, degree=2):
+    """`(rms, pico_a_pico)` del ajuste polinomico contra las bandas medidas.
+
+    `factor_at_wavelengths` interpola 8 bandas con un polinomio de grado bajo
+    para no meter escalones en el continuo, pero nadie comprobaba cuanto se
+    aparta ese polinomio de lo que se midio. En el run canonico vale 1.03% rms
+    y 2.82% pico a pico, y es lo que produce el repunte rojo que mide
+    `interior_dip`.
+    """
+
+    bands = (growth_qc or {}).get("bands") or []
+    if len(bands) < degree + 2:
+        return None, None
+    x = np.asarray([b["wave_A"] for b in bands], dtype=np.float64)
+    y = np.asarray([b["ratio_total_over_normrad"] for b in bands], dtype=np.float64)
+    fit = np.polyval(np.polyfit(x, y, int(degree)), x)
+    rel = fit / y - 1.0
+    return float(np.std(rel)), float(np.max(rel) - np.min(rel))
+
+
 def halo_plus_sky(r, amp, power, sky):
     """Perfil radial: halo en ley de potencias mas un suelo constante."""
 
@@ -468,6 +517,8 @@ __all__ = [
     "RUN_PRODUCT_NAME",
     "factor_at_wavelengths",
     "interior_bump",
+    "interior_dip",
+    "polynomial_misfit",
     "MAX_INTERIOR_BUMP",
     "fit_halo_and_sky",
     "growth_curve_note",

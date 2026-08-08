@@ -253,3 +253,75 @@ class FluxConventionResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InteriorDipTests(unittest.TestCase):
+    """El repunte rojo que `interior_bump` no ve.
+
+    `interior_bump` mide el maximo interior, asi que una curva que baja, toca
+    fondo dentro del rango y vuelve a subir le da 0.0 — y el diagnostico de D2
+    la declaraba «monotona». La `apcorr` de `ROXs12b_realigned` es exactamente
+    ese caso: minimo en 7978 A y repunte del 3.15% hasta 9350 A.
+    """
+
+    def test_a_monotone_falling_curve_has_no_dip(self):
+        from musepipe.growth_curve import interior_dip
+
+        self.assertEqual(interior_dip([2.0, 1.8, 1.6, 1.5]), 0.0)
+
+    def test_a_curve_that_bottoms_out_and_climbs_back_is_measured(self):
+        from musepipe.growth_curve import interior_dip
+
+        self.assertAlmostEqual(interior_dip([2.0, 1.5, 1.0, 1.1, 1.2]), 0.2, places=9)
+
+    def test_interior_bump_is_blind_to_it(self):
+        # La razon exacta por la que hace falta la funcion nueva.
+        from musepipe.growth_curve import interior_bump, interior_dip
+
+        curva = [2.0, 1.5, 1.0, 1.1, 1.2]
+        self.assertEqual(interior_bump(curva), 0.0)
+        self.assertGreater(interior_dip(curva), 0.1)
+
+    def test_only_the_climb_after_the_minimum_counts(self):
+        # La bajada previa es lo que la curva DEBE hacer: no es el defecto.
+        from musepipe.growth_curve import interior_dip
+
+        self.assertAlmostEqual(interior_dip([5.0, 1.0, 1.5]), 0.5, places=9)
+
+    def test_too_few_points_is_not_an_error(self):
+        from musepipe.growth_curve import interior_dip
+
+        self.assertEqual(interior_dip([1.0, 2.0]), 0.0)
+
+
+class PolynomialMisfitTests(unittest.TestCase):
+    """Cuanto se aparta la parabola de las bandas que se midieron."""
+
+    def test_bands_on_a_parabola_are_fitted_exactly(self):
+        from musepipe.growth_curve import polynomial_misfit
+
+        w = np.linspace(5000.0, 9000.0, 8)
+        y = 1.5 + 1e-9 * (w - 7000.0) ** 2
+        qc = {"bands": [{"wave_A": a, "ratio_total_over_normrad": b} for a, b in zip(w, y)]}
+        rms, pp = polynomial_misfit(qc)
+        self.assertLess(rms, 1e-9)
+        self.assertLess(pp, 1e-9)
+
+    def test_a_curve_that_flattens_is_not_a_parabola(self):
+        # La forma real: cae deprisa y se aplana. La parabola le pone vertice.
+        from musepipe.growth_curve import polynomial_misfit
+
+        w = np.linspace(5000.0, 9000.0, 8)
+        y = np.array([1.684, 1.566, 1.506, 1.488, 1.472, 1.466, 1.460, 1.465])
+        qc = {"bands": [{"wave_A": a, "ratio_total_over_normrad": b} for a, b in zip(w, y)]}
+        rms, pp = polynomial_misfit(qc)
+        self.assertGreater(rms, 0.005)
+        self.assertGreater(pp, 0.02)
+
+    def test_too_few_bands_returns_none_instead_of_a_fake_number(self):
+        from musepipe.growth_curve import polynomial_misfit
+
+        qc = {"bands": [{"wave_A": 5000.0, "ratio_total_over_normrad": 1.6},
+                        {"wave_A": 7000.0, "ratio_total_over_normrad": 1.5},
+                        {"wave_A": 9000.0, "ratio_total_over_normrad": 1.4}]}
+        self.assertEqual(polynomial_misfit(qc), (None, None))

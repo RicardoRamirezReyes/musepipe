@@ -192,6 +192,28 @@ def display_name(run_id: str | None = None) -> str:
         return slug
 
 
+def primary_display_name(run_id: str | None = None) -> str:
+    """Nombre legible de la PRIMARIA (`targets/<slug>.json` -> `primary_display_name`).
+
+    Hace falta porque `display_name` nombra al COMPAÑERO, que es de quien va el
+    run: las figuras de la primaria salían tituladas «ROXs 12 B · la PRIMARIA
+    calibrada», o sea con el nombre del compañero encima del espectro de la
+    estrella. Si el objeto no lo declara no se inventa un nombre — se dice de
+    quién es primaria y ya.
+    """
+    slug = run_target(_effective_run(run_id))
+    if slug:
+        path = project_root() / "targets" / f"{slug}.json"
+        try:
+            with open(path) as fh:
+                declared = json.load(fh).get("primary_display_name")
+            if declared:
+                return str(declared)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return f"la primaria de {display_name(run_id)}"
+
+
 def _run_object_prefix(run_id: str) -> str:
     """Objeto según la convención de nombres de runs: `<objeto>_<variante>`."""
     return _normalize(run_id.split("_", 1)[0])
