@@ -30,6 +30,61 @@ def write_csv(path, rows, fieldnames=None) -> None:
             writer.writerow(row)
 
 
+#: Sello que D2 graba en cada npz de controles calibrados. Su ausencia significa
+#: que el fichero es anterior a que D2 los emitiera.
+CALIBRATED_CONTROLS_STAMP = "x11"
+
+#: Margen al comparar fechas: escribir los seis productos de un metodo y su npz
+#: no es atomico, y unos segundos de diferencia no son obsolescencia.
+_CONTROLS_MTIME_SLACK_S = 300.0
+
+
+def load_calibrated_controls(path, *, object_path=None, key="control_spectra"):
+    """Lee los controles calibrados de un metodo, comprobando su procedencia.
+
+    Estos npz tuvieron durante meses **cuatro lectores y ningun escritor**: los
+    de `ROXs12b_realigned` eran del 2026-07-09/07-15 y sobrevivieron al cambio de
+    cubo del 07-28 y a la re-ejecucion entera del 08-07 sin que nada lo dijera.
+    Como E1 normaliza cada control con el error del OBJETO, sigma se cancela y el
+    limite de E3 acaba siendo `q99(flujo de los controles)`: unos controles de
+    otro cubo fijan el resultado publicado ellos solos. Ahi la distribucion nula
+    tenia la MEDIANA a 8-33 sigma, que no es una distribucion nula.
+
+    Por eso aqui no hay respaldo silencioso: sin sello de D2, o mas viejo que el
+    producto del objeto con el que se va a comparar, se para.
+    """
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    with np.load(path, allow_pickle=False) as data:
+        if key not in data.files:
+            raise ValueError(f"{path} has no {key!r} array (found {list(data.files)}).")
+        controls = np.asarray(data[key], dtype=np.float64)
+        written_by = str(data["written_by"]) if "written_by" in data.files else ""
+    if written_by != CALIBRATED_CONTROLS_STAMP:
+        raise RuntimeError(
+            f"{path} carries no D2 provenance stamp (written_by={written_by!r}, "
+            f"expected {CALIBRATED_CONTROLS_STAMP!r}). Nothing wrote these files until "
+            "2026-08-08, so an unstamped one is a leftover from the legacy root notebooks "
+            "and may describe a cube this run no longer uses. Re-run D2 "
+            "(`python -m musepipe.stages.stage_x11_calibrate --run-id <RUN>`), which now "
+            "emits them next to the calibrated spectra."
+        )
+    if object_path is not None:
+        object_path = Path(object_path)
+        if object_path.exists():
+            age = object_path.stat().st_mtime - path.stat().st_mtime
+            if age > _CONTROLS_MTIME_SLACK_S:
+                raise RuntimeError(
+                    f"{path} is {age / 3600.0:.1f} h older than {object_path.name}. The "
+                    "controls must be processed identically to the object and come from the "
+                    "same cube; sigma cancels in E1/E3, so a stale control set sets the "
+                    "published limit on its own. Re-run D2 for this run."
+                )
+    return controls
+
+
 def get_cube_data(hdul, cube_index=0):
     """Return a 3D cube from a FITS HDUList with common pipeline layouts."""
 
@@ -284,8 +339,10 @@ def flux_unit_conflict(bunit, qc_m3, *, rtol=1e-6):
 
 
 __all__ = [
+    "CALIBRATED_CONTROLS_STAMP",
     "MUSE_NATIVE_BUNIT",
     "bunit_to_cgs_scale",
+    "load_calibrated_controls",
     "flux_unit_cgs",
     "flux_unit_conflict",
     "flux_unit_from_m3_qc",

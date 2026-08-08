@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
+from musepipe.io import CALIBRATED_CONTROLS_STAMP
+
 from musepipe.stages.stage_h01_detect import compute_stage_h01_products, stage_h01_paths, write_stage_h01_products
 from musepipe.stages.stage_x10_compare import METHOD_ORDER
 from tests.test_h01_helpers import h01_controls, h01_product
@@ -21,7 +23,8 @@ class H01StageTests(unittest.TestCase):
                 signal = 8.0 if method in {"psffit", "aperture"} else 0.0
                 product = h01_product(method, signal_flux=signal, lsf_fwhm_A=2.5)
                 product.write(paths[f"spec_calibrated_{method}_object"])
-                np.savez(paths[f"controls_calibrated_{method}_npz"], control_spectra=h01_controls())
+                np.savez(paths[f"controls_calibrated_{method}_npz"], control_spectra=h01_controls(),
+                         written_by=CALIBRATED_CONTROLS_STAMP)
             paths["stage00q_qc_json"].write_text(
                 json.dumps({"m2_lsf": {"status": "green", "fwhm_at_halpha_A": 2.5}}),
                 encoding="utf-8",

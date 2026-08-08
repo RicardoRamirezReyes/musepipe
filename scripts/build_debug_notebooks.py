@@ -3444,6 +3444,7 @@ def build_c2_cells(mb, target, run_id):
                 stem="spectrum_paper_star_ref",
                 qc="stages/spec_psffit_qc.json",
                 title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+                primary=True,
             )
         ),
     ]
@@ -4863,6 +4864,7 @@ def build_c3_cells(mb, target, run_id):
                 stem="spectrum_paper_star_ref",
                 qc="stages/spec_psffit_qc.json",
                 title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+                primary=True,
             )
         ),
     ]
@@ -5327,6 +5329,7 @@ def build_c4_cells(mb, target, run_id):
                 err_label="±1σ empírico (controles procesados igual)",
                 err_alt_label="±1σ formal del ajuste (matriz de covarianza)",
                 title_suffix="psffit de la PRIMARIA, rehecho en el notebook (C4 debug)",
+                primary=True,
             )
         ),
         md(mb.STAR_REFERENCE_MD),
@@ -5338,6 +5341,7 @@ def build_c4_cells(mb, target, run_id):
                 stem="spectrum_paper_star_ref",
                 qc="stages/spec_psffit_qc.json",
                 title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+                primary=True,
             )
         ),
     ]
@@ -5925,6 +5929,7 @@ def build_halosub_cells(mb, target, run_id, stage_id):
                 stem="spectrum_paper_star_ref",
                 qc="stages/spec_psffit_qc.json",
                 title_suffix="espectro de la PRIMARIA (producto de C4, referencia)",
+                primary=True,
             )
         ),
     ]
@@ -6947,6 +6952,7 @@ def build_d2_star_cells(mb, target, run_id):
                 stem="spectrum_paper_primaria",
                 qc="stages/stage_x11_qc.json",
                 title_suffix="la PRIMARIA calibrada (producto de D2)",
+                primary=True,
             )
         ),
         md(
@@ -7004,13 +7010,18 @@ def build_d2_star_cells(mb, target, run_id):
             "    MODELO = None\n"
             "    if _psf_path.exists():\n"
             "        _m = json.loads(_psf_path.read_text(encoding='utf-8'))\n"
+            "        # El radio grande es RADIO_FORMA_PX, el MISMO de la apertura de\n"
+            "        # arriba: el testigo solo vale si mide entre los dos radios que se\n"
+            "        # están comparando. `_R` es el semilado de la rejilla (con margen\n"
+            "        # para no truncar el modelo), no un radio de apertura — confundirlos\n"
+            "        # dibujaba la curva del modelo a r=40 px contra una apertura de 32.\n"
             "        _rn = float(_m.get('norm_radius_px', 25.0)); _R = int(RADIO_FORMA_PX) + 8\n"
             "        _yy, _xx = np.indices((2 * _R + 1, 2 * _R + 1), dtype=np.float64)\n"
             "        _dy, _dx = _yy - _R, _xx - _R\n"
             "        _wn = aperture_weights(2 * _R + 1, 2 * _R + 1, (_R, _R),\n"
             "                               {'kind': 'circle', 'radius_px': _rn})\n"
             "        _wg = aperture_weights(2 * _R + 1, 2 * _R + 1, (_R, _R),\n"
-            "                               {'kind': 'circle', 'radius_px': float(_R)})\n"
+            "                               {'kind': 'circle', 'radius_px': float(RADIO_FORMA_PX)})\n"
             "        _lam = np.linspace(WAVE[0], WAVE[-1], 40)\n"
             "        _rat = []\n"
             "        for _l in _lam:\n"
@@ -7028,25 +7039,51 @@ def build_d2_star_cells(mb, target, run_id):
             "    # `interior_bump`, no el signo de la derivada: un repunte del 1% en el\n"
             "    # borde por extrapolación del ajuste no es una joroba, y un test\n"
             "    # estricto lo marcaba igual que el máximo interior del 16% que sí lo era.\n"
-            "    from musepipe.growth_curve import interior_bump, MAX_INTERIOR_BUMP\n"
+            "    # Pero la joroba sola NO basta: una curva que baja, toca fondo dentro\n"
+            "    # del rango y vuelve a subir tiene su máximo en un extremo, así que\n"
+            "    # `interior_bump` da 0.00% y esta línea decía «monótona: sí» de una\n"
+            "    # apcorr que no lo es. Por eso va también el HUNDIMIENTO.\n"
+            "    from musepipe.growth_curve import (interior_bump, interior_dip,\n"
+            "                                       polynomial_misfit, MAX_INTERIOR_BUMP)\n"
             "    _joroba = interior_bump(APC)\n"
-            "    _mono = _joroba <= MAX_INTERIOR_BUMP\n"
-            "    print(f'apcorr monótona en λ:       {\"sí\" if _mono else \"NO\"}  (joroba {100 * _joroba:.2f}%)')\n"
+            "    _hundido = interior_dip(APC)\n"
+            "    _mono = _joroba <= MAX_INTERIOR_BUMP and _hundido <= MAX_INTERIOR_BUMP\n"
+            "    print(f'apcorr monótona en λ:       {\"sí\" if _mono else \"NO\"}'\n"
+            "          f'  (joroba {100 * _joroba:.2f}%, repunte rojo {100 * _hundido:.2f}%)')\n"
+            "    _gc = nb.load_qc_optional('stages/growth_curve_qc.json', RUN_ID)\n"
+            "    _rms, _ppm = polynomial_misfit(_gc) if _gc else (None, None)\n"
+            "    if _rms is not None:\n"
+            "        print(f'la parábola vs las bandas:  {100 * _rms:.2f}% rms, '\n"
+            "              f'{100 * _ppm:.2f}% pico a pico')\n"
             "    if MODELO is not None:\n"
             "        _jm = interior_bump(MODELO)\n"
             "        print(f'modelo de C1 monótono:      {\"sí\" if _jm <= MAX_INTERIOR_BUMP else \"NO\"}  (joroba {100 * _jm:.2f}%)')\n"
-            "    if not _mono:\n"
+            "        _pm = float(np.nanpercentile(_norm(WAVE, MODELO)[_fin], 98)\n"
+            "                    / np.nanpercentile(_norm(WAVE, MODELO)[_fin], 2))\n"
+            "        _pc = float(np.nanpercentile(_norm(WAVE, COCIENTE)[_fin], 98)\n"
+            "                    / np.nanpercentile(_norm(WAVE, COCIENTE)[_fin], 2))\n"
+            "        print(f'cromatismo entre r={_rn:.0f} y r={RADIO_FORMA_PX:.0f} px: '\n"
+            "              f'el modelo dice factor {_pm:.3f}, la medida {_pc:.3f}')\n"
+            "    if _joroba > MAX_INTERIOR_BUMP:\n"
             "        print('\\nLa apcorr tiene una joroba: la curva de crecimiento está mal medida.')\n"
             "        print('Mira `stages/growth_curve_qc.json`: halo_power (físico 2.5-4),')\n"
             "        print('tail_fraction (<=0.25) y la dispersión ratio_max/ratio_min por banda.')\n"
             "        print('Se re-mide con measure_growth_curve.py sobre un combinado más ancho.')\n"
-            "    elif _pp >= 1.10:\n"
-            "        print(f'\\nLa apcorr es sana (monótona) pero AÚN queda un {100 * (_pp - 1):.0f}% de')\n"
-            "        print('forma sin explicar. Eso ya no es la curva de crecimiento. Lo que queda')\n"
-            "        print('entre las dos medidas es cuánto se parece el MODELO de PSF de C1 al')\n"
-            "        print('perfil real en función de λ: el psffit devuelve la amplitud de un')\n"
-            "        print('modelo ajustado, la apertura suma píxeles. Contrástalo con el residuo')\n"
-            "        print('del ajuste de C1 (`psf_hybrid_residual.fits`) y con `psf_roundtrip_error`.')\n\n"
+            "    if _hundido > MAX_INTERIOR_BUMP:\n"
+            "        print(f'\\nLa apcorr toca fondo dentro del rango y repunta un {100 * _hundido:.1f}%')\n"
+            "        print('hacia el rojo. Eso NO lo dicen las bandas: lo fabrica el polinomio de')\n"
+            "        print('grado 2 de `factor_at_wavelengths`, que a 8 bandas de una curva que cae')\n"
+            "        print('deprisa y luego se aplana le pone un vértice interior. El tramo rojo')\n"
+            "        print('del continuo sale sobre-corregido en LOS SEIS métodos del bloque C.')\n"
+            "    if _pp >= 1.10:\n"
+            "        print(f'\\nAÚN queda un {100 * (_pp - 1):.0f}% de forma sin explicar por la apcorr.')\n"
+            "        print('Lo que queda entre las dos medidas es cuánto se parece el MODELO de')\n"
+            "        print('PSF de C1 al perfil real en función de λ: el psffit devuelve la')\n"
+            "        print('amplitud de un modelo ajustado, la apertura suma píxeles. La línea')\n"
+            "        print('de «cromatismo» de arriba es el contraste directo: si el modelo da un')\n"
+            "        print('factor mucho menor que la medida, su halo es demasiado poco cromático')\n"
+            "        print('y el psffit hereda ese error. C1 ya lo declara en su propio QC')\n"
+            "        print('(`companion_ring_metric.residual_pct_median`, `status: red_accepted`).')\n\n"
             "    fig, (a1, a2) = plt.subplots(2, 1, figsize=(11.5, 6), sharex=True,\n"
             "                                 gridspec_kw={'height_ratios': [1.4, 1]})\n"
             "    a1.plot(WAVE, _norm(WAVE, COCIENTE), lw=0.8, color='tab:blue',\n"

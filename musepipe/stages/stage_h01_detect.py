@@ -12,7 +12,7 @@ import numpy as np
 from ..config import load_run_config
 from ..extraction.aperture import FLAG_BAD_WINDOW, FLAG_SKYLINE
 from ..extraction.product import SpectrumProduct
-from ..io import read_json, write_csv, write_json
+from ..io import load_calibrated_controls, read_json, write_csv, write_json
 from ..paths import RunPaths
 from ..spectral import continuum_running_median
 from .stage08c_look_elsewhere import empirical_fap
@@ -179,24 +179,22 @@ def load_h01_products(product_paths):
     return products
 
 
-def _load_control_npz(path):
-    with np.load(path) as data:
-        for key in ("control_spectra", "controls", "spectra", "flux"):
-            if key in data:
-                return np.asarray(data[key], dtype=np.float64)
-        two_d = [key for key in data.files if np.asarray(data[key]).ndim == 2]
-        if len(two_d) == 1:
-            return np.asarray(data[two_d[0]], dtype=np.float64)
-    raise ValueError(f"Could not find a 2D control spectra array in {path}.")
+def load_h01_controls(control_paths, products, *, min_controls=3, product_paths=None):
+    """Controles calibrados por metodo, con la guardia de procedencia de D2.
 
+    Comprobar solo `shape[1] == n_wave` no basta: el eje espectral no cambia
+    cuando cambia el cubo, asi que unos controles de otra reduccion pasan el
+    filtro. Y aqui importa mas que en ningun sitio, porque cada control se
+    normaliza con el error del OBJETO (ver `analyze_halpha_method`): sigma se
+    cancela y el limite de E3 se reduce a `q99(flujo de los controles)`.
+    """
 
-def load_h01_controls(control_paths, products, *, min_controls=3):
     controls = {}
     for method in METHOD_ORDER:
         path = Path(control_paths[method])
-        if not path.exists():
-            raise FileNotFoundError(path)
-        arr = _load_control_npz(path)
+        arr = load_calibrated_controls(
+            path, object_path=None if product_paths is None else product_paths.get(method)
+        )
         n_wave = products[method].wave_A.size
         if arr.ndim != 2 or arr.shape[1] != n_wave:
             raise ValueError(f"Controls for {method} must have shape (n_controls, {n_wave}).")
@@ -559,6 +557,7 @@ def compute_stage_h01_products(config, paths=None) -> StageH01Product:
         _control_paths_from_config(cfg, paths),
         products,
         min_controls=int(cfg.get("h01_min_controls", 3)),
+        product_paths=_product_paths_from_config(cfg, paths),
     )
     method_results = {}
     rows = []

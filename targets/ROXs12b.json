@@ -1,11 +1,17 @@
 {
   "slug": "ROXs12b",
   "display_name": "ROXs 12 B",
-  "aliases": ["ROXs12b", "ROX12b", "ROXs 12B", "ROXs12"],
+  "aliases": [
+    "ROXs12b",
+    "ROX12b",
+    "ROXs 12B",
+    "ROXs12"
+  ],
   "companion_class": "planetary/brown-dwarf",
   "references": {
     "distance": "Gaia DR2/DR3",
     "membership": "rho Oph"
   },
-  "note": "Primer objeto de la cadena. display_name se usa en la prosa de los informes."
+  "note": "Primer objeto de la cadena. display_name se usa en la prosa de los informes. `primary_display_name` es la estrella que domina el cubo; `display_name` es el compañero, que es de quien va el run.",
+  "primary_display_name": "ROXs 12 A"
 }

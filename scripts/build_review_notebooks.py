@@ -371,6 +371,7 @@ def paper_spectrum_cell(
     err_alt_label: str,
     title_suffix: str,
     stem: str = "spectrum_paper",
+    primary: bool = False,
 ) -> str:
     """Celda que dibuja el espectro sin binar y **escribe sus datos**.
 
@@ -409,7 +410,11 @@ def paper_spectrum_cell(
         "        W_P, F_P, E_P, flux_err_alt=E_ALT_P, bad_channels=MALOS_P,\n"
         f"        err_label={err_label!r}, err_alt_label={err_alt_label!r},\n"
         "        transmission=trans,\n"
-        f"        title=nb.display_name(RUN_ID) + ' · ' + {title_suffix!r},\n"
+        # El espectro de la PRIMARIA llevaba el nombre del COMPAÑERO en el
+        # título ("ROXs 12 B · la PRIMARIA calibrada"), que es de quien va el
+        # run pero no de quien es el espectro.
+        f"        title=nb.{'primary_display_name' if primary else 'display_name'}(RUN_ID)"
+        f" + ' · ' + {title_suffix!r},\n"
         "        flux_label='flujo [' + pretty_flux_unit(BUNIT_P) + ']')\n"
         f"    outdir = nb.run_dir(RUN_ID) / 'plots' / {subdir!r}\n"
         "    outdir.mkdir(parents=True, exist_ok=True)\n"
@@ -438,7 +443,7 @@ def paper_spectrum_cell(
 
 
 def paper_from_product_cell(*, product, method, subdir, title_suffix, qc=None,
-                            stem="spectrum_paper") -> str:
+                            stem="spectrum_paper", primary=False) -> str:
     """La celda de paper leyendo un producto `SpectrumProduct` de la cadena.
 
     Todos los métodos escriben el mismo esquema de columnas, así que la única
@@ -482,6 +487,7 @@ def paper_from_product_cell(*, product, method, subdir, title_suffix, qc=None,
         err_label="±1σ empírico (controles procesados igual)",
         err_alt_label="±1σ propagado del STAT (no es σ)",
         title_suffix=title_suffix,
+        primary=primary,
     )
 
 
@@ -3628,6 +3634,7 @@ STAGES: list[dict] = [
                     stem='spectrum_paper_star',
                     qc='stages/spec_psffit_qc.json',
                     title_suffix='espectro de la PRIMARIA · psffit (C4)',
+                    primary=True,
                 ),
             ),
         ],

@@ -184,7 +184,24 @@ def _read_optional_json(path):
 
 
 def resolve_continuum_injection(config, paths):
-    """Resolve the non-zero flat continuum required by E4 v2."""
+    """Resolve the non-zero flat continuum required by E4 v2.
+
+    Nota sobre la etiqueta `scale="normrad_flux_density"`: es un nombre heredado
+    y **equivocado**. Lo que E4 usa no es la convencion `normrad` de
+    `growth_curve.resolve_flux_convention`, sino la escala CRUDA del extractor:
+    aqui se divide por `apcorr` (abajo) y la recuperacion se mide sobre la
+    salida en memoria del extractor, que tampoco lo lleva
+    (`_coerce_spectrum_product` no toca `apcorr`).
+
+    Que la escala sea la cruda es lo que hace que E3 pueda dividir por el
+    throughput sin convertir nada: `throughput = recuperado/inyectado` con los
+    dos terminos en la misma escala y el pedestal restado
+    (`_apply_baseline_subtraction`) es ADIMENSIONAL, asi que no le afecta
+    `apcorr` ni la convencion de flujo del run. Por eso el arreglo de la curva de
+    crecimiento del 2026-08-07 no obligo a re-correr E4. La etiqueta se conserva
+    tal cual porque viaja en el QC y F1/G0/G5 verifican esquemas; lo que estaba
+    mal era el nombre, no el numero.
+    """
 
     configured = config.get("h04_continuum_flux_density")
     bands = [

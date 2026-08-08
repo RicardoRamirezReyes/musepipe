@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
+from musepipe.io import CALIBRATED_CONTROLS_STAMP
+
 from musepipe.stages.stage_h02_artifacts import compute_stage_h02_products, stage_h02_paths, write_stage_h02_products
 from musepipe.stages.stage_x10_compare import METHOD_ORDER
 from tests.test_h01_helpers import h01_controls, h01_product
@@ -20,7 +22,8 @@ class H02StageTests(unittest.TestCase):
             paths["paths"].ensure_base_dirs()
             for method in METHOD_ORDER:
                 h01_product(method).write(paths[f"spec_calibrated_{method}_object"])
-                np.savez(paths[f"controls_calibrated_{method}_npz"], control_spectra=h01_controls())
+                np.savez(paths[f"controls_calibrated_{method}_npz"], control_spectra=h01_controls(),
+                         written_by=CALIBRATED_CONTROLS_STAMP)
             paths["stage_h01_qc_json"].write_text(
                 json.dumps({"verdict": {"verdict": "non_detection"}}),
                 encoding="utf-8",
