@@ -16,6 +16,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
+from ..io import load_calibrated_controls
 from ..lines import measure_catalog
 from ..paths import RunPaths
 from ..stages.stage07_accretion_lines import default_accretion_lines
@@ -49,19 +50,24 @@ _CALIBRATED_CONTROL_NPZ = {
 }
 
 
-def _load_controls(stage_dir, method, n_wave):
-    """`(array (N, n_wave), procedencia)` o `(None, motivo)`. Nunca en silencio."""
+def _load_controls(stage_dir, method, n_wave, *, object_path=None):
+    """`(array (N, n_wave), procedencia)` o `(None, motivo)`. Nunca en silencio.
+
+    Que FALTEN es un motivo blando: G2 lo dice y sigue con el error propagado.
+    Que esten pero sin el sello de D2, o mas viejos que el objeto, NO lo es —
+    seria volver a la escala que la v2 vino a arreglar, y ademas con la
+    apariencia de haberla medido. `load_calibrated_controls` para en ese caso.
+    """
     name = _CALIBRATED_CONTROL_NPZ.get(str(method))
     if name is None:
         return None, f"metodo {method!r} sin npz de controles declarado"
     path = Path(stage_dir) / name
-    if not path.exists():
+    try:
+        arr = np.atleast_2d(load_calibrated_controls(path, object_path=object_path))
+    except FileNotFoundError:
         return None, f"{name} no esta en el run"
-    with np.load(path) as z:
-        key = next((k for k in ("control_spectra", "controls", "spectra") if k in z), None)
-        if key is None:
-            return None, f"{name} no trae espectros de control"
-        arr = np.atleast_2d(np.asarray(z[key], dtype=np.float64))
+    except ValueError:
+        return None, f"{name} no trae espectros de control"
     if arr.shape[1] != int(n_wave):
         return None, f"{name} tiene {arr.shape[1]} canales y el objeto {n_wave}"
     return arr, name
@@ -173,7 +179,10 @@ def compute_stage_g2(cfg, paths):
     # Sin ellos G2 etiquetaria contra el sigma propagado canal a canal, que a la
     # separacion del compañero subestima la dispersion real (E1 la mide ~18x en
     # psffit sobre este cubo) y convierte residuos de halo en "detecciones".
-    controls, control_source = _load_controls(paths["spectrum_fits"].parent, canonical, wave.size)
+    controls, control_source = _load_controls(
+        paths["spectrum_fits"].parent, canonical, wave.size,
+        object_path=paths["spectrum_fits"],
+    )
     if controls is None:
         open_issues.append({
             "issue": (f"Sin espectros de control ({control_source}): las etiquetas salen del "

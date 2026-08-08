@@ -18,6 +18,7 @@ from ..extraction.aperture import (
 )
 from ..extraction.product import SpectrumProduct
 from ..io import (
+    CALIBRATED_CONTROLS_STAMP,
     bunit_to_cgs_scale,
     flux_unit_conflict,
     flux_unit_from_m3_qc,
@@ -89,6 +90,8 @@ class StageX11Product:
     qc: dict
     #: primaria calibrada (None si C4 no dejo `spec_psffit_star.fits`)
     star: CalibratedProduct | None = None
+    #: controles por metodo en la escala calibrada, los que consumen E1/E2/G2
+    controls: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 def _finite_or_none(value):
@@ -815,8 +818,10 @@ def _qc_for_wavelength_v1(qc00, corrections):
     return verify_wavelength_residuals(offsets, corrections)
 
 
-# Raw (pre-calibration) control npz per method, used as a fallback when the
-# calibrated control npz (written by the E1/E2 glue) is not present yet.
+# Controles crudos (pre-calibracion) que escriben C2-C6, uno por metodo. Son la
+# UNICA fuente de los controles calibrados: hasta 2026-08-08 nadie escribia
+# `spec_calibrated_*_controls.npz` y D2 los prefería si existían, con lo que un
+# fichero de julio se colaba delante de los controles del cubo actual.
 _RAW_CONTROL_NPZ = {
     "aperture": "spec_aperture_controls.npz",
     "optimal_ls": "spec_optimal_controls.npz",
@@ -827,32 +832,43 @@ _RAW_CONTROL_NPZ = {
 }
 
 
-def _method_control_bias(stage_dir, method, waves, good_mask, window_A, *, flux_scale=1.0):
-    """Control-mean continuum bias for a method on the calibrated flux scale.
+def calibrate_control_spectra(stage_dir, method, *, flux_scale=1.0):
+    """Controles de un metodo llevados a la escala calibrada, o None si no estan.
 
-    Prefers the calibrated control npz; falls back to the raw control npz scaled
-    by the D2 flux scale (so a fresh run without the E1/E2 glue still works).
-    Returns None if no controls are available.
+    El objeto lo calibra `calibrate_spectrum_product` y de todo lo que hace lo
+    unico que cambia una amplitud es `flux_scale`; la correccion de longitud de
+    onda mueve el eje, que los controles comparten con el producto del objeto.
+    Asi que "procesados igual que el objeto" son, exactamente, los controles de
+    C multiplicados por esa escala. Se toma `control_spectra` (con `apcorr`
+    aplicado), no `control_spectra_raw`, que es lo que le corresponde a `flux`.
     """
 
     if stage_dir is None:
         return None
-    stage_dir = Path(stage_dir)
-    cal = stage_dir / f"spec_calibrated_{method}_controls.npz"
-    if cal.exists():
-        try:
-            controls = np.load(cal)["control_spectra"]
-            return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
-        except (OSError, KeyError, ValueError):
-            pass
     raw_name = _RAW_CONTROL_NPZ.get(method)
-    if raw_name and (stage_dir / raw_name).exists():
-        try:
-            controls = np.load(stage_dir / raw_name)["control_spectra"] * float(flux_scale)
-            return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
-        except (OSError, KeyError, ValueError):
-            pass
-    return None
+    if not raw_name:
+        return None
+    path = Path(stage_dir) / raw_name
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=False) as data:
+        if "control_spectra" not in data.files:
+            return None
+        controls = np.asarray(data["control_spectra"], dtype=np.float64)
+    return controls * float(flux_scale)
+
+
+def _method_control_bias(stage_dir, method, waves, good_mask, window_A, *, flux_scale=1.0, controls=None):
+    """Control-mean continuum bias for a method on the calibrated flux scale."""
+
+    if controls is None:
+        controls = calibrate_control_spectra(stage_dir, method, flux_scale=flux_scale)
+    if controls is None:
+        return None
+    try:
+        return control_reference_bias(waves, controls, good_mask, window_A=float(window_A))
+    except (KeyError, ValueError):
+        return None
 
 
 def _intermethod_continuum_report(
@@ -1009,12 +1025,20 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
     # detection flux and cont_runmed are left untouched (E1/E3 unaffected).
     _stage_dir = paths["spec_final_object"].parent
     _cont_window_A = float(cfg.get("x11_continuum_window_A", 80.0))
+    # Los controles calibrados se calculan UNA vez y se entregan como producto de
+    # D2 (`write_stage_x11_products`): E1, E2 y G2 los leen, y hasta hoy nadie los
+    # escribia. Ver `calibrate_control_spectra` y `io.load_calibrated_controls`.
+    controls = {
+        method: calibrate_control_spectra(_stage_dir, method, flux_scale=corrections.flux_scale)
+        for method in calibrated
+    }
     for method, cal in calibrated.items():
         prod = cal.product
         cont = np.asarray(prod.extra_columns["cont_runmed"], dtype=np.float64)
         bias = _method_control_bias(
             _stage_dir, method, np.asarray(prod.wave_A, dtype=np.float64),
             np.isfinite(cont), _cont_window_A, flux_scale=corrections.flux_scale,
+            controls=controls.get(method),
         )
         if bias is not None:
             prod.extra_columns["continuum_bias"] = bias
@@ -1143,6 +1167,7 @@ def compute_stage_x11_products(config, paths=None) -> StageX11Product:
         calibrated=calibrated,
         qc=_json_ready(qc),
         star=star_calibrated,
+        controls={method: arr for method, arr in controls.items() if arr is not None},
     )
 
 
@@ -1874,12 +1899,28 @@ def write_stage_x11_products(product: StageX11Product, config, paths):
     if product.star is not None:
         star_out = paths["spec_calibrated_psffit_star"]
         product.star.product.write(star_out, overwrite=True)
+    # Controles calibrados: consumidos por E1, E2 y G2 desde siempre, escritos
+    # por nadie hasta 2026-08-08. El sello `written_by` es lo que deja a
+    # `io.load_calibrated_controls` distinguir estos de los huerfanos de julio.
+    stage_dir = paths["spec_final_object"].parent
+    output_controls = {}
+    for method, controls in (product.controls or {}).items():
+        out = stage_dir / f"spec_calibrated_{method}_controls.npz"
+        np.savez(
+            out,
+            control_spectra=np.asarray(controls, dtype=np.float64),
+            written_by=CALIBRATED_CONTROLS_STAMP,
+            flux_scale=float(product.calibrated[method].product.header["FLXSCL"]),
+            source_npz=_RAW_CONTROL_NPZ.get(method, ""),
+        )
+        output_controls[method] = str(out)
     plots = _write_stage_x11_plots(product, paths)
     qc = dict(product.qc)
     qc["products"] = {
         "final_object": str(paths["spec_final_object"]),
         "calibrated_by_method": output_products,
         "calibrated_star": None if star_out is None else str(star_out),
+        "calibrated_controls_by_method": output_controls,
     }
     qc["plots"] = plots
     write_json(paths["stage_x11_qc_json"], _json_ready(qc))

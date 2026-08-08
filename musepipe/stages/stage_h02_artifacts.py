@@ -493,6 +493,7 @@ def _compute_t5_placebos(paths, cfg):
             _h01_control_paths_from_config(cfg, paths),
             products,
             min_controls=int(cfg.get("h01_min_controls", 3)),
+            product_paths=_h01_product_paths_from_config(cfg, paths),
         )
         rv_sys, _rv_source = _h01_rv_from_config(cfg)
         rv_err = _h01_rv_err_from_config(cfg)
