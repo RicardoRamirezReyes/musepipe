@@ -29,6 +29,11 @@ except Exception:  # pragma: no cover
 DETECT_Z = 5.0
 MARGINAL_Z = 3.0
 
+#: z gaussiano de una cola al 1%. Es el divisor que convierte el cuantil 99
+#: EMPIRICO de los controles en un factor de inflacion: cuanto se equivoca el
+#: sigma propagado respecto a lo que la medida realmente dispersa.
+Z_GAUSS_99 = 2.3263478740408408
+
 
 @dataclass
 class LineMeasurement:
@@ -57,6 +62,17 @@ class LineMeasurement:
     rv_kms: float = np.nan
     rv_err_kms: float = np.nan
     z_score: float = np.nan
+    #: --- escala EMPIRICA: la misma medida repetida en los controles ---
+    #: `z_score` esta en unidades del sigma PROPAGADO canal a canal, que en una
+    #: fuente pegada al halo de una estrella brillante subestima lo que la medida
+    #: dispersa de verdad. Estos campos la corrigen con el dato, no con un modelo.
+    z_emp: float = np.nan               # z_score / sigma_inflation_applied: z en sigmas MEDIDOS
+    sigma_inflation: float = np.nan     # MEDIDO: cuanto dispersan los controles vs el sigma propagado
+    sigma_inflation_applied: float = np.nan  # max(medido, 1): el que entra en la etiqueta
+    fap_empirical: float = np.nan       # fraccion de controles que iguala o supera al objeto
+    n_controls: int = 0
+    min_resolvable_fap: float = np.nan  # 1/(n+1): el suelo que dan n controles
+    null_source: str = "none"           # de donde salio la distribucion nula
     flux_upper_limit_5sigma: float = np.nan
     throughput_applied: float = np.nan
     n_mc: int = 0
@@ -149,7 +165,8 @@ def _direct_quantities(wave, resid, cont, dl, line_mask, center, rest_A, vsys):
 def measure_line(wave_A, flux, flux_err, line_def, *, lsf_fwhm_A, vsys_kms=0.0,
                  wl_cal_err_kms=0.0, throughput=1.0, cov=None, n_mc=1000, seed=0,
                  min_continuum_pixels=6, detect_z=DETECT_Z, marginal_z=MARGINAL_Z,
-                 catalog=(), bad_ranges=(), bad_flags=None, windows=None):
+                 catalog=(), bad_ranges=(), bad_flags=None, windows=None,
+                 null_z=None, null_source="controls"):
     """Measure one line; returns a LineMeasurement (spec G2 §3.2-§3.3)."""
     wave = np.asarray(wave_A, dtype=np.float64)
     flux = np.asarray(flux, dtype=np.float64)
@@ -219,8 +236,38 @@ def measure_line(wave_A, flux, flux_err, line_def, *, lsf_fwhm_A, vsys_kms=0.0,
     m.centroid_err_A = errs.get("centroid", np.nan)
     m.rv_err_kms = float(np.hypot(errs.get("rv", np.nan), float(wl_cal_err_kms)))
 
-    # status + label + upper limit
-    z = m.z_score
+    # --- escala empirica: los mismos umbrales, pero en sigmas MEDIDOS ---
+    # Los 5/3 de la spec se conservan; lo que cambia es la unidad en que se
+    # miden. Sin controles no hay escala: se etiqueta con el sigma propagado y
+    # se DECLARA (`null_source`), porque un umbral sin procedencia es el mismo
+    # fallback silencioso que persigue el resto de la cadena.
+    escala = empirical_scale(null_z, m.z_score) if null_z is not None else None
+    if escala is not None and np.isfinite(escala.get("sigma_inflation", np.nan)):
+        m.sigma_inflation = escala["sigma_inflation"]
+        m.n_controls = escala["n_controls"]
+        m.min_resolvable_fap = escala["min_resolvable_fap"]
+        m.fap_empirical = escala.get("fap_empirical", np.nan)
+        m.null_source = str(null_source)
+        # SUELO EN 1: los controles solo pueden DESTAPAR dispersion de mas, nunca
+        # quitar la que el presupuesto ya contabiliza. Comparten con el objeto los
+        # sistematicos globales (calibracion de flujo, throughput, PSF), asi que
+        # esos se cancelan en la comparacion y la nula no los ve. Sin este suelo,
+        # una linea cuyos controles salgan tranquilos por azar —33 muestras— se
+        # divide por <1 y se fabrica significancia: paso de verdad con Ca II 8662,
+        # que con z nominal 1.40 e inflacion 0.27 salia `detected`.
+        m.sigma_inflation_applied = max(float(m.sigma_inflation), 1.0)
+        m.z_emp = m.z_score / m.sigma_inflation_applied if np.isfinite(m.z_score) else np.nan
+        if m.sigma_inflation < 1.0:
+            flags.append("null_quieter_than_budget")
+    else:
+        m.null_source = "none"
+        m.z_emp = m.z_score          # sin controles, la escala es la propagada
+        m.sigma_inflation_applied = 1.0 if np.isfinite(m.z_score) else np.nan
+        if null_z is not None:
+            flags.append("empirical_scale_unavailable")
+
+    # status + label + upper limit  (sobre z_emp: el z en sigmas medidos)
+    z = m.z_emp
     if not np.isfinite(z):
         m.status, m.reason = "not_measurable", "z_undefined"
     elif z >= float(detect_z):
@@ -229,8 +276,12 @@ def measure_line(wave_A, flux, flux_err, line_def, *, lsf_fwhm_A, vsys_kms=0.0,
         m.status, m.label = "marginal", "direct_measurement"
     else:
         m.status, m.label = "upper_limit", "upper_limit"
-    # 5-sigma integrated upper limit with LSF template width, throughput-corrected
+    # 5-sigma integrated upper limit with LSF template width, throughput-corrected.
+    # El sigma se infla con el mismo factor medido: un limite calculado con el
+    # sigma propagado seria optimista por ese factor.
     sigma_flux = m.flux_direct_err if np.isfinite(m.flux_direct_err) and m.flux_direct_err > 0 else float(cont_noise) * float(np.sqrt(np.nansum(dll ** 2)))
+    if np.isfinite(m.sigma_inflation_applied) and m.sigma_inflation_applied > 0:
+        sigma_flux = sigma_flux * float(m.sigma_inflation_applied)
     m.flux_upper_limit_5sigma = float(5.0 * sigma_flux / float(throughput)) if throughput else np.nan
     if np.isfinite(cen_fit):
         m.centroid_A = cen_fit if np.isfinite(cen_fit) else m.centroid_A
@@ -272,6 +323,65 @@ def _matched_z(wave, resid, ferr, center_A, fwhm_A, good_mask):
     return z
 
 
+def null_z_from_controls(wave_A, control_fluxes, flux_err, *, center_A, lsf_fwhm_A, windows):
+    """`z` del MISMO estimador en cada control, donde se sabe que no hay fuente.
+
+    Es el paso que convierte un error propagado en una escala medida. Cada
+    control lleva **exactamente** el mismo camino que el objeto —las mismas
+    ventanas, el mismo continuo lineal, el mismo filtro adaptado— y con el
+    **mismo** `flux_err`, para que los `z` salgan en las mismas unidades y su
+    dispersion se lea directamente como el factor de correccion (igual que hace
+    E1 en `matched_filter_scan`).
+
+    Devuelve `np.ndarray` de `z`, uno por control (NaN donde no se pudo medir).
+    """
+    wave = np.asarray(wave_A, dtype=np.float64)
+    controls = np.atleast_2d(np.asarray(control_fluxes, dtype=np.float64))
+    ferr = np.asarray(flux_err, dtype=np.float64)
+    line_mask, blue, red = windows
+    out = np.full(controls.shape[0], np.nan, dtype=np.float64)
+    for i, ctrl in enumerate(controls):
+        if not np.any(np.isfinite(ctrl)):
+            continue
+        _c0, cont, _slope = _linear_continuum(wave, ctrl, blue, red, float(center_A))
+        out[i] = _matched_z(wave, ctrl - cont, ferr, float(center_A), float(lsf_fwhm_A),
+                            blue | red | line_mask)
+    return out
+
+
+def empirical_scale(null_z, object_z=None, *, fap=0.01):
+    """Escala empirica de una linea a partir de sus controles.
+
+    `sigma_inflation` es el cuantil (1-`fap`) de los controles dividido por el z
+    gaussiano equivalente: 1.0 significa que el sigma propagado ya describe la
+    dispersion real, y 18 significa que se queda 18 veces corto.
+
+    El cuantil se toma con `empirical_upper_quantile` de E3 —el mismo estimador
+    que usa el limite superior— para que las dos etapas no midan lo mismo de dos
+    maneras distintas.
+    """
+    from .stages.stage_h03_limits import empirical_upper_quantile
+
+    vals = np.asarray(null_z, dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return None
+    z_q = float(empirical_upper_quantile(vals, fap=float(fap)))
+    inflation = z_q / Z_GAUSS_99 if np.isfinite(z_q) and z_q > 0 else np.nan
+    out = {
+        "n_controls": int(vals.size),
+        "z_quantile": z_q,
+        "fap_used": float(fap),
+        "sigma_inflation": float(inflation),
+        "min_resolvable_fap": float(1.0 / (vals.size + 1)),
+        "null_median": float(np.median(vals)),
+        "null_max": float(np.max(vals)),
+    }
+    if object_z is not None and np.isfinite(object_z):
+        out["fap_empirical"] = float(np.mean(vals >= float(object_z)))
+    return out
+
+
 def _mc_errors(wave, flux, ferr, blue, red, line_mask, dl, center0, vsys, n_mc, seed, cov):
     if int(n_mc) <= 0:
         return {}
@@ -289,13 +399,37 @@ def _mc_errors(wave, flux, ferr, blue, red, line_mask, dl, center0, vsys, n_mc, 
     return {"flux_direct": pct(fd), "ew": pct(ew), "centroid": pct(cen), "rv": pct(rv)}
 
 
-def measure_catalog(wave_A, flux, flux_err, catalog, *, lsf_fwhm_A, **kw):
-    """Measure every line in ``catalog`` on one spectrum; returns list[LineMeasurement]."""
+def measure_catalog(wave_A, flux, flux_err, catalog, *, lsf_fwhm_A,
+                    control_fluxes=None, null_source="controls", **kw):
+    """Measure every line in ``catalog`` on one spectrum; returns list[LineMeasurement].
+
+    Con `control_fluxes` (N espectros de control, misma malla) cada linea saca
+    ademas su distribucion nula y se etiqueta contra ella. Las **ventanas se
+    construyen una sola vez por linea** y se pasan a objeto y controles: si cada
+    uno eligiera las suyas, la comparacion dejaria de ser la misma medida.
+    """
+    wave = np.asarray(wave_A, dtype=np.float64)
+    controls = None if control_fluxes is None else np.atleast_2d(
+        np.asarray(control_fluxes, dtype=np.float64))
+    if controls is not None and controls.shape[1] != wave.size:
+        raise ValueError(
+            f"control_fluxes tiene {controls.shape[1]} canales y el objeto {wave.size}: "
+            "no son la misma malla, compararlos mediria canales distintos.")
     out = []
     for line_def in catalog:
-        out.append(measure_line(wave_A, flux, flux_err, line_def, lsf_fwhm_A=float(lsf_fwhm_A),
-                                 catalog=catalog, **kw))
+        windows = kw.pop("windows", None) or build_windows(
+            wave, line_def, catalog=catalog,
+            bad_ranges=kw.get("bad_ranges", ()), bad_flags=kw.get("bad_flags"))
+        null_z = None
+        if controls is not None:
+            null_z = null_z_from_controls(
+                wave, controls, flux_err, center_A=float(line_def["wave_A"]),
+                lsf_fwhm_A=float(lsf_fwhm_A), windows=windows)
+        out.append(measure_line(wave, flux, flux_err, line_def, lsf_fwhm_A=float(lsf_fwhm_A),
+                                catalog=catalog, windows=windows, null_z=null_z,
+                                null_source=null_source, **kw))
     return out
 
 
-__all__ = ["DETECT_Z", "MARGINAL_Z", "LineMeasurement", "build_windows", "measure_catalog", "measure_line"]
+__all__ = ["DETECT_Z", "MARGINAL_Z", "Z_GAUSS_99", "LineMeasurement", "build_windows",
+           "empirical_scale", "measure_catalog", "measure_line", "null_z_from_controls"]

@@ -27,9 +27,44 @@ TABLE_FIELDS = [
     "ew_A", "ew_err_A", "centroid_A", "centroid_err_A",
     "fwhm_obs_A", "fwhm_intrinsic_A", "fwhm_intrinsic_err_A", "asymmetry",
     "rv_kms", "rv_err_kms", "z_score", "flux_upper_limit_5sigma",
+    # La escala empirica viaja en la tabla, no solo en el QC: `sigma_inflation`
+    # por linea y por metodo es la metrica de salud que deja ver un salto entre
+    # reducciones o entre metodos que no se explique por el procedimiento.
+    "z_emp", "sigma_inflation", "sigma_inflation_applied", "fap_empirical", "n_controls",
+    "min_resolvable_fap", "null_source",
     "throughput_applied", "n_mc", "seed", "covariance_used",
     "line_window_A", "continuum_windows_A", "flags", "reason",
 ]
+
+#: Espectros de control CALIBRADOS por metodo (los que D2 escribe junto al
+#: objeto). Son las mismas 33 posiciones a la separacion del compañero que usan
+#: C2-C6 y E1, procesadas igual: por eso sirven de distribucion nula.
+_CALIBRATED_CONTROL_NPZ = {
+    "aperture": "spec_calibrated_aperture_controls.npz",
+    "optimal_ls": "spec_calibrated_optimal_ls_controls.npz",
+    "optimal_psfsub": "spec_calibrated_optimal_psfsub_controls.npz",
+    "psffit": "spec_calibrated_psffit_controls.npz",
+    "sgf": "spec_calibrated_sgf_controls.npz",
+    "lpm": "spec_calibrated_lpm_controls.npz",
+}
+
+
+def _load_controls(stage_dir, method, n_wave):
+    """`(array (N, n_wave), procedencia)` o `(None, motivo)`. Nunca en silencio."""
+    name = _CALIBRATED_CONTROL_NPZ.get(str(method))
+    if name is None:
+        return None, f"metodo {method!r} sin npz de controles declarado"
+    path = Path(stage_dir) / name
+    if not path.exists():
+        return None, f"{name} no esta en el run"
+    with np.load(path) as z:
+        key = next((k for k in ("control_spectra", "controls", "spectra") if k in z), None)
+        if key is None:
+            return None, f"{name} no trae espectros de control"
+        arr = np.atleast_2d(np.asarray(z[key], dtype=np.float64))
+    if arr.shape[1] != int(n_wave):
+        return None, f"{name} tiene {arr.shape[1]} canales y el objeto {n_wave}"
+    return arr, name
 
 
 def stage_g2_paths(run_id, project_root=None):
@@ -73,6 +108,43 @@ def _resolve_lsf(cfg, qc00):
     raise RuntimeError("G2 requires an LSF: A4 M2 is unavailable and no config LSF is set (spec §2.3 stop).")
 
 
+def _empirical_scale_block(measurements, control_source):
+    """Resumen de la escala empirica: de donde sale y cuanto se mueve.
+
+    Se publica la MEDIANA y el rango entre lineas, no un numero suelto: lo que
+    hace util a esta metrica es su estabilidad, y para verla hace falta la
+    dispersion. `lines_without_scale` no puede quedarse en cero por descuido —
+    una linea sin controles esta etiquetada con otra vara de medir.
+    """
+    con = [m for m in measurements if m.null_source not in ("", "none")
+           and np.isfinite(m.sigma_inflation)]
+    infl = np.asarray([m.sigma_inflation for m in con], dtype=np.float64)
+    sin_escala = [m.name for m in measurements
+                  if m.status != "not_measurable" and m.null_source in ("", "none")]
+    block = {
+        "source": str(control_source),
+        "applied": bool(len(con) > 0),
+        "n_lines_with_scale": int(len(con)),
+        "lines_without_scale": sin_escala,
+        "n_controls": int(con[0].n_controls) if con else 0,
+        "min_resolvable_fap": float(con[0].min_resolvable_fap) if con else None,
+        "note": (
+            "sigma_inflation = cuantil 99 empirico de los controles / z gaussiano 99. "
+            "Es el factor por el que el error propagado canal a canal subestima la "
+            "dispersion real de ESTA medida. Las etiquetas detected/marginal/upper_limit "
+            "usan los mismos umbrales 5/3 de la spec, pero sobre z_emp = z/sigma_inflation."
+        ),
+    }
+    if infl.size:
+        block.update({
+            "inflation_median": float(np.median(infl)),
+            "inflation_min": float(np.min(infl)),
+            "inflation_max": float(np.max(infl)),
+            "inflation_p16_p84": [float(np.percentile(infl, 16)), float(np.percentile(infl, 84))],
+        })
+    return block
+
+
 def compute_stage_g2(cfg, paths):
     qc00 = _read_optional(paths["stage00q_qc_json"])
     x11 = _read_optional(paths["stage_x11_qc_json"]) or {}
@@ -97,10 +169,24 @@ def compute_stage_g2(cfg, paths):
     if "default" in throughput_source:
         open_issues.append({"issue": "Canonical throughput not found (E4); upper limits use throughput=1.0 (uncorrected).", "priority": "major"})
 
+    # La escala de deteccion sale de los MISMOS controles que usan C2-C6 y E1.
+    # Sin ellos G2 etiquetaria contra el sigma propagado canal a canal, que a la
+    # separacion del compañero subestima la dispersion real (E1 la mide ~18x en
+    # psffit sobre este cubo) y convierte residuos de halo en "detecciones".
+    controls, control_source = _load_controls(paths["spectrum_fits"].parent, canonical, wave.size)
+    if controls is None:
+        open_issues.append({
+            "issue": (f"Sin espectros de control ({control_source}): las etiquetas salen del "
+                      "sigma PROPAGADO, que subestima la dispersion real de la medida. "
+                      "`detected` aqui no es comparable con el veredicto de E1."),
+            "priority": "blocking"})
+
     measurements = measure_catalog(
         wave, flux, ferr, catalog, lsf_fwhm_A=lsf_fwhm, vsys_kms=vsys,
         wl_cal_err_kms=wl_cal_err, throughput=throughput, n_mc=n_mc, seed=seed,
         bad_flags=(flags != 0),
+        control_fluxes=controls,
+        null_source=str(control_source),
     )
 
     # RV weighted over detected lines
@@ -130,6 +216,13 @@ def compute_stage_g2(cfg, paths):
         "input_spectrum": {"file": str(paths["spectrum_fits"].name), "method": canonical},
         "lsf_source": lsf_source, "lsf_fwhm_A": lsf_fwhm,
         "covariance_used": "none",  # per-line MC used independent errors in this provisional run
+        # --- escala empirica: el diagnostico, no solo el criterio ---
+        # `sigma_inflation` mide cuanto subestima el error propagado. Su valor
+        # absoluto interesa menos que su ESTABILIDAD: entre lineas, entre
+        # metodos y entre reducciones deberia moverse poco. Un salto que no se
+        # explique por lo que se ha cambiado a proposito apunta a la reduccion,
+        # no a la fisica, y por eso se publica por linea en la tabla.
+        "empirical_scale": _empirical_scale_block(measurements, control_source),
         "catalog_n": len(catalog),
         "n_detected": counts["detected"], "n_marginal": counts["marginal"],
         "n_upper_limit": counts["upper_limit"], "n_not_measurable": counts["not_measurable"],

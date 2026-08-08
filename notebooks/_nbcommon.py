@@ -423,6 +423,134 @@ def show_chain(run_id: str | None = None) -> None:
     pend = [r["id"] for r in rows if r["estado"] == "no ejecutada"]
     if pend:
         print(f"  etapas pendientes para este objeto: {', '.join(pend)}")
+    show_vintage(rid)
+
+
+# --------------------------------------------------------------------------
+# Procedencia en el tiempo: qué etapa se quedó atrás
+# --------------------------------------------------------------------------
+def entry_cube(run_id: str | None = None) -> tuple[Path | None, float | None]:
+    """`(ruta, mtime)` del cubo por el que la cadena entra HOY, según B1.
+
+    Es el ancla de `stage_vintage`: B1 declara en su QC el fichero que cargó, y
+    si ese fichero cambió (otra reducción, otro OB, otra combinación) todo lo
+    calculado antes describe un dato que ya no es el de la cadena.
+    """
+    import contextlib
+    import io
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            path, _run, _why = resolve_qc("stages/stage01_qc.json", run_id)
+    except FileNotFoundError:
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    entradas = payload.get("inputs") or payload.get("input") or []
+    if isinstance(entradas, dict):
+        entradas = [entradas]
+    for entrada in entradas if isinstance(entradas, list) else []:
+        nombre = entrada.get("file") if isinstance(entrada, dict) else entrada
+        if not nombre:
+            continue
+        cubo = Path(nombre)
+        if not cubo.is_absolute():
+            cubo = project_root() / cubo
+        if cubo.exists():
+            return cubo, cubo.stat().st_mtime
+        return cubo, None
+    return None, None
+
+
+#: Etapa a partir de la cual el cubo de entrada YA es una dependencia. Las del
+#: bloque A lo *producen* y lo califican, así que compararlas con él marcaría
+#: como vieja a la etapa que lo escribió.
+_PRIMERA_CONSUMIDORA = "B1"
+
+
+def stage_vintage(run_id: str | None = None) -> list[dict]:
+    """Etapas cuyo QC es más viejo que el **cubo de entrada** de la cadena.
+
+    Solo se compara contra el cubo, y a propósito. Es la única dependencia que
+    el repositorio declara de verdad (B1 escribe en su QC el fichero que
+    cargó) y la única cuyo cambio invalida el dato entero: otro OB, otra
+    combinación, otra reducción. Encadenar además «cada etapa contra la
+    anterior» usando el orden de `stage_registry` suena razonable y no lo es —
+    ese orden es de declaración, no de dependencia, y basta con re-correr A3
+    sola para que 29 de 32 etapas salgan marcadas. Un aviso que salta cuando no
+    debe se acaba ignorando.
+
+    Para pares concretos que sí se conocen (el calibrado de la primaria de D2
+    frente al espectro de C4) el guardia fino vive donde se conoce el par, en
+    el notebook de esa etapa.
+
+    No es un fallo de código: es el estado del run. Pero sin decirlo, un
+    notebook enseña números de una etapa vieja al lado de los de una nueva y
+    parece que discrepan por física.
+    """
+    rid = _effective_run(run_id)
+    reg = _registry()
+    if reg is None:
+        return []
+    _cubo, cubo_mtime = entry_cube(rid)
+    orden = [s.id for s in reg.STAGES]
+    corte = orden.index(_PRIMERA_CONSUMIDORA) if _PRIMERA_CONSUMIDORA in orden else 0
+    import contextlib
+    import io
+
+    rows: list[dict] = []
+    for i, stage in enumerate(reg.STAGES):
+        probe = stage.qc or (stage.qc_paths[0] if stage.qc_paths else None)
+        if probe is None:
+            continue
+        try:
+            # `resolve_qc` avisa por pantalla de la procedencia de cada QC, y
+            # aquí se resuelven las 32 de golpe: `show_chain` ya lo ha dicho
+            # una vez y repetirlo entierra la tabla que sí importa.
+            with contextlib.redirect_stdout(io.StringIO()):
+                path, run, _why = resolve_qc(probe, rid)
+            mtime = path.stat().st_mtime
+        except (FileNotFoundError, OSError):
+            continue          # no ejecutada: no hay nada que fechar
+        motivo = None
+        if i >= corte and cubo_mtime is not None and mtime < cubo_mtime:
+            motivo = f"el cubo de entrada ({_fecha(cubo_mtime)})"
+        rows.append(dict(id=stage.id, block=stage.block, run=run, qc=probe,
+                         mtime=mtime, fecha=_fecha(mtime), desfasada_por=motivo))
+    return rows
+
+
+def _fecha(mtime: float) -> str:
+    import datetime as _dt
+
+    return _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+
+
+def show_vintage(run_id: str | None = None) -> None:
+    """Imprime qué etapas se quedaron atrás, y respecto a qué."""
+    rid = _effective_run(run_id)
+    rows = stage_vintage(rid)
+    if not rows:
+        return
+    cubo, cubo_mtime = entry_cube(rid)
+    viejas = [r for r in rows if r["desfasada_por"]]
+    print(f"\n  -- procedencia en el tiempo --")
+    if cubo is not None:
+        estado = _fecha(cubo_mtime) if cubo_mtime else "NO ESTÁ EN DISCO"
+        print(f"  cubo de entrada (B1): {cubo}  [{estado}]")
+    if not viejas:
+        print("  ninguna etapa es más vieja que su entrada.")
+        return
+    print(f"\n  ⚠️  {len(viejas)} de {len(rows)} etapas son MÁS VIEJAS que el cubo que")
+    print("      la cadena carga hoy: sus números describen un dato anterior.\n")
+    print(f"  {'et':5s} {'fecha':12s} más vieja que")
+    for r in viejas:
+        print(f"  {r['id']:5s} {r['fecha']:12s} {r['desfasada_por']}")
+    print(f"\n  al día: {', '.join(r['id'] for r in rows if not r['desfasada_por']) or 'ninguna'}")
+    print("  Re-ejecutar es una decisión de cadena (mueve resultados congelados),")
+    print("  no algo que este notebook deba hacer por su cuenta.")
 
 
 def provenance_line(relpath: str, run_id: str | None = None) -> str:
@@ -439,18 +567,34 @@ def provenance_line(relpath: str, run_id: str | None = None) -> str:
 # --------------------------------------------------------------------------
 # Comandos de las etapas de reducción (bloque A)
 # --------------------------------------------------------------------------
-def _sibling_setting(run_id: str, key: str):
-    """Busca `key` en el config de otros runs del MISMO objeto."""
+def sibling_setting(run_id: str, key: str) -> tuple[object, str | None]:
+    """`(valor, run_de_donde_salió)` de `key` en otros runs del MISMO objeto.
+
+    Se recorren por orden alfabético y gana el primero, así que el valor puede
+    venir de un run que no tiene nada que ver con la cadena de hoy: en ROXs 12 b
+    el primero es `runs/ROXs12b`, cuyo `cube_files` es un ADP del archivo. Por
+    eso devuelve **de dónde** lo sacó y los llamantes lo imprimen. Un valor sin
+    procedencia es exactamente el fallback silencioso que este repositorio
+    persigue en todas partes.
+    """
     runs_dir = project_root() / "runs"
     if not runs_dir.exists():
-        return None
+        return None, None
     for entry in sorted(runs_dir.iterdir()):
         if entry.name == run_id or _is_cross_object(entry.name, run_id):
             continue
         value = _config_payload(entry.name).get("config", {}).get(key)
         if value:
-            return value
-    return None
+            return value, entry.name
+    return None, None
+
+
+def _sibling_setting(run_id: str, key: str):
+    """Como `sibling_setting`, pero solo el valor y diciendo de dónde salió."""
+    value, origen = sibling_setting(run_id, key)
+    if value is not None and origen is not None:
+        print(f"[procedencia] {key!r} no está en runs/{run_id}: se toma de runs/{origen}")
+    return value
 
 
 def _launch_context(run_id: str) -> dict:

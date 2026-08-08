@@ -108,9 +108,14 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    stage fills in defaults the run does not spell out, and hardcoding them is precisely what
    made the first C3 notebook fail to reproduce the chain. Living in `debug/` is deliberate:
    `--check` and `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb`
-   non-recursively. Covered: **C2**, **C3** (its two variants), **C4** (the canonical psffit, with a
-   channel-subsampling knob because the per-channel fit costs ~11 min for all 3681), **C5** and
-   **C6** (which share one builder: same skeleton, different subtraction).
+   non-recursively. Covered: **A3**, **C2**, **C3** (its two variants), **C4** (the canonical
+   psffit, with a channel-subsampling knob because the per-channel fit costs ~11 min for all
+   3681), **C5** and **C6** (which share one builder: same skeleton, different subtraction), and
+   **D2** — the only one about the **primary star** rather than the companion: it redoes D2's
+   star calibration (cheap and exact) and then measures the primary **in each per-exposure cube**
+   (`perexp_cubes`/`perexp_dir` in the run config), which no stage does. Its comparison also
+   guards freshness: a calibrated product older than its C4 input means D2 has not been re-run,
+   and the slow test skips instead of failing.
 
 ### Multi-object layout
 
@@ -128,6 +133,18 @@ contamination in red. Adding an object = new run + config with `chain`, a
 `targets/<slug>.json`, and `python scripts/build_review_notebooks.py --target <slug>` — no
 code changes. `--check` exits non-zero on cross-object QC resolution. Never hand-edit a
 generated notebook; edit the builder and regenerate only the requested stages.
+
+**Provenance in time.** A run's stages can have different vintages: changing the input
+cube and re-running only part of the chain leaves the rest describing a dataset that is no
+longer there (that is what happened to `ROXs12b_realigned` on 2026-07-28 — see
+`docs/2026-08-07_procedencia_cubo_por_ob.md`). `_nbcommon.stage_vintage()` dates every
+stage against the cube B1 declares in its QC and flags the older ones; `show_chain()` calls
+it, so every review notebook prints it, and `--check` reports it as a **warning, not a
+failure** — it is the state of the run, not a code error. It compares against the cube and
+nothing else on purpose: chaining "each stage against the previous one" using the
+`stage_registry` order marks 29 of 32 stages as soon as A3 alone is re-run, and a warning
+that fires when it shouldn't gets ignored. For known product pairs the fine-grained guard
+lives where the pair is known (D2's debug notebook checks its calibrated star against C4's).
 
 ### Module map (`musepipe/`)
 

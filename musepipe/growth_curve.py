@@ -37,6 +37,24 @@ rangos y se reporta la dispersion (`ratio_min`/`ratio_max`) junto al adoptado.
 Validacion: comparando `F(<=78)/F(<=25)`, el modelo psfao de C1 reproduce estos
 datos al 1.3-2.3%. El modelo esta bien; lo que estaba mal era donde se ponia el
 "1".
+
+## El campo importa, y hay que vigilarlo (2026-08-07)
+
+Todo lo de arriba se midio sobre el cubo de **330 px**. Cuando la cadena paso al
+combinado multinoche, recortado a **200 px** por `stream_combine`, esta medida
+**colapso sin avisar**: el ultimo anillo completo bajo de 163 a 99 px, cielo y
+halo dejaron de ser separables, `p` cayo a 2.20-2.62, el suelo huyo a -2.6 y
+hasta el **45%** del "total" paso a ser cola extrapolada, con la dispersion entre
+rangos de ajuste al 100%. El factor resultante **no era monotono en lambda**
+—maximo interior hacia 7400 A— y deformo la pendiente del continuo de TODOS los
+productos del bloque C un ~47%, en el sentido de hacerlos mas rojos.
+
+Se descubrio dividiendo el espectro entregado por una apertura cruda sobre el
+cubo: el cociente tenia que ser plano y no lo era. De ahi los guardias
+(`MIN_HALO_POWER`, `MAX_TAIL_FRACTION`, `MAX_RATIO_SPREAD`, `MAX_INTERIOR_BUMP`)
+y el diagnostico permanente en `D2_primary_star_debug` §10. La regla que queda:
+**el factor solo vale si el halo llega al suelo de cielo DENTRO del campo**, y
+si no, hay que re-medirlo en un combinado mas ancho.
 """
 
 from __future__ import annotations
@@ -65,11 +83,50 @@ DEFAULT_NORM_RADIUS_PX = 25.0
 #: ROXs42Bb (campo recortado a 200 px por `stream_combine.DEFAULT_CROP_NPIX`)
 #: salian p = 10, 13, 16 y 24, con factores que parecian razonables (1.13-1.26)
 #: y no lo eran.
-MIN_HALO_POWER = 2.05
+#: Suelo SUBIDO de 2.05 a 2.5 el 2026-08-07. El 2.05 no rechazaba nada de lo
+#: que hay que rechazar: sobre el cubo combinado de 200 px el ajuste colapsaba a
+#: p = 2.20-2.62 —con el suelo de cielo huyendo a -2.6 y casi la mitad del
+#: "total" en la cola extrapolada— y el factor se adoptaba en silencio. La forma
+#: resultante de `apcorr` no era monotona (maximo interior hacia 7400 A) y
+#: deformaba la pendiente del continuo un ~47%. Kolmogorov da 3.67 y lo medido
+#: en el campo grande de ROXs12b caia en 3.1-3.4: 2.5 deja margen de sobra al
+#: halo real y corta el colapso.
+MIN_HALO_POWER = 2.5
 MAX_HALO_POWER = 5.0
+#: Fraccion maxima del "total" que puede venir de la cola EXTRAPOLADA. Por
+#: encima, el numero lo domina el modelo y no el dato: en el cubo de 200 px se
+#: llegaba a 0.455. En el campo grande la cola era ~5%.
+MAX_TAIL_FRACTION = 0.25
+#: Dispersion sistematica maxima por banda (`ratio_max/ratio_min` entre rangos
+#: de ajuste). Cielo y halo son degenerados cuando el campo es pequeno y esta
+#: razon se dispara: se median 1.5-2.2, o sea el factor era incierto al 100%.
+MAX_RATIO_SPREAD = 1.6
+#: Joroba maxima tolerada al juzgar la monotonia de una curva que deberia caer
+#: con lambda. Se mide con `interior_bump`, no por signo: un test estricto marca
+#: tambien un repunte del ~1% en el borde por ruido o por extrapolacion del
+#: ajuste. El caso que motivo el guardia valia 11%.
+MAX_INTERIOR_BUMP = 0.03
 #: Brazo de palanca minimo del ajuste DENTRO de los anillos completos. Sin esto
 #: el ajuste se apoya en las esquinas, que muestrean pocas direcciones.
 MIN_FIT_BASELINE_PX = 40.0
+
+
+def interior_bump(values):
+    """Cuanto sube un maximo INTERIOR por encima del mayor de los dos extremos.
+
+    0.0 si la curva es monotona (el maximo cae en un extremo). Es la medida que
+    separa una joroba real de un repunte de borde: no mira signos de la
+    derivada, mira tamano.
+    """
+
+    vals = np.asarray(values, dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 3:
+        return 0.0
+    borde = max(float(vals[0]), float(vals[-1]))
+    if borde <= 0:
+        return 0.0
+    return max(0.0, float(np.max(vals)) / borde - 1.0)
 
 
 def halo_plus_sky(r, amp, power, sky):
@@ -238,15 +295,30 @@ def measure_growth_curve(
             )
             if not np.isfinite(ref) or ref == 0.0:
                 continue
+            tail_frac = tail / (inside + tail) if (inside + tail) else float("nan")
+            if not np.isfinite(tail_frac) or tail_frac > MAX_TAIL_FRACTION:
+                # El "total" lo domina la extrapolacion: es un modelo, no una medida.
+                rejected.append({"band_wave_A": float(centers[band]), "fit_range_px": list(candidate),
+                                 "halo_power": float(power), "tail_fraction": float(tail_frac),
+                                 "reason": f"extrapolated tail {tail_frac:.3f} > {MAX_TAIL_FRACTION}"})
+                continue
             ratios[tuple(candidate)] = {
                 "amp": amp, "power": power, "sky": sky,
                 "ratio": (inside + tail) / ref,
-                "tail_frac": tail / (inside + tail) if (inside + tail) else float("nan"),
+                "tail_frac": tail_frac,
             }
         if not ratios:
             continue
         adopted = ratios.get(tuple(fit_range)) or next(iter(ratios.values()))
         spread = [v["ratio"] for v in ratios.values()]
+        # Degeneracion cielo/halo: si mover el rango de ajuste mueve el factor
+        # mas que `MAX_RATIO_SPREAD`, la banda no esta midiendo nada utilizable.
+        if len(spread) > 1 and float(np.nanmax(spread)) / float(np.nanmin(spread)) > MAX_RATIO_SPREAD:
+            rejected.append({"band_wave_A": float(centers[band]),
+                             "ratio_min": float(np.nanmin(spread)), "ratio_max": float(np.nanmax(spread)),
+                             "reason": (f"fit-range spread {np.nanmax(spread) / np.nanmin(spread):.2f}x "
+                                        f"> {MAX_RATIO_SPREAD} (sky and halo are degenerate)")})
+            continue
         rows.append({
             "wave_A": float(centers[band]),
             "ratio_total_over_normrad": float(adopted["ratio"]),
@@ -338,11 +410,20 @@ def resolve_flux_convention(cfg, stage_dir, *, knob="flux_convention"):
     return doc, "total"
 
 
-def factor_at_wavelengths(growth_qc, wave_A, *, degree=2):
+def factor_at_wavelengths(growth_qc, wave_A, *, degree=2, require_monotonic=True):
     """Interpola el factor por banda a un eje de longitudes de onda.
 
     Polinomio de grado bajo en vez de interpolacion lineal: las bandas son 8
     puntos de una curva suave, y un polinomio no mete escalones en el continuo.
+
+    **Se exige monotonia** (2026-08-07). El factor es `F_total / F(<=r_norm)`, o
+    sea el inverso de una fraccion encerrada: con AO el Strehl empeora hacia el
+    azul, mas luz se va al halo y la correccion tiene que **caer** del azul al
+    rojo. Un maximo interior no es fisico. La parabola ajustada a las 8 bandas
+    del cubo de 200 px tenia el maximo en ~7400 A, y eso deformaba la pendiente
+    del continuo de TODOS los productos del bloque C un ~47%. Si aparece, se
+    para: las bandas estan mal y hay que re-medirlas en un campo mayor, no
+    interpolarlas.
     """
 
     bands = (growth_qc or {}).get("bands") or []
@@ -351,7 +432,31 @@ def factor_at_wavelengths(growth_qc, wave_A, *, degree=2):
     x = np.asarray([b["wave_A"] for b in bands], dtype=np.float64)
     y = np.asarray([b["ratio_total_over_normrad"] for b in bands], dtype=np.float64)
     coeff = np.polyfit(x, y, int(degree))
-    return np.polyval(coeff, np.asarray(wave_A, dtype=np.float64))
+    wave = np.asarray(wave_A, dtype=np.float64)
+    out = np.polyval(coeff, wave)
+    if require_monotonic:
+        # Se juzga sobre el eje pedido, que es donde se aplica: un polinomio
+        # puede tener el vertice fuera del rango de las bandas y dentro del
+        # rango del espectro.
+        #
+        # Con TOLERANCIA, no por signo: un test estricto marca tambien un
+        # repunte del 1% en el borde por ruido numerico o por extrapolacion del
+        # ajuste. Lo que importa es el TAMANO de la joroba: cuanto sube el
+        # maximo interior por encima del mayor de los dos extremos. En el caso
+        # que motivo esto valia 11%; en una curva sana vale 0.
+        if np.isfinite(out).sum() > 2:
+            joroba = interior_bump(out)
+            if joroba > MAX_INTERIOR_BUMP:
+                pico = float(wave[np.nanargmax(out)])
+                raise RuntimeError(
+                    f"The growth-curve factor is not monotonic in wavelength: it bumps {100 * joroba:.1f}% "
+                    f"above its endpoints, peaking at {pico:.0f} A. It is the inverse of an "
+                    "enclosed fraction: under AO it must "
+                    "decrease from blue to red. Non-monotonic bands mean the halo/sky fit is "
+                    "degenerate — re-measure on a wider field with "
+                    "`scripts/measure_growth_curve.py --cube <cubo ancho> --write-run-product`. "
+                    f"bands={np.array2string(y, precision=3)}")
+    return out
 
 
 __all__ = [
@@ -362,6 +467,8 @@ __all__ = [
     "band_images",
     "RUN_PRODUCT_NAME",
     "factor_at_wavelengths",
+    "interior_bump",
+    "MAX_INTERIOR_BUMP",
     "fit_halo_and_sky",
     "growth_curve_note",
     "halo_plus_sky",

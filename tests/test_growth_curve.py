@@ -106,6 +106,70 @@ class GrowthCurveTests(unittest.TestCase):
         self.assertTrue(np.all((got > 1.5) & (got < 3.0)))
 
 
+class CollapsedFitGuardTests(unittest.TestCase):
+    """Un ajuste colapsado tiene que rechazarse, no adoptarse en silencio.
+
+    Sobre el cubo combinado de 200 px el ajuste halo+cielo se degeneraba: `p`
+    bajaba a 2.2-2.6, el suelo huia a -2.6 y hasta el 45% del "total" era cola
+    extrapolada. El factor resultante NO era monotono en lambda (maximo interior
+    hacia 7400 A) y deformaba la pendiente del continuo de todo el bloque C un
+    ~47%. Nada avisaba: `MIN_HALO_POWER` valia 2.05 y no habia limite ni para la
+    cola ni para la dispersion entre rangos de ajuste.
+    """
+
+    #: Las 8 bandas REALES que midio `ROXs12b_realigned` sobre el cubo de 200 px.
+    BANDAS_ROTAS = [2.178, 1.894, 1.823, 2.031, 2.416, 2.473, 2.283, 1.694]
+    LAMBDAS = [5037, 5612, 6187, 6762, 7337, 7912, 8487, 9062]
+
+    def test_the_real_broken_bands_are_refused_by_the_monotonic_check(self):
+        qc = {"bands": [{"wave_A": w, "ratio_total_over_normrad": v}
+                        for w, v in zip(self.LAMBDAS, self.BANDAS_ROTAS)]}
+        with self.assertRaises(RuntimeError) as ctx:
+            factor_at_wavelengths(qc, np.linspace(4800.0, 9300.0, 200))
+        mensaje = str(ctx.exception)
+        self.assertIn("not monotonic", mensaje)
+        self.assertIn("measure_growth_curve", mensaje)   # dice cómo arreglarlo
+
+    def test_a_physical_decreasing_curve_still_passes(self):
+        qc = {"bands": [{"wave_A": w, "ratio_total_over_normrad": v}
+                        for w, v in zip(self.LAMBDAS,
+                                        [2.6, 2.45, 2.32, 2.21, 2.12, 2.05, 2.00, 1.97])]}
+        got = factor_at_wavelengths(qc, np.linspace(4800.0, 9300.0, 200))
+        self.assertTrue(np.all(np.diff(got) < 0))
+
+    def test_the_check_can_be_switched_off_for_diagnostics(self):
+        """El notebook de análisis necesita PODER dibujar la curva rota."""
+        qc = {"bands": [{"wave_A": w, "ratio_total_over_normrad": v}
+                        for w, v in zip(self.LAMBDAS, self.BANDAS_ROTAS)]}
+        got = factor_at_wavelengths(qc, np.linspace(4800.0, 9300.0, 50),
+                                    require_monotonic=False)
+        self.assertEqual(got.size, 50)
+
+    def test_the_power_floor_is_physical(self):
+        """2.05 no rechazaba nada: lo medido en el colapso llegaba a 2.20."""
+        from musepipe.growth_curve import MIN_HALO_POWER
+
+        self.assertGreaterEqual(MIN_HALO_POWER, 2.5)
+        self.assertLess(MIN_HALO_POWER, 3.1)   # por debajo de lo medido en campo grande
+
+    def test_an_extrapolated_tail_is_capped(self):
+        from musepipe.growth_curve import MAX_TAIL_FRACTION
+
+        self.assertLessEqual(MAX_TAIL_FRACTION, 0.25)
+        # El caso real que hay que cortar.
+        self.assertGreater(0.455, MAX_TAIL_FRACTION)
+
+    def test_a_small_field_is_refused_instead_of_returning_a_factor(self):
+        """El campo recortado es la causa raíz: sin brazo, no hay medida."""
+        cube, wave, _ = _synthetic_cube(n=121, power=3.2, sky=-0.4)
+        completo = measure_growth_curve(cube, wave, n_bands=3)
+        self.assertTrue(completo["bands"])
+        recortado = cube[:, 30:91, 30:91]      # la mitad de campo
+        with self.assertRaises(RuntimeError) as ctx:
+            measure_growth_curve(recortado, wave, n_bands=3)
+        self.assertIn("field is too small", str(ctx.exception))
+
+
 class ApcorrConventionTests(unittest.TestCase):
     """A2 mide; C2 decide. Sin `growth_curve` nada se mueve."""
 

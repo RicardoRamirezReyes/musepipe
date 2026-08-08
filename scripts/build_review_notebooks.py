@@ -509,6 +509,31 @@ STAR_REFERENCE_MD = (
 )
 
 
+#: Los casos de S0 (una exposición por cubo, más el combinado y el ADP de
+#: control). Va en un solo sitio porque lo usan dos celdas del notebook S0 y
+#: estaban escritas por separado, las dos con `range(1, 8)`: siete exposiciones
+#: fijas para cualquier objeto y cualquier reducción. Se enumeran las que de
+#: verdad tienen S0 bajo `perexp_dir`.
+S0_CASES_CODE = (
+    "PEREXP_DIR = run_workdir_setting(RUN_ID, 'perexp_dir', project_root=nb.project_root())\n"
+    "import glob as _glob\n"
+    "CASES = []\n"
+    "if PEREXP_DIR:\n"
+    "    for _qc in sorted(_glob.glob(os.path.join(str(PEREXP_DIR), '*', 'stageS0_qc.json'))):\n"
+    "        _d = os.path.dirname(_qc)\n"
+    "        CASES.append((os.path.basename(_d), _qc,\n"
+    "                      os.path.join(_d, 'stageS0_offset_map.fits')))\n"
+    "    if not CASES:\n"
+    "        print('sin S0 por exposición bajo', PEREXP_DIR)\n"
+    "else:\n"
+    "    print('este run no declara `perexp_dir`: no hay casos por exposición')\n"
+    "N_EXP = len(CASES)\n"
+    "CASES += [('combinado', str(rd/'stages'/'stageS0_qc.json'), str(rd/'stages'/'stageS0_offset_map.fits')),\n"
+    "          ('ADP',       str(rd/'stages'/'stageS0_adp_qc.json'), str(rd/'stages'/'stageS0_adp_offset_map.fits'))]\n"
+    "print(f'{N_EXP} exposiciones + combinado + ADP = {len(CASES)} casos')\n"
+)
+
+
 #: Lo que explica la celda de arriba, en los dos notebooks.
 PAPER_SPECTRUM_MD = (
     "## Figura de paper — el espectro sin binar, con su error y sus líneas\n\n"
@@ -6990,21 +7015,25 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Mapas S0 — panorama de TODOS los cubos (7 exposiciones + combinado + ADP)\n\n"
+                    "## Mapas S0 — panorama de TODOS los cubos (exposiciones + combinado + ADP)\n\n"
                     "Renderizados **directamente del FITS** `stageS0_offset_map.fits`. Se incluyen "
-                    "las **7 exposiciones individuales** (S2, `/mnt/2TB/MUSE_work/ROXs12b_perexp/`), "
-                    "el **combinado** (realineado) y el **ADP** de ESO (control) — 9 casos. Primero "
-                    "el detalle de 4 paneles del combinado (offset/error/perfil-columna/histograma), "
-                    "luego una rejilla 3×3 con el mapa de offset de cada caso.\n\n"
-                    "**Por qué mirar por exposición:** las cabeceras (`INS DROT MODE=SKY`, "
-                    "`INS DROT POSANG` = 0°,0°,90°,90°,180°,180°,0°) muestran un **patrón "
-                    "deliberado de rotación de 90°** entre grupos de exposiciones; los 7 cubos "
-                    "están remuestreados norte-arriba ⇒ el combinado mezcla TRES asignaciones "
-                    "de slice distintas (0°/90°/180°) y el scrambling de un stripe fijo del "
-                    "slicer es total. Cada exposición sí conserva su orientación de slicer "
-                    "(vertical para POSANG 0/180, **horizontal para 90** — exp3/exp4), así que "
-                    "0/7 con estructura, medido cada uno en su eje, es la prueba real de que no "
-                    "hay stripes."
+                    "las **exposiciones individuales** que declare el run en `perexp_dir` (las que "
+                    "de verdad tengan S0 hecho; la celda las cuenta, no van escritas a mano), el "
+                    "**combinado** y el **ADP** de ESO (control). Primero el detalle de 4 paneles "
+                    "del combinado (offset/error/perfil-columna/histograma), luego una rejilla con "
+                    "el mapa de offset de cada caso.\n\n"
+                    "**Por qué mirar por exposición:** en ROXs 12 b las cabeceras "
+                    "(`INS DROT MODE=SKY`, `INS DROT POSANG` = 0°,0°,90°,90°,180°,180°,0°) "
+                    "muestran un **patrón deliberado de rotación de 90°** entre grupos de "
+                    "exposiciones; los cubos están remuestreados norte-arriba ⇒ el combinado "
+                    "mezcla TRES asignaciones de slice distintas (0°/90°/180°) y el scrambling de "
+                    "un stripe fijo del slicer es total. Cada exposición sí conserva su "
+                    "orientación de slicer (vertical para POSANG 0/180, **horizontal para 90** — "
+                    "exp3/exp4), así que 0/7 con estructura, medido cada uno en su eje, fue la "
+                    "prueba real de que no hay stripes.\n\n"
+                    "> Esa tabla de POSANG es una **medida de las 7 exposiciones de ROXs 12 b**. "
+                    "Para cualquier otro caso no hay POSANG declarado y la celda asume slicer "
+                    "vertical — lo dice al ejecutarse en vez de asumirlo callando."
                 ),
                 code=(
                     "import os, numpy as np, matplotlib.pyplot as plt\n"
@@ -7014,13 +7043,7 @@ STAGES: list[dict] = [
                     "# Directorio de cubos por exposición: del config del run, no fijo (WP-E4b).\n"
                     "import sys as _sys; _sys.path.insert(0, str(nb.project_root()))\n"
                     "from musepipe.config import run_workdir_setting\n"
-                    "PEREXP_DIR = run_workdir_setting(RUN_ID, 'perexp_dir', project_root=nb.project_root())\n"
-
-                    "# CASES: (label, qc_path, map_path)  — per-exp absolutos; combinado/ADP en el run\n"
-                    "CASES = [(f'exp{i}', f'{PEREXP_DIR}/exp{i}/stageS0_qc.json',\n"
-                    "          f'{PEREXP_DIR}/exp{i}/stageS0_offset_map.fits') for i in range(1, 8)]\n"
-                    "CASES += [('combinado', str(rd/'stages'/'stageS0_qc.json'), str(rd/'stages'/'stageS0_offset_map.fits')),\n"
-                    "          ('ADP',       str(rd/'stages'/'stageS0_adp_qc.json'), str(rd/'stages'/'stageS0_adp_offset_map.fits'))]\n"
+                    + S0_CASES_CODE +
                     "import json\n"
                     "def _load(qcf, mapf):\n"
                     "    q = json.load(open(qcf)); step = q['channel_step_A']; thr = q['gate_g1']['thresholds']['max_err_ch']\n"
@@ -7039,8 +7062,12 @@ STAGES: list[dict] = [
                     "ax[2].plot(np.arange(prof['profile'].size), np.asarray(prof['profile'],float)*step, lw=0.9); ax[2].axhline(0,color='0.6',lw=0.6); ax[2].set_title('perfil por columna (∥ stripes)'); ax[2].set_xlabel('columna'); ax[2].set_ylabel('offset mediano (Å)')\n"
                     "ax[3].hist(d['OFFSET_A'][low], bins=60, color='tab:blue', alpha=0.8); ax[3].axvline(0,color='k',lw=0.8); ax[3].axvline(np.median(d['OFFSET_A'][low]),color='tab:red',ls='--',label=f\"mediana {np.median(d['OFFSET_A'][low])*1e3:+.0f} mÅ\"); ax[3].set_title('hist (bajo error)'); ax[3].set_xlabel('offset (Å)'); ax[3].legend(fontsize=8)\n"
                     "fig.tight_layout(); plt.show()\n"
-                    "# --- rejilla 3x3 de mapas de offset (9 casos) ---\n"
-                    "fig, axes = plt.subplots(3, 3, figsize=(13, 12)); fig.suptitle('S0 · mapa de offset (Å) por caso — 7 exposiciones + combinado + ADP', fontsize=12)\n"
+                    "# --- rejilla de mapas de offset (un panel por caso) ---\n"
+                    "_ncol = 3; _nrow = max(1, int(np.ceil(len(CASES) / _ncol)))\n"
+                    "fig, axes = plt.subplots(_nrow, _ncol, figsize=(13, 4.0 * _nrow), squeeze=False)\n"
+                    "fig.suptitle(f'S0 · mapa de offset (Å) por caso — {N_EXP} exposiciones + combinado + ADP', fontsize=12)\n"
+                    "for axi in axes.ravel()[len(CASES):]:\n"
+                    "    axi.axis('off')\n"
                     "for axi, (label, qcf, mapf) in zip(axes.ravel(), CASES):\n"
                     "    if not os.path.exists(mapf):\n"
                     "        axi.set_title(f'{label}: (falta)'); axi.axis('off'); continue\n"
@@ -7055,7 +7082,7 @@ STAGES: list[dict] = [
             ),
             dict(
                 md=(
-                    "## Paso extra — crop 100×100 en la estrella, para los 9 casos\n\n"
+                    "## Paso extra — crop 100×100 en la estrella, para todos los casos\n\n"
                     "**Motivación:** el gate global lo lastran los spaxels débiles del borde (el "
                     "p95 crudo y el `median|offset|` los dominan). Si hubiera un offset "
                     "**coherente escondido en el ruido**, se saca a la luz midiéndolo donde la "
@@ -7063,7 +7090,7 @@ STAGES: list[dict] = [
                     "la estrella** (centroide de menor error, sin cargar el cubo) y se recalculan "
                     "las métricas + el **offset medio con signo ± error** — el test directo de un "
                     "offset coherente oculto (que `median|·|` no ve por no distinguir signo).\n\n"
-                    "Se hace para **los 7 cubos por exposición + combinado + ADP** (full vs crop), "
+                    "Se hace para **todos los cubos por exposición + combinado + ADP** (full vs crop), "
                     "midiendo el stripe **en la orientación real del slicer de cada caso** según "
                     "`INS DROT POSANG` (vertical para 0/180, horizontal para 90 — exp3/exp4; "
                     "corrección 2026-07-19, ver `2026-07-17_decision_g1_wavesol.md`). Dos "
@@ -7082,16 +7109,18 @@ STAGES: list[dict] = [
                     "rd = nb.run_dir(RUN_ID); HALF = 50\n"
                     "import sys as _sys; _sys.path.insert(0, str(nb.project_root()))\n"
                     "from musepipe.config import run_workdir_setting\n"
-                    "PEREXP_DIR = run_workdir_setting(RUN_ID, 'perexp_dir', project_root=nb.project_root())\n"
-
-                    "CASES = [(f'exp{i}', f'{PEREXP_DIR}/exp{i}/stageS0_qc.json',\n"
-                    "          f'{PEREXP_DIR}/exp{i}/stageS0_offset_map.fits') for i in range(1, 8)]\n"
-                    "CASES += [('combinado', str(rd/'stages'/'stageS0_qc.json'), str(rd/'stages'/'stageS0_offset_map.fits')),\n"
-                    "          ('ADP',       str(rd/'stages'/'stageS0_adp_qc.json'), str(rd/'stages'/'stageS0_adp_offset_map.fits'))]\n"
+                    + S0_CASES_CODE +
                     "# Orientación del slicer EN el cubo norte-arriba, por INS DROT POSANG (modo SKY):\n"
-                    "# POSANG 0/180 -> vertical; POSANG 90 -> horizontal. Combinado/ADP: vertical (dominante 5/7).\n"
+                    "# POSANG 0/180 -> vertical; POSANG 90 -> horizontal. Combinado/ADP: vertical.\n"
+                    "# La tabla es una MEDIDA de las 7 exposiciones de ROXs 12 b; para cualquier\n"
+                    "# otro caso no hay POSANG declarado y se asume vertical, así que se dice en\n"
+                    "# voz alta en vez de asumirlo callando.\n"
                     "POSANG = {'exp1': 0, 'exp2': 0, 'exp3': 90, 'exp4': 90, 'exp5': 180, 'exp6': 180, 'exp7': 0}\n"
                     "orient_of = lambda label: 'horizontal' if POSANG.get(label, 0) == 90 else 'vertical'\n"
+                    "_sin_posang = [l for l, _, _ in CASES if l not in POSANG and l not in ('combinado', 'ADP')]\n"
+                    "if _sin_posang:\n"
+                    "    print(f'sin POSANG declarado ({len(_sin_posang)} casos): se asume slicer VERTICAL ->',\n"
+                    "          ', '.join(_sin_posang[:6]) + (' …' if len(_sin_posang) > 6 else ''))\n"
                     "def stats(oc, ec, oa, step, thr, orient):\n"
                     "    m = wsm.structure_metrics(oc, step, orientation=orient, err_map_ch=ec, max_err_ch=thr)\n"
                     "    low = np.isfinite(oa) & np.isfinite(ec) & (ec < thr); v = oa[low]\n"
@@ -7450,6 +7479,20 @@ def check_qc_resolution(out_dir: Path, run_id: str) -> list[str]:
               "(se degradan a aviso, no son errores):")
         for line in sorted(pending):
             print("  ", line)
+    # Procedencia en el tiempo: NO es un error de código (no sale ≠0), es el
+    # estado del run. Se dice aquí porque `--check` es lo que se corre antes de
+    # mirar resultados, y una etapa anterior a su cubo enseña otro dato.
+    try:
+        viejas = [r for r in nb.stage_vintage(run_id) if r["desfasada_por"]]
+    except Exception as exc:                     # noqa: BLE001 - nunca debe tumbar --check
+        print(f"\n--check: no se pudo fechar la cadena ({type(exc).__name__}: {exc})")
+        viejas = []
+    if viejas:
+        _cubo, _mt = nb.entry_cube(run_id)
+        print(f"\n--check: {len(viejas)} etapa(s) MÁS VIEJAS que el cubo que carga B1"
+              + (f" ({nb._fecha(_mt)})" if _mt else "") + " — no es un fallo, es el estado del run:")
+        print("  ", ", ".join(r["id"] for r in viejas))
+        print("   sus números describen un dato anterior; re-ejecutarlas es decisión de cadena.")
     return problems
 
 
