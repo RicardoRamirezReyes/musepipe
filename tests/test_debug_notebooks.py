@@ -74,6 +74,14 @@ class InlinedSourceTests(unittest.TestCase):
         "A3": (["import numpy as np", "from dataclasses import dataclass"],
                ["TELLURIC_BANDS", "PROTECTED_WINDOWS",
                 "HALPHA_PROTECTED", "NALGS_PROTECTED"]),
+        # D2: `BAD_CONTINUUM_FLAGS` está escrita en términos de dos nombres
+        # IMPORTADOS, no de otras constantes. Fija que `needed_imports` mire
+        # también las constantes copiadas: mirando solo los `def`, ese bloque
+        # salía sin sus imports y la primera celda de código petaba.
+        "D2": (["import numpy as np", "from dataclasses import dataclass",
+                "from musepipe.extraction.aperture import FLAG_BAD_WINDOW",
+                "from musepipe.extraction.aperture import FLAG_SKYLINE"],
+               ["BAD_CONTINUUM_FLAGS"]),
     }
 
     def test_the_copy_carries_the_imports_and_constants_it_uses(self):
@@ -121,9 +129,16 @@ class InlinedSourceTests(unittest.TestCase):
         `PROTECTED_WINDOWS = (HALPHA_PROTECTED, NALGS_PROTECTED)` se descubre
         antes que sus dos operandos; emitirla antes que ellos daría un notebook
         que compila y revienta al ejecutarse.
+
+        Se ejecuta con los imports delante, que es como los emite el notebook:
+        una constante puede estar escrita en términos de un nombre IMPORTADO
+        (`BAD_CONTINUUM_FLAGS = FLAG_BAD_WINDOW | FLAG_SKYLINE` en D2) y sin
+        ellos este test mediría otra cosa.
         """
         for stage_id in self.bdn.INLINE_SOURCES:
-            bloque = "\n".join(self.bdn.needed_constants(self._sources(stage_id)))
+            sources = self._sources(stage_id)
+            bloque = "\n".join(self.bdn.needed_imports(sources) + [""]
+                               + self.bdn.needed_constants(sources))
             with self.subTest(etapa=stage_id):
                 try:
                     exec(compile(bloque, f"<constantes {stage_id}>", "exec"), {})
@@ -170,7 +185,8 @@ class GeneratedNotebookTests(unittest.TestCase):
                      "C3": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
                      "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
                      "C5": ["spec_sgf_object.fits"],
-                     "C6": ["spec_lpm_object.fits"]}
+                     "C6": ["spec_lpm_object.fits"],
+                     "D2": ["spec_calibrated_psffit_star.fits"]}
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
@@ -226,6 +242,7 @@ class ReproducesTheChainTests(unittest.TestCase):
         "C4_psffit_debug": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
         "C5_sgf_debug": ["spec_sgf_object.fits"],
         "C6_lpm_debug": ["spec_lpm_object.fits"],
+        "D2_primary_star_debug": ["spec_psffit_star.fits", "spec_calibrated_psffit_star.fits"],
     }
     #: (objeto, run) de cada cadena. Estaba fijado a ROXs 12 b, asi que los cinco
     #: notebooks de ROXs 42B b **no los ejecutaba nadie**: se generaban y nadie
@@ -254,6 +271,29 @@ class ReproducesTheChainTests(unittest.TestCase):
             cubo = ROOT / cubo
         return None if (cubo is not None and cubo.exists()) else str(declarado)
 
+    #: notebook -> (producto de la etapa, entrada de la que se deriva). El
+    #: notebook solo puede salir IDÉNTICO si el producto se escribió DESPUÉS de
+    #: su entrada; si la etapa de arriba se re-ejecutó y la de abajo no, lo que
+    #: hay en disco calibra un espectro que ya no existe y la diferencia no
+    #: mide la copia, mide que el run está a medias.
+    DERIVADOS = {
+        "D2_primary_star_debug": ("spec_calibrated_psffit_star.fits", "spec_psffit_star.fits"),
+    }
+
+    @classmethod
+    def _producto_desfasado(cls, slug, stage_dir):
+        """`None`, o el motivo por el que el producto en disco no es comparable."""
+        par = cls.DERIVADOS.get(slug)
+        if par is None:
+            return None
+        salida, entrada = (stage_dir / n for n in par)
+        if not (salida.exists() and entrada.exists()):
+            return None
+        if salida.stat().st_mtime >= entrada.stat().st_mtime:
+            return None
+        return (f"{salida.name} es más viejo que {entrada.name}: la etapa no se ha "
+                "re-ejecutado desde su entrada")
+
     def test_every_debug_notebook_reports_identical(self):
         import matplotlib
         matplotlib.use("Agg")
@@ -269,6 +309,9 @@ class ReproducesTheChainTests(unittest.TestCase):
                     fuera = self._entrada_fuera_del_run(slug, stage_dir)
                     if fuera:
                         self.skipTest(f"{slug}: entrada fuera del run sin disponer: {fuera}")
+                    desfasado = self._producto_desfasado(slug, stage_dir)
+                    if desfasado:
+                        self.skipTest(f"{slug}: {desfasado}")
                     if not path.exists():
                         self.skipTest(f"{slug} no generado")
                     self._reproduce_la_cadena(path, slug)

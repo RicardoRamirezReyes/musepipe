@@ -160,6 +160,7 @@ reprodujera la cadena.
 | `C4_psffit_debug` | el ajuste simultáneo de **dos PSF** por canal (el método canónico): región de ajuste, matriz de diseño, χ²ᵣ y ρ(a,b), controles y los dos espectros. Trae perilla de submuestreo de canales |
 | `C5_sgf_debug` | selección de spaxels de referencia, espectro estelar de referencia, filtrado Savitzky-Golay y apertura sobre el residual |
 | `C6_lpm_debug` | lo mismo, pero modelando con Legendre y **con las líneas enmascaradas del ajuste**: la base del diseño y la energía por grado |
+| `D2_primary_star_debug` | el único sobre la **estrella primaria** y no sobre el compañero. Rehace la calibración de D2 sobre el producto de C4 (λ, escala de flujo y el presupuesto de sistemáticos, término a término) y añade lo que **ninguna etapa hace**: el espectro de la primaria **en cada exposición** —localizada en su propio marco, con la misma apertura que usa A3—, su curva de crecimiento (que es lo que explica por qué el nivel no es comparable entre observaciones), la dispersión entre ellas contra el ruido, la suma pesada por `EXPTIME` contra el combinado y el EW(Hα) observación a observación. Los cubos salen de `perexp_cubes`/`perexp_dir` del config; si el objeto no los declara, la sección lo dice y sigue |
 
 ## Seleccionar un run
 
