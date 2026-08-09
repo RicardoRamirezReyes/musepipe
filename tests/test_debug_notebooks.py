@@ -74,6 +74,16 @@ class InlinedSourceTests(unittest.TestCase):
         "A3": (["import numpy as np", "from dataclasses import dataclass"],
                ["TELLURIC_BANDS", "PROTECTED_WINDOWS",
                 "HALPHA_PROTECTED", "NALGS_PROTECTED"]),
+        # C1: `functools` lo trae el decorador `@lru_cache` de
+        # `_psfao_image_cached` —el único caso en que el import viene de una
+        # línea que no es el cuerpo de la función— y `DEFAULT_X0` es el vector
+        # de arranque único que la §7 señala como causa de los 12 bins caídos.
+        "C1": (["import functools", "import math", "import numpy as np",
+                "import warnings", "from dataclasses import dataclass",
+                "from scipy.ndimage import gaussian_filter1d",
+                "from scipy.optimize import least_squares"],
+               ["PSFAO_PARAM_NAMES", "_PSFAO_PARAM_NAMES", "DEFAULT_X0",
+                "PSF_SHAPE_PARAMS", "MOFFAT_BETA_FLOOR"]),
         # D2: `BAD_CONTINUUM_FLAGS` está escrita en términos de dos nombres
         # IMPORTADOS, no de otras constantes. Fija que `needed_imports` mire
         # también las constantes copiadas: mirando solo los `def`, ese bloque
@@ -181,6 +191,11 @@ class GeneratedNotebookTests(unittest.TestCase):
 
     def test_it_carries_the_drift_check_and_the_comparison(self):
         productos = {"A3": ["stage00t_qc.json"],
+                     # C1 no entrega un espectro: su producto es el modelo, y la
+                     # comparación es contra el JSON reconstruido desde el CSV.
+                     # Los dos CSV aparecen porque las dos formas viajan.
+                     "C1": ["psf_model.json", "stage_e01_psfao_params.csv",
+                            "stage_e01_psf_params.csv", "stage_e01_qc.json"],
                      "C2": ["spec_aperture_object.fits"],
                      "C3": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
                      "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
@@ -237,6 +252,14 @@ class ReproducesTheChainTests(unittest.TestCase):
     #: notebook -> productos de la etapa que tienen que existir para compararlo
     CASOS = {
         "A3_telluric_debug": ["stage00t_qc.json"],
+        # C1 necesita además el cubo sobre el que ajustó (§6 reajusta bins de
+        # verdad y §9.b mide la apertura sobre él) y el producto de C4, que es
+        # el coeficiente contra el que se contrasta el reparto núcleo/halo. El
+        # CSV de psfao NO se exige: solo existe si psfao ganó, y el notebook
+        # audita la forma que la etapa eligió (ROXs 42B b sale moffat).
+        "C1_chromatic_psf_debug": ["psf_model.json", "stage_e01_psf_params.csv",
+                                   "stage_e01_qc.json",
+                                   "stage02_xcorr_cube_stack.fits", "spec_psffit_star.fits"],
         "C2_aperture_debug": ["spec_aperture_object.fits"],
         "C3_optimal_debug": ["spec_optimal_object.fits", "spec_optimal_psfsub_object.fits"],
         "C4_psffit_debug": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
@@ -278,6 +301,10 @@ class ReproducesTheChainTests(unittest.TestCase):
     #: mide la copia, mide que el run está a medias.
     DERIVADOS = {
         "D2_primary_star_debug": ("spec_calibrated_psffit_star.fits", "spec_psffit_star.fits"),
+        # C1: la §6 reajusta bins del cubo y los compara contra el CSV. Si el
+        # cubo cambió y C1 no se ha vuelto a correr, esos dos números salen de
+        # datos distintos y el DIFIERE no mide la copia.
+        "C1_chromatic_psf_debug": ("psf_model.json", "stage02_xcorr_cube_stack.fits"),
     }
 
     @classmethod
