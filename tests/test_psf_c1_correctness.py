@@ -64,6 +64,100 @@ class PsfaoConvergenceTests(unittest.TestCase):
         self.assertEqual(recons, {})
 
 
+class WarmStartRescueTests(unittest.TestCase):
+    """El rescate de los bins estancados en el vector de arranque comun.
+
+    Cada bin caido es un hueco en `param_table` que `_evaluate_psfao` cruza con
+    una recta, y de ahi salen las mesetas del modelo cromatico. El rescate tiene
+    que ser ESTRICTAMENTE aditivo: los bins que ya convergian no se tocan.
+    """
+
+    OK = {"success": True, "status": 1, "message": "ok", "nfev": 12,
+          "cost": 1.0, "stalled_at_initial": False}
+    ESTANCADO = {"success": True, "status": 1, "message": "sin moverse", "nfev": 2,
+                 "cost": 9.0, "stalled_at_initial": True}
+
+    @staticmethod
+    def _bins(n):
+        return [(6000.0 + 100 * i, 6100.0 + 100 * i, 6050.0 + 100 * i,
+                 np.ones(4, dtype=bool)) for i in range(n)]
+
+    def _corre(self, n_bins, guion, **kwargs):
+        """`guion`: un resultado de `fit_bin` por LLAMADA (un bin puede llevar dos)."""
+        cube = np.ones((4, 8, 8), dtype=float)
+        llamadas = []
+        pendientes = list(guion)
+
+        def falso(img, var, samp, system, comp, mask_r, fit_r, x0, field_yx=None):
+            llamadas.append(list(x0))
+            params, optimizer = pendientes.pop(0)
+            return (params, 1.0, 0.0, (0.0, 0.0), 8.0, np.ones((8, 8)), optimizer)
+
+        with mock.patch("musepipe.stages.stage_e01_psfao.fit_bin", side_effect=falso):
+            rows, recons = fit_psfao_bins(
+                cube, cube, np.arange(4), self._bins(n_bins),
+                object(), (4.0, 6.0), 2.0, 3.0, **kwargs
+            )
+        self.assertEqual(pendientes, [], "el guion preveia llamadas que no se hicieron")
+        return rows, recons, llamadas
+
+    def test_a_stalled_bin_is_retried_from_the_last_converged_one(self):
+        bueno = [0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7]
+        rescatado = [0.12, 3e-4, 2.1, 0.07, 0.95, 0.2, 1.8]
+        rows, recons, llamadas = self._corre(2, [
+            (bueno, dict(self.OK)),              # bin 0: converge a la primera
+            (DEFAULT_X0, dict(self.ESTANCADO)),  # bin 1: se estanca...
+            (rescatado, dict(self.OK)),          # ...y el rescate lo saca
+        ])
+        self.assertEqual([r["status"] for r in rows], ["ok", "ok"])
+        self.assertEqual([r["start_vector"] for r in rows], ["initial_vector", "warm_start"])
+        # el rescate parte del bin anterior convergido, no de DEFAULT_X0
+        self.assertEqual(llamadas[0], list(DEFAULT_X0))
+        self.assertEqual(llamadas[1], list(DEFAULT_X0))
+        self.assertEqual(llamadas[2], bueno)
+        self.assertEqual(sorted(recons), [6050.0, 6150.0])
+
+    def test_the_bins_that_already_converged_are_untouched(self):
+        """Ningun bin bueno se reajusta: `fit_bin` se llama UNA vez por bin."""
+        bueno = [0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7]
+        rows, _recons, llamadas = self._corre(2, [
+            (bueno, dict(self.OK)),
+            (bueno, dict(self.OK)),
+        ])
+        self.assertEqual(len(llamadas), 2)
+        self.assertTrue(all(l == list(DEFAULT_X0) for l in llamadas))
+        self.assertTrue(all(r["start_vector"] == "initial_vector" for r in rows))
+
+    def test_a_stall_with_no_converged_predecessor_stays_stalled(self):
+        """Sin bin del que partir no hay rescate: el primero no se inventa nada."""
+        rows, recons, llamadas = self._corre(1, [
+            (DEFAULT_X0, dict(self.ESTANCADO)),
+        ])
+        self.assertEqual(rows[0]["status"], "fit_stalled:initial_vector")
+        self.assertEqual(len(llamadas), 1)
+        self.assertEqual(recons, {})
+
+    def test_warm_start_off_reproduces_the_old_behaviour(self):
+        rows, recons, llamadas = self._corre(2, [
+            ([0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7], dict(self.OK)),
+            (DEFAULT_X0, dict(self.ESTANCADO)),
+        ], warm_start=False)
+        self.assertEqual([r["status"] for r in rows], ["ok", "fit_stalled:initial_vector"])
+        self.assertEqual(len(llamadas), 2)
+
+    def test_a_failed_rescue_keeps_the_original_verdict(self):
+        """Si el segundo intento tampoco sale, se conserva el diagnostico real."""
+        bueno = [0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7]
+        rows, recons, llamadas = self._corre(2, [
+            (bueno, dict(self.OK)),
+            (DEFAULT_X0, dict(self.ESTANCADO)),
+            (bueno, dict(self.ESTANCADO)),   # el rescate tambien se estanca
+        ])
+        self.assertEqual(rows[1]["status"], "fit_stalled:initial_vector")
+        self.assertEqual(len(llamadas), 3)
+        self.assertEqual(sorted(recons), [6050.0])
+
+
 class RingQCTests(unittest.TestCase):
     def test_post_hybrid_arrays_drive_all_qc_fields(self):
         summary = _ring_qc_summary(
