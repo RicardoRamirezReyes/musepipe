@@ -428,6 +428,10 @@ def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None):
         # MISMA mascara que la rama Moffat: sin esto `model_comparison` compara
         # dos ajustes con contaminantes distintos.
         field_yx=field_yx,
+        # Rescate de los bins que se estancan en el vector de arranque comun.
+        # Cada hueco que deja un bin caido lo cruza `_evaluate_psfao` con una
+        # recta, y ahi nacen las mesetas del modelo cromatico.
+        warm_start=bool(cfg.get("psf_warm_start", True)),
     )
     if not recons:
         return {"status": "unavailable:no_valid_fits", "rows": rows}
@@ -637,10 +641,21 @@ def compute_stage_e01_products(config) -> StageE01Product:
             "chi2r_median": None,
         }
         smoothing_qc = {
+            # `smoothed_poly` NO es lo que se evalua mientras exista `param_table`:
+            # `_evaluate_psfao` interpola la tabla por bin y el polinomio queda
+            # inerte. Se declara asi para que el QC no siga sugiriendo que el
+            # modelo por canal es una parabola. Medido en el notebook de C1.
             "per_param_model": {name: f"polynomial_deg{max(len(v) - 1, 0)}" for name, v in model_doc["smoothed_poly"].items()},
+            "per_param_model_is_evaluated": not bool(model_doc.get("param_table")),
+            "evaluated_as": ("param_table_linear_interp" if model_doc.get("param_table")
+                             else "smoothed_poly"),
             "outlier_bins": [],
             "centroid_vs_b3_max_diff_px": centroid_diff,
             "centroid_vs_b3_status": b3_track_status,
+            "warm_start": bool(cfg.get("psf_warm_start", True)),
+            "n_bins_rescued_by_warm_start": int(sum(
+                1 for r in psfao_rows if r.get("start_vector") == "warm_start"
+                and r.get("status") == "ok")),
         }
 
     roundtrip = psf_roundtrip_error(model_doc, waves_rt)
@@ -746,12 +761,17 @@ def _write_csv(path, rows):
 def _write_psfao_csv(path, rows):
     from .stage_e01_psfao import PSFAO_PARAM_NAMES
 
+    # Las `*_err` son las incertidumbres formales que `psffit` ya calculaba y que
+    # `fit_bin` tiraba (ver `_psfao_param_errors`). Van detras de sus parametros
+    # y son aditivas: nada aguas abajo las lee, y los CSV escritos antes de que
+    # existieran siguen siendo legibles (el lector va por nombre de columna).
     cols = ["lambda_A", "samp", "amp", "bck", "dy", "dx", "ring_residual_pct",
             "ring_residual_pct_canonical", "ring_residual_p90_pct_canonical",
-            *PSFAO_PARAM_NAMES, "ring_residual_pct_after_hybrid_canonical",
+            *PSFAO_PARAM_NAMES, *(f"{name}_err" for name in PSFAO_PARAM_NAMES),
+            "dy_err", "dx_err", "ring_residual_pct_after_hybrid_canonical",
             "ring_residual_p90_pct_after_hybrid_canonical", "optimizer_success",
             "optimizer_status", "optimizer_message", "optimizer_nfev", "optimizer_cost",
-            "optimizer_stalled_at_initial", "status"]
+            "optimizer_stalled_at_initial", "start_vector", "status"]
     with open(path, "w", encoding="utf-8") as f:
         f.write(",".join(cols) + "\n")
         for r in rows:

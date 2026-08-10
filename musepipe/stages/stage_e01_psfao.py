@@ -95,7 +95,49 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
         "cost": float(res.cost),
         "stalled_at_initial": stalled,
     }
-    return list(map(float, res.x)), float(amp), float(bck), tuple(map(float, res.dxdy)), ring, recon, optimizer
+    errors = _psfao_param_errors(res)
+    return (list(map(float, res.x)), float(amp), float(bck), tuple(map(float, res.dxdy)),
+            ring, recon, optimizer, errors)
+
+
+def _psfao_param_errors(res):
+    """Las incertidumbres formales del ajuste, `{param: sigma}`.
+
+    `psffit` ya las calcula —`1/sqrt(diag(JtJ))`, al final de `maoppy/psffit.py`—
+    y las deja en `res.x_std` / `res.dxdy_std`, pero hasta ahora se tiraban: el
+    CSV de Moffat traia sus siete columnas `*_err` y el de psfao ninguna, asi que
+    no habia forma de saber si un parametro que salta entre bins vecinos esta
+    medido o no.
+
+    OJO con lo que significan. Los pesos del ajuste son `1/STAT`, y
+    `docs/noise_model.md` tiene medido que STAT subestima el ruido, asi que esto
+    es una **cota inferior formal**, no la incertidumbre real; ademas Moffat usa
+    otra convencion (`pinv(JtJ) * sigma^2` con sigma empirica del residuo, en
+    `psf.py:fit_moffat_image`). Sirven para ver la estabilidad DENTRO de cada
+    forma, no para comparar tamanos ENTRE formas.
+
+    Un parametro pegado a su limite fisico tiene gradiente nulo y su entrada de
+    la diagonal sale 0 -> `1/sqrt(0)` es infinito. Eso no es una incertidumbre
+    infinita, es «no medido»: se devuelve NaN, que es lo que los graficos y las
+    estadisticas robustas saben ignorar.
+    """
+
+    def _limpio(value):
+        v = float(value)
+        return v if np.isfinite(v) and v > 0 else float("nan")
+
+    nombres = [f"{n}_err" for n in PSFAO_PARAM_NAMES]
+    try:
+        x_std = np.asarray(res.x_std, dtype=float).ravel()
+        dxdy_std = np.asarray(res.dxdy_std, dtype=float).ravel()
+    except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+        return {name: float("nan") for name in (*nombres, "dx_err", "dy_err")}
+    errors = {name: (_limpio(x_std[i]) if i < x_std.size else float("nan"))
+              for i, name in enumerate(nombres)}
+    # `res.dxdy` es (dx, dy), y `res.dxdy_std` va en el mismo orden.
+    errors["dx_err"] = _limpio(dxdy_std[0]) if dxdy_std.size > 0 else float("nan")
+    errors["dy_err"] = _limpio(dxdy_std[1]) if dxdy_std.size > 1 else float("nan")
+    return errors
 
 
 def _ring_residual(image, model, companion_yx, mask_radius, width=1.5):
@@ -187,36 +229,71 @@ def prepare_psfao_inputs(cfg, stage_dir):
     }
 
 
-def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *, x0=None, field_yx=None):
+def _psfao_fit_status(optimizer):
+    """El veredicto de un intento: `ok`, estancado en el arranque, o fallido."""
+
+    if optimizer["stalled_at_initial"]:
+        return "fit_stalled:initial_vector"
+    if not optimizer["success"]:
+        return f"fit_failed:optimizer_status_{optimizer['status']}"
+    return "ok"
+
+
+def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *,
+                   x0=None, field_yx=None, warm_start=True):
     """Fit the Psfao model per wavelength bin (companion masked).
 
     Returns ``(rows, recons)`` where ``rows`` is the per-bin parameter table
     (identical structure to the legacy loop) and ``recons`` maps each bin centre
     wavelength to ``(bin_image, reconstructed_model)`` so a caller can score the
-    reconstruction with any ring metric it likes."""
+    reconstruction with any ring metric it likes.
+
+    ``warm_start`` **rescues** the bins that stall on the shared start vector.
+    Every bin is first fitted from ``x0`` exactly as before, so the bins that
+    already converged are unchanged bit for bit; only when that attempt comes
+    back ``fit_stalled:initial_vector`` (``psffit`` returned the start vector
+    untouched with ``nfev <= 2``) is a second attempt made, starting from the
+    last bin that did converge.
+
+    This matters because every stalled bin is a HOLE in the ``param_table`` that
+    ``_evaluate_psfao`` then spans with a straight line. In ROXs 12 b the twelve
+    stalls clustered into an 800 A gap (7900-8700 A) crossed by interpolation,
+    which is one of the sources of the plateau/step structure C2-C4 inherit
+    through the growth curve. Measured on that run: 8 of the 12 recover, in 8-32
+    optimiser evaluations instead of 2."""
 
     from maoppy.instrument import muse_nfm
 
     x0 = DEFAULT_X0 if x0 is None else x0
     rows = []
     recons = {}
+    x0_caliente = None   # el ultimo bin que convergio, para el rescate
     for (a, b, mid, sel) in bins:
         img = np.nanmedian(cube[sel], axis=0)
         var = np.nanmedian(stat[sel], axis=0)
         samp = float(muse_nfm.samp(mid * 1e-10))
+        intentos = [("initial_vector", list(x0))]
         try:
-            params, amp, bck, dxdy, ring, recon, optimizer = fit_bin(
+            params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
                 img, var, samp, system, companion, mask_radius, fit_radius, x0, field_yx=field_yx
             )
         except Exception as exc:  # pragma: no cover - defensive
             rows.append({"lambda_A": mid, "status": f"fit_failed:{exc}"})
             continue
-        if optimizer["stalled_at_initial"]:
-            fit_status = "fit_stalled:initial_vector"
-        elif not optimizer["success"]:
-            fit_status = f"fit_failed:optimizer_status_{optimizer['status']}"
-        else:
-            fit_status = "ok"
+        fit_status = _psfao_fit_status(optimizer)
+        # Rescate: solo cuando el arranque compartido no movio nada, y solo si ya
+        # hay un bin convergido del que partir. Nunca sustituye a un ajuste bueno.
+        if (warm_start and fit_status == "fit_stalled:initial_vector"
+                and x0_caliente is not None):
+            intentos.append(("warm_start", list(x0_caliente)))
+            try:
+                r = fit_bin(img, var, samp, system, companion, mask_radius, fit_radius,
+                            x0_caliente, field_yx=field_yx)
+            except Exception:  # pragma: no cover - defensive
+                r = None
+            if r is not None and _psfao_fit_status(r[6]) == "ok":
+                params, amp, bck, dxdy, ring, recon, optimizer, errors = r
+                fit_status = "ok"
         row = {"lambda_A": float(mid), "samp": samp, "amp": amp, "bck": bck,
                "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring,
                "optimizer_success": optimizer["success"],
@@ -225,11 +302,16 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
                "optimizer_nfev": optimizer["nfev"],
                "optimizer_cost": optimizer["cost"],
                "optimizer_stalled_at_initial": optimizer["stalled_at_initial"],
+               "start_vector": intentos[-1][0],
                "status": fit_status}
         row.update({name: params[i] for i, name in enumerate(PSFAO_PARAM_NAMES)})
+        # Las incertidumbres formales del intento que se queda (el rescatado, si
+        # lo hubo). NaN donde el parametro esta pegado a su limite fisico.
+        row.update(errors)
         rows.append(row)
         if fit_status == "ok":
             recons[float(mid)] = (img, recon)
+            x0_caliente = list(params)
     return rows, recons
 
 

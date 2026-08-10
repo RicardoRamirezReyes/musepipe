@@ -108,14 +108,28 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    stage fills in defaults the run does not spell out, and hardcoding them is precisely what
    made the first C3 notebook fail to reproduce the chain. Living in `debug/` is deliberate:
    `--check` and `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb`
-   non-recursively. Covered: **A3**, **C2**, **C3** (its two variants), **C4** (the canonical
-   psffit, with a channel-subsampling knob because the per-channel fit costs ~11 min for all
-   3681), **C5** and **C6** (which share one builder: same skeleton, different subtraction), and
-   **D2** — the only one about the **primary star** rather than the companion: it redoes D2's
-   star calibration (cheap and exact) and then measures the primary **in each per-exposure cube**
-   (`perexp_cubes`/`perexp_dir` in the run config), which no stage does. Its comparison also
-   guards freshness: a calibrated product older than its C4 input means D2 has not been re-run,
-   and the slow test skips instead of failing.
+   non-recursively. Covered: **C1**, **A3**, **C2**, **C3** (its two variants), **C4** (the
+   canonical psffit, with a channel-subsampling knob because the per-channel fit costs ~11 min
+   for all 3681), **C5** and **C6** (which share one builder: same skeleton, different
+   subtraction), and **D2** — the only one about the **primary star** rather than the companion:
+   it redoes D2's star calibration (cheap and exact) and then measures the primary **in each
+   per-exposure cube** (`perexp_cubes`/`perexp_dir` in the run config), which no stage does. Its
+   comparison also guards freshness: a calibrated product older than its C4 input means D2 has
+   not been re-run, and the slow test skips instead of failing.
+
+   **C1 is the exception to the "compare against the product" rule**, because C1 does not emit a
+   spectrum: it emits `psf_model.json`, the PSF every other stage consumes. Its per-bin fit is
+   expensive (~43 fits) so it is subsampled by a knob, but the model-document builder is a *pure
+   function of the per-bin rows* and those rows are in the stage's CSVs written with `repr` — so
+   the notebook rebuilds the model document from the CSV, exactly and without touching the cube,
+   and that is what `IDÉNTICO` compares. Its long section is the **evaluation**:
+   `_evaluate_psfao` is copied verbatim (inverting the usual cut, where `evaluate_psf_model` is
+   imported as "C1's, not what is fitted here") because it is the function under audit — the QC
+   advertises `polynomial_deg2` smoothing but while `param_table` exists the polynomial is never
+   evaluated; what varies per channel is a linear interpolation of the bin table, on a λ snapped
+   to 50 Å. **Both PSF forms travel in the copy**: C1 always fits Moffat and Psfao and keeps the
+   lower ring residual, and the winner is per-object (ROXs 12 b → `psfao`, ROXs 42B b →
+   `moffat`), so a notebook that knew only one would crash on the other object.
 
 ### Multi-object layout
 
