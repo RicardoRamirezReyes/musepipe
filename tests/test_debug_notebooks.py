@@ -189,6 +189,47 @@ class GeneratedNotebookTests(unittest.TestCase):
                 with self.subTest(etapa=stage_id, celda=i):
                     compile("".join(cell["source"]), f"<{stage_id} celda {i}>", "exec")
 
+    #: Nombres que IPython REASIGNA por su cuenta antes de ejecutar cada celda:
+    #: `_i`/`_ii`/`_iii` son el código de las celdas anteriores, `_`/`__`/`___`
+    #: las últimas salidas, `In`/`Out` el historial. Un valor guardado en uno de
+    #: ellos NO sobrevive al salto de celda.
+    IPYTHON_RESERVADOS = frozenset({
+        "_i", "_ii", "_iii", "_", "__", "___", "_ih", "_oh", "_dh",
+        "In", "Out", "_exit_code", "_sh",
+    })
+
+    def test_no_cell_reads_an_ipython_reserved_name_from_another_cell(self):
+        """Un `_i` que cruza de celda funciona con `exec` y revienta en Jupyter.
+
+        Es un fallo que NINGUNA otra prueba puede ver: el test `slow` y
+        `nbclient` sobre el .ipynb ejecutan las celdas con `exec` en un espacio
+        de nombres normal, donde `_i` es una variable como otra cualquiera. En
+        un kernel de IPython, en cambio, `_i` se reescribe con el código de la
+        celda anterior antes de cada ejecución, así que el valor se pierde al
+        cambiar de celda y la siguiente falla con `IndexError`. Pasó de verdad
+        en la §8 de C1 (`_i = int(np.nanargmax(_salto))` usado en la celda de
+        las figuras), y solo se vio abriendo el notebook a mano.
+
+        Asignar uno de esos nombres y consumirlo EN LA MISMA celda es correcto
+        y muy común (`for _i in ...`), así que solo se persigue lo que cruza.
+        """
+        for stage_id, cells in self.cells.items():
+            codigo = [c for c in cells if c["cell_type"] == "code"]
+            asignados_antes = set()
+            for i, cell in enumerate(codigo):
+                arbol = ast.parse("".join(cell["source"]))
+                nombres = [n for n in ast.walk(arbol) if isinstance(n, ast.Name)]
+                escribe = {n.id for n in nombres if isinstance(n.ctx, ast.Store)}
+                lee = {n.id for n in nombres if isinstance(n.ctx, ast.Load)}
+                heredados = (lee - escribe) & self.IPYTHON_RESERVADOS & asignados_antes
+                with self.subTest(etapa=stage_id, celda=i):
+                    self.assertEqual(
+                        heredados, set(),
+                        f"{stage_id} celda {i} lee {sorted(heredados)} de una celda "
+                        "anterior; IPython lo habrá reasignado. Renómbralo.",
+                    )
+                asignados_antes |= escribe & self.IPYTHON_RESERVADOS
+
     def test_it_carries_the_drift_check_and_the_comparison(self):
         productos = {"A3": ["stage00t_qc.json"],
                      # C1 no entrega un espectro: su producto es el modelo, y la
@@ -247,6 +288,15 @@ class ReproducesTheChainTests(unittest.TestCase):
 
     Se salta si el run no está en disco (`runs/` no se versiona), que es el caso
     de un clon limpio.
+
+    **La §10 de C1 tiene caché, y la primera vez la llena.** Ajusta las dos
+    formas de PSF en cada cubo por exposición y guarda el resultado en
+    `runs/<RUN>/tables/c1_perexp_psf_params.json`; con las perillas por defecto
+    eso son ~320 ajustes a ~4.5 s, o sea ~24 min la PRIMERA ejecución en una
+    máquina que tenga los cubos delante. Las siguientes leen la caché en menos
+    de un segundo y el notebook vuelve a costar lo de siempre. En una máquina
+    sin esos cubos la sección se salta sola y no cuesta nada. Si este test
+    parece colgado, es eso: mira si la caché está creciendo.
     """
 
     #: notebook -> productos de la etapa que tienen que existir para compararlo
@@ -294,17 +344,34 @@ class ReproducesTheChainTests(unittest.TestCase):
             cubo = ROOT / cubo
         return None if (cubo is not None and cubo.exists()) else str(declarado)
 
-    #: notebook -> (producto de la etapa, entrada de la que se deriva). El
+    #: notebook -> (productos de la etapa, entrada de la que se derivan). El
     #: notebook solo puede salir IDÉNTICO si el producto se escribió DESPUÉS de
     #: su entrada; si la etapa de arriba se re-ejecutó y la de abajo no, lo que
     #: hay en disco calibra un espectro que ya no existe y la diferencia no
     #: mide la copia, mide que el run está a medias.
+    #:
+    #: El primer elemento puede ser un nombre o varios: manda el MÁS VIEJO, que
+    #: es el que delata que la etapa no se re-ejecutó entera.
     DERIVADOS = {
         "D2_primary_star_debug": ("spec_calibrated_psffit_star.fits", "spec_psffit_star.fits"),
         # C1: la §6 reajusta bins del cubo y los compara contra el CSV. Si el
         # cubo cambió y C1 no se ha vuelto a correr, esos dos números salen de
         # datos distintos y el DIFIERE no mide la copia.
         "C1_chromatic_psf_debug": ("psf_model.json", "stage02_xcorr_cube_stack.fits"),
+        # C2-C6 consumen el modelo de PSF de C1. Re-correr C1 sin re-correr el
+        # bloque C deja a estos notebooks recalculando con el modelo NUEVO
+        # contra productos hechos con el viejo: DIFIERE garantizado, y no mide
+        # la copia. Pasó de verdad el 2026-08-08 (`docs/2026-08-09_handoff.md`
+        # §5.1): `psf_model.json` de las 13:02 y los espectros de la noche
+        # anterior, y los cinco subtests se pusieron en rojo sin que hubiera
+        # cambiado una línea de la cadena.
+        "C2_aperture_debug": ("spec_aperture_object.fits", "psf_model.json"),
+        "C3_optimal_debug": (("spec_optimal_object.fits",
+                              "spec_optimal_psfsub_object.fits"), "psf_model.json"),
+        "C4_psffit_debug": (("spec_psffit_object.fits", "spec_psffit_star.fits"),
+                            "psf_model.json"),
+        "C5_sgf_debug": ("spec_sgf_object.fits", "psf_model.json"),
+        "C6_lpm_debug": ("spec_lpm_object.fits", "psf_model.json"),
     }
 
     @classmethod
@@ -313,9 +380,15 @@ class ReproducesTheChainTests(unittest.TestCase):
         par = cls.DERIVADOS.get(slug)
         if par is None:
             return None
-        salida, entrada = (stage_dir / n for n in par)
-        if not (salida.exists() and entrada.exists()):
+        nombres, entrada_n = par
+        if isinstance(nombres, str):
+            nombres = (nombres,)
+        entrada = stage_dir / entrada_n
+        salidas = [stage_dir / n for n in nombres]
+        salidas = [s for s in salidas if s.exists()]
+        if not salidas or not entrada.exists():
             return None
+        salida = min(salidas, key=lambda s: s.stat().st_mtime)
         if salida.stat().st_mtime >= entrada.stat().st_mtime:
             return None
         return (f"{salida.name} es más viejo que {entrada.name}: la etapa no se ha "
