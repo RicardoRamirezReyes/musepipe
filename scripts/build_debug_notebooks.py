@@ -172,8 +172,8 @@ INLINE_SOURCES = {
         ]),
         ("musepipe/stages/stage_e01_psfao.py", [
             "_bad_windows", "make_bins", "_ring_residual", "_box3_apcorr", "fit_bin",
-            "_psfao_fit_status", "fit_psfao_bins", "_norm_roundtrip",
-            "build_psfao_model_document",
+            "_psfao_param_errors", "_psfao_fit_status", "fit_psfao_bins",
+            "_norm_roundtrip", "build_psfao_model_document",
         ]),
         ("musepipe/stages/stage_e01_psf.py", [
             "_good_wave_mask", "make_psf_bins", "_median_image", "_positions_from_qc",

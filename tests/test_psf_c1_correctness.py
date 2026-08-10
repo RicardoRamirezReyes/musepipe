@@ -14,7 +14,18 @@ from musepipe.stages.stage_e01_psf import (
     _write_psfao_csv,
     _write_summary_plot,
 )
-from musepipe.stages.stage_e01_psfao import DEFAULT_X0, fit_psfao_bins
+from musepipe.stages.stage_e01_psfao import (
+    DEFAULT_X0,
+    PSFAO_PARAM_NAMES,
+    _psfao_param_errors,
+    fit_psfao_bins,
+)
+
+#: Los errores formales que `fit_bin` devuelve ahora como octavo elemento. Los
+#: tests que solo miran convergencia no dependen de ellos, pero la tupla tiene
+#: que traerlos o `fit_psfao_bins` no desempaqueta.
+ERRORES_FALSOS = {f"{name}_err": 0.01 for name in PSFAO_PARAM_NAMES}
+ERRORES_FALSOS.update({"dx_err": 0.02, "dy_err": 0.03})
 
 
 class PsfaoConvergenceTests(unittest.TestCase):
@@ -27,7 +38,8 @@ class PsfaoConvergenceTests(unittest.TestCase):
             "cost": 12.0,
             "stalled_at_initial": True,
         }
-        fit_result = (DEFAULT_X0, 1.0, 0.0, (0.0, 0.0), 8.0, np.ones((8, 8)), optimizer)
+        fit_result = (DEFAULT_X0, 1.0, 0.0, (0.0, 0.0), 8.0, np.ones((8, 8)), optimizer,
+                      dict(ERRORES_FALSOS))
         bins = [(6500.0, 6600.0, 6550.0, np.ones(4, dtype=bool))]
         cube = np.ones((4, 8, 8), dtype=float)
 
@@ -50,7 +62,8 @@ class PsfaoConvergenceTests(unittest.TestCase):
             "cost": 20.0,
             "stalled_at_initial": False,
         }
-        fit_result = (DEFAULT_X0, 1.0, 0.0, (0.1, 0.0), 8.0, np.ones((8, 8)), optimizer)
+        fit_result = (DEFAULT_X0, 1.0, 0.0, (0.1, 0.0), 8.0, np.ones((8, 8)), optimizer,
+                      dict(ERRORES_FALSOS))
         bins = [(6500.0, 6600.0, 6550.0, np.ones(4, dtype=bool))]
         cube = np.ones((4, 8, 8), dtype=float)
 
@@ -83,15 +96,22 @@ class WarmStartRescueTests(unittest.TestCase):
                  np.ones(4, dtype=bool)) for i in range(n)]
 
     def _corre(self, n_bins, guion, **kwargs):
-        """`guion`: un resultado de `fit_bin` por LLAMADA (un bin puede llevar dos)."""
+        """`guion`: un resultado de `fit_bin` por LLAMADA (un bin puede llevar dos).
+
+        Cada entrada es `(params, optimizer)` o `(params, optimizer, errores)`;
+        sin el tercero se usan unos errores cualesquiera, porque casi ningun
+        test de este bloque los mira.
+        """
         cube = np.ones((4, 8, 8), dtype=float)
         llamadas = []
         pendientes = list(guion)
 
         def falso(img, var, samp, system, comp, mask_r, fit_r, x0, field_yx=None):
             llamadas.append(list(x0))
-            params, optimizer = pendientes.pop(0)
-            return (params, 1.0, 0.0, (0.0, 0.0), 8.0, np.ones((8, 8)), optimizer)
+            entrada = pendientes.pop(0)
+            params, optimizer = entrada[0], entrada[1]
+            errores = entrada[2] if len(entrada) > 2 else dict(ERRORES_FALSOS)
+            return (params, 1.0, 0.0, (0.0, 0.0), 8.0, np.ones((8, 8)), optimizer, errores)
 
         with mock.patch("musepipe.stages.stage_e01_psfao.fit_bin", side_effect=falso):
             rows, recons = fit_psfao_bins(
@@ -156,6 +176,72 @@ class WarmStartRescueTests(unittest.TestCase):
         self.assertEqual(rows[1]["status"], "fit_stalled:initial_vector")
         self.assertEqual(len(llamadas), 3)
         self.assertEqual(sorted(recons), [6050.0])
+
+    def test_the_row_carries_the_errors_of_the_attempt_that_stays(self):
+        """Si el rescate gana, los errores de la fila son los SUYOS.
+
+        Es la trampa evidente al anadir un valor de retorno mas: dejar el
+        `errors` del primer intento —el estancado— junto a los parametros del
+        segundo. La fila describiria un ajuste que no existe.
+        """
+        bueno = [0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7]
+        rescatado = [0.12, 3e-4, 2.1, 0.07, 0.95, 0.2, 1.8]
+        err_estancado = {f"{n}_err": 9.0 for n in PSFAO_PARAM_NAMES}
+        err_estancado.update({"dx_err": 9.0, "dy_err": 9.0})
+        err_rescate = {f"{n}_err": 0.5 for n in PSFAO_PARAM_NAMES}
+        err_rescate.update({"dx_err": 0.5, "dy_err": 0.5})
+        rows, _recons, _llamadas = self._corre(2, [
+            (bueno, dict(self.OK)),
+            (DEFAULT_X0, dict(self.ESTANCADO), err_estancado),
+            (rescatado, dict(self.OK), err_rescate),
+        ])
+        self.assertEqual(rows[1]["start_vector"], "warm_start")
+        self.assertEqual(rows[1]["r0"], rescatado[0])
+        self.assertEqual(rows[1]["r0_err"], 0.5)
+        self.assertEqual(rows[1]["dx_err"], 0.5)
+
+
+class PsfaoParameterErrorTests(unittest.TestCase):
+    """`_psfao_param_errors`: lo que `psffit` ya calculaba y se tiraba.
+
+    `maoppy` deja las incertidumbres formales en `res.x_std` / `res.dxdy_std`
+    (`1/sqrt(diag(JtJ))`). Lo unico con criterio aqui es que un parametro pegado
+    a su limite fisico tiene gradiente nulo, la diagonal sale 0 y la division da
+    infinito: eso NO es una incertidumbre enorme, es «no medido», y tiene que
+    salir NaN para que las medianas robustas y los `errorbar` lo ignoren.
+    """
+
+    class _Res:
+        def __init__(self, x_std, dxdy_std):
+            self.x_std = x_std
+            self.dxdy_std = dxdy_std
+
+    def test_finite_positive_values_travel_one_per_parameter(self):
+        x_std = [0.1 * (i + 1) for i in range(len(PSFAO_PARAM_NAMES))]
+        errors = _psfao_param_errors(self._Res(x_std, [0.7, 0.8]))
+        for i, name in enumerate(PSFAO_PARAM_NAMES):
+            self.assertAlmostEqual(errors[f"{name}_err"], x_std[i])
+        # `res.dxdy` es (dx, dy) y `res.dxdy_std` va en el mismo orden.
+        self.assertAlmostEqual(errors["dx_err"], 0.7)
+        self.assertAlmostEqual(errors["dy_err"], 0.8)
+
+    def test_a_parameter_pinned_at_its_bound_is_nan_not_infinity(self):
+        x_std = [np.inf, 0.0, -1.0, np.nan, 0.05, 0.05, 0.05]
+        errors = _psfao_param_errors(self._Res(x_std, [np.inf, 0.0]))
+        # r0 (inf), C (cero), A (negativo) y alpha (NaN) no estan medidos.
+        for name in PSFAO_PARAM_NAMES[:4]:
+            self.assertTrue(np.isnan(errors[f"{name}_err"]), name)
+        # ratio, theta y beta si.
+        for name in PSFAO_PARAM_NAMES[4:]:
+            self.assertAlmostEqual(errors[f"{name}_err"], 0.05, msg=name)
+        self.assertTrue(np.isnan(errors["dx_err"]))
+        self.assertTrue(np.isnan(errors["dy_err"]))
+
+    def test_a_result_without_the_attributes_degrades_to_nan(self):
+        """Una version de `maoppy` que no las publique no puede tumbar C1."""
+        errors = _psfao_param_errors(object())
+        self.assertEqual(len(errors), len(PSFAO_PARAM_NAMES) + 2)
+        self.assertTrue(all(np.isnan(v) for v in errors.values()))
 
 
 class RingQCTests(unittest.TestCase):
@@ -244,6 +330,34 @@ class SelectedOutputTests(unittest.TestCase):
         self.assertEqual(float(row["ring_residual_pct_canonical"]), 8.0)
         self.assertEqual(float(row["ring_residual_pct_after_hybrid_canonical"]), 4.0)
         self.assertEqual(row["optimizer_success"], "True")
+
+    def test_the_csv_has_one_error_column_per_parameter(self):
+        fila = self._psfao_row()
+        fila.update({f"{name}_err": 0.25 for name in PSFAO_PARAM_NAMES})
+        fila.update({"dx_err": 0.5, "dy_err": 0.75})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "params.csv"
+            _write_psfao_csv(path, [fila])
+            row = next(csv.DictReader(path.open(encoding="utf-8")))
+
+        for name in PSFAO_PARAM_NAMES:
+            self.assertEqual(float(row[f"{name}_err"]), 0.25, name)
+        self.assertEqual(float(row["dx_err"]), 0.5)
+        self.assertEqual(float(row["dy_err"]), 0.75)
+
+    def test_a_row_from_before_the_error_columns_still_writes(self):
+        """Las columnas nuevas son aditivas: una fila vieja sale con el hueco vacio.
+
+        Importa porque el CSV que hay en `runs/` se escribio antes de que
+        existieran, y los lectores van por nombre de columna.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "params.csv"
+            _write_psfao_csv(path, [self._psfao_row()])
+            row = next(csv.DictReader(path.open(encoding="utf-8")))
+
+        self.assertEqual(row["r0_err"], "")
+        self.assertEqual(float(row["r0"]), 0.1)
 
     def test_summary_plot_accepts_selected_psfao_rows_without_moffat_fields(self):
         product = StageE01Product(

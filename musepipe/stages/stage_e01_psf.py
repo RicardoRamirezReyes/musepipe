@@ -761,9 +761,14 @@ def _write_csv(path, rows):
 def _write_psfao_csv(path, rows):
     from .stage_e01_psfao import PSFAO_PARAM_NAMES
 
+    # Las `*_err` son las incertidumbres formales que `psffit` ya calculaba y que
+    # `fit_bin` tiraba (ver `_psfao_param_errors`). Van detras de sus parametros
+    # y son aditivas: nada aguas abajo las lee, y los CSV escritos antes de que
+    # existieran siguen siendo legibles (el lector va por nombre de columna).
     cols = ["lambda_A", "samp", "amp", "bck", "dy", "dx", "ring_residual_pct",
             "ring_residual_pct_canonical", "ring_residual_p90_pct_canonical",
-            *PSFAO_PARAM_NAMES, "ring_residual_pct_after_hybrid_canonical",
+            *PSFAO_PARAM_NAMES, *(f"{name}_err" for name in PSFAO_PARAM_NAMES),
+            "dy_err", "dx_err", "ring_residual_pct_after_hybrid_canonical",
             "ring_residual_p90_pct_after_hybrid_canonical", "optimizer_success",
             "optimizer_status", "optimizer_message", "optimizer_nfev", "optimizer_cost",
             "optimizer_stalled_at_initial", "start_vector", "status"]

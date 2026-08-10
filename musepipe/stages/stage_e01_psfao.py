@@ -95,7 +95,49 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
         "cost": float(res.cost),
         "stalled_at_initial": stalled,
     }
-    return list(map(float, res.x)), float(amp), float(bck), tuple(map(float, res.dxdy)), ring, recon, optimizer
+    errors = _psfao_param_errors(res)
+    return (list(map(float, res.x)), float(amp), float(bck), tuple(map(float, res.dxdy)),
+            ring, recon, optimizer, errors)
+
+
+def _psfao_param_errors(res):
+    """Las incertidumbres formales del ajuste, `{param: sigma}`.
+
+    `psffit` ya las calcula —`1/sqrt(diag(JtJ))`, al final de `maoppy/psffit.py`—
+    y las deja en `res.x_std` / `res.dxdy_std`, pero hasta ahora se tiraban: el
+    CSV de Moffat traia sus siete columnas `*_err` y el de psfao ninguna, asi que
+    no habia forma de saber si un parametro que salta entre bins vecinos esta
+    medido o no.
+
+    OJO con lo que significan. Los pesos del ajuste son `1/STAT`, y
+    `docs/noise_model.md` tiene medido que STAT subestima el ruido, asi que esto
+    es una **cota inferior formal**, no la incertidumbre real; ademas Moffat usa
+    otra convencion (`pinv(JtJ) * sigma^2` con sigma empirica del residuo, en
+    `psf.py:fit_moffat_image`). Sirven para ver la estabilidad DENTRO de cada
+    forma, no para comparar tamanos ENTRE formas.
+
+    Un parametro pegado a su limite fisico tiene gradiente nulo y su entrada de
+    la diagonal sale 0 -> `1/sqrt(0)` es infinito. Eso no es una incertidumbre
+    infinita, es «no medido»: se devuelve NaN, que es lo que los graficos y las
+    estadisticas robustas saben ignorar.
+    """
+
+    def _limpio(value):
+        v = float(value)
+        return v if np.isfinite(v) and v > 0 else float("nan")
+
+    nombres = [f"{n}_err" for n in PSFAO_PARAM_NAMES]
+    try:
+        x_std = np.asarray(res.x_std, dtype=float).ravel()
+        dxdy_std = np.asarray(res.dxdy_std, dtype=float).ravel()
+    except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+        return {name: float("nan") for name in (*nombres, "dx_err", "dy_err")}
+    errors = {name: (_limpio(x_std[i]) if i < x_std.size else float("nan"))
+              for i, name in enumerate(nombres)}
+    # `res.dxdy` es (dx, dy), y `res.dxdy_std` va en el mismo orden.
+    errors["dx_err"] = _limpio(dxdy_std[0]) if dxdy_std.size > 0 else float("nan")
+    errors["dy_err"] = _limpio(dxdy_std[1]) if dxdy_std.size > 1 else float("nan")
+    return errors
 
 
 def _ring_residual(image, model, companion_yx, mask_radius, width=1.5):
@@ -232,7 +274,7 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
         samp = float(muse_nfm.samp(mid * 1e-10))
         intentos = [("initial_vector", list(x0))]
         try:
-            params, amp, bck, dxdy, ring, recon, optimizer = fit_bin(
+            params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
                 img, var, samp, system, companion, mask_radius, fit_radius, x0, field_yx=field_yx
             )
         except Exception as exc:  # pragma: no cover - defensive
@@ -250,7 +292,7 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
             except Exception:  # pragma: no cover - defensive
                 r = None
             if r is not None and _psfao_fit_status(r[6]) == "ok":
-                params, amp, bck, dxdy, ring, recon, optimizer = r
+                params, amp, bck, dxdy, ring, recon, optimizer, errors = r
                 fit_status = "ok"
         row = {"lambda_A": float(mid), "samp": samp, "amp": amp, "bck": bck,
                "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring,
@@ -263,6 +305,9 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
                "start_vector": intentos[-1][0],
                "status": fit_status}
         row.update({name: params[i] for i, name in enumerate(PSFAO_PARAM_NAMES)})
+        # Las incertidumbres formales del intento que se queda (el rescatado, si
+        # lo hubo). NaN donde el parametro esta pegado a su limite fisico.
+        row.update(errors)
         rows.append(row)
         if fit_status == "ok":
             recons[float(mid)] = (img, recon)
