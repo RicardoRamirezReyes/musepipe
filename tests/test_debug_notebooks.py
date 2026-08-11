@@ -92,6 +92,12 @@ class InlinedSourceTests(unittest.TestCase):
                 "from musepipe.extraction.aperture import FLAG_BAD_WINDOW",
                 "from musepipe.extraction.aperture import FLAG_SKYLINE"],
                ["BAD_CONTINUUM_FLAGS"]),
+        # APCORR arrastra lo de C4 (el ajuste de dos PSF) y además
+        # `MAX_INTERIOR_BUMP`, que es el umbral con el que `factor_at_wavelengths`
+        # decide si para la etapa. Sin él la copia peta con NameError justo en la
+        # función que este notebook existe para auditar.
+        "APCORR": (["import warnings", "import numpy as np"],
+                   ["FLAG_BAD_WINDOW", "MAX_INTERIOR_BUMP"]),
     }
 
     def test_the_copy_carries_the_imports_and_constants_it_uses(self):
@@ -242,7 +248,13 @@ class GeneratedNotebookTests(unittest.TestCase):
                      "C4": ["spec_psffit_object.fits", "spec_psffit_star.fits"],
                      "C5": ["spec_sgf_object.fits"],
                      "C6": ["spec_lpm_object.fits"],
-                     "D2": ["spec_calibrated_psffit_star.fits"]}
+                     "D2": ["spec_calibrated_psffit_star.fits"],
+                     # APCORR sigue la primaria por toda la cadena, así que se
+                     # compara contra los DOS productos que la llevan: el de C4
+                     # y el calibrado de D2 (que para la estrella tiene el mismo
+                     # flujo, solo cambia el eje λ — y el notebook lo comprueba).
+                     "APCORR": ["spec_psffit_star.fits",
+                                "spec_calibrated_psffit_star.fits"]}
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
@@ -316,6 +328,11 @@ class ReproducesTheChainTests(unittest.TestCase):
         "C5_sgf_debug": ["spec_sgf_object.fits"],
         "C6_lpm_debug": ["spec_lpm_object.fits"],
         "D2_primary_star_debug": ["spec_psffit_star.fits", "spec_calibrated_psffit_star.fits"],
+        # `apcorr_debug` re-ajusta el psffit sobre el cubo de B2, así que además
+        # de los productos necesita el cubo — como C1.
+        "apcorr_debug": ["spec_psffit_star.fits", "spec_calibrated_psffit_star.fits",
+                         "stage02_xcorr_cube_stack.fits", "psf_model.json",
+                         "stage01c_qc.json"],
     }
     #: (objeto, run) de cada cadena. Estaba fijado a ROXs 12 b, asi que los cinco
     #: notebooks de ROXs 42B b **no los ejecutaba nadie**: se generaban y nadie
@@ -365,13 +382,32 @@ class ReproducesTheChainTests(unittest.TestCase):
         # §5.1): `psf_model.json` de las 13:02 y los espectros de la noche
         # anterior, y los cinco subtests se pusieron en rojo sin que hubiera
         # cambiado una línea de la cadena.
-        "C2_aperture_debug": ("spec_aperture_object.fits", "psf_model.json"),
+        #
+        # Y ademas de `psf_model.json`, el MODULO que calcula la correccion de
+        # apertura: los seis metodos multiplican por `factor_at_wavelengths`, asi
+        # que cambiarlo deja igual de obsoletos a sus productos. Paso el
+        # 2026-08-11 al pasar de parabola a PCHIP: los cinco notebooks de
+        # ROXs 42B b se pusieron en rojo sin que su copia tuviera nada malo.
+        "C2_aperture_debug": ("spec_aperture_object.fits",
+                              ("psf_model.json", "musepipe/growth_curve.py")),
         "C3_optimal_debug": (("spec_optimal_object.fits",
-                              "spec_optimal_psfsub_object.fits"), "psf_model.json"),
+                              "spec_optimal_psfsub_object.fits"),
+                             ("psf_model.json", "musepipe/growth_curve.py")),
         "C4_psffit_debug": (("spec_psffit_object.fits", "spec_psffit_star.fits"),
-                            "psf_model.json"),
-        "C5_sgf_debug": ("spec_sgf_object.fits", "psf_model.json"),
-        "C6_lpm_debug": ("spec_lpm_object.fits", "psf_model.json"),
+                            ("psf_model.json", "musepipe/growth_curve.py")),
+        "C5_sgf_debug": ("spec_sgf_object.fits",
+                         ("psf_model.json", "musepipe/growth_curve.py")),
+        "C6_lpm_debug": ("spec_lpm_object.fits",
+                         ("psf_model.json", "musepipe/growth_curve.py")),
+        # `apcorr_debug` recalcula la apcorr con el CODIGO DE HOY. Si el producto
+        # se escribio antes de que ese codigo cambiara, la diferencia mide que el
+        # run esta por detras de la cadena, no la copia. Por eso su entrada no es
+        # un producto del run sino un fichero del repo: paso el 2026-08-11 al
+        # cambiar el interpolador de las bandas (parabola -> PCHIP), que dejo los
+        # productos de ROXs 42B b describiendo una apcorr que ya no se calcula
+        # asi.
+        "apcorr_debug": (("spec_psffit_star.fits", "spec_calibrated_psffit_star.fits"),
+                         "musepipe/growth_curve.py"),
     }
 
     @classmethod
@@ -383,12 +419,21 @@ class ReproducesTheChainTests(unittest.TestCase):
         nombres, entrada_n = par
         if isinstance(nombres, str):
             nombres = (nombres,)
-        entrada = stage_dir / entrada_n
+        # Una entrada con `/` es una ruta del REPO (p. ej. el modulo que calcula
+        # la correccion), no un producto del run: la frescura tambien se pierde
+        # cuando cambia el codigo, no solo cuando cambia un fichero de entrada.
+        if isinstance(entrada_n, str):
+            entrada_n = (entrada_n,)
+        entradas = [(ROOT / n) if "/" in n else (stage_dir / n) for n in entrada_n]
+        entradas = [e for e in entradas if e.exists()]
         salidas = [stage_dir / n for n in nombres]
         salidas = [s for s in salidas if s.exists()]
-        if not salidas or not entrada.exists():
+        if not salidas or not entradas:
             return None
+        # Manda la entrada MAS NUEVA contra la salida MAS VIEJA: basta con que
+        # una entrada se haya movido despues para que el producto ya no sirva.
         salida = min(salidas, key=lambda s: s.stat().st_mtime)
+        entrada = max(entradas, key=lambda e: e.stat().st_mtime)
         if salida.stat().st_mtime >= entrada.stat().st_mtime:
             return None
         return (f"{salida.name} es más viejo que {entrada.name}: la etapa no se ha "

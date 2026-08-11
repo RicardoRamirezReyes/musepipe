@@ -204,6 +204,23 @@ _HALOSUB_COMUN = [
     ]),
 ]
 
+# `apcorr_debug` sigue el flujo de la primaria por toda la cadena, asi que
+# necesita lo que necesita C4 (el ajuste de dos PSF) MAS dos cosas que ningun
+# otro notebook copia:
+#   * la suma de apertura simple de A3 -- el camino que NO usa modelo, y que es
+#     la vara con la que se mide todo lo demas;
+#   * `factor_at_wavelengths` y sus guardias, que aqui son **la funcion bajo
+#     sospecha**: viajan copiadas para poder editarlas sin tocar la cadena, el
+#     mismo corte invertido que hace C1 con `_evaluate_psfao`.
+INLINE_SOURCES["APCORR"] = INLINE_SOURCES["C4"] + [
+    ("musepipe/reduction/verify.py", [
+        "VerificationError", "circular_aperture_mask", "extract_aperture_spectrum",
+    ]),
+    ("musepipe/growth_curve.py", [
+        "interior_bump", "interior_dip", "polynomial_misfit", "factor_at_wavelengths",
+    ]),
+]
+
 INLINE_SOURCES["C5"] = _HALOSUB_COMUN + [
     ("musepipe/halosub.py", ["SgfResult", "sgf_subtract"]),
 ]
@@ -9181,8 +9198,510 @@ def build_c1_cells(mb, target, run_id):
     ]
 
 
+def build_apcorr_cells(mb, target, run_id):
+    """Las celdas de `apcorr_debug`: el flujo de la primaria, paso a paso.
+
+    Los demas notebooks de analisis auditan UNA etapa. Este sigue una sola
+    cantidad —el flujo de la estrella— por toda la cadena, y ensena en cada
+    paso **por que funcion se multiplica**. Existe porque el cociente
+    `producto / apertura` dividido por la `apcorr` deberia ser plano y varia un
+    factor 1.19: hay una deformacion que ninguna etapa por separado ensena.
+    """
+    md, code = mb.md, mb.code
+    sources = extract_sources("APCORR")
+    inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
+    shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
+
+    cells = [
+        md(
+            f"# apcorr · el flujo de la primaria, paso a paso\n\n"
+            f"**Objeto:** {target}  |  **Run:** `{run_id}`\n\n"
+            "Los otros notebooks `debug` auditan **una etapa** cada uno. Éste sigue **una sola "
+            "cantidad** —el flujo de la estrella— desde el cubo hasta el producto, y en cada paso "
+            "enseña **por qué función se multiplica**.\n\n"
+            "Existe por un número: el cociente entre el producto y una apertura sobre el cubo, "
+            "dividido por la `apcorr`, **debería ser plano** y varía un factor **1.19**. Mientras "
+            "eso no se cierre, la forma del continuo no es citable.\n\n"
+            "Poco texto: **una figura por paso**."
+        ),
+        code(
+            "import json, sys\n"
+            "from pathlib import Path\n\n"
+            "import numpy as np\n"
+            "from astropy.io import fits\n"
+            "import matplotlib.pyplot as plt\n\n"
+            "import matplotlib as mpl\n"
+            "mpl.rcParams['figure.dpi'] = 120\n"
+            "mpl.rcParams['savefig.dpi'] = 200\n"
+            "try:\n"
+            "    from matplotlib_inline.backend_inline import set_matplotlib_formats\n"
+            "    set_matplotlib_formats('retina')\n"
+            "except Exception:\n"
+            "    pass\n"
+            "_aqui = Path.cwd()\n"
+            "ROOT = next(p for p in (_aqui, *_aqui.parents) if (p / 'musepipe').is_dir())\n"
+            "sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'notebooks'))\n"
+            "import _nbcommon as nb\n\n"
+            f"RUN_ID = nb.resolve_run_id({run_id!r})\n"
+            "RD = nb.run_dir(RUN_ID); SD = RD / 'stages'\n"
+            "TARGET = nb.run_target(RUN_ID) or nb.display_name(RUN_ID)\n"
+            "print('objeto :', TARGET, '·', nb.display_name(RUN_ID))\n"
+            "print('run    :', RUN_ID)"
+        ),
+        md(
+            "## 1 · Perillas\n\n"
+            "Del **config resuelto de cada etapa**, nunca copiadas como literales: la etapa "
+            "rellena defaults que el run no escribe."
+        ),
+        code(
+            "from musepipe.stages.stage_x03_psffit import stage_x03_config_from_run\n"
+            "from musepipe.stages.stage_e01_psf import stage_e01_config_from_run\n"
+            "from musepipe.growth_curve import resolve_flux_convention as _res_conv\n\n"
+            "X03 = stage_x03_config_from_run(RUN_ID, project_root=ROOT)\n"
+            "E01 = stage_e01_config_from_run(RUN_ID, project_root=ROOT)\n"
+            "STAR_RADIUS_PX = float(X03.get('x03_star_radius_px', 20.0))\n"
+            "COMP_RADIUS_PX = float(X03.get('x03_comp_radius_px', 12.0))\n"
+            "APCORR_MODE    = X03.get('x03_aperture_correction', 'auto')\n"
+            "GROWTH, CONVENCION = _res_conv(X03, SD, knob='x03_flux_convention')\n\n"
+            "# Radio de normalización del modelo de PSF: el '1' de la convención\n"
+            "# `normrad`. Todo el problema vive entre este radio y el total.\n"
+            "R_NORM = float(E01.get('e01_norm_radius_px', 25.0))\n"
+            "R_GRANDE = 32.0    # apertura grande: recoge casi todo el halo medible\n\n"
+            "# 1 de cada N canales. El ajuste es independiente por canal, así que\n"
+            "# los muestreados salen idénticos a los de la cadena completa.\n"
+            "PASO_CANALES = 5\n\n"
+            "print(f'convención de flujo: {CONVENCION}'\n"
+            "      f\"  ({'con' if GROWTH else 'SIN'} curva de crecimiento empírica)\")\n"
+            "print(f'radios: normalización {R_NORM:.0f} px · apertura grande {R_GRANDE:.0f} px'\n"
+            "      f' | 1 de cada {PASO_CANALES} canales')"
+        ),
+        md(
+            "## 2 · La escalera de entradas, con su fecha\n\n"
+            "Un run puede tener piezas de vintages distintos. Si algo aquí está fechado antes que "
+            "su entrada, lo que salga describe un estado que ya no existe."
+        ),
+        code(
+            "import datetime as _dt\n\n"
+            "ESCALERA = [\n"
+            "    ('B1/B2  cubo de entrada', SD / 'stage02_xcorr_cube_stack.fits'),\n"
+            "    ('A3     transmisión telúrica', SD / 'TELLURIC_TRANS.fits'),\n"
+            "    ('C1     modelo de PSF', SD / 'psf_model.json'),\n"
+            "    ('A2     curva de crecimiento', SD / 'growth_curve_qc.json'),\n"
+            "    ('C4     primaria sin calibrar', SD / 'spec_psffit_star.fits'),\n"
+            "    ('D2     primaria calibrada', SD / 'spec_calibrated_psffit_star.fits'),\n"
+            "]\n"
+            "for etiqueta, ruta in ESCALERA:\n"
+            "    if ruta.exists():\n"
+            "        cuando = _dt.datetime.fromtimestamp(ruta.stat().st_mtime)\n"
+            "        print(f'  {etiqueta:28s} {cuando:%Y-%m-%d %H:%M}  {ruta.name}')\n"
+            "    else:\n"
+            "        print(f'  {etiqueta:28s} {\"AUSENTE\":16s}  {ruta.name}')"
+        ),
+        md(
+            "## 3 · Las funciones copiadas de `musepipe`\n\n"
+            "Incluye `factor_at_wavelengths`: **es la función bajo sospecha**, así que viaja en la "
+            "copia y se puede editar aquí sin tocar la cadena.\n\n"
+            + "\n".join(f"- `{name}` — de `{rel}`" for rel, name, _s, _h in sources)
+        ),
+        code(
+            "# ------------------------------------------------------------------\n"
+            "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
+            "# ------------------------------------------------------------------\n"
+            + "\n".join(needed_imports(sources)) + "\n"
+            "from dataclasses import dataclass\n"
+            "# `evaluate_psf_model` (C1) se importa arriba: es lo que C1 entrega,\n"
+            "# no lo que se audita aquí.\n\n"
+            + "\n".join(needed_constants(sources)) + "\n\n\n"
+            + inline_src
+        ),
+        md("## 4 · Chequeo de deriva"),
+        drift_cell(code, shas, "APCORR"),
+        md(
+            "## 5 · Paso 0 — lo que el DRS ya hizo\n\n"
+            "El punto de partida **no es el crudo**: un crudo de MUSE son 24 pixtables por IFU y "
+            "no tiene espectro. Lo primero que existe como espectro es el cubo, y para entonces "
+            "esorex ya aplicó bias, flat, calibración en λ y **la calibración de flujo con la "
+            "estrella estándar**. Eso fija la unidad; lo que viene después solo cambia la forma."
+        ),
+        code(
+            "QC_A1 = nb.load_qc_optional('stages/stage00r_qc.json', RUN_ID) or {}\n"
+            "QC_A4 = nb.load_qc_optional('stages/stage00q_qc.json', RUN_ID) or {}\n"
+            "from musepipe.io import resolve_bunit\n\n"
+            "CUBO = SD / 'stage02_xcorr_cube_stack.fits'\n"
+            "with fits.open(CUBO) as _h:\n"
+            "    CUBE_FULL = np.asarray(_h['CUBES'].data, dtype=float)\n"
+            "    WAVE_FULL = np.asarray(_h['WAVELENGTH'].data, dtype=float)\n"
+            "    STAT_FULL = np.asarray(_h['STAT'].data, dtype=float) if 'STAT' in _h else None\n"
+            "    _bunit_stack = str(_h[0].header.get('BUNIT', '')\n"
+            "                       or _h['CUBES'].header.get('BUNIT', '')) or None\n"
+            "if CUBE_FULL.ndim == 4:\n"
+            "    CUBE_FULL = CUBE_FULL[0]\n"
+            "if STAT_FULL is not None and STAT_FULL.ndim == 4:\n"
+            "    STAT_FULL = STAT_FULL[0]\n"
+            "UNIDAD = resolve_bunit(X03, stack_bunit=_bunit_stack) or 'sin unidad declarada'\n"
+            "print('cubo   :', CUBE_FULL.shape, f'({WAVE_FULL[0]:.0f}-{WAVE_FULL[-1]:.0f} Å)')\n"
+            "print('unidad :', UNIDAD)\n"
+            "_m3 = (QC_A4.get('m3_flux') or {})\n"
+            "if _m3.get('flux_factor') is not None:\n"
+            "    print(f\"A4/M3  : escala contra Gaia {_m3['band']} =\"\n"
+            "          f\" {float(_m3['flux_factor']):.4f}  (estado {_m3.get('status')})\")\n"
+            "    print('         se MIDE y se declara; no se aplica al flujo (ver §10).')\n"
+            "print('los pasos siguientes NO cambian la unidad: solo multiplican por'\n"
+            "      ' funciones de λ.')"
+        ),
+        md(
+            "## 6 · Paso 1 — el dato: dos aperturas y su cociente\n\n"
+            "Suma de apertura sobre el mismo cubo, a `R_NORM` y a `R_GRANDE`. **Sin sustraer "
+            "fondo**, igual que la §10 de `D2_primary_star_debug`, para que los números sean "
+            "comparables entre notebooks: lo que hay fuera del núcleo es halo de la propia "
+            "estrella, no cielo (esorex ya lo restó).\n\n"
+            "El cociente de las dos curvas es **el cromatismo real del dato**, medido sin ningún "
+            "modelo. Es la vara con la que se mide todo lo demás."
+        ),
+        code(
+            "QC_B3 = json.loads((SD / 'stage01c_qc.json').read_text(encoding='utf-8'))\n"
+            "STAR_YX = tuple(float(v) for v in QC_B3['primary']['pos_yx'])\n"
+            "COMP_YX = tuple(float(v) for v in QC_B3['companion']['pos_yx'])\n"
+            "PSF_MODEL = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n\n"
+            "CANALES = np.arange(0, WAVE_FULL.size, PASO_CANALES)\n"
+            "CUBE = CUBE_FULL[CANALES]\n"
+            "WAVE = WAVE_FULL[CANALES]\n"
+            "STAT = None if STAT_FULL is None else STAT_FULL[CANALES]\n\n"
+            "def suma_apertura(radio):\n"
+            "    \"\"\"Suma simple dentro de un círculo, sin pesos ni fondo.\"\"\"\n"
+            "    return extract_aperture_spectrum(CUBE, STAR_YX, float(radio))\n\n"
+            "F_NORM = suma_apertura(R_NORM)\n"
+            "F_GRANDE = suma_apertura(R_GRANDE)\n"
+            "with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "    CROMA_DATO = F_GRANDE / F_NORM\n"
+            "_fin = np.isfinite(CROMA_DATO)\n"
+            "print(f'F(<={R_GRANDE:.0f}) / F(<={R_NORM:.0f}) medido:'\n"
+            "      f' {float(np.nanmin(CROMA_DATO[_fin])):.3f} .. {float(np.nanmax(CROMA_DATO[_fin])):.3f}'\n"
+            "      f'  (mediana {float(np.nanmedian(CROMA_DATO)):.3f})')\n"
+            "# Precalculado a propósito: una expresión de f-string NO puede partirse\n"
+            "# entre dos literales concatenados.\n"
+            "RANGO_CROMA_DATO = (float(np.nanpercentile(CROMA_DATO[_fin], 98))\n"
+            "                    / float(np.nanpercentile(CROMA_DATO[_fin], 2)))\n"
+            "print(f'varía un {100 * (RANGO_CROMA_DATO - 1):.1f}% de punta a punta'\n"
+            "      '  <- ESTE es el cromatismo que hay que reproducir')\n\n"
+            "fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 5.4), sharex=True,\n"
+            "                               gridspec_kw={'height_ratios': [2, 1]})\n"
+            "ax1.plot(WAVE, F_NORM, lw=0.7, color='tab:blue', label=f'apertura r={R_NORM:.0f} px')\n"
+            "ax1.plot(WAVE, F_GRANDE, lw=0.7, color='tab:orange', label=f'apertura r={R_GRANDE:.0f} px')\n"
+            "ax1.set_ylabel(f'suma [{UNIDAD}]'); ax1.legend(fontsize=8)\n"
+            "ax1.set_title('paso 1 · el dato, sin ningún modelo', fontsize=9)\n"
+            "ax2.plot(WAVE, CROMA_DATO, lw=0.8, color='k')\n"
+            "ax2.set_ylabel('F(grande)/F(norm)', fontsize=8); ax2.set_xlabel('λ [Å]')\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 7 · Paso 2 — el telúrico\n\n"
+            "A3 mide la transmisión sobre esta misma estrella y **divide el cubo por ella**. O sea "
+            "que el cubo del paso 1 ya la lleva dentro: aquí se enseña la función aplicada, que "
+            "actúa solo dentro de sus bandas y no puede explicar una deformación de banda ancha."
+        ),
+        code(
+            "# El accesor de la cadena, no una lectura a mano: la curva no vive\n"
+            "# bajo `stages/` sino donde diga `products.transmission` del QC de A3,\n"
+            "# y buscarla por nombre daba «AUSENTE» con el fichero delante.\n"
+            "from musepipe.telluric_lines import measured_transmission\n\n"
+            "_medida = measured_transmission(RUN_ID, project_root=ROOT)\n"
+            "TRANS = None\n"
+            "if _medida is not None:\n"
+            "    TRANS = np.interp(WAVE, np.asarray(_medida['wave_A'], dtype=float),\n"
+            "                      np.asarray(_medida['transmission'], dtype=float))\n"
+            "    print('curva de A3:', str(_medida['source']).split('/')[-1])\n"
+            "if TRANS is None:\n"
+            "    # No es que falte: puede que A3 haya decidido NO corregir, que es\n"
+            "    # un resultado y no una ausencia. Se dice cuál de las dos es.\n"
+            "    _qc_a3 = nb.load_qc_optional('stages/stage00t_qc.json', RUN_ID) or {}\n"
+            "    _dec = _qc_a3.get('decision') or {}\n"
+            "    if _dec:\n"
+            "        print(f\"A3 decidió NO corregir (telluric_applied ={_dec.get('telluric_applied')}):\"\n"
+            "              ' la función de este paso es la IDENTIDAD.')\n"
+            "        for _banda, _prof in (_dec.get('depth_pct_by_band') or {}).items():\n"
+            "            print(f'   {_banda:10s} profundidad medida {float(_prof):5.2f}%')\n"
+            "        print('   -> el paso 2 no puede explicar nada de la deformación en este objeto.')\n"
+            "    else:\n"
+            "        print('este run no tiene QC de A3: no se puede decir nada del paso 2.')\n"
+            "else:\n"
+            "    _dentro = TRANS < 0.995\n"
+            "    print(f'transmisión: mínimo {float(np.nanmin(TRANS)):.3f},'\n"
+            "          f' {100 * _dentro.mean():.1f}% de los canales por debajo de 0.995')\n"
+            "    fig, ax = plt.subplots(figsize=(11, 2.8))\n"
+            "    ax.plot(WAVE, TRANS, lw=0.8, color='tab:green')\n"
+            "    ax.axhline(1.0, color='0.6', lw=0.7, ls=':')\n"
+            "    ax.set_ylabel('T(λ)', fontsize=8); ax.set_xlabel('λ [Å]')\n"
+            "    ax.set_title('paso 2 · la función telúrica: actúa SOLO en sus bandas', fontsize=9)\n"
+            "    fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 8 · Paso 3 — el psffit: la amplitud del modelo\n\n"
+            "C4 no suma píxeles: ajusta **dos PSF normalizadas** (primaria y compañero) más un "
+            "plano, y se queda con la amplitud. Como la PSF va normalizada a 1 dentro de "
+            "`R_NORM`, esa amplitud **es el flujo dentro de ese radio** — la convención `normrad`."
+        ),
+        code(
+            "VARIANZA = (estimate_variance_cube(CUBE) if STAT is None\n"
+            "            else np.asarray(STAT, dtype=float)\n"
+            "            * float(X03.get('x03_stat_factor_spaxel', 1.0) or 1.0))\n"
+            "AJUSTE = fit_psffit_cube(CUBE, VARIANZA, WAVE, STAR_YX, COMP_YX, PSF_MODEL,\n"
+            "                         star_radius_px=STAR_RADIUS_PX,\n"
+            "                         comp_radius_px=COMP_RADIUS_PX, n_jobs=1)\n"
+            "F_PSFFIT = AJUSTE.coeffs[:, 0]\n"
+            "print(f'{WAVE.size} canales ajustados · χ²ᵣ mediano'\n"
+            "      f' {float(np.nanmedian(AJUSTE.chi2r)):.3f}')\n"
+            "with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "    _r = F_PSFFIT / F_NORM\n"
+            "print(f'psffit / apertura r={R_NORM:.0f}: mediana {float(np.nanmedian(_r)):.3f}'\n"
+            "      '  (1.0 = el modelo reparte la luz como el dato dentro del radio)')\n\n"
+            "fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 5.4), sharex=True,\n"
+            "                               gridspec_kw={'height_ratios': [2, 1]})\n"
+            "ax1.plot(WAVE, F_NORM, lw=0.7, color='tab:blue', label=f'apertura r={R_NORM:.0f} px')\n"
+            "ax1.plot(WAVE, F_PSFFIT, lw=0.7, color='tab:red', label='psffit (amplitud del modelo)')\n"
+            "ax1.set_ylabel(f'[{UNIDAD}]'); ax1.legend(fontsize=8)\n"
+            "ax1.set_title('paso 3 · las dos maneras de medir DENTRO del mismo radio', fontsize=9)\n"
+            "ax2.plot(WAVE, _r, lw=0.8, color='tab:purple')\n"
+            "ax2.axhline(1.0, color='0.6', lw=0.7, ls=':')\n"
+            "ax2.set_ylabel('psffit / apertura', fontsize=8); ax2.set_xlabel('λ [Å]')\n"
+            "fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 9 · Paso 4 — × `apcorr`\n\n"
+            "Aquí es donde se pasa de «flujo dentro de `R_NORM`» a «flujo total». Para la primaria "
+            "por psffit la `apcorr` nominal es **1** (spec C4 §3.4), así que lo único que "
+            "multiplica es **el factor empírico de la curva de crecimiento**, `F_total/F(≤R_NORM)`, "
+            "interpolado de 8 bandas medidas."
+        ),
+        code(
+            "# `require_monotonic=False` a propósito: si la curva de este objeto está\n"
+            "# rota, la cadena PARA — y un notebook de diagnóstico tiene que poder\n"
+            "# dibujar justo esa curva. El veredicto del guardia se pide aparte y se\n"
+            "# imprime, que es más útil que morirse aquí.\n"
+            "APCORR = (np.ones(WAVE.size) if GROWTH is None else\n"
+            "          np.asarray(factor_at_wavelengths(GROWTH, WAVE, require_monotonic=False),\n"
+            "                     dtype=float))\n"
+            "F_TOTAL = F_PSFFIT * APCORR\n"
+            "GUARDIA_OK = True\n"
+            "if GROWTH is not None:\n"
+            "    try:\n"
+            "        factor_at_wavelengths(GROWTH, WAVE)\n"
+            "    except RuntimeError as _err:\n"
+            "        GUARDIA_OK = False\n"
+            "        print('LA CADENA PARA CON ESTA CURVA:')\n"
+            "        print('  ', str(_err)[:200])\n"
+            "        print('  -> para ESTE objeto, el paso 4 no es auditable: hay que'\n"
+            "             ' re-medir la curva antes de creerse nada de abajo.\\n')\n"
+            "if GROWTH is None:\n"
+            "    print('este run no lleva curva de crecimiento: apcorr = 1 y el paso 4 no hace nada.')\n"
+            "else:\n"
+            "    _xb = np.array([b['wave_A'] for b in GROWTH['bands']], dtype=float)\n"
+            "    _yb = np.array([b['ratio_total_over_normrad'] for b in GROWTH['bands']], dtype=float)\n"
+            "    _o = np.argsort(_xb); _xb, _yb = _xb[_o], _yb[_o]\n"
+            "    print(f'factor: {float(APCORR[0]):.4f} (azul) .. {float(APCORR[-1]):.4f} (rojo)')\n"
+            "    print(f'joroba {100 * interior_bump(APCORR):.2f}% · repunte'\n"
+            "          f' {100 * interior_dip(APCORR):.2f}% · umbral'\n"
+            "          f' {100 * MAX_INTERIOR_BUMP:.0f}%')\n"
+            "    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 5.4), sharex=True,\n"
+            "                                   gridspec_kw={'height_ratios': [1, 2]})\n"
+            "    ax1.plot(WAVE, APCORR, lw=1.2, color='tab:red', label='apcorr aplicada')\n"
+            "    ax1.plot(_xb, _yb, 'ko', ms=4, label='las 8 bandas medidas')\n"
+            "    ax1.set_ylabel('factor', fontsize=8); ax1.legend(fontsize=8)\n"
+            "    ax1.set_title('paso 4 · la función que multiplica', fontsize=9)\n"
+            "    ax2.plot(WAVE, F_PSFFIT, lw=0.7, color='0.6', label='antes (normrad)')\n"
+            "    ax2.plot(WAVE, F_TOTAL, lw=0.7, color='k', label='después (total)')\n"
+            "    ax2.set_ylabel(f'[{UNIDAD}]'); ax2.set_xlabel('λ [Å]'); ax2.legend(fontsize=8)\n"
+            "    fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 10 · Paso 5 — D2\n\n"
+            "Para la primaria, D2 **no toca el flujo**: solo desplaza el eje λ con lo que midió A4 "
+            "sobre líneas de cielo. La escala de flujo se mide contra Gaia y, si sale consistente "
+            "con 1, se **declara** en vez de aplicarse. La celda lo comprueba, no lo supone."
+        ),
+        code(
+            "from musepipe.extraction.product import SpectrumProduct\n\n"
+            "C4_PROD = SpectrumProduct.read(SD / 'spec_psffit_star.fits')\n"
+            "D2_PROD = SpectrumProduct.read(SD / 'spec_calibrated_psffit_star.fits')\n"
+            "_fc4 = np.asarray(C4_PROD.flux, float); _fd2 = np.asarray(D2_PROD.flux, float)\n"
+            "_m = np.isfinite(_fc4) & np.isfinite(_fd2)\n"
+            "_dlam = float(np.nanmax(np.abs(np.asarray(D2_PROD.wave_A, float)\n"
+            "                               - np.asarray(C4_PROD.wave_A, float))))\n"
+            "print(f'flujo C4 -> D2: {\"IDÉNTICO\" if np.array_equal(_fc4[_m], _fd2[_m]) else \"CAMBIA\"}'\n"
+            "      f'  |  eje λ desplazado {_dlam:.4f} Å')\n"
+            "print('o sea: toda la FORMA del espectro entregado se decide en los pasos 3 y 4.')"
+        ),
+        md(
+            "## 11 · La cascada, de un vistazo\n\n"
+            "Todo lo anterior normalizado en la misma banda. Si la `apcorr` fuera correcta, las "
+            "curvas de «apertura grande» y «psffit × apcorr» **coincidirían**: las dos dicen ser "
+            "el flujo total de la misma estrella."
+        ),
+        code(
+            "BANDA_REF = (7750.0, 7860.0)\n\n"
+            "def _norm_banda(valores):\n"
+            "    _msk = ((WAVE >= BANDA_REF[0]) & (WAVE <= BANDA_REF[1])\n"
+            "            & np.isfinite(valores))\n"
+            "    return valores / float(np.nanmedian(valores[_msk])) if _msk.any() else valores * np.nan\n\n"
+            "PASOS = [('1 · apertura r=%.0f (normrad)' % R_NORM, F_NORM, 'tab:blue'),\n"
+            "         ('1 · apertura r=%.0f (casi total)' % R_GRANDE, F_GRANDE, 'tab:orange'),\n"
+            "         ('3 · psffit (normrad)', F_PSFFIT, 'tab:red'),\n"
+            "         ('4 · psffit × apcorr (total)', F_TOTAL, 'k')]\n"
+            "fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11.5, 6.2), sharex=True,\n"
+            "                               gridspec_kw={'height_ratios': [2, 1]})\n"
+            "for etiqueta, valores, color in PASOS:\n"
+            "    ax1.plot(WAVE, _norm_banda(valores), lw=0.9, color=color, label=etiqueta)\n"
+            "ax1.axvspan(*BANDA_REF, color='0.9', zorder=0)\n"
+            "ax1.set_ylabel('normalizado en la banda gris'); ax1.legend(fontsize=8)\n"
+            "ax1.set_title('la cascada: si la apcorr fuese correcta, la naranja y la negra'\n"
+            "              ' coincidirían', fontsize=9)\n"
+            "with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "    DESAJUSTE = _norm_banda(F_TOTAL) / _norm_banda(F_GRANDE)\n"
+            "ax2.plot(WAVE, DESAJUSTE, lw=0.8, color='tab:purple')\n"
+            "ax2.axhline(1.0, color='0.6', lw=0.7, ls=':')\n"
+            "ax2.set_ylabel('total(modelo) / casi-total(dato)', fontsize=8)\n"
+            "ax2.set_xlabel('λ [Å]')\n"
+            "fig.tight_layout(); plt.show()\n"
+            "_f = np.isfinite(DESAJUSTE)\n"
+            "RANGO_DESAJUSTE = (float(np.nanpercentile(DESAJUSTE[_f], 98))\n"
+            "                   / float(np.nanpercentile(DESAJUSTE[_f], 2)))\n"
+            "print(f'desajuste de punta a punta: {100 * (RANGO_DESAJUSTE - 1):.0f}%')\n\n"
+            "# El MISMO número que imprime la §10 de `D2_primary_star_debug`, para\n"
+            "# que los dos notebooks se puedan contrastar: allí el cociente se\n"
+            "# divide además por la apcorr, y lo que queda es lo que la corrección\n"
+            "# NO explica.\n"
+            "with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "    SIN_EXPLICAR = DESAJUSTE / _norm_banda(APCORR)\n"
+            "_f2b = np.isfinite(SIN_EXPLICAR) & (WAVE > 4800) & (WAVE < 9300)\n"
+            "RANGO_SIN_EXPLICAR = (float(np.nanpercentile(SIN_EXPLICAR[_f2b], 98))\n"
+            "                      / float(np.nanpercentile(SIN_EXPLICAR[_f2b], 2)))\n"
+            "print(f'y dividiendo además por la apcorr: queda un'\n"
+            "      f' {100 * (RANGO_SIN_EXPLICAR - 1):.0f}% SIN explicar'\n"
+            "      '   <- el número de la §10 de D2')"
+        ),
+        md(
+            "## 12 · Dónde entra la deformación\n\n"
+            "El cromatismo entre `R_NORM` y `R_GRANDE`, por dos caminos: **medido en el dato** "
+            "(§6) y **predicho por el modelo de PSF de C1**. Si el modelo dice mucho menos que el "
+            "dato, su halo es demasiado poco cromático y el psffit hereda ese error entero."
+        ),
+        code(
+            "_ap_grande = {'kind': 'circle', 'radius_px': float(R_GRANDE),\n"
+            "              'name': f'star_r{R_GRANDE:g}'}\n"
+            "_ap_norm = {'kind': 'circle', 'radius_px': float(R_NORM),\n"
+            "            'name': f'star_r{R_NORM:g}'}\n"
+            "# `aperture_correction_from_psf` devuelve 1/F(dentro): el cociente de\n"
+            "# las dos correcciones ES el cromatismo que predice el modelo.\n"
+            "_c_grande, _, _ = aperture_correction_from_psf(\n"
+            "    WAVE, _ap_grande, PSF_MODEL, center_yx=STAR_YX,\n"
+            "    correction_mode=APCORR_MODE, growth_curve=None)\n"
+            "_c_norm, _, _ = aperture_correction_from_psf(\n"
+            "    WAVE, _ap_norm, PSF_MODEL, center_yx=STAR_YX,\n"
+            "    correction_mode=APCORR_MODE, growth_curve=None)\n"
+            "CROMA_MODELO = _c_norm / _c_grande\n\n"
+            "def _rango(valores):\n"
+            "    _f2 = np.isfinite(valores)\n"
+            "    return (float(np.nanpercentile(valores[_f2], 98))\n"
+            "            / float(np.nanpercentile(valores[_f2], 2)))\n\n"
+            "print(f'cromatismo entre r={R_NORM:.0f} y r={R_GRANDE:.0f} px, de punta a punta:')\n"
+            "print(f'   medido en el dato : factor {_rango(CROMA_DATO):.3f}')\n"
+            "print(f'   dicho por el modelo: factor {_rango(CROMA_MODELO):.3f}')\n"
+            "print(f'   -> el modelo se queda {100 * (_rango(CROMA_DATO) / _rango(CROMA_MODELO) - 1):.0f}%'\n"
+            "      ' corto de cromatismo')\n\n"
+            "fig, ax = plt.subplots(figsize=(11, 3.4))\n"
+            "ax.plot(WAVE, CROMA_DATO / float(np.nanmedian(CROMA_DATO)), lw=0.9, color='k',\n"
+            "        label='medido en el dato')\n"
+            "ax.plot(WAVE, CROMA_MODELO / float(np.nanmedian(CROMA_MODELO)), lw=1.2,\n"
+            "        color='tab:red', label='predicho por el modelo de PSF (C1)')\n"
+            "ax.set_ylabel('cromatismo (normalizado)', fontsize=8); ax.set_xlabel('λ [Å]')\n"
+            "ax.set_title('la misma cantidad, por dos caminos', fontsize=9)\n"
+            "ax.legend(fontsize=8); fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 13 · La corrección que sale del propio dato\n\n"
+            "`F(≤R_GRANDE) / F(≤R_NORM)` **no necesita modelo ni extrapolación**: es una división "
+            "de dos sumas. No es el factor a total —hasta `R_GRANDE` sigue faltando halo— pero su "
+            "**forma en λ** es la que la apcorr debería tener, y se puede comparar con la que "
+            "lleva puesta.\n\n"
+            "Aquí no se decide nada: se deja el número al lado del otro."
+        ),
+        code(
+            "if GROWTH is None:\n"
+            "    print('sin curva de crecimiento: no hay apcorr que comparar.')\n"
+            "else:\n"
+            "    _emp = CROMA_DATO / float(np.nanmedian(CROMA_DATO))\n"
+            "    _apl = APCORR / float(np.nanmedian(APCORR))\n"
+            "    fig, ax = plt.subplots(figsize=(11, 3.6))\n"
+            "    ax.plot(WAVE, _emp, lw=0.9, color='k', label='forma medida en el dato')\n"
+            "    ax.plot(WAVE, _apl, lw=1.4, color='tab:red', label='forma de la apcorr aplicada')\n"
+            "    ax.set_ylabel('normalizado a su mediana', fontsize=8); ax.set_xlabel('λ [Å]')\n"
+            "    ax.set_title('§13 · la forma que debería tener, contra la que tiene', fontsize=9)\n"
+            "    ax.legend(fontsize=8); fig.tight_layout(); plt.show()\n"
+            "    with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "        _coc = _emp / _apl\n"
+            "    _f3 = np.isfinite(_coc)\n"
+            "    RANGO_FORMA = (float(np.nanpercentile(_coc[_f3], 98))\n"
+            "                   / float(np.nanpercentile(_coc[_f3], 2)))\n"
+            "    print(f'discrepancia de forma: {100 * (RANGO_FORMA - 1):.0f}% de punta a punta')\n"
+            "    print('Las dos rutas para cerrarlo, y las dos son decisión científica:')\n"
+            "    print('  a) imponer la forma medida y dejar el modelo de C1 solo para el núcleo;')\n"
+            "    print('  b) rehacer el modelo de C1 para que su halo sea tan cromático como el dato.')"
+        ),
+        md(
+            "## 14 · Comparación con la cadena\n\n"
+            "Con las perillas por defecto, lo reconstruido aquí tiene que ser **exactamente** el "
+            "producto: si no, esta cascada no describe la cadena y nada de lo de arriba vale."
+        ),
+        code(
+            "def compara(nombre, mio, fichero, rtol=1e-9):\n"
+            "    ref = SpectrumProduct.read(SD / fichero)\n"
+            "    suyo = np.asarray(ref.flux, float)[CANALES]\n"
+            "    _fin4 = np.isfinite(mio) & np.isfinite(suyo)\n"
+            "    _ig = np.isclose(mio[_fin4], suyo[_fin4], rtol=rtol, atol=0.0)\n"
+            "    print(f'{nombre} vs {fichero}: idénticos {100 * _ig.mean():6.2f}%'\n"
+            "          f' de {_fin4.sum()} canales | máx |Δ| ='\n"
+            "          f' {float(np.max(np.abs(mio - suyo)[_fin4])):.3e}')\n"
+            "    return bool(_ig.all())\n\n"
+            "_ok = compara('primaria C4  ', F_TOTAL, 'spec_psffit_star.fits')\n"
+            "_ok &= compara('primaria D2  ', F_TOTAL, 'spec_calibrated_psffit_star.fits')\n"
+            "if not _ok and GROWTH is not None:\n"
+            "    # Antes de culpar a la copia: el producto en disco puede ser\n"
+            "    # ANTERIOR al cambio de interpolador (2026-08-11), y entonces lleva\n"
+            "    # la parábola. Se comprueba en vez de suponerlo.\n"
+            "    _apc_prod = np.asarray(C4_PROD.apcorr, float)[CANALES]\n"
+            "    _cual = {}\n"
+            "    for _m2 in ('pchip', 'poly2'):\n"
+            "        _f5 = np.asarray(factor_at_wavelengths(GROWTH, WAVE, method=_m2,\n"
+            "                                              require_monotonic=False), float)\n"
+            "        _cual[_m2] = float(np.nanmax(np.abs(_apc_prod / _f5 - 1)))\n"
+            "    _lleva = min(_cual, key=_cual.get)\n"
+            "    print(f'\\nel producto en disco lleva `{_lleva}`'\n"
+            "          f' (|Δ| máx {100 * _cual[_lleva]:.3f}%)')\n"
+            "    if _lleva != 'pchip':\n"
+            "        print('  -> es anterior al cambio del 2026-08-11: la diferencia de arriba'\n"
+            "              ' es ESO, no un fallo de la copia.')\n"
+            "print()\n"
+            "print('IDÉNTICO: la copia reproduce la cadena.' if _ok else\n"
+            "      'DIFIERE — si has tocado una perilla, es lo esperado; si no, mira la deriva.')"
+        ),
+        md(
+            "## 15 · Qué NO decide este notebook\n\n"
+            "1. **No toca `musepipe`.** Es un notebook de análisis: enseña la cascada y deja los "
+            "dos números enfrentados.\n"
+            "2. **No dice que la apcorr sea el único culpable.** Separa lo que es del modelo de "
+            "PSF (§12) de lo que es del factor empírico (§13); cerrar el 19 % puede exigir tocar "
+            "los dos.\n"
+            "3. **No mide el flujo total de verdad.** `R_GRANDE` sigue dejando halo fuera: lo que "
+            "se compara son **formas en λ**, no escalas absolutas."
+        ),
+    ]
+    return cells
+
+
 BUILDERS = {
     "C1": ("C1_chromatic_psf_debug", build_c1_cells),
+    "APCORR": ("apcorr_debug", build_apcorr_cells),
     "A3": ("A3_telluric_debug", build_a3_cells),
     "C2": ("C2_aperture_debug", build_c2_cells),
     "C3": ("C3_optimal_debug", build_c3_cells),
