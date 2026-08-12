@@ -4934,6 +4934,104 @@ def build_c3_cells(mb, target, run_id):
     ]
 
 
+def native_spectrum_cells(mb, seccion, producto, metodo, *, motivo):
+    """Las dos celdas que enseñan el espectro ALMACENADO, a resolución nativa.
+
+    Lo que estos notebooks dibujan es lo que acaban de recalcular, y eso puede
+    verse más grueso que el dato por perillas del propio notebook: el
+    submuestreo de canales en C4 y apcorr, la mediana móvil en las curvas de
+    comparación. Ninguna de las dos toca el producto. Esta sección lo enseña
+    tal cual está en disco —3681 canales de 1.25 A— para que no quede la duda
+    de si el espectro de la cadena es así de grueso. `motivo` dice cuál de las
+    dos cosas es la que engrosa ESTE notebook.
+    """
+
+    md, code = mb.md, mb.code
+    calibrado = f"spec_calibrated_{metodo}_object.fits"
+    return [
+        md(
+            f"## {seccion} · El espectro almacenado, a resolución nativa\n\n"
+            f"{motivo}\n\n"
+            "Nada de eso toca el producto. Esta sección abre el fichero que escribió la cadena y "
+            "lo dibuja **sin recalcular ni suavizar nada**: los 3681 canales de 1.25 Å tal como "
+            "están en disco. Se enseñan los dos que existen para este método:\n\n"
+            f"- **`{producto}`** — lo que emite esta etapa, en cuentas.\n"
+            f"- **`{calibrado}`** — el mismo espectro después de D2, que es el "
+            "**definitivo**: con calibración, `BUNIT` y presupuesto de error. Si no está, es que "
+            "D2 no ha corrido con este método en este run, y la celda lo dice en vez de callarse.\n\n"
+            "El zoom de Hα está para que se vea el muestreo real: un punto por canal, 1.25 Å."
+        ),
+        code(
+            "from astropy.io import fits\n\n"
+            "def _lee_nativo(nombre):\n"
+            "    ruta = SD / nombre\n"
+            "    if not ruta.exists():\n"
+            "        print(f'{nombre}: NO ESTÁ en este run')\n"
+            "        return None\n"
+            "    with fits.open(ruta) as _h:\n"
+            "        _d = _h['SPECTRUM'].data if 'SPECTRUM' in _h else _h[1].data\n"
+            "        _cols = list(_d.columns.names)\n"
+            "        d = {c: np.asarray(_d[c]) for c in _cols}\n"
+            "        # La unidad viaja con el dato: sin BUNIT no se inventa ninguna.\n"
+            "        d['BUNIT'] = _h[1].header.get('BUNIT')\n"
+            "    w = np.asarray(d['wave_A'], float)\n"
+            "    print(f\"{nombre}: {w.size} canales · paso {np.median(np.diff(w)):.3f} Å\"\n"
+            "          f\" · {w.min():.1f}-{w.max():.1f} Å\"\n"
+            "          f\" · finitos {int(np.isfinite(d['flux']).sum())}\"\n"
+            "          f\" · BUNIT={d['BUNIT']}\")\n"
+            "    return d\n\n"
+            f"NATIVO = _lee_nativo({producto!r})\n"
+            f"NATIVO_CAL = _lee_nativo({calibrado!r})\n\n"
+            "# El contraste con lo que dibuja el resto del notebook, dicho con números.\n"
+            "_w_nb = globals().get('WAVE')\n"
+            "if NATIVO is not None and _w_nb is not None:\n"
+            "    _n = int(np.size(_w_nb))\n"
+            "    _paso_nb = float(np.median(np.diff(np.asarray(_w_nb, float)))) if _n > 1 else 0.0\n"
+            "    print()\n"
+            "    print(f'este notebook trabaja con {_n} canales (uno cada {_paso_nb:.2f} Å);'\n"
+            "          f\" el producto tiene {np.size(NATIVO['wave_A'])} (uno cada 1.25 Å)\")\n"
+            "    if _n < np.size(NATIVO['wave_A']):\n"
+            "        print('  -> la diferencia es la perilla del notebook, no el dato.')"
+        ),
+        code(
+            "_paneles = [(NATIVO, 'producto de la etapa'), (NATIVO_CAL, 'calibrado (D2, definitivo)')]\n"
+            "_paneles = [(d, t) for d, t in _paneles if d is not None]\n"
+            "if not _paneles:\n"
+            "    print('no hay ningún producto que dibujar')\n"
+            "else:\n"
+            "    fig, axes = plt.subplots(len(_paneles), 2, squeeze=False,\n"
+            "                             figsize=(12, 2.6 * len(_paneles)),\n"
+            "                             gridspec_kw={'width_ratios': [3, 1]})\n"
+            "    for (d, titulo), (axf, axz) in zip(_paneles, axes):\n"
+            "        w = np.asarray(d['wave_A'], float)\n"
+            "        f = np.asarray(d['flux'], float)\n"
+            "        # El empírico es el que manda cuando existe (docs/noise_model.md).\n"
+            "        e = np.asarray(d.get('flux_err_emp', d.get('flux_err')), float)\n"
+            "        for ax in (axf, axz):\n"
+            "            if e is not None and np.isfinite(e).any():\n"
+            "                ax.fill_between(w, f - e, f + e, color='tab:blue', alpha=0.20, lw=0)\n"
+            "            ax.axhline(0.0, color='k', lw=0.5, ls=':')\n"
+            "        axf.plot(w, f, lw=0.4, color='tab:blue')\n"
+            "        _fin = np.isfinite(f)\n"
+            "        if _fin.any():\n"
+            "            _lo, _hi = np.nanpercentile(f[_fin], [1, 99])\n"
+            "            _m = 0.5 * (_hi - _lo)\n"
+            "            axf.set_ylim(_lo - _m, _hi + _m)\n"
+            "        axf.set_ylabel(d['BUNIT'] or 'cuentas', fontsize=8)\n"
+            "        axf.set_title(f\"{titulo} — {np.size(w)} canales, sin suavizar\", fontsize=9)\n"
+            "        axf.set_xlabel('λ [Å]')\n"
+            "        # Zoom de Hα: un marcador por canal, para ver el muestreo de verdad.\n"
+            "        _z = (w >= 6520) & (w <= 6600)\n"
+            "        axz.plot(w[_z], f[_z], '-o', ms=2.5, lw=0.7, color='tab:blue')\n"
+            "        axz.axvline(6562.8, color='tab:red', lw=0.8, ls='--')\n"
+            "        axz.set_title('Hα, un punto por canal (1.25 Å)', fontsize=9)\n"
+            "        axz.set_xlabel('λ [Å]')\n"
+            "        axz.tick_params(labelsize=8)\n"
+            "    fig.tight_layout(); plt.show()"
+        ),
+    ]
+
+
 def build_c4_cells(mb, target, run_id):
     """Las celdas de `C4_psffit_debug`: el ajuste simultáneo de dos PSF."""
     md, code = mb.md, mb.code
@@ -5343,13 +5441,23 @@ def build_c4_cells(mb, target, run_id):
             "print('IDÉNTICO: la copia reproduce la cadena.' if ok else\n"
             "      'DIFIERE — si has tocado una perilla, es lo esperado; si no, revisa el chequeo de deriva.')"
         ),
+        *native_spectrum_cells(
+            mb, 10, "spec_psffit_object.fits", "psffit",
+            motivo=(
+                "Las curvas de la §8 se ven gruesas por **dos perillas de este notebook**: "
+                "`PASO_CANALES` (20 por defecto) ajusta 1 de cada 20 canales — 185 puntos, uno "
+                "cada 25 Å, porque los 3681 cuestan ~11 min — y `SUAVIZADO_CH` (11) les pasa "
+                "encima una mediana móvil."
+            ),
+        ),
         md(
-            "## 10 · Figura de paper y tabla — el compañero y la primaria\n\n"
+            "## 11 · Figura de paper y tabla — el compañero y la primaria\n\n"
             + mb.PAPER_SPECTRUM_MD.split("\n\n", 1)[1]
             + "\n\n> Dos veces: el compañero (el espectro canónico de la cadena) y la "
             "primaria. Salen de los números recalculados aquí, con sufijo `_debug`.\n\n"
             "> **Ojo con la rejilla**: el notebook ajusta 1 de cada `PASO_CANALES` canales, "
-            "así que la figura y la tabla llevan esos ~175 puntos, no los 3681. Pon "
+            "así que la figura y la tabla llevan esos 185 puntos, no los 3681 (la §10 enseña "
+            "el producto entero, que sí los tiene). Pon "
             "`PASO_CANALES = 1` para exportar el espectro completo.\n\n"
             "> Y la línea fina no es el STAT propagado sino el **error formal del ajuste** "
             "(la diagonal de la matriz de covarianza): en psffit es esa la segunda "
@@ -5956,8 +6064,18 @@ def build_halosub_cells(mb, target, run_id, stage_id):
             "a2.set_ylabel('este − cadena'); a2.set_xlabel('λ [Å]')\n"
             "fig.tight_layout(); plt.show()"
         ),
+        *native_spectrum_cells(
+            mb, 11, meta["producto"], meta["metodo"],
+            motivo=(
+                "Aquí **no hay submuestreo de canales**: a diferencia de C4, este notebook "
+                "calcula los 3681. Lo que engrosa las figuras son dos suavizados de "
+                "presentación — el binado de `BIN_CANALES` (25) en la §8, que lleva el dato "
+                "por canal detrás en gris, y la mediana móvil de 41 canales, fija, con la que "
+                "la §10 compara las dos curvas."
+            ),
+        ),
         md(
-            "## 11 · Figura de paper y tabla\n\n"
+            "## 12 · Figura de paper y tabla\n\n"
             + mb.PAPER_SPECTRUM_MD.split("\n\n", 1)[1]
             + "\n\n> Sale de los números recalculados aquí, no del producto de la cadena: "
             "si has tocado una perilla, la figura y la tabla la llevan. Ficheros con sufijo "
