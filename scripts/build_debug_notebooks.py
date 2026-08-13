@@ -172,7 +172,8 @@ INLINE_SOURCES = {
             "source_mask", "corner_background", "_initial_fit_params", "_pack_params",
             "fit_moffat_image", "evaluate_moffat_fit", "companion_ring_metric",
             "smooth_parameter", "eval_smoothed_parameter", "build_psf_model_document",
-            "_psfao_image_cached", "_evaluate_psfao", "evaluate_psf_model",
+            "_psfao_image_cached", "_psfao_wave_bin_A", "_evaluate_psfao",
+            "evaluate_psf_model",
             "psf_roundtrip_error", "radial_hybrid_profile", "evaluate_radial_profile",
         ]),
         ("musepipe/stages/stage_e01_psfao.py", [
@@ -7951,8 +7952,9 @@ def build_c1_cells(mb, target, run_id):
             "| # | qué hace | línea del original |\n"
             "|---|---|---|\n"
             "| 1 | redondea λ a múltiplos de `psfao_wave_bin_A`, que C1 escribe en el documento "
-            "igual al ancho de bin que ajustó (**50 Å** solo en documentos viejos, que no la "
-            "declaran) | `w_eff = round(λ/wave_bin)*wave_bin` |\n"
+            "igual al ancho de bin que ajustó (un documento viejo que no la declare la hereda "
+            "de la separación de su propia tabla; **ya no hay default de 50 Å**) "
+            "| `w_eff = round(λ/wave_bin)*wave_bin` |\n"
             "| 2 | **interpola linealmente** `param_table` — no evalúa `smoothed_poly` | `np.interp(w, lam, table[name])` |\n"
             "| 3 | recorta λ al rango de la tabla | `np.clip(w_eff, lam.min(), lam.max())` |\n"
             "| 4 | recorta los parámetros a los límites físicos de Psfao | dentro de `_psfao_image_cached` |\n\n"
@@ -7998,7 +8000,7 @@ def build_c1_cells(mb, target, run_id):
             "    print('curvatura real, y los bins atípicos no se rechazan (`outlier_bins` va')\n"
             "    print('a [] escrito a mano, contra lo que pide la §3.3 del spec).')\n"
             "else:\n"
-            "    WAVE_BIN_A = float(PSF_MODEL.get('psfao_wave_bin_A', 50.0))\n"
+            "    WAVE_BIN_A = _psfao_wave_bin_A(PSF_MODEL)  # copiada de psf.py, sin default\n"
             "    LAM_T = np.asarray(PSF_MODEL['param_table']['lambda_A'], dtype=float)\n"
             "    TABLA = {n: np.asarray(PSF_MODEL['param_table'][n], dtype=float) for n in NOMBRES}\n"
             "    # (1) la λ que de verdad ve el modelo\n"
@@ -9925,13 +9927,16 @@ def build_apcorr_cells(mb, target, run_id):
             "en λ sino en `w_eff = round(λ / psfao_wave_bin_A) * psfao_wave_bin_A`, y sus "
             "parámetros salen de **interpolar** `param_table`, que solo tiene los bins que C1 "
             "ajustó de verdad (100 Å). Cuando la rejilla es más fina que esos bins —los 50 Å "
-            "que se usaban cuando el documento no la declaraba— la mitad de los canales cae "
-            "entre dos, y ahí nace el escalón.\n\n"
+            "que `psf.py` ponía por su cuenta cuando el documento no la declaraba, y que ya no "
+            "existen— la mitad de los canales cae entre dos, y ahí nace el escalón.\n\n"
             "La pregunta que lo decide: ¿el cociente depende de lo lejos que caiga `w_eff` del bin "
             "más cercano?"
         ),
         code(
-            "SNAP_A = float(PSF_MODEL.get('psfao_wave_bin_A', 50.0))\n"
+            "# La rejilla la resuelve `psf.py`, no este notebook: es de C1, como\n"
+            "# `_evaluate_psfao`, y aquí se importa en vez de copiarse.\n"
+            "from musepipe.psf import _psfao_wave_bin_A\n\n"
+            "SNAP_A = _psfao_wave_bin_A(PSF_MODEL)\n"
             "NODOS = np.asarray((PSF_MODEL.get('param_table') or {}).get('lambda_A', []),\n"
             "                   dtype=float)\n"
             "# `np.round` y el `round` de `psf.py` empatan a par igual: mismo w_eff.\n"

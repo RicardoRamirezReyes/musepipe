@@ -482,8 +482,57 @@ class WaveBinInTheDocumentTests(unittest.TestCase):
 
         from musepipe import psf
 
-        fuente = inspect.getsource(psf._evaluate_psfao)
+        fuente = inspect.getsource(psf._psfao_wave_bin_A)
         self.assertIn('model_doc.get("psfao_wave_bin_A"', fuente)
+        self.assertIn("_psfao_wave_bin_A(model_doc)", inspect.getsource(psf._evaluate_psfao))
+
+
+class WaveBinResolutionTests(unittest.TestCase):
+    """De donde sale la rejilla cuando el documento no la declara.
+
+    El default historico de `psf.py` era 50 A: la mitad del ancho de los bins
+    que C1 ajusta, asi que uno de cada dos canales recibia los parametros del
+    PSD interpolados entre dos bins. Al ser degenerados, la recta entre dos
+    ajustes se sale del valle. Ya no hay numero inventado: o lo declara C1, o
+    sale de la propia tabla, o no se redondea.
+    """
+
+    def _tabla(self, lambdas):
+        return {"param_table": {"lambda_A": list(lambdas)}}
+
+    def test_the_declared_grid_wins(self):
+        from musepipe.psf import _psfao_wave_bin_A
+
+        doc = self._tabla([6000.0, 6100.0])
+        doc["psfao_wave_bin_A"] = 250.0
+        self.assertEqual(_psfao_wave_bin_A(doc), 250.0)
+
+    def test_without_the_key_the_grid_is_the_width_of_the_fitted_bins(self):
+        from musepipe.psf import _psfao_wave_bin_A
+
+        # Los huecos (bins que C1 rechazo) son multiplos del ancho: la mediana
+        # de las separaciones los contaria, el minimo no.
+        doc = self._tabla([6000.0, 6100.0, 6200.0, 6600.0, 6700.0])
+        self.assertEqual(_psfao_wave_bin_A(doc), 100.0)
+
+    def test_no_default_of_fifty(self):
+        """El 50 A historico no puede volver por ninguna via."""
+        from musepipe.psf import _psfao_wave_bin_A
+
+        self.assertNotEqual(_psfao_wave_bin_A(self._tabla([4800.0, 4900.0])), 50.0)
+
+    def test_a_document_without_a_table_is_evaluated_at_the_exact_wavelength(self):
+        """Sin `param_table` no hay rejilla que respetar: el polinomio es continuo."""
+        from musepipe.psf import _psfao_wave_bin_A
+
+        self.assertEqual(_psfao_wave_bin_A({"smoothed_poly": {"r0": [0.12]}}), 0.0)
+
+    def test_an_invalid_declared_grid_raises(self):
+        from musepipe.psf import _psfao_wave_bin_A
+
+        for malo in (-100.0, float("nan")):
+            with self.assertRaises(ValueError):
+                _psfao_wave_bin_A({"psfao_wave_bin_A": malo})
 
 
 if __name__ == "__main__":
