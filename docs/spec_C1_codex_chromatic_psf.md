@@ -241,6 +241,28 @@ punto**. A partir de ahí cada mejora del anillo se paga cara, y por encima de 1
 se dispara. **`cap = 5` es el default** (`PSFAO_DEFAULT_WEIGHT_CAP`), y el valor viaja en el
 documento (`psfao_fit_weight_cap`) y en el QC (`fit.weight_cap`) junto al esquema.
 
+### 5.3 · El peso **no** se puede desplegar a ciegas: su efecto depende del objeto
+
+Medido el 2026-08-14 con una sonda de **solo lectura** (mismas máscaras, misma métrica
+canónica, sin escribir en el run), sobre los dos objetos:
+
+| objeto | psfao con `stat` | psfao con `relative` cap 5 | Moffat | forma elegida |
+|---|---|---|---|---|
+| ROXs 12 b | 24.30 % | **10.73 %** (mejora ×2.3) | 26.40 % | psfao |
+| ROXs 42B b | 10.05 % | **14.34 %** (empeora ×1.4) | **6.88 %** | moffat |
+
+En ROXs 42B b el peso relativo **empeora** el ajuste de psfao (p90 17.95 → 30.12 %), así que
+Moffat sigue ganando y **la elección de forma no cambia** — el riesgo de que el knob voltease
+la forma por haberle dado a psfao una báscula distinta **no se materializa en este objeto**.
+
+Pero la lección es la contraria a la que se esperaba: **el efecto es del objeto, no del
+método**, y no es siquiera del mismo signo. Por qué no está medido; la sospecha razonable es
+la relación señal/ruido del halo (en ROXs 42B b el compañero está a 46.6 px en vez de 71 y hay
+una fuente de campo a 15 px, dentro del radio de ajuste), pero **eso es hipótesis**.
+
+**Consecuencia operativa:** `psf_fit_weighting` se declara **por run, con la sonda hecha
+antes**, nunca en bloque. Para ROXs 42B b la respuesta medida es *no tocarlo*.
+
 ## 6. Esquema de `stage_e01_qc.json`
 
 ```json
