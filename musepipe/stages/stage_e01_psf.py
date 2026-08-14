@@ -502,8 +502,14 @@ def compute_stage_e01_products(config) -> StageE01Product:
     form_cfg = str(cfg.get("e01_psf_form", "auto")).lower()
     if form_cfg not in ("auto", "moffat", "psfao"):
         raise ValueError(f"e01_psf_form must be auto|moffat|psfao, got {form_cfg!r}.")
+    # Forzar una forma decide el GANADOR, no silencia la medida: la §3.4 de la
+    # spec pide que las dos formas se ajusten y se comparen en el QC. Antes,
+    # `e01_psf_form=moffat` se saltaba psfao entero y el `model_comparison` se
+    # quedaba sin la mitad -- justo cuando congelar la forma es lo que hace falta
+    # para que un knob de ajuste no pueda voltearla sin que nadie mire.
+    comparar = bool(cfg.get("e01_psf_compare_forms", True))
     psfao = {"status": "skipped"}
-    if form_cfg in ("auto", "psfao"):
+    if form_cfg in ("auto", "psfao") or comparar:
         psfao = _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx)
     psfao_ok = psfao.get("status") == "ok"
     psfao_ring = (

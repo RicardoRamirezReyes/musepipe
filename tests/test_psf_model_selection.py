@@ -156,3 +156,48 @@ class ModelSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FormIsFrozenPerObjectTests(unittest.TestCase):
+    """Declarar la forma decide el ganador, y NO apaga la comparacion.
+
+    El peso del ajuste (`psf_fit_weighting`) cambia el residuo de anillo de una
+    forma y no de la otra —en ROXs 12 b mejora psfao x2.3 y en ROXs 42B b lo
+    empeora x1.4—, asi que dejar la seleccion en `auto` es dejar que un knob de
+    ajuste pueda voltear la familia de modelo de un objeto sin que nadie mire.
+    Se congela por run; pero la §3.4 de la spec pide las dos formas medidas, y
+    forzar no puede llevarse esa medida por delante.
+    """
+
+    def test_forcing_moffat_still_measures_psfao(self):
+        import inspect
+
+        from musepipe.stages import stage_e01_psf as m
+
+        fuente = inspect.getsource(m.compute_stage_e01_products)
+        self.assertIn('e01_psf_compare_forms', fuente)
+        # La condicion tiene que dejar entrar a psfao tambien con moffat forzado.
+        self.assertIn('form_cfg in ("auto", "psfao") or comparar', fuente)
+
+    def test_the_runs_on_disk_declare_the_form_they_already_have(self):
+        """Congelar no puede cambiar nada: la forma declarada es la que hay."""
+        import json
+
+        raiz = Path(__file__).resolve().parents[1] / "runs"
+        vistos = 0
+        for cfg_path in sorted(raiz.glob("*/config/config.json")):
+            modelo = cfg_path.parent.parent / "stages" / "psf_model.json"
+            if not modelo.exists():
+                continue
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            declarada = cfg.get("config", {}).get("e01_psf_form")
+            if declarada is None:
+                continue
+            vistos += 1
+            with self.subTest(run=cfg_path.parent.parent.name):
+                self.assertEqual(
+                    declarada,
+                    json.loads(modelo.read_text(encoding="utf-8"))["form"],
+                    "la forma declarada en el config no es la del modelo en disco")
+        if vistos == 0:
+            self.skipTest("ningun run con forma declarada en este clon")
