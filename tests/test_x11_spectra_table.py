@@ -158,6 +158,40 @@ class SpectraTableTests(unittest.TestCase):
         self.assertEqual(len(axes), 2)
         plt.close(fig)
 
+    def test_the_raw_data_is_drawn_behind_the_smoothed_curves(self):
+        """El panel del compañero enseña el dato, no solo su mediana móvil.
+
+        La figura existe para comparar seis métodos, y para eso hay que
+        suavizar o no se lee ninguno; pero enseñar SOLO el suavizado es lo que
+        hace que un espectro parezca mejor de lo que es. Van los dos: el crudo
+        de los seis detrás en gris, y encima la mediana.
+        """
+        import matplotlib
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        self._run()
+        stage_dir = self.paths["spec_final_object"].parent
+
+        fig, axes = definitive_spectra_figure(stage_dir, plt=plt, smooth_channels=15)
+        companion = axes[1]
+        grises = [l for l in companion.get_lines() if l.get_color() == "0.8"]
+        self.assertEqual(len(grises), len(METHOD_KEYS),
+                         "falta el dato por canal de algún método")
+        # Detrás: por encima solo puede quedar el suavizado y el canónico.
+        self.assertTrue(all(l.get_zorder() < 2 for l in grises))
+        etiquetas = [t.get_text() for t in companion.get_legend().get_texts()]
+        self.assertIn("por canal, sin suavizar (los 6)", etiquetas)
+        self.assertIn("gris", companion.get_title())
+        plt.close(fig)
+
+        # Sin suavizado no hay dos curvas por método: el crudo YA es la curva.
+        fig, axes = definitive_spectra_figure(stage_dir, plt=plt, smooth_channels=1)
+        companion = axes[1]
+        self.assertEqual([l for l in companion.get_lines() if l.get_color() == "0.8"], [])
+        self.assertIn("sin suavizar", companion.get_title())
+        plt.close(fig)
+
     def test_an_empty_run_says_so_instead_of_drawing_an_empty_figure(self):
         import matplotlib.pyplot as plt
 

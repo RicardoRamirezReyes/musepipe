@@ -63,7 +63,10 @@ servicio de esa métrica.
   objeto); veredicto `chromatic_centroid_needed` de B3.
 - LSF(λ) y semáforos de A4 (informativo).
 - Config: `psf_bin_A` (default 100 Å), `psf_fit_radius_px`, radios de máscara
-  de fuentes, `companion_ring_width_px` (default 3).
+  de fuentes, `companion_ring_width_px` (default 3), `psfao_wave_bin_A`
+  (default: el propio `psf_bin_A` — ver §5.1), `psfao_grid_reach_px`
+  (default 140 px; el alcance de la rejilla con que se construye la PSF de
+  psfao cuando C4 la evalúa sobre toda la imagen).
 - Material de referencia: los notebooks `04c_airy_ring_moffat_diagnostics` y
   `04d_pca_residual_moffat_diagnostics` documentan la estructura ya conocida
   de esta PSF (anillos tipo Airy del AO). Leerlos para saber qué esperar; no
@@ -149,6 +152,31 @@ runs/<RUN_ID>/stages/psf_model.json              # forma elegida, coeficientes s
 runs/<RUN_ID>/stages/psf_hybrid_residual.fits    # solo si híbrido: perfil radial residual por bin
 runs/<RUN_ID>/plots/stage_e01_*.png
 ```
+
+### 5.1 `psfao_wave_bin_A` — la rejilla de evaluación viaja en el documento
+
+Solo aplica a la forma `psfao`. Es la rejilla a la que `_evaluate_psfao`
+(`musepipe/psf.py`) **redondea λ** antes de construir la PSF, y cumple dos
+funciones: canales consecutivos comparten una sola FFT cacheada (3681 → ~45
+construcciones), y —lo que la hace científica y no de rendimiento— **ningún
+canal recibe sus parámetros del PSD interpolados entre dos bins**. Los siete
+parámetros de Psfao son degenerados entre sí: la recta que une dos ajustes se
+sale del valle, la PSF sale ~1 % mal en el halo y el diseño casi degenerado del
+psffit (PSF + PSF + plano) lo amplifica a una onda cuadrada del 13 % en el
+espectro. Medido en `apcorr_debug` §§14–17; historia en
+`docs/2026-08-12_handoff.md`.
+
+Reglas:
+
+- C1 **siempre** la escribe en `psf_model.json` (con su clave hermana
+  `psfao_wave_bin_A_note`), tomándola del config o, si no está declarada, de
+  `psf_bin_A`. Nunca debe ser **menor** que el ancho de los bins ajustados.
+- Los consumidores la leen del documento, jamás de un literal. Si un documento
+  antiguo no la trae, `psf.py` la deriva de la separación mínima de su propio
+  `param_table` (los huecos son múltiplos del ancho, así que la mediana
+  mentiría); un documento sin `param_table` se evalúa con λ exacta.
+- **No hay default numérico**: el histórico era 50 Å, la mitad del ancho de los
+  bins, y es exactamente el fallo descrito arriba. No reintroducirlo.
 
 ## 6. Esquema de `stage_e01_qc.json`
 

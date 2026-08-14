@@ -421,6 +421,45 @@ def _psfao_image_cached(x_key, npix, system_name, samp, norm_radius):
     return img, total, c
 
 
+def _psfao_wave_bin_A(model_doc):
+    """Grid ``_evaluate_psfao`` snaps lambda to, resolved FROM THE DOCUMENT.
+
+    Order: the grid C1 declared (``psfao_wave_bin_A``) -> the spacing of the
+    document's own ``param_table`` -> no snapping at all (0.0, exact lambda).
+    There is deliberately no numeric default. The historic one was 50 A, half
+    the width of the bins C1 actually fits, so every other channel landed
+    between two bins and got its Psfao parameters by linear interpolation --
+    and those parameters live in the PSD, where they are degenerate: the
+    straight line between two fitted bins leaves the valley, the PSF comes out
+    ~1% wrong in the halo, and the near-degenerate psffit design (PSF + PSF +
+    plane) turns that into a 13% square wave in the extracted spectrum. See
+    `docs/2026-08-12_handoff.md` and `apcorr_debug` sections 14-17.
+
+    A document that carries a ``param_table`` therefore snaps to the width of
+    those bins: the parameters exist there and nowhere else. Gaps (bins C1
+    rejected) are whole multiples of that width, so the *smallest* spacing is
+    the grid -- a median would be inflated by the gaps. A poly-only document
+    has no grid to respect: the smoothed polynomial is continuous in lambda, so
+    it is evaluated exactly, and if such a document ever needs the FFT cache to
+    batch channels it has to declare the grid explicitly.
+    """
+
+    declared = model_doc.get("psfao_wave_bin_A")
+    if declared is not None:
+        wave_bin = float(declared)
+        if not np.isfinite(wave_bin) or wave_bin < 0:
+            raise ValueError(
+                f"psfao_wave_bin_A must be finite and >= 0 (0 = no snapping), got {declared!r}.")
+        return wave_bin
+    table = model_doc.get("param_table") or {}
+    lam = np.unique(np.asarray(table.get("lambda_A", []), dtype=np.float64))
+    if lam.size >= 2:
+        spacing = float(np.min(np.diff(lam)))
+        if np.isfinite(spacing) and spacing > 0:
+            return spacing
+    return 0.0
+
+
 def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
     """Evaluate a physical AO PSF (maoppy Psfao) on the (dy, dx) offsets,
     normalised so it sums to 1 within ``norm_radius_px``. Mirrors the Moffat
@@ -448,12 +487,14 @@ def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
         dy = dy / fwhm_scale
         dx = dx / fwhm_scale
     names = model_doc.get("param_names", _PSFAO_PARAM_NAMES)
-    # Snap the wavelength to a coarse bin before building the PSF: C1 fits the
-    # Psfao parameters in 100 A bins and the PSF varies <0.5% within ~50 A, so
-    # binning lets consecutive channels share ONE cached FFT build (3681 builds
-    # -> ~90) with negligible loss. Sampling still uses the exact per-call
-    # offsets, so per-channel positions/flux stay exact.
-    wave_bin = float(model_doc.get("psfao_wave_bin_A", 50.0))
+    # Snap the wavelength to the grid the parameters were fitted on before
+    # building the PSF: consecutive channels then share ONE cached FFT build
+    # (3681 builds -> ~45), and -- the reason the grid must not be finer than
+    # C1's bins -- no channel gets its degenerate PSD parameters from a point
+    # halfway between two fits. `_psfao_wave_bin_A` resolves it from the
+    # document; 0 means evaluate at the exact wavelength. Sampling always uses
+    # the exact per-call offsets, so per-channel positions/flux stay exact.
+    wave_bin = _psfao_wave_bin_A(model_doc)
     w_eff = round(float(wavelength_A) / wave_bin) * wave_bin if wave_bin > 0 else float(wavelength_A)
     table = model_doc.get("param_table")
     if table:

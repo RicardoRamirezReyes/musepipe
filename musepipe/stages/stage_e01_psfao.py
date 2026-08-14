@@ -248,52 +248,39 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
     wavelength to ``(bin_image, reconstructed_model)`` so a caller can score the
     reconstruction with any ring metric it likes.
 
-    ``warm_start`` **rescues** the bins that stall on the shared start vector.
-    Every bin is first fitted from ``x0`` exactly as before, so the bins that
-    already converged are unchanged bit for bit; only when that attempt comes
-    back ``fit_stalled:initial_vector`` (``psffit`` returned the start vector
-    untouched with ``nfev <= 2``) is a second attempt made, starting from the
-    last bin that did converge.
+    ``warm_start`` fits every bin from its neighbours as well as from the shared
+    ``x0``, and keeps the attempt with the LOWEST optimiser cost — the weighted
+    least squares of that same bin, so the attempts are directly comparable. A
+    bin only changes if another start vector fits its own data strictly better;
+    where ``x0`` already wins, the parameters are unchanged bit for bit. Two
+    passes, both deterministic: forward from the last accepted bin, then
+    backward from the next one, so a good solution propagates in either
+    direction. With ``warm_start=False`` each bin gets the single ``x0`` fit.
 
-    This matters because every stalled bin is a HOLE in the ``param_table`` that
-    ``_evaluate_psfao`` then spans with a straight line. In ROXs 12 b the twelve
-    stalls clustered into an 800 A gap (7900-8700 A) crossed by interpolation,
-    which is one of the sources of the plateau/step structure C2-C4 inherit
-    through the growth curve. Measured on that run: 8 of the 12 recover, in 8-32
-    optimiser evaluations instead of 2."""
+    This matters because every bin left out is a HOLE in the ``param_table``
+    that ``_evaluate_psfao`` then spans with a straight line, and that is where
+    the plateau/step structure C2-C4 inherit through the growth curve is born.
+    Rescuing only the stalled bins is not enough: in ROXs 12 b the 8100-8300 A
+    bins CONVERGED, from ``x0``, onto a second minimum 8x worse in cost
+    (7.5e5 vs 9.4e4) whose box3 aperture correction fell 10% off the chromatic
+    trend, so the outlier guard in ``build_psfao_model_document`` dropped them —
+    and, being converged, they seeded the warm start that then stalled the three
+    bins above them. Fitting them from either neighbour recovers the good
+    minimum in all six (cost 8.7-9.4e4, ring residual better in all of them,
+    box3 back on the trend), which closes the 700 A gap."""
 
     from maoppy.instrument import muse_nfm
 
     x0 = DEFAULT_X0 if x0 is None else x0
-    rows = []
-    recons = {}
-    x0_caliente = None   # el ultimo bin que convergio, para el rescate
-    for (a, b, mid, sel) in bins:
-        img = np.nanmedian(cube[sel], axis=0)
-        var = np.nanmedian(stat[sel], axis=0)
-        samp = float(muse_nfm.samp(mid * 1e-10))
-        intentos = [("initial_vector", list(x0))]
-        try:
-            params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
-                img, var, samp, system, companion, mask_radius, fit_radius, x0, field_yx=field_yx
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            rows.append({"lambda_A": mid, "status": f"fit_failed:{exc}"})
-            continue
-        fit_status = _psfao_fit_status(optimizer)
-        # Rescate: solo cuando el arranque compartido no movio nada, y solo si ya
-        # hay un bin convergido del que partir. Nunca sustituye a un ajuste bueno.
-        if (warm_start and fit_status == "fit_stalled:initial_vector"
-                and x0_caliente is not None):
-            intentos.append(("warm_start", list(x0_caliente)))
-            try:
-                r = fit_bin(img, var, samp, system, companion, mask_radius, fit_radius,
-                            x0_caliente, field_yx=field_yx)
-            except Exception:  # pragma: no cover - defensive
-                r = None
-            if r is not None and _psfao_fit_status(r[6]) == "ok":
-                params, amp, bck, dxdy, ring, recon, optimizer, errors = r
-                fit_status = "ok"
+
+    def _intento(datos, arranque, etiqueta):
+        """Un ajuste del bin, con su veredicto. Propaga lo que reviente."""
+
+        img, var, samp, mid = datos
+        params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
+            img, var, samp, system, companion, mask_radius, fit_radius,
+            list(arranque), field_yx=field_yx)
+        estado = _psfao_fit_status(optimizer)
         row = {"lambda_A": float(mid), "samp": samp, "amp": amp, "bck": bck,
                "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring,
                "optimizer_success": optimizer["success"],
@@ -302,25 +289,96 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
                "optimizer_nfev": optimizer["nfev"],
                "optimizer_cost": optimizer["cost"],
                "optimizer_stalled_at_initial": optimizer["stalled_at_initial"],
-               "start_vector": intentos[-1][0],
-               "status": fit_status}
+               "start_vector": etiqueta,
+               "status": estado}
         row.update({name: params[i] for i, name in enumerate(PSFAO_PARAM_NAMES)})
-        # Las incertidumbres formales del intento que se queda (el rescatado, si
-        # lo hubo). NaN donde el parametro esta pegado a su limite fisico.
+        # Las incertidumbres formales del intento que se queda. NaN donde el
+        # parametro esta pegado a su limite fisico.
         row.update(errors)
-        rows.append(row)
-        if fit_status == "ok":
-            recons[float(mid)] = (img, recon)
-            x0_caliente = list(params)
+        return {"row": row, "params": list(params), "recon": recon,
+                "ok": estado == "ok", "cost": float(optimizer["cost"])}
+
+    def _intento_suave(datos, arranque, etiqueta):
+        try:
+            return _intento(datos, arranque, etiqueta)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _mejor(actual, nuevo):
+        """El intento que se queda: `ok` gana a no-`ok`, y entre dos `ok`, el de
+        menor coste. El empate lo gana el que ya estaba, para no mover un bin
+        que nadie mejora."""
+
+        if nuevo is None:
+            return actual
+        if actual is None:
+            return nuevo
+        if nuevo["ok"] != actual["ok"]:
+            return nuevo if nuevo["ok"] else actual
+        if nuevo["ok"] and nuevo["cost"] < actual["cost"]:
+            return nuevo
+        return actual
+
+    datos = []
+    for (a, b, mid, sel) in bins:
+        datos.append((np.nanmedian(cube[sel], axis=0),
+                      np.nanmedian(stat[sel], axis=0),
+                      float(muse_nfm.samp(mid * 1e-10)),
+                      float(mid)))
+
+    aceptado = [None] * len(bins)
+    reventados = {}
+    x0_caliente = None   # el ultimo bin aceptado como bueno, hacia el rojo
+    for i, d in enumerate(datos):
+        try:
+            mejor = _intento(d, x0, "initial_vector")
+        except Exception as exc:  # pragma: no cover - defensive
+            reventados[i] = {"lambda_A": d[3], "status": f"fit_failed:{exc}"}
+            continue
+        if warm_start and x0_caliente is not None:
+            mejor = _mejor(mejor, _intento_suave(d, x0_caliente, "warm_start"))
+        aceptado[i] = mejor
+        if mejor["ok"]:
+            x0_caliente = mejor["params"]
+
+    # Segunda pasada, hacia el azul: un bin cuyo unico vecino bueno esta al rojo
+    # —el caso de 8400-8600 A en ROXs 12 b— no tiene de donde partir en la
+    # primera. Se propaga el ajuste ya aceptado del bin siguiente.
+    if warm_start:
+        for i in range(len(datos) - 2, -1, -1):
+            siguiente = aceptado[i + 1]
+            if aceptado[i] is None or siguiente is None or not siguiente["ok"]:
+                continue
+            aceptado[i] = _mejor(aceptado[i],
+                                 _intento_suave(datos[i], siguiente["params"], "warm_start_back"))
+
+    rows, recons = [], {}
+    for i, d in enumerate(datos):
+        if i in reventados:
+            rows.append(reventados[i])
+            continue
+        acc = aceptado[i]
+        rows.append(acc["row"])
+        if acc["ok"]:
+            recons[d[3]] = (d[0], acc["recon"])
     return rows, recons
 
 
-def build_psfao_model_document(rows, system, norm_radius, fit_radius, *, system_name="muse_nfm"):
+def build_psfao_model_document(rows, system, norm_radius, fit_radius, *, system_name="muse_nfm",
+                               wave_bin_A=None):
     """Assemble the psfao ``psf_model.json`` document from per-bin fit rows.
 
     Split out of ``run_stage_e01_psfao`` (behaviour unchanged) so the canonical
     stage can build the winning-form document when Psfao is selected. Returns the
-    psf_model dict plus a small ``meta`` dict for QC assembly."""
+    psf_model dict plus a small ``meta`` dict for QC assembly.
+
+    ``wave_bin_A`` is the grid ``_evaluate_psfao`` snaps its wavelength to. It
+    travels in the document because that is where the consumer reads it, and it
+    defaults to the width of the bins actually fitted here: the parameters exist
+    only at those wavelengths, so anything finer interpolates the degenerate PSD
+    parameters between two bins and lands outside the valley (measured: a 1%
+    error in the halo becomes 13% in the psffit amplitude). ``None`` leaves the
+    key out, and ``psf.py`` then falls back to its historical 50 A."""
 
     ok = [r for r in rows if r.get("status") == "ok" and np.isfinite(r.get("ring_residual_pct", np.nan))]
     lam = np.array([r["lambda_A"] for r in ok])
@@ -364,6 +422,12 @@ def build_psfao_model_document(rows, system, norm_radius, fit_radius, *, system_
                  "param_table": param_table, "n_bins_rejected": n_rejected,
                  "norm_radius_px": norm_radius, "fit_radius_px": fit_radius,
                  "param_names": list(PSFAO_PARAM_NAMES), "hybrid": False}
+    if wave_bin_A is not None:
+        psf_model["psfao_wave_bin_A"] = float(wave_bin_A)
+        psf_model["psfao_wave_bin_A_note"] = (
+            "Rejilla a la que _evaluate_psfao redondea lambda. Es el ancho de los bins "
+            "que C1 ajusta: los parametros del PSD solo existen ahi, y una rejilla mas "
+            "fina interpola entre dos bins parametros degenerados.")
     meta = {"ok": ok, "lam": lam, "rings": rings, "n_ok": len(ok),
             "n_rejected": n_rejected, "norm_err": norm_err, "poly": poly}
     return psf_model, meta
@@ -387,7 +451,9 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
     norm_radius = inp["norm_radius"]
 
     rows, _ = fit_psfao_bins(cube, inp["stat"], inp["wave"], bins, system, companion, mask_radius, fit_radius)
-    psf_model, meta = build_psfao_model_document(rows, system, norm_radius, fit_radius)
+    psf_model, meta = build_psfao_model_document(
+        rows, system, norm_radius, fit_radius,
+        wave_bin_A=float(cfg.get("psfao_wave_bin_A", bin_A)))
     ok = meta["ok"]
     lam = meta["lam"]
     rings = meta["rings"]

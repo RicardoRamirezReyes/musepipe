@@ -586,6 +586,10 @@ def compute_stage_e01_products(config) -> StageE01Product:
         recons = psfao["recons"]
         model_doc, meta = psfao["build_doc"](
             psfao_rows, inp["system"], inp["norm_radius"], inp["fit_radius"],
+            # La rejilla de evaluacion viaja en el documento, que es donde la lee
+            # `_evaluate_psfao`. Por defecto, el ancho de bin que se acaba de
+            # ajustar; el config manda si lo declara.
+            wave_bin_A=float(cfg.get("psfao_wave_bin_A", inp["bin_A"])),
         )
         mids = sorted(recons)
         p_images = [recons[m][0] for m in mids]
@@ -653,8 +657,12 @@ def compute_stage_e01_products(config) -> StageE01Product:
             "centroid_vs_b3_max_diff_px": centroid_diff,
             "centroid_vs_b3_status": b3_track_status,
             "warm_start": bool(cfg.get("psf_warm_start", True)),
+            # Las dos direcciones cuentan: un bin que solo tiene vecino bueno al
+            # rojo se recupera en la pasada hacia atras, y dejarlo fuera de la
+            # cuenta hacia parecer que el arranque caliente no habia hecho nada.
             "n_bins_rescued_by_warm_start": int(sum(
-                1 for r in psfao_rows if r.get("start_vector") == "warm_start"
+                1 for r in psfao_rows
+                if r.get("start_vector") in ("warm_start", "warm_start_back")
                 and r.get("status") == "ok")),
         }
 

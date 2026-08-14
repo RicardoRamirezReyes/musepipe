@@ -325,3 +325,82 @@ class PolynomialMisfitTests(unittest.TestCase):
                         {"wave_A": 7000.0, "ratio_total_over_normrad": 1.5},
                         {"wave_A": 9000.0, "ratio_total_over_normrad": 1.4}]}
         self.assertEqual(polynomial_misfit(qc), (None, None))
+
+
+class MonotoneInterpolationTests(unittest.TestCase):
+    """El interpolador de la apcorr, cambiado a PCHIP el 2026-08-11.
+
+    La parabola tiene curvatura constante: no puede bajar deprisa y luego
+    aplanarse, que es lo que hace esta curva. Sobre las bandas reales de
+    `ROXs12b_realigned` le ponia el vertice DENTRO del rango, en 7978 A, y
+    repuntaba un 3.15% hasta 9350 A. Como la apcorr multiplica, el continuo
+    rojo salia sobre-corregido en los seis metodos del bloque C a la vez.
+    """
+
+    #: Las 8 bandas REALES de `ROXs12b_realigned` (cubo de 256 px, las buenas):
+    #: caen 13% y se aplanan, con el ultimo punto subiendo un 0.37%.
+    LAMBDAS = [5037.0, 5612.0, 6187.0, 6762.0, 7337.0, 7912.0, 8487.0, 9062.0]
+    BANDAS = [1.6844, 1.5662, 1.5063, 1.4882, 1.4717, 1.4662, 1.4599, 1.4653]
+
+    def setUp(self):
+        self.qc = {"bands": [{"wave_A": w, "ratio_total_over_normrad": v}
+                             for w, v in zip(self.LAMBDAS, self.BANDAS)]}
+        self.wave = np.linspace(4750.0, 9350.0, 400)
+
+    def test_pchip_passes_through_the_measured_bands_and_the_parabola_does_not(self):
+        x = np.asarray(self.LAMBDAS)
+        y = np.asarray(self.BANDAS)
+        np.testing.assert_allclose(factor_at_wavelengths(self.qc, x), y, rtol=0, atol=0)
+        poly = factor_at_wavelengths(self.qc, x, method="poly2", require_monotonic=False)
+        self.assertGreater(float(np.max(np.abs(poly / y - 1.0))), 0.01)
+
+    def test_the_parabola_invents_a_red_rebound_that_the_bands_do_not_have(self):
+        from musepipe.growth_curve import interior_dip
+
+        poly = factor_at_wavelengths(self.qc, self.wave, method="poly2",
+                                     require_monotonic=False)
+        pchip = factor_at_wavelengths(self.qc, self.wave)
+        self.assertGreater(interior_dip(poly), 0.03)      # 3.15%: lo fabrica el ajuste
+        self.assertLess(interior_dip(pchip), 0.01)        # 0.75%: lo que dicen las bandas
+        # Y el repunte del dato es mucho menor que el que fabricaba la parabola.
+        self.assertLess(self.BANDAS[-1] / self.BANDAS[-2] - 1.0, 0.005)
+
+    def test_the_guard_now_refuses_the_parabola_and_says_who_manufactured_it(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            factor_at_wavelengths(self.qc, self.wave, method="poly2")
+        mensaje = str(ctx.exception)
+        self.assertIn("bottoms out", mensaje)
+        self.assertIn("pchip", mensaje)                   # dice como arreglarlo
+
+    def test_pchip_on_those_same_bands_passes_the_guard(self):
+        got = factor_at_wavelengths(self.qc, self.wave)   # require_monotonic por defecto
+        self.assertEqual(got.size, self.wave.size)
+
+    def test_extrapolation_outside_the_bands_is_a_straight_line_that_cannot_turn_around(self):
+        """El eje llega a 4750 A y la banda mas azul esta en 5037: se extrapola."""
+        bajando = {"bands": [{"wave_A": w, "ratio_total_over_normrad": v}
+                             for w, v in zip(self.LAMBDAS,
+                                             [2.6, 2.45, 2.32, 2.21, 2.12, 2.05, 2.00, 1.97])]}
+        got = factor_at_wavelengths(bajando, self.wave)
+        self.assertTrue(np.all(np.diff(got) < 0))
+        azul = self.wave < self.LAMBDAS[0]
+        paso = np.diff(got[azul])
+        np.testing.assert_allclose(paso, paso[0], rtol=1e-9)   # recta, no cubica
+
+    def test_poly2_still_reproduces_the_frozen_path_bit_for_bit(self):
+        """Los runs congelados se reproducen pidiendo el metodo viejo."""
+        x = np.asarray(self.LAMBDAS)
+        y = np.asarray(self.BANDAS)
+        esperado = np.polyval(np.polyfit(x, y, 2), self.wave)
+        got = factor_at_wavelengths(self.qc, self.wave, method="poly2",
+                                    require_monotonic=False)
+        np.testing.assert_array_equal(got, esperado)
+
+    def test_bands_out_of_order_do_not_break_the_spline(self):
+        revuelto = {"bands": list(reversed(self.qc["bands"]))}
+        np.testing.assert_allclose(factor_at_wavelengths(revuelto, self.wave),
+                                   factor_at_wavelengths(self.qc, self.wave))
+
+    def test_an_unknown_method_raises(self):
+        with self.assertRaises(ValueError):
+            factor_at_wavelengths(self.qc, self.wave, method="spline37")

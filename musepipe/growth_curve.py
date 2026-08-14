@@ -459,30 +459,78 @@ def resolve_flux_convention(cfg, stage_dir, *, knob="flux_convention"):
     return doc, "total"
 
 
-def factor_at_wavelengths(growth_qc, wave_A, *, degree=2, require_monotonic=True):
+#: Interpolador por defecto de `factor_at_wavelengths` (2026-08-11). Ver ahi.
+DEFAULT_FACTOR_METHOD = "pchip"
+
+
+def factor_at_wavelengths(growth_qc, wave_A, *, method=None, degree=2,
+                          require_monotonic=True):
     """Interpola el factor por banda a un eje de longitudes de onda.
 
-    Polinomio de grado bajo en vez de interpolacion lineal: las bandas son 8
-    puntos de una curva suave, y un polinomio no mete escalones en el continuo.
+    Las bandas son 8 puntos de una curva suave, y hace falta una interpolacion
+    que no meta escalones en el continuo. Hay dos:
 
-    **Se exige monotonia** (2026-08-07). El factor es `F_total / F(<=r_norm)`, o
-    sea el inverso de una fraccion encerrada: con AO el Strehl empeora hacia el
-    azul, mas luz se va al halo y la correccion tiene que **caer** del azul al
-    rojo. Un maximo interior no es fisico. La parabola ajustada a las 8 bandas
-    del cubo de 200 px tenia el maximo en ~7400 A, y eso deformaba la pendiente
-    del continuo de TODOS los productos del bloque C un ~47%. Si aparece, se
-    para: las bandas estan mal y hay que re-medirlas en un campo mayor, no
-    interpolarlas.
+    * ``"pchip"`` (**por defecto desde 2026-08-11**) -- cubica monotona a trozos
+      (Fritsch-Carlson). Pasa **por** las bandas y no inventa curvatura entre
+      ellas: si el dato baja, ella baja. Fuera del rango de bandas extrapola
+      **en recta** con la pendiente del extremo, no con la cubica, que se
+      dispara.
+    * ``"poly2"`` -- el ajuste polinomico historico. Se conserva para reproducir
+      runs congelados; para eso hace falta ademas `require_monotonic=False`
+      (ver abajo).
+
+    **Por que cambio el defecto.** Una parabola tiene curvatura constante: no
+    puede bajar deprisa y luego aplanarse, que es justo lo que hace esta curva.
+    En `ROXs12b_realigned` las 8 bandas caen de 1.684 a 1.460 y se aplanan
+    (el ultimo punto sube un 0.37%, ruido), y la parabola les pone el **vertice
+    dentro del rango**, en 7978 A, repuntando un **3.15%** hasta 9350 A. Como
+    la apcorr multiplica, el continuo por encima de ~8000 A salia
+    **sobre-corregido en los seis metodos del bloque C** a la vez. La parabola
+    ni siquiera reproducia las bandas: 1.03% rms, 2.82% pico a pico
+    (`polynomial_misfit`). Con `pchip` el repunte cae a lo que digan las bandas
+    y el residuo contra ellas es cero por construccion.
+
+    **Se exige monotonia** (2026-08-07, ampliado 2026-08-11). El factor es
+    `F_total / F(<=r_norm)`, o sea el inverso de una fraccion encerrada: con AO
+    el Strehl empeora hacia el azul, mas luz se va al halo y la correccion tiene
+    que **caer** del azul al rojo. Se miran los dos modos de fallo:
+
+    * un **maximo interior** (`interior_bump`) -- la parabola de las bandas del
+      cubo de 200 px lo tenia en ~7400 A y deformaba la pendiente del continuo
+      de TODO el bloque C un ~47%. Bandas mal medidas: se re-miden en un campo
+      mayor, no se interpolan.
+    * un **minimo interior con repunte** (`interior_dip`) -- invisible para
+      `interior_bump`, porque el maximo cae en un extremo y devolvia 0.00%. Es
+      el caso de arriba, y con `poly2` lo fabrica el ajuste, no el dato.
     """
 
+    method = str(method or DEFAULT_FACTOR_METHOD).lower()
+    if method not in {"pchip", "poly2", "poly"}:
+        raise ValueError(f"Unknown method={method!r}; expected 'pchip' or 'poly2'.")
     bands = (growth_qc or {}).get("bands") or []
-    if len(bands) < degree + 1:
-        raise ValueError(f"Need at least {degree + 1} bands to fit the factor, got {len(bands)}.")
+    minimo = 2 if method == "pchip" else int(degree) + 1
+    if len(bands) < minimo:
+        raise ValueError(f"Need at least {minimo} bands to fit the factor, got {len(bands)}.")
     x = np.asarray([b["wave_A"] for b in bands], dtype=np.float64)
     y = np.asarray([b["ratio_total_over_normrad"] for b in bands], dtype=np.float64)
-    coeff = np.polyfit(x, y, int(degree))
+    orden = np.argsort(x)           # PCHIP exige x creciente; el QC no lo promete
+    x, y = x[orden], y[orden]
     wave = np.asarray(wave_A, dtype=np.float64)
-    out = np.polyval(coeff, wave)
+    if method == "pchip":
+        from scipy.interpolate import PchipInterpolator
+
+        spline = PchipInterpolator(x, y, extrapolate=False)
+        out = spline(wave)
+        # Fuera de las bandas, RECTA con la pendiente del extremo. La cubica
+        # extrapolada se curva sin dato que la sujete, y aqui se extrapola de
+        # verdad: el eje del cubo llega a 4750 A y la banda mas azul esta en
+        # 5037. Una recta al menos no puede dar la vuelta.
+        pend = spline.derivative()
+        azul, rojo = wave < x[0], wave > x[-1]
+        out[azul] = y[0] + (wave[azul] - x[0]) * float(pend(x[0]))
+        out[rojo] = y[-1] + (wave[rojo] - x[-1]) * float(pend(x[-1]))
+    else:
+        out = np.polyval(np.polyfit(x, y, int(degree)), wave)
     if require_monotonic:
         # Se juzga sobre el eje pedido, que es donde se aplica: un polinomio
         # puede tener el vertice fuera del rango de las bandas y dentro del
@@ -505,6 +553,23 @@ def factor_at_wavelengths(growth_qc, wave_A, *, degree=2, require_monotonic=True
                     "degenerate — re-measure on a wider field with "
                     "`scripts/measure_growth_curve.py --cube <cubo ancho> --write-run-product`. "
                     f"bands={np.array2string(y, precision=3)}")
+            # El otro modo de fallo, que hasta 2026-08-11 pasaba entero: bajar,
+            # tocar fondo DENTRO del rango y repuntar. El maximo queda en un
+            # extremo, asi que `interior_bump` da 0.00% y esto se colaba.
+            hundido = interior_dip(out)
+            if hundido > MAX_INTERIOR_BUMP:
+                fondo = float(wave[np.nanargmin(out)])
+                culpa = (
+                    "the degree-2 fit manufactures it (a parabola cannot fall and then "
+                    "flatten); use method='pchip', the default"
+                    if method != "pchip" else
+                    "the measured bands themselves turn up; re-measure on a wider field with "
+                    "`scripts/measure_growth_curve.py --cube <cubo ancho> --write-run-product`")
+                raise RuntimeError(
+                    f"The growth-curve factor is not monotonic in wavelength: it bottoms out at "
+                    f"{fondo:.0f} A and rebounds {100 * hundido:.1f}% to the red end. It is the "
+                    "inverse of an enclosed fraction: under AO it must decrease from blue to red. "
+                    f"Here {culpa}. bands={np.array2string(y, precision=3)}")
     return out
 
 

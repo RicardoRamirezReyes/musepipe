@@ -1784,9 +1784,16 @@ def definitive_spectra_figure(stage_dir, *, canonical_method=None, plt=None, smo
 
     Tres paneles con el mismo eje λ porque son tres escalas distintas: la
     primaria es ~1e3-1e4 veces mas brillante que el compañero, y lo que se
-    compara entre metodos es el continuo, no el flujo canal a canal. El flujo
-    del compañero va suavizado para que se lean los 6 a la vez, sobre la banda
-    de error total del canonico (sin suavizar).
+    compara entre metodos es el continuo, no el flujo canal a canal.
+
+    En el panel del compañero conviven las dos cosas: el dato **por canal** de
+    los seis, detras y en gris, y encima la mediana movil de `smooth_channels`
+    que permite leerlos a la vez, sobre la banda de error total del canonico
+    (sin suavizar). Ensenar solo el suavizado es lo que hace que un espectro
+    parezca mejor de lo que es; ensenar solo el crudo hace ilegible la
+    comparacion, que es para lo que existe la figura. Con
+    ``smooth_channels=1`` no hay gris ni mediana: una sola curva por metodo,
+    el dato.
     """
     if plt is None:  # pragma: no cover - conveniencia para uso interactivo
         import matplotlib.pyplot as plt
@@ -1838,9 +1845,22 @@ def definitive_spectra_figure(stage_dir, *, canonical_method=None, plt=None, smo
     ax.fill_between(wave, -cerr, cerr, color="0.75", alpha=0.45, lw=0,
                     label="± error total (canonico)")
     drawn = []
+    # El dato POR CANAL, detras y en gris: seis espectros crudos superpuestos no
+    # se distinguen entre si, pero ensenian la amplitud real del ruido sobre la
+    # que se lee la comparacion. Sin esto la figura solo mostraba las medianas
+    # moviles, que es lo que hace que un espectro parezca mejor de lo que es.
+    if smooth_channels > 1:
+        for i, product in enumerate(products.values()):
+            ax.plot(
+                np.asarray(product.wave_A, dtype=np.float64),
+                np.asarray(product.flux, dtype=np.float64),
+                lw=0.3, color="0.8", alpha=0.7, zorder=1,
+                label="por canal, sin suavizar (los 6)" if i == 0 else None,
+            )
     for method, product in products.items():
         is_canonical = method == canonical_method
-        smoothed = median_filter_1d(np.asarray(product.flux, dtype=np.float64), width=smooth_channels)
+        flux = np.asarray(product.flux, dtype=np.float64)
+        smoothed = median_filter_1d(flux, width=smooth_channels) if smooth_channels > 1 else flux
         drawn.append(smoothed)
         ax.plot(
             np.asarray(product.wave_A, dtype=np.float64), smoothed,
@@ -1849,12 +1869,17 @@ def definitive_spectra_figure(stage_dir, *, canonical_method=None, plt=None, smo
             label=f"{method} (canonico)" if is_canonical else method,
         )
     # Escala robusta: un solo canal en el borde del notch AO (~6000 A) es 20
-    # veces el continuo del compañero y aplastaria los 6 espectros.
+    # veces el continuo del compañero y aplastaria los 6 espectros. Se calcula
+    # sobre las curvas de arriba, no sobre el gris: el crudo puede salirse del
+    # recuadro, que es justo lo que dice cuanto ruido hay.
     ax.set_ylim(*_robust_limits(drawn + [cerr, -cerr]))
     ax.axhline(0.0, color="0.6", lw=0.6)
     ax.axvline(6562.8, color="tab:red", ls=":", lw=1.0)
     ax.set_ylabel(f"flujo compañero\n[{unit}]", fontsize=8)
-    ax.set_title(f"compañero: flujo suavizado {smooth_channels} canales (Hα en rojo)", fontsize=9)
+    ax.set_title(
+        ("compañero: por canal en gris + suavizado "
+         f"{smooth_channels} canales (Hα en rojo)") if smooth_channels > 1
+        else "compañero: flujo por canal, sin suavizar (Hα en rojo)", fontsize=9)
     ax.legend(fontsize=7, ncol=4, loc="upper left")
 
     ax = next(panels)
