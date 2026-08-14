@@ -650,6 +650,14 @@ def compute_stage_e01_products(config) -> StageE01Product:
             "n_fit_failed": int(len(psfao_rows) - meta["n_ok"]),
             "clip_frac_max": 0.0,
             "chi2r_median": None,
+            # Que parte de la imagen decidio el ajuste. Va aqui ademas de en
+            # `psf_model.json` porque este es el camino canonico (el de la
+            # comparacion de formas) y su QC es lo que lee F1.
+            "weighting": str(cfg.get("psf_fit_weighting", PSFAO_DEFAULT_WEIGHTING)),
+            "weight_cap": (None if cfg.get("psf_fit_weight_cap",
+                                           PSFAO_DEFAULT_WEIGHT_CAP) is None
+                           else float(cfg.get("psf_fit_weight_cap",
+                                              PSFAO_DEFAULT_WEIGHT_CAP))),
         }
         smoothing_qc = {
             # `smoothed_poly` NO es lo que se evalua mientras exista `param_table`:
