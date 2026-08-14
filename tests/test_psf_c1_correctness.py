@@ -17,9 +17,13 @@ from musepipe.stages.stage_e01_psf import (
 from musepipe.stages.stage_e01_psfao import (
     build_psfao_model_document,
     DEFAULT_X0,
+    PSFAO_DEFAULT_WEIGHT_CAP,
+    PSFAO_DEFAULT_WEIGHTING,
     PSFAO_PARAM_NAMES,
+    PSFAO_WEIGHTINGS,
     _psfao_param_errors,
     fit_psfao_bins,
+    psfao_fit_weights,
 )
 
 #: Los errores formales que `fit_bin` devuelve ahora como octavo elemento. Los
@@ -117,9 +121,13 @@ class WarmStartRescueTests(unittest.TestCase):
         """
         cube = np.ones((4, 8, 8), dtype=float)
         llamadas = []
+        esquemas = []
         pendientes = list(guion)
 
-        def falso(img, var, samp, system, comp, mask_r, fit_r, x0, field_yx=None):
+        def falso(img, var, samp, system, comp, mask_r, fit_r, x0, field_yx=None,
+                  weighting=PSFAO_DEFAULT_WEIGHTING,
+                  weight_cap=PSFAO_DEFAULT_WEIGHT_CAP):
+            esquemas.append((weighting, weight_cap))
             llamadas.append(list(x0))
             entrada = pendientes.pop(0)
             params, optimizer = entrada[0], entrada[1]
@@ -132,6 +140,12 @@ class WarmStartRescueTests(unittest.TestCase):
                 object(), (4.0, 6.0), 2.0, 3.0, **kwargs
             )
         self.assertEqual(pendientes, [], "el guion preveia llamadas que no se hicieron")
+        # El esquema de pesos llega a TODOS los intentos, tambien a los del
+        # rescate: si solo llegara al primero, los bins rescatados saldrian
+        # ajustados con otros pesos que sus vecinos y nadie lo veria.
+        self.assertEqual(set(esquemas),
+                         {(kwargs.get("weighting", PSFAO_DEFAULT_WEIGHTING),
+                           kwargs.get("weight_cap", PSFAO_DEFAULT_WEIGHT_CAP))})
         return rows, recons, llamadas
 
     def test_a_stalled_bin_is_retried_from_the_last_converged_one(self):
@@ -537,3 +551,120 @@ class WaveBinResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FitWeightingTests(unittest.TestCase):
+    """Que parte de la imagen manda en el ajuste por bin.
+
+    Con `stat` el chi2 lo domina el nucleo y al halo no se le pregunta: medido
+    en `C1_chromatic_psf_debug` §13.f, asi el modelo reproduce el 28 % del
+    cromatismo del halo y deja el anillo en 32 %, y con `relative` el anillo baja
+    a 4.65 %. El knob existe para poder pedirle el halo al ajuste; el default
+    sigue siendo el historico para que ningun run cambie sin declararlo.
+    """
+
+    IMG = np.array([[1.0, 10.0], [100.0, 1000.0]])
+    VAR = np.array([[2.0, 2.0], [4.0, 4.0]])
+    RAD = np.array([[0.0, 5.0], [20.0, 30.0]])
+
+    def test_the_default_is_the_historic_one_bit_for_bit(self):
+        """Un run que no declare nada tiene que salir IDENTICO al de antes."""
+        historico = 1.0 / np.clip(self.VAR, 1e-6, None)
+        for modo in (PSFAO_DEFAULT_WEIGHTING, "stat"):
+            with self.subTest(modo=modo):
+                np.testing.assert_array_equal(
+                    psfao_fit_weights(self.IMG, self.VAR, self.RAD, modo), historico)
+        self.assertEqual(PSFAO_DEFAULT_WEIGHTING, "stat")
+
+    def test_relative_gives_the_faint_pixels_a_voice(self):
+        """El nucleo deja de llevarse todo el peso: es LO QUE ARREGLA el halo."""
+        w = psfao_fit_weights(self.IMG, self.VAR, self.RAD, "relative")
+        stat = psfao_fit_weights(self.IMG, self.VAR, self.RAD, "stat")
+        # El pixel mas brillante pierde peso frente al mas debil, que con `stat`
+        # pesaban lo mismo (misma varianza).
+        self.assertLess(w[1, 1] / w[0, 0], stat[1, 1] / stat[0, 0])
+        self.assertTrue(np.all(np.isfinite(w)) and np.all(w >= 0))
+
+    def test_halo_drops_the_core_entirely(self):
+        w = psfao_fit_weights(self.IMG, self.VAR, self.RAD, "halo", core_px=12.0)
+        self.assertTrue(np.all(w[self.RAD < 12.0] == 0.0))
+        self.assertTrue(np.all(w[self.RAD >= 12.0] > 0.0))
+
+    def test_an_unknown_scheme_raises_instead_of_falling_back(self):
+        with self.assertRaises(ValueError):
+            psfao_fit_weights(self.IMG, self.VAR, self.RAD, "1/STAT")
+
+    def test_the_choice_travels_in_the_document(self):
+        """Quien lea `psf_model.json` tiene que poder saber que decidio el ajuste."""
+        filas = [{"lambda_A": 6000.0 + 100 * i, "status": "ok", "ring_residual_pct": 5.0,
+                  **{n: v for n, v in zip(PSFAO_PARAM_NAMES,
+                                          [0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7])}}
+                 for i in range(4)]
+        with mock.patch("musepipe.stages.stage_e01_psfao._box3_apcorr", return_value=7.0):
+            doc, _ = build_psfao_model_document(filas, object(), 25.0, 78.0,
+                                                weighting="relative")
+            viejo, _ = build_psfao_model_document(filas, object(), 25.0, 78.0)
+        self.assertEqual(doc["psfao_fit_weighting"], "relative")
+        # Un documento de antes no adquiere una clave que nadie eligio.
+        self.assertNotIn("psfao_fit_weighting", viejo)
+
+    def test_every_declared_scheme_is_implemented(self):
+        for modo in PSFAO_WEIGHTINGS:
+            with self.subTest(modo=modo):
+                w = psfao_fit_weights(self.IMG, self.VAR, self.RAD, modo)
+                self.assertEqual(w.shape, self.IMG.shape)
+
+
+class WeightCapTests(unittest.TestCase):
+    """El tope del termino relativo: lo que impide que el nucleo deje de contar.
+
+    Sin tope, `relative` ensancha el modelo y la correccion de apertura se va
+    x2.7 -- probado en la cadena entera el 2026-08-14 y revertido. El barrido de
+    la spec C1 §5.2 pone el codo en 5: el residuo de anillo cae a un tercio y el
+    nucleo se mueve 1 punto.
+    """
+
+    IMG = np.array([[1.0, 10.0], [100.0, 1000.0]])
+    VAR = np.ones_like(IMG)
+    RAD = np.zeros_like(IMG)
+
+    def _rango(self, **kw):
+        w = psfao_fit_weights(self.IMG, self.VAR, self.RAD, "relative", **kw)
+        return float(np.max(w) / np.min(w))
+
+    def test_the_cap_bounds_the_weight_ratio(self):
+        for cap in (1.0, 5.0, 100.0):
+            with self.subTest(cap=cap):
+                self.assertLessEqual(self._rango(cap=cap), cap * (1 + 1e-9))
+
+    def test_the_default_is_the_measured_elbow(self):
+        self.assertEqual(PSFAO_DEFAULT_WEIGHT_CAP, 5.0)
+        self.assertLessEqual(self._rango(), PSFAO_DEFAULT_WEIGHT_CAP * (1 + 1e-9))
+
+    def test_without_a_cap_the_ratio_is_the_one_that_broke_the_chain(self):
+        """`cap=None` reproduce el `relative` sin tope, para poder re-medirlo."""
+        self.assertGreater(self._rango(cap=None), 100.0)
+
+    def test_a_cap_of_one_collapses_to_stat(self):
+        """Con razon 1 el termino de imagen es plano: los pesos son los de `stat`."""
+        w = psfao_fit_weights(self.IMG, self.VAR, self.RAD, "relative", cap=1.0)
+        self.assertAlmostEqual(float(np.max(w) / np.min(w)), 1.0)
+
+    def test_a_cap_below_one_raises(self):
+        for malo in (0.0, 0.5, float("nan")):
+            with self.assertRaises(ValueError):
+                psfao_fit_weights(self.IMG, self.VAR, self.RAD, "relative", cap=malo)
+
+    def test_the_cap_travels_in_the_document_next_to_the_scheme(self):
+        filas = [{"lambda_A": 6000.0 + 100 * i, "status": "ok", "ring_residual_pct": 5.0,
+                  **{n: v for n, v in zip(PSFAO_PARAM_NAMES,
+                                          [0.11, 2e-4, 2.0, 0.06, 0.9, 0.1, 1.7])}}
+                 for i in range(4)]
+        with mock.patch("musepipe.stages.stage_e01_psfao._box3_apcorr", return_value=7.0):
+            rel, _ = build_psfao_model_document(filas, object(), 25.0, 78.0,
+                                                weighting="relative", weight_cap=5.0)
+            est, _ = build_psfao_model_document(filas, object(), 25.0, 78.0,
+                                                weighting="stat")
+        self.assertEqual(rel["psfao_fit_weight_cap"], 5.0)
+        # `stat` no tiene termino relativo, asi que no arrastra un tope que no usa.
+        self.assertNotIn("psfao_fit_weight_cap", est)

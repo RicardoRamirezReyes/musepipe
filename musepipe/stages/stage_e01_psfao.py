@@ -27,6 +27,67 @@ from ..config import load_run_config
 PSFAO_PARAM_NAMES = ("r0", "C", "A", "alpha", "ratio", "theta", "beta")
 DEFAULT_X0 = [0.15, 1e-4, 1.0, 0.05, 1.0, 0.0, 1.6]
 
+#: Como se pesan los pixeles del ajuste por bin. `stat` es el historico y sigue
+#: siendo el default: NINGUN run cambia si no lo declara.
+PSFAO_WEIGHTINGS = ("stat", "relative", "halo")
+PSFAO_DEFAULT_WEIGHTING = "stat"
+#: Radio del nucleo que `halo` deja fuera del ajuste.
+PSFAO_HALO_CORE_PX = 12.0
+#: Tope del termino relativo: razon maxima entre el peso mayor y el menor que
+#: puede introducir la imagen. Sin tope (`None`) el nucleo deja de contar y la
+#: correccion de apertura se dispara -- medido y revertido el 2026-08-14, ver el
+#: barrido en la spec C1 §5.2. 5 es el codo de esa curva.
+PSFAO_DEFAULT_WEIGHT_CAP = 5.0
+
+
+def psfao_fit_weights(image, var, radius_px, weighting=PSFAO_DEFAULT_WEIGHTING,
+                      core_px=PSFAO_HALO_CORE_PX, cap=PSFAO_DEFAULT_WEIGHT_CAP):
+    """Los pesos del ajuste por bin, segun que parte de la imagen deba mandar.
+
+    Con `stat` —1/STAT, lo que se ha usado siempre— el chi2 lo domina el NUCLEO
+    por varios ordenes de magnitud, y el halo no llega a tener voz. Eso no es un
+    detalle de implementacion: medido en `C1_chromatic_psf_debug` §13.f sobre
+    ROXs 12 b, el modelo reproduce asi el 28 % del cromatismo del halo y deja el
+    residuo de anillo en 32 %, mientras que con `relative` baja a 4.65 % —el
+    objetivo de la spec C1— y sube al 45 %, y con `halo` (nucleo fuera) llega al
+    101 %. El modelo siempre pudo; era el peso.
+
+    - ``stat``     1/STAT. El historico, y el default.
+    - ``relative`` 1/STAT dividido por ``clip(|imagen|, piso, techo)^2``: error
+      RELATIVO **con tope**, o sea cada anillo cuenta lo mismo aunque sea mil
+      veces mas debil, pero la imagen no puede introducir una razon de pesos
+      mayor que ``cap``. El suelo en la mediana evita que el fondo (donde
+      |imagen| es diminuto) se lleve todo el peso, y el techo evita lo
+      contrario: que el NUCLEO deje de contar. Sin tope (`cap=None`) el modelo
+      se ensancha y la correccion de apertura se va x2.7 -- probado en la cadena
+      entera el 2026-08-14 y revertido.
+    - ``halo``     1/STAT con el nucleo (``r < core_px``) a cero. Es el mas
+      extremo y el que mas cromatismo recupera, pero deja el nivel del anillo
+      bajo y empuja `beta` contra su cota: sirve de diagnostico, no de default.
+    """
+
+    if weighting not in PSFAO_WEIGHTINGS:
+        raise ValueError(
+            f"psf_fit_weighting desconocido: {weighting!r}; los validos son {PSFAO_WEIGHTINGS}.")
+    w = 1.0 / np.clip(var, 1e-6, None)
+    if weighting == "relative":
+        img = np.abs(np.asarray(image, dtype=np.float64))
+        piso = max(float(np.nanpercentile(img, 50)), 1e-6)
+        if cap is None:
+            techo = np.inf
+        else:
+            cap = float(cap)
+            if not np.isfinite(cap) or cap < 1.0:
+                raise ValueError(f"psf_fit_weight_cap debe ser >= 1 o None, y es {cap!r}.")
+            # El peso va como 1/x^2, asi que un rango sqrt(cap) en la imagen es
+            # un rango `cap` en el peso: el knob se lee como «cuantas veces mas
+            # puede pesar un pixel que otro».
+            techo = piso * np.sqrt(cap)
+        return w / np.clip(img, piso, techo) ** 2
+    if weighting == "halo":
+        return np.where(np.asarray(radius_px) >= float(core_px), w, 0.0)
+    return w
+
 
 def _bad_windows(cfg):
     if cfg.get("drop_wave_min_A") is not None and cfg.get("drop_wave_max_A") is not None:
@@ -48,7 +109,9 @@ def make_bins(wave, bin_A, bad_windows, min_channels=3):
     return bins
 
 
-def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0, field_yx=None):
+def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
+            field_yx=None, weighting=PSFAO_DEFAULT_WEIGHTING,
+            weight_cap=PSFAO_DEFAULT_WEIGHT_CAP):
     """Ajuste Psfao de un bin.
 
     `field_yx` enmascara una fuente de campo igual que hace la rama Moffat. Sin
@@ -58,6 +121,10 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
     contra psfao, porque era la unica que se comia el contaminante. Se vio en
     ROXs 42B b, donde enmascarar ROXs 42B cc1 mejoro Moffat (8.38 -> 6.88%) y
     dejo psfao intacta (9.80 -> 10.69%).
+
+    `weighting` decide QUE PARTE DE LA IMAGEN manda en el ajuste, y es lo que
+    separa un modelo que reproduce el halo de uno que no. Ver
+    `psfao_fit_weights`.
     """
 
     from maoppy.psfmodel import Psfao
@@ -71,7 +138,7 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
     mask = np.isfinite(image) & (comp > mask_radius) & (r < fit_radius)
     if field_yx is not None:
         mask &= np.hypot(yy - float(field_yx[0]), xx - float(field_yx[1])) > mask_radius
-    weights = np.where(mask, 1.0 / np.clip(var, 1e-6, None), 0.0)
+    weights = np.where(mask, psfao_fit_weights(image, var, r, weighting, cap=weight_cap), 0.0)
     imgf = np.where(np.isfinite(image), image, 0.0)
     model = Psfao((ny, nx), system=system, samp=float(samp))
     with warnings.catch_warnings():
@@ -240,7 +307,9 @@ def _psfao_fit_status(optimizer):
 
 
 def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *,
-                   x0=None, field_yx=None, warm_start=True):
+                   x0=None, field_yx=None, warm_start=True,
+                   weighting=PSFAO_DEFAULT_WEIGHTING,
+                   weight_cap=PSFAO_DEFAULT_WEIGHT_CAP):
     """Fit the Psfao model per wavelength bin (companion masked).
 
     Returns ``(rows, recons)`` where ``rows`` is the per-bin parameter table
@@ -279,7 +348,8 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
         img, var, samp, mid = datos
         params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
             img, var, samp, system, companion, mask_radius, fit_radius,
-            list(arranque), field_yx=field_yx)
+            list(arranque), field_yx=field_yx, weighting=weighting,
+            weight_cap=weight_cap)
         estado = _psfao_fit_status(optimizer)
         row = {"lambda_A": float(mid), "samp": samp, "amp": amp, "bck": bck,
                "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring,
@@ -365,7 +435,8 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
 
 
 def build_psfao_model_document(rows, system, norm_radius, fit_radius, *, system_name="muse_nfm",
-                               wave_bin_A=None):
+                               wave_bin_A=None, weighting=None,
+                               weight_cap=PSFAO_DEFAULT_WEIGHT_CAP):
     """Assemble the psfao ``psf_model.json`` document from per-bin fit rows.
 
     Split out of ``run_stage_e01_psfao`` (behaviour unchanged) so the canonical
@@ -422,6 +493,13 @@ def build_psfao_model_document(rows, system, norm_radius, fit_radius, *, system_
                  "param_table": param_table, "n_bins_rejected": n_rejected,
                  "norm_radius_px": norm_radius, "fit_radius_px": fit_radius,
                  "param_names": list(PSFAO_PARAM_NAMES), "hybrid": False}
+    if weighting is not None:
+        # Viaja con el producto por el mismo motivo que la rejilla: quien lea
+        # este documento tiene que poder saber QUE decidio el ajuste.
+        psf_model["psfao_fit_weighting"] = str(weighting)
+        if str(weighting) == "relative":
+            psf_model["psfao_fit_weight_cap"] = (
+                None if weight_cap is None else float(weight_cap))
     if wave_bin_A is not None:
         psf_model["psfao_wave_bin_A"] = float(wave_bin_A)
         psf_model["psfao_wave_bin_A_note"] = (
@@ -450,10 +528,15 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
     fit_radius = inp["fit_radius"]
     norm_radius = inp["norm_radius"]
 
-    rows, _ = fit_psfao_bins(cube, inp["stat"], inp["wave"], bins, system, companion, mask_radius, fit_radius)
+    weighting = str(cfg.get("psf_fit_weighting", PSFAO_DEFAULT_WEIGHTING))
+    weight_cap = cfg.get("psf_fit_weight_cap", PSFAO_DEFAULT_WEIGHT_CAP)
+    rows, _ = fit_psfao_bins(cube, inp["stat"], inp["wave"], bins, system, companion,
+                             mask_radius, fit_radius, weighting=weighting,
+                             weight_cap=weight_cap)
     psf_model, meta = build_psfao_model_document(
         rows, system, norm_radius, fit_radius,
-        wave_bin_A=float(cfg.get("psfao_wave_bin_A", bin_A)))
+        wave_bin_A=float(cfg.get("psfao_wave_bin_A", bin_A)), weighting=weighting,
+        weight_cap=weight_cap)
     ok = meta["ok"]
     lam = meta["lam"]
     rings = meta["rings"]
@@ -478,7 +561,8 @@ def run_stage_e01_psfao(run_id=None, *, project_root=None):
         "masks": {"companion_radius_px": mask_radius, "chromatic_tracking": False,
                   "companion_yx": list(companion)},
         "fit": {"form_chosen": "psfao", "model": "maoppy.Psfao", "fit_radius_px": fit_radius,
-                "n_ok_bins": len(ok)},
+                "n_ok_bins": len(ok), "weighting": weighting,
+                "weight_cap": (None if weight_cap is None else float(weight_cap))},
         "smoothing": {"per_param_poly_deg": {k: (len(v) - 1) for k, v in poly.items()}},
         "companion_ring_metric": {
             "radius_px": float(np.hypot(companion[0] - cube.shape[1] // 2, companion[1] - cube.shape[2] // 2)),

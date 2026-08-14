@@ -66,7 +66,8 @@ servicio de esa métrica.
   de fuentes, `companion_ring_width_px` (default 3), `psfao_wave_bin_A`
   (default: el propio `psf_bin_A` — ver §5.1), `psfao_grid_reach_px`
   (default 140 px; el alcance de la rejilla con que se construye la PSF de
-  psfao cuando C4 la evalúa sobre toda la imagen).
+  psfao cuando C4 la evalúa sobre toda la imagen), `psf_fit_weighting`
+  (default `stat` — ver §5.2).
 - Material de referencia: los notebooks `04c_airy_ring_moffat_diagnostics` y
   `04d_pca_residual_moffat_diagnostics` documentan la estructura ya conocida
   de esta PSF (anillos tipo Airy del AO). Leerlos para saber qué esperar; no
@@ -177,6 +178,68 @@ Reglas:
   mentiría); un documento sin `param_table` se evalúa con λ exacta.
 - **No hay default numérico**: el histórico era 50 Å, la mitad del ancho de los
   bins, y es exactamente el fallo descrito arriba. No reintroducirlo.
+
+### 5.2 · `psf_fit_weighting` — qué parte de la imagen decide el ajuste
+
+Solo aplica a la forma `psfao`. Con `stat` —1/STAT, lo que se usó siempre— el χ² lo
+**domina el núcleo** por varios órdenes de magnitud y el halo no llega a tener voz. Eso no
+es un detalle: medido en `C1_chromatic_psf_debug` §13.f sobre ROXs 12 b, así el modelo
+reproduce el **28 %** del cromatismo del halo y deja el residuo de anillo en **32 %**.
+
+| valor | pesos | efecto medido (ROXs 12 b, 43 bins) |
+|---|---|---|
+| `stat` | `1/STAT` | croma 28 %, anillo 32.05 % — el histórico, y el **default** |
+| `relative` | `1/STAT ÷ clip(\|imagen\|, piso, techo)²`, con `psf_fit_weight_cap` | ver el barrido de abajo |
+| `halo` | `1/STAT`, núcleo a cero | croma **101 %**, anillo 15.84 % |
+
+Reglas:
+
+- **El default es `stat`**: ningún run cambia si no lo declara.
+- La elección **viaja en `psf_model.json`** (`psfao_fit_weighting`) y en el QC
+  (`fit.weighting`), por el mismo motivo que la rejilla: quien lea el producto tiene que
+  poder saber qué decidió el ajuste, no suponerlo.
+- `halo` es **diagnóstico, no default**: recupera todo el cromatismo pero deja el nivel del
+  anillo un 4–14 % bajo y empuja `beta` contra su cota.
+- Con `relative`, `beta` se apila cerca de su tope (5), pero **el resultado no depende de
+  eso**: fijándolo en 1.35 —la mediana histórica, lejos del borde— salen los mismos
+  números (croma 45 %, anillo 4.66 %) con 0 de 43 bins en la cota. Es la degeneración
+  `alpha`–`beta` (r = +0.98), no un ajuste apoyado en el límite.
+- La rama Moffat **no** pasa por aquí: `fit_moffat_image` nunca usó `STAT`, hace mínimos
+  cuadrados con recorte sigma. Las dos formas ya pesaban distinto antes de este knob.
+
+> **`relative` NO se puede usar tal cual, y está medido.** Se probó en la cadena entera el
+> 2026-08-14 y se revirtió. Arregla el halo —el residuo de anillo cae de 24.30 % a **4.64 %**,
+> por primera vez dentro del objetivo de esta spec, y el híbrido deja de hacer falta— pero
+> **rompe el núcleo**: el dato dice `F(r≤25)/F(box3) = 4.96` y el modelo pasa de decir 5.71
+> a decir **13.94**. Como la corrección de apertura es justo ese cociente, se infla ×2.7
+> (mediana 9.51 → 26.05) y arrastra a todo lo que cuelga: dispersión entre métodos
+> 27.9 % → 63.9 %, pares de continuo divergentes en D1 5 → 6, `open_issues` de F1 38 → 49 y
+> Ṁ un 51 % más alto (1.83e-13 → 2.76e-13 M☉/año) por un motivo equivocado.
+>
+> El diagnóstico es simétrico al problema original: con `stat` el núcleo se lo lleva todo;
+> con `relative` sin tope cada anillo pesa igual y el núcleo —9 píxeles de un disco de
+> 78 px de radio— deja de contar.
+
+**El tope: `psf_fit_weight_cap`.** Es la razón máxima entre el peso mayor y el menor que la
+imagen puede introducir (`cap = 1` → equivale a `stat`; `cap = None` → el `relative` sin
+tope de arriba). Barrido sobre ROXs 12 b, 15 bins, un solo vector de arranque —los absolutos
+son peores que los de la cadena, que usa arranque en caliente; lo que vale es la forma:
+
+| `cap` | anillo del compañero | `F(r≤25)/F(box3)` | error vs el dato (4.87) |
+|---|---|---|---|
+| 1 (= `stat`) | 32.80 % | 5.05 | +4 % |
+| **5** | **11.76 %** | **5.11** | **+5 %** |
+| 10 | 9.94 % | 5.16 | +6 % |
+| 20 | 8.77 % | 5.29 | +9 % |
+| 50 | 7.28 % | 5.80 | +19 % |
+| 100 | 6.34 % | 7.12 | +46 % |
+| 1000 | 4.84 % | 22.21 | +357 % |
+| ∞ (sin tope) | ~4.6 % | 13.94 | +185 % |
+
+El codo está en **5**: el residuo de anillo cae **a un tercio** y el núcleo se mueve **un
+punto**. A partir de ahí cada mejora del anillo se paga cara, y por encima de 100 el núcleo
+se dispara. **`cap = 5` es el default** (`PSFAO_DEFAULT_WEIGHT_CAP`), y el valor viaja en el
+documento (`psfao_fit_weight_cap`) y en el QC (`fit.weight_cap`) junto al esquema.
 
 ## 6. Esquema de `stage_e01_qc.json`
 
