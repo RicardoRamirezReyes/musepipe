@@ -11431,7 +11431,9 @@ def build_residuos_cells(mb, target, run_id):
             "              f'   relativo = {_dif / _esc:.2e}')\n"
             "        _ok = _dif <= _tol\n"
             "    print()\n"
-            "    print('IDÉNTICO: la reconstrucción reproduce la cadena.' if _ok else\n"
+            "    # La frase es literal a proposito: el test `slow` la busca tal cual,\n"
+            "    # igual que en los otros nueve notebooks.\n"
+            "    print('IDÉNTICO: la copia reproduce la cadena.' if _ok else\n"
             "          'DIFIERE — si has tocado una perilla, es lo esperado;'\n"
             "          ' si no, mira el chequeo de deriva.')"
         ),
