@@ -189,7 +189,7 @@ reproduce el **28 %** del cromatismo del halo y deja el residuo de anillo en **3
 | valor | pesos | efecto medido (ROXs 12 b, 43 bins) |
 |---|---|---|
 | `stat` | `1/STAT` | croma 28 %, anillo 32.05 % — el histórico, y el **default** |
-| `relative` | `1/STAT ÷ max(\|imagen\|, mediana)²` | croma **45 %**, anillo **4.65 %** |
+| `relative` | `1/STAT ÷ max(\|imagen\|, mediana)²` | croma **45 %**, anillo **4.65 %** — pero rompe el núcleo, ver abajo |
 | `halo` | `1/STAT`, núcleo a cero | croma **101 %**, anillo 15.84 % |
 
 Reglas:
@@ -206,6 +206,21 @@ Reglas:
   `alpha`–`beta` (r = +0.98), no un ajuste apoyado en el límite.
 - La rama Moffat **no** pasa por aquí: `fit_moffat_image` nunca usó `STAT`, hace mínimos
   cuadrados con recorte sigma. Las dos formas ya pesaban distinto antes de este knob.
+
+> **`relative` NO se puede usar tal cual, y está medido.** Se probó en la cadena entera el
+> 2026-08-14 y se revirtió. Arregla el halo —el residuo de anillo cae de 24.30 % a **4.64 %**,
+> por primera vez dentro del objetivo de esta spec, y el híbrido deja de hacer falta— pero
+> **rompe el núcleo**: el dato dice `F(r≤25)/F(box3) = 4.96` y el modelo pasa de decir 5.71
+> a decir **13.94**. Como la corrección de apertura es justo ese cociente, se infla ×2.7
+> (mediana 9.51 → 26.05) y arrastra a todo lo que cuelga: dispersión entre métodos
+> 27.9 % → 63.9 %, pares de continuo divergentes en D1 5 → 6, `open_issues` de F1 38 → 49 y
+> Ṁ un 51 % más alto (1.83e-13 → 2.76e-13 M☉/año) por un motivo equivocado.
+>
+> El diagnóstico es simétrico al problema original: con `stat` el núcleo se lo lleva todo;
+> con `relative` cada anillo pesa igual y el núcleo —9 píxeles de un disco de 78 px de
+> radio— deja de contar. Lo que hace falta es un peso **equilibrado**, no invertido: un
+> esquema intermedio (p. ej. limitar cuánto se puede desviar el peso relativo, o ajustar
+> contra `F(r, λ)` imponiendo el nivel del núcleo como restricción). Eso está sin hacer.
 
 ## 6. Esquema de `stage_e01_qc.json`
 
