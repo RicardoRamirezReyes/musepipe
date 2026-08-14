@@ -12,7 +12,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
-from .stage_e01_psfao import PSFAO_DEFAULT_WEIGHTING
+from .stage_e01_psfao import PSFAO_DEFAULT_WEIGHT_CAP, PSFAO_DEFAULT_WEIGHTING
 from ..io import read_json, write_json
 from ..paths import RunPaths
 from ..psf import (
@@ -436,6 +436,7 @@ def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None):
         # QUE PARTE DE LA IMAGEN manda en el ajuste. El default (`stat`) es el
         # historico y no cambia ningun run que no lo declare.
         weighting=str(cfg.get("psf_fit_weighting", PSFAO_DEFAULT_WEIGHTING)),
+        weight_cap=cfg.get("psf_fit_weight_cap", PSFAO_DEFAULT_WEIGHT_CAP),
     )
     if not recons:
         return {"status": "unavailable:no_valid_fits", "rows": rows}
@@ -595,6 +596,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
             # ajustar; el config manda si lo declara.
             wave_bin_A=float(cfg.get("psfao_wave_bin_A", inp["bin_A"])),
             weighting=str(cfg.get("psf_fit_weighting", PSFAO_DEFAULT_WEIGHTING)),
+            weight_cap=cfg.get("psf_fit_weight_cap", PSFAO_DEFAULT_WEIGHT_CAP),
         )
         mids = sorted(recons)
         p_images = [recons[m][0] for m in mids]

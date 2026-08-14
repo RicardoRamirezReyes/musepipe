@@ -189,7 +189,7 @@ reproduce el **28 %** del cromatismo del halo y deja el residuo de anillo en **3
 | valor | pesos | efecto medido (ROXs 12 b, 43 bins) |
 |---|---|---|
 | `stat` | `1/STAT` | croma 28 %, anillo 32.05 % — el histórico, y el **default** |
-| `relative` | `1/STAT ÷ max(\|imagen\|, mediana)²` | croma **45 %**, anillo **4.65 %** — pero rompe el núcleo, ver abajo |
+| `relative` | `1/STAT ÷ clip(\|imagen\|, piso, techo)²`, con `psf_fit_weight_cap` | ver el barrido de abajo |
 | `halo` | `1/STAT`, núcleo a cero | croma **101 %**, anillo 15.84 % |
 
 Reglas:
@@ -217,10 +217,29 @@ Reglas:
 > Ṁ un 51 % más alto (1.83e-13 → 2.76e-13 M☉/año) por un motivo equivocado.
 >
 > El diagnóstico es simétrico al problema original: con `stat` el núcleo se lo lleva todo;
-> con `relative` cada anillo pesa igual y el núcleo —9 píxeles de un disco de 78 px de
-> radio— deja de contar. Lo que hace falta es un peso **equilibrado**, no invertido: un
-> esquema intermedio (p. ej. limitar cuánto se puede desviar el peso relativo, o ajustar
-> contra `F(r, λ)` imponiendo el nivel del núcleo como restricción). Eso está sin hacer.
+> con `relative` sin tope cada anillo pesa igual y el núcleo —9 píxeles de un disco de
+> 78 px de radio— deja de contar.
+
+**El tope: `psf_fit_weight_cap`.** Es la razón máxima entre el peso mayor y el menor que la
+imagen puede introducir (`cap = 1` → equivale a `stat`; `cap = None` → el `relative` sin
+tope de arriba). Barrido sobre ROXs 12 b, 15 bins, un solo vector de arranque —los absolutos
+son peores que los de la cadena, que usa arranque en caliente; lo que vale es la forma:
+
+| `cap` | anillo del compañero | `F(r≤25)/F(box3)` | error vs el dato (4.87) |
+|---|---|---|---|
+| 1 (= `stat`) | 32.80 % | 5.05 | +4 % |
+| **5** | **11.76 %** | **5.11** | **+5 %** |
+| 10 | 9.94 % | 5.16 | +6 % |
+| 20 | 8.77 % | 5.29 | +9 % |
+| 50 | 7.28 % | 5.80 | +19 % |
+| 100 | 6.34 % | 7.12 | +46 % |
+| 1000 | 4.84 % | 22.21 | +357 % |
+| ∞ (sin tope) | ~4.6 % | 13.94 | +185 % |
+
+El codo está en **5**: el residuo de anillo cae **a un tercio** y el núcleo se mueve **un
+punto**. A partir de ahí cada mejora del anillo se paga cara, y por encima de 100 el núcleo
+se dispara. **`cap = 5` es el default** (`PSFAO_DEFAULT_WEIGHT_CAP`), y el valor viaja en el
+documento (`psfao_fit_weight_cap`) y en el QC (`fit.weight_cap`) junto al esquema.
 
 ## 6. Esquema de `stage_e01_qc.json`
 
