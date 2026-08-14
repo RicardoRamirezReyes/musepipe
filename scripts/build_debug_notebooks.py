@@ -213,6 +213,24 @@ _HALOSUB_COMUN = [
 #   * `factor_at_wavelengths` y sus guardias, que aqui son **la funcion bajo
 #     sospecha**: viajan copiadas para poder editarlas sin tocar la cadena, el
 #     mismo corte invertido que hace C1 con `_evaluate_psfao`.
+# `residuos_debug` mira el residuo `dato - modelo` en (radio, lambda). Lo que
+# viaja copiado es lo que AUDITA -- el perfil radial del residuo y las metricas
+# de anillo, que son la lupa -- y se importa lo que da por bueno: la evaluacion
+# de la PSF es de C1 y la correccion de apertura de C2. `make_bins` y
+# `_bad_windows` viajan porque el binado tiene que ser EL MISMO que el del CSV
+# que se lee, o los modelos por bin no corresponden a sus imagenes.
+INLINE_SOURCES["RESID"] = [
+    ("musepipe/psf.py", [
+        "source_mask", "companion_ring_metric", "radial_hybrid_profile",
+        "evaluate_radial_profile",
+    ]),
+    ("musepipe/stages/stage_e01_psfao.py", ["_bad_windows", "make_bins", "_ring_residual"]),
+    ("musepipe/extraction/aperture.py", ["_as_cube", "annulus_background_spectrum"]),
+    ("musepipe/reduction/verify.py", [
+        "VerificationError", "circular_aperture_mask", "extract_aperture_spectrum",
+    ]),
+]
+
 INLINE_SOURCES["APCORR"] = INLINE_SOURCES["C4"] + [
     ("musepipe/reduction/verify.py", [
         "VerificationError", "circular_aperture_mask", "extract_aperture_spectrum",
@@ -10739,9 +10757,417 @@ def build_apcorr_cells(mb, target, run_id):
     return cells
 
 
+def build_residuos_cells(mb, target, run_id):
+    """Las celdas de `residuos_debug`: el residuo `dato - modelo`, en (radio, lambda).
+
+    Todo lo que la cadena mide del halo son cantidades INTEGRADAS -- un numero
+    por lambda -- y un integral no dice DONDE falla el modelo. Este notebook
+    mira el residuo, y empieza por la pregunta que invalidaria a las demas si
+    saliera que si: ¿parte del cromatismo que le falta al modelo no es halo,
+    sino una componente aditiva con dependencia en lambda?
+
+    No ajusta nada: el modelo por bin se reconstruye desde el CSV de C1
+    (`amp * PSF(x, dx, dy) + bck`), asi que cuesta un par de minutos.
+    """
+    md, code = mb.md, mb.code
+    sources = extract_sources("RESID")
+    inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
+    shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
+
+    return [
+        md(
+            f"# residuos · dónde falla el modelo de PSF, no cuánto\n\n"
+            f"**Objeto:** {target}  |  **Run:** `{run_id}`  |  "
+            f"**Spec:** [`docs/spec_C1_codex_chromatic_psf.md`]"
+            f"(../../../docs/spec_C1_codex_chromatic_psf.md)\n\n"
+            "El modelo de PSF de C1 reproduce **~28 %** del cromatismo del halo que se mide en "
+            "el dato (`apcorr_debug` §12), y la §13 de `C1_chromatic_psf_debug` ya demostró que "
+            "**re-parametrizar lo que hay no lo arregla**. Pero todo eso son cantidades "
+            "**integradas**: un número por λ, que no dice *dónde* falla.\n\n"
+            "El residuo `dato − modelo` sí lo dice, y su lectura está cantada de antemano:\n\n"
+            "| lo que se vea en el residuo | lo que significa |\n|---|---|\n"
+            "| anillo a un radio fijo | estructura de la AO: la forma está mal, no la amplitud |\n"
+            "| falda suave que crece al azul | el halo que falta, y su perfil dice qué término añadir |\n"
+            "| **plano en todo el campo** | **pedestal aditivo: es problema del dato, no del modelo** |\n"
+            "| estructura azimutal | elongación, refracción diferencial o vibración |\n\n"
+            "**Se empieza por la tercera fila** (§5): si el residuo es un pedestal, la medida de "
+            "los 8 % está inflada y todo lo demás sobra. Las otras tres lecturas son la etapa "
+            "siguiente de este mismo notebook.\n\n"
+            "> **No ajusta nada.** El modelo por bin se reconstruye desde el CSV de C1 —"
+            "`amp · PSF(x, dx, dy) + bck`, con los siete parámetros, el `samp` y el "
+            "desplazamiento que la etapa ya escribió—, así que esto no vuelve a llamar al "
+            "optimizador ni una vez."
+        ),
+        code(
+            "import csv, json, sys, warnings\n"
+            "from pathlib import Path\n\n"
+            "import numpy as np\n"
+            "from astropy.io import fits\n"
+            "import matplotlib.pyplot as plt\n\n"
+            "import matplotlib as mpl\n"
+            "mpl.rcParams['figure.dpi'] = 120\n"
+            "mpl.rcParams['savefig.dpi'] = 200\n"
+            "try:\n"
+            "    from matplotlib_inline.backend_inline import set_matplotlib_formats\n"
+            "    set_matplotlib_formats('retina')\n"
+            "except Exception:\n"
+            "    pass\n"
+            "_aqui = Path.cwd()\n"
+            "ROOT = next(p for p in (_aqui, *_aqui.parents) if (p / 'musepipe').is_dir())\n"
+            "sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'notebooks'))\n"
+            "import _nbcommon as nb\n\n"
+            f"RUN_ID = nb.resolve_run_id({run_id!r})\n"
+            "RD = nb.run_dir(RUN_ID); SD = RD / 'stages'\n"
+            "TARGET = nb.run_target(RUN_ID) or nb.display_name(RUN_ID)\n"
+            "print('objeto :', TARGET, '·', nb.display_name(RUN_ID))\n"
+            "print('run    :', RUN_ID)"
+        ),
+        md(
+            "## 1 · Perillas\n\n"
+            "Del **config resuelto de la etapa**, nunca copiadas como literales: C1 rellena "
+            "defaults que el run no escribe, y copiarlos a mano es lo que hizo que el primer "
+            "notebook de C3 no reprodujera la cadena."
+        ),
+        code(
+            "from musepipe.stages.stage_e01_psf import stage_e01_config_from_run\n"
+            "from musepipe.stages.stage_e01_psfao import prepare_psfao_inputs\n\n"
+            "E01 = stage_e01_config_from_run(RUN_ID, project_root=ROOT)\n"
+            "R_NORM = float(E01.get('psf_norm_radius_px', E01.get('e01_norm_radius_px', 25.0)))\n"
+            "R_GRANDE = 32.0        # apertura grande: casi todo el halo medible\n"
+            "# Anillos de fondo para la §5.b. NO es una decisión científica nueva:\n"
+            "# se barren tres y se enseña la tendencia, que es el diagnóstico.\n"
+            "ANILLOS = [(40.0, 60.0), (50.0, 70.0), (60.0, 80.0)]\n"
+            "# Los tres tramos en λ con los que se parte todo lo demás.\n"
+            "CORTE_AZUL_A, CORTE_ROJO_A = 6400.0, 8000.0\n\n"
+            "QC_C1 = json.loads((SD / 'stage_e01_qc.json').read_text(encoding='utf-8'))\n"
+            "PSF_MODEL = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n"
+            "FORMA = str(PSF_MODEL.get('form', 'moffat')).lower()\n"
+            "ES_PSFAO = FORMA == 'psfao'\n"
+            "NOMBRES = tuple(PSF_MODEL.get('param_names', ()))\n"
+            "print(f'forma elegida por C1: {FORMA}')\n"
+            "print(f'radios: normalización {R_NORM:.0f} px · grande {R_GRANDE:.0f} px')\n"
+            "print(f'anillos de fondo: {ANILLOS}')\n"
+            "_hib = QC_C1.get('hybrid') or {}\n"
+            "print(f\"híbrido: aplicado={_hib.get('applied')}\"\n"
+            "      f\" · suavizado={_hib.get('smoothing_scale_px')}\")"
+        ),
+        md(
+            "## 2 · La escalera de entradas, con su fecha\n\n"
+            "Un run puede tener piezas de vintages distintos. Si algo aquí está fechado antes "
+            "que su entrada, lo que salga describe un estado que ya no existe."
+        ),
+        code(
+            "import datetime as _dt\n\n"
+            "ESCALERA = [\n"
+            "    ('B1/B2  cubo de entrada', SD / 'stage02_xcorr_cube_stack.fits'),\n"
+            "    ('B3     posiciones', SD / 'stage01c_qc.json'),\n"
+            "    ('C1     modelo de PSF', SD / 'psf_model.json'),\n"
+            "    ('C1     parámetros por bin', SD / 'stage_e01_psfao_params.csv'),\n"
+            "    ('C1     residuo del híbrido', SD / 'psf_hybrid_residual.fits'),\n"
+            "]\n"
+            "for etiqueta, ruta in ESCALERA:\n"
+            "    if ruta.exists():\n"
+            "        cuando = _dt.datetime.fromtimestamp(ruta.stat().st_mtime)\n"
+            "        print(f'  {etiqueta:28s} {cuando:%Y-%m-%d %H:%M}  {ruta.name}')\n"
+            "    else:\n"
+            "        print(f'  {etiqueta:28s} {\"AUSENTE\":16s}  {ruta.name}')"
+        ),
+        md(
+            "## 3 · Las funciones copiadas de `musepipe`\n\n"
+            "Viaja copiado lo que este notebook **audita** —el perfil radial del residuo y las "
+            "métricas de anillo— y se **importa** lo que es de otra etapa y aquí se da por "
+            "bueno: `evaluate_psf_model` es de C1 y `aperture_correction_from_psf` de C2.\n\n"
+            + "\n".join(f"- `{name}` — de `{rel}`" for rel, name, _s, _h in sources)
+        ),
+        code(
+            "# ------------------------------------------------------------------\n"
+            "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
+            "# ------------------------------------------------------------------\n"
+            + "\n".join(needed_imports(sources)) + "\n\n"
+            + "\n".join(needed_constants(sources)) + "\n\n\n"
+            + inline_src
+        ),
+        md("## 4 · Chequeo de deriva"),
+        drift_cell(code, shas, "RESID"),
+        md(
+            "## 5 · ¿Es un pedestal?\n\n"
+            "La medida que abrió todo esto —`F(≤32 px)/F(≤25 px)`, que varía un **8 %** en el "
+            "dato y un 2.3 % en el modelo— se hace con dos sumas de apertura **sin restar "
+            "fondo**. Cualquier componente **aditiva** con dependencia en λ (cielo residual, luz "
+            "dispersada, pedestal instrumental) entra en el anillo de 25–32 px mucho más que en "
+            "el círculo interior, y se disfrazaría exactamente de esto.\n\n"
+            "Cuatro medidas, de la más barata a la más cara. La pregunta es siempre la misma: "
+            "**¿cuánto del 8 % sobrevive?**"
+        ),
+        code(
+            "with fits.open(SD / 'stage02_xcorr_cube_stack.fits', memmap=True) as _h:\n"
+            "    CUBE = np.asarray(_h['CUBES'].data, dtype=float)\n"
+            "    WAVE = np.asarray(_h['WAVELENGTH'].data, dtype=float)\n"
+            "if CUBE.ndim == 4:\n"
+            "    CUBE = CUBE[0]\n"
+            "_pos = json.loads((SD / 'stage01c_qc.json').read_text(encoding='utf-8'))\n"
+            "STAR_YX = tuple(float(v) for v in _pos['primary']['pos_yx'])\n"
+            "COMP_YX = tuple(float(v) for v in _pos['companion']['pos_yx'])\n"
+            "INP = prepare_psfao_inputs(dict(E01), SD)\n"
+            "MASK_RADIUS_PX = float(INP['mask_radius'])\n"
+            "BINS = INP['bins']\n\n\n"
+            "def _rango(v):\n"
+            "    \"\"\"Recorrido de punta a punta, p98/p2 — el mismo de `apcorr_debug` §12.\"\"\"\n"
+            "    _f = np.isfinite(v)\n"
+            "    return float(np.nanpercentile(v[_f], 98)) / float(np.nanpercentile(v[_f], 2))\n\n\n"
+            "F_NORM = extract_aperture_spectrum(CUBE, STAR_YX, R_NORM)\n"
+            "F_GRANDE = extract_aperture_spectrum(CUBE, STAR_YX, R_GRANDE)\n"
+            "with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "    CROMA_DATO = _rango(F_GRANDE / F_NORM)\n"
+            "print(f'cubo {CUBE.shape} · estrella en {STAR_YX} · compañero en {COMP_YX}')\n"
+            "print(f'cromatismo del dato, sin tocar nada: {CROMA_DATO:.4f}'\n"
+            "      f'  ({100 * (CROMA_DATO - 1):.1f} %)   <- el número a explicar')"
+        ),
+        md(
+            "### 5.a · Lo que el ajuste ya se comió\n\n"
+            "`fit_bin` ajusta un **fondo constante** `bck` junto con la amplitud, así que un "
+            "pedestal plano ya debería estar absorbido ahí. Dos preguntas: cuánto pesa ese "
+            "fondo en el anillo que decide el cociente, y **si es cromático** — porque un "
+            "pedestal que sube hacia el rojo empujaría el cociente en sentido contrario al que "
+            "se observa, y entonces explicaría el problema aún menos."
+        ),
+        code(
+            "if not ES_PSFAO:\n"
+            "    print('esta cadena eligió Moffat: su CSV no trae `bck` por bin.')\n"
+            "    print('Las §§5.a, 5.c y 5.d son de la rama psfao; la §5.b sí aplica.')\n"
+            "    FILAS = []\n"
+            "else:\n"
+            "    FILAS = sorted((r for r in csv.DictReader(\n"
+            "        open(SD / 'stage_e01_psfao_params.csv', encoding='utf-8'))\n"
+            "        if r['status'] == 'ok'), key=lambda r: float(r['lambda_A']))\n"
+            "    LAM = np.array([float(r['lambda_A']) for r in FILAS])\n"
+            "    BCK = np.array([float(r['bck']) for r in FILAS])\n"
+            "    _area_anillo = np.pi * (R_GRANDE ** 2 - R_NORM ** 2)\n"
+            "    _flujo_anillo = np.interp(LAM, WAVE, F_GRANDE - F_NORM)\n"
+            "    _peso = BCK * _area_anillo / _flujo_anillo\n"
+            "    _pend = np.polyfit(LAM, BCK, 1)[0] * 1000\n"
+            "    print(f'bck: mediana {np.median(BCK):.4g}, recorrido'\n"
+            "          f' {BCK.min():.3g}..{BCK.max():.3g}')\n"
+            "    print(f'     pesa {np.median(_peso):.2%} del flujo del anillo {R_NORM:.0f}-{R_GRANDE:.0f} px')\n"
+            "    print(f'     pendiente en λ: {_pend:+.3f} por 1000 Å')\n"
+            "    if _pend > 0:\n"
+            "        print('     -> SUBE hacia el rojo. Un aditivo así mete más luz en el anillo')\n"
+            "        print('        en el rojo, o sea empuja F(32)/F(25) HACIA ARRIBA al rojo,')\n"
+            "        print('        y lo que se observa es que BAJA. Explica el problema aún menos.')"
+        ),
+        md(
+            "### 5.b · La vara, restando fondo\n\n"
+            "Si el 8 % fuera aditivo, restar un fondo de anillo lo tumbaría. El detalle que hay "
+            "que mirar **no es sólo el número final, sino la tendencia con el radio del "
+            "anillo**: cuanto más cerca esté el anillo de la estrella, más halo suyo contiene, y "
+            "restarlo quita señal de verdad. Si al alejar el anillo el cociente vuelve al valor "
+            "crudo, lo que se estaba restando era halo, no fondo."
+        ),
+        code(
+            "_n_norm = np.pi * R_NORM ** 2\n"
+            "_n_grande = np.pi * R_GRANDE ** 2\n"
+            "print(f'{\"tratamiento\":34s} {\"cociente\":>9s} {\"%\":>7s} {\"nivel restado\":>14s}')\n"
+            "print(f'{\"sin restar nada\":34s} {CROMA_DATO:9.4f}'\n"
+            "      f' {100 * (CROMA_DATO - 1):6.1f}% {\"-\":>14s}')\n"
+            "SUPERVIVENCIA = []\n"
+            "for _r_in, _r_out in ANILLOS:\n"
+            "    _bkg = annulus_background_spectrum(CUBE, STAR_YX, _r_in, _r_out)\n"
+            "    with np.errstate(invalid='ignore', divide='ignore'):\n"
+            "        _c = _rango((F_GRANDE - _bkg * _n_grande) / (F_NORM - _bkg * _n_norm))\n"
+            "    SUPERVIVENCIA.append((_r_in, _r_out, _c, float(np.nanmedian(_bkg))))\n"
+            "    print(f'{f\"anillo {_r_in:.0f}-{_r_out:.0f} px restado\":34s} {_c:9.4f}'\n"
+            "          f' {100 * (_c - 1):6.1f}% {np.nanmedian(_bkg):14.4g}')\n"
+            "_cs = np.array([s[2] for s in SUPERVIVENCIA])\n"
+            "_niv = np.array([s[3] for s in SUPERVIVENCIA])\n"
+            "print()\n"
+            "print(f'sobrevive entre {100 * (_cs.min() - 1) / (CROMA_DATO - 1):.0f}%'\n"
+            "      f' y {100 * (_cs.max() - 1) / (CROMA_DATO - 1):.0f}% del cromatismo original.')\n"
+            "if _niv[0] > _niv[-1] and _cs[0] < _cs[-1]:\n"
+            "    print('Y el «fondo» CAE al alejar el anillo mientras el cociente SUBE hacia el')\n"
+            "    print('valor crudo: lo que se restaba era halo de la estrella, no fondo.')"
+        ),
+        md(
+            "### 5.c · El residuo, región por región\n\n"
+            "Aquí entra el modelo. Se reconstruye el de cada bin desde el CSV —sin reajustar— y "
+            "se mira **qué fracción del dato queda sin explicar**, por separado dentro del "
+            "núcleo (`r ≤ R_NORM`) y en el anillo que decide el cociente. Partido en tres "
+            "tramos de λ.\n\n"
+            "Un pedestal aditivo dejaría un residuo del **mismo signo y parecido tamaño en los "
+            "tres tramos**. Que el residuo del anillo cambie de signo entre el azul y el rojo "
+            "sería otra cosa: el halo del modelo mal repartido en λ, que es justo lo que la §12 "
+            "de `apcorr_debug` mide de forma integrada."
+        ),
+        code(
+            "if not ES_PSFAO:\n"
+            "    print('sin CSV de psfao: esta sección no aplica a la forma Moffat.')\n"
+            "else:\n"
+            "    from maoppy.psfmodel import Psfao as _Psfao\n\n"
+            "    _por_lambda = {round(float(b[2]), 3): b for b in BINS}\n"
+            "    IMAGENES, MODELOS, LAM_OK = [], [], []\n"
+            "    for _r in FILAS:\n"
+            "        _b = _por_lambda.get(round(float(_r['lambda_A']), 3))\n"
+            "        if _b is None:\n"
+            "            continue\n"
+            "        _img = np.nanmedian(CUBE[_b[3]], axis=0)\n"
+            "        _m = _Psfao(_img.shape, system=INP['system'], samp=float(_r['samp']))\n"
+            "        with warnings.catch_warnings():\n"
+            "            warnings.simplefilter('ignore')\n"
+            "            _recon = (float(_r['amp'])\n"
+            "                      * _m([float(_r[n]) for n in NOMBRES],\n"
+            "                           dx=float(_r['dx']), dy=float(_r['dy']))\n"
+            "                      + float(_r['bck']))\n"
+            "        IMAGENES.append(_img); MODELOS.append(_recon)\n"
+            "        LAM_OK.append(float(_r['lambda_A']))\n"
+            "    LAM_OK = np.array(LAM_OK)\n"
+            "    print(f'{len(MODELOS)} modelos por bin reconstruidos desde el CSV, sin reajustar')\n\n"
+            "    _yy, _xx = np.mgrid[0:IMAGENES[0].shape[0], 0:IMAGENES[0].shape[1]]\n"
+            "    _rr = np.hypot(_yy - STAR_YX[0], _xx - STAR_YX[1])\n"
+            "    MASCARA_COMP = source_mask(IMAGENES[0].shape, [COMP_YX], MASK_RADIUS_PX)\n"
+            "    _sin = ~MASCARA_COMP\n"
+            "    _sel_nucleo = (_rr <= R_NORM) & _sin\n"
+            "    _sel_anillo = (_rr > R_NORM) & (_rr <= R_GRANDE) & _sin\n"
+            "    _S = lambda _im, _sel: np.array([float(np.nansum(_i[_sel])) for _i in _im])\n"
+            "    _d_n, _d_a = _S(IMAGENES, _sel_nucleo), _S(IMAGENES, _sel_anillo)\n"
+            "    _m_n, _m_a = _S(MODELOS, _sel_nucleo), _S(MODELOS, _sel_anillo)\n"
+            "    AZUL = LAM_OK < CORTE_AZUL_A\n"
+            "    ROJO = LAM_OK > CORTE_ROJO_A\n"
+            "    TRAMOS = ((f'azul  <{CORTE_AZUL_A:.0f}', AZUL),\n"
+            "              ('medio', ~AZUL & ~ROJO),\n"
+            "              (f'rojo  >{CORTE_ROJO_A:.0f}', ROJO))\n"
+            "    print()\n"
+            "    print('residuo (dato − modelo) en fracción del dato de cada región:')\n"
+            "    print(f'   {\"tramo\":16s} {f\"r<={R_NORM:.0f}\":>10s}'\n"
+            "          f' {f\"anillo {R_NORM:.0f}-{R_GRANDE:.0f}\":>16s}')\n"
+            "    _fa = {}\n"
+            "    for _et, _sel in TRAMOS:\n"
+            "        _rn = float(np.median(((_d_n - _m_n) / _d_n)[_sel]))\n"
+            "        _ra = float(np.median(((_d_a - _m_a) / _d_a)[_sel]))\n"
+            "        _fa[_et] = _ra\n"
+            "        print(f'   {_et:16s} {_rn:9.2%} {_ra:15.2%}')\n"
+            "    _v = list(_fa.values())\n"
+            "    print()\n"
+            "    if _v[0] * _v[-1] < 0:\n"
+            "        print(f'El residuo del anillo CAMBIA DE SIGNO: {_v[0]:+.1%} en el azul,'\n"
+            "              f' {_v[-1]:+.1%} en el rojo.')\n"
+            "        print('El modelo se queda corto de halo en el azul y se pasa en el rojo.')\n"
+            "        print('Eso NO es un pedestal aditivo: es el halo mal repartido en λ.')\n"
+            "    else:\n"
+            "        print('El residuo del anillo mantiene el signo en toda la banda:')\n"
+            "        print('compatible con una componente aditiva — seguir por la §5.d.')"
+        ),
+        md(
+            "### 5.d · El perfil radial del residuo\n\n"
+            "La prueba directa, y la que no admite interpretación: **un pedestal es plano en "
+            "radio**. Se toma la mediana azimutal del residuo por bin —la misma función que usa "
+            "la rama híbrida de C1— y se normaliza a `R_NORM`, por tramos de λ.\n\n"
+            "Plano de 20 a 60 px → aditivo. Cayendo → es la falda de la estrella, y entonces el "
+            "8 % es real y el problema está en el modelo."
+        ),
+        code(
+            "if not ES_PSFAO:\n"
+            "    print('sin CSV de psfao: esta sección no aplica a la forma Moffat.')\n"
+            "else:\n"
+            "    SUAVE_PX = float((QC_C1.get('hybrid') or {}).get('smoothing_scale_px', 0.0))\n"
+            "    PERFILES, RADIOS = [], None\n"
+            "    for _img, _mod in zip(IMAGENES, MODELOS):\n"
+            "        _rad, _per = radial_hybrid_profile(_img - _mod, STAR_YX,\n"
+            "                                          mask=MASCARA_COMP,\n"
+            "                                          smoothing_scale_px=SUAVE_PX)\n"
+            "        if RADIOS is None:\n"
+            "            RADIOS = _rad\n"
+            "        PERFILES.append(_per if _rad.size == RADIOS.size\n"
+            "                        else np.interp(RADIOS, _rad, _per))\n"
+            "    PERFILES = np.array(PERFILES)\n"
+            "    _i_norm = int(np.argmin(np.abs(RADIOS - R_NORM)))\n"
+            "    _muestra = (20.0, R_NORM, R_GRANDE, 40.0, 50.0, 60.0)\n"
+            "    print(f'perfil radial del residuo, normalizado a r={R_NORM:.0f}:')\n"
+            "    print(f'   {\"tramo\":16s} ' + '  '.join(f'r={_r:<5.0f}' for _r in _muestra))\n"
+            "    _curvas = []\n"
+            "    for _et, _sel in TRAMOS:\n"
+            "        _p = np.nanmedian(PERFILES[_sel], axis=0)\n"
+            "        _p = _p / _p[_i_norm]\n"
+            "        _curvas.append((_et, _p))\n"
+            "        print(f'   {_et:16s} ' + '  '.join(\n"
+            "            f'{_p[int(np.argmin(np.abs(RADIOS - _r)))]:6.2f} ' for _r in _muestra))\n"
+            "    _caida = [np.abs(_p[int(np.argmin(np.abs(RADIOS - 60.0)))]) for _, _p in _curvas]\n"
+            "    print()\n"
+            "    if max(_caida) < 0.3:\n"
+            "        print('A 60 px no queda nada del residuo: CAE como una falda, no es plano.')\n"
+            "        print('-> la hipótesis del pedestal aditivo queda descartada.')\n"
+            "    else:\n"
+            "        print('El residuo sigue en pie a 60 px: compatible con un pedestal.')\n"
+            "    fig, ax = plt.subplots(figsize=(9, 3.6))\n"
+            "    for _et, _p in _curvas:\n"
+            "        ax.plot(RADIOS, _p, lw=1.1, label=_et)\n"
+            "    ax.axvline(R_NORM, color='0.6', lw=0.7, ls=':')\n"
+            "    ax.axvline(R_GRANDE, color='0.6', lw=0.7, ls=':')\n"
+            "    ax.axhline(0.0, color='0.6', lw=0.7)\n"
+            "    ax.set_xlim(0, 70); ax.set_xlabel('radio [px]')\n"
+            "    ax.set_ylabel(f'residuo / residuo(r={R_NORM:.0f})', fontsize=8)\n"
+            "    ax.set_title('§5.d · plano = pedestal; cayendo = falda de la estrella',\n"
+            "                 fontsize=9)\n"
+            "    ax.legend(fontsize=8); fig.tight_layout(); plt.show()"
+        ),
+        md(
+            "## 6 · Comparación con la cadena\n\n"
+            "El producto que esta reconstrucción tiene que reproducir es **`psf_hybrid_residual."
+            "fits`**: la mediana azimutal de `dato − modelo` por bin, que C1 calcula en su rama "
+            "híbrida. Es una **función pura** de las imágenes por bin, los modelos y la máscara "
+            "del compañero — y las tres se rehacen aquí desde el CSV, sin reajustar.\n\n"
+            "Si esto sale idéntico, la reconstrucción del modelo es la de la cadena, y todo lo "
+            "que dice la §5 se apoya en el mismo modelo que consumen C2–C6.\n\n"
+            "> El producto se guarda en **float32** y aquí se calcula en float64, así que la "
+            "tolerancia es la del redondeo de almacenamiento (~1e-5 relativo), no un margen "
+            "elegido a conveniencia."
+        ),
+        code(
+            "_ruta_hib = SD / 'psf_hybrid_residual.fits'\n"
+            "if not ES_PSFAO or not _ruta_hib.exists():\n"
+            "    print('no hay `psf_hybrid_residual.fits` para esta forma/run:'\n"
+            "          ' la comparación no aplica.')\n"
+            "else:\n"
+            "    with fits.open(_ruta_hib) as _h:\n"
+            "        _prod = np.asarray(_h['PROFILE'].data, dtype=np.float64)\n"
+            "        _prod_r = np.asarray(_h['RADIUS_PX'].data, dtype=np.float64)\n"
+            "    print(f'perfiles: reconstruidos {PERFILES.shape} · producto {_prod.shape}')\n"
+            "    _ok = PERFILES.shape == _prod.shape and np.allclose(RADIOS, _prod_r)\n"
+            "    if _ok:\n"
+            "        _esc = float(np.nanmedian(np.abs(_prod))) or 1.0\n"
+            "        _dif = float(np.nanmax(np.abs(PERFILES - _prod)))\n"
+            "        _tol = 1e-4 * _esc      # redondeo de float32 sobre la escala del perfil\n"
+            "        print(f'   |dif| máx = {_dif:.4g}   escala = {_esc:.4g}'\n"
+            "              f'   relativo = {_dif / _esc:.2e}')\n"
+            "        _ok = _dif <= _tol\n"
+            "    print()\n"
+            "    print('IDÉNTICO: la reconstrucción reproduce la cadena.' if _ok else\n"
+            "          'DIFIERE — si has tocado una perilla, es lo esperado;'\n"
+            "          ' si no, mira el chequeo de deriva.')"
+        ),
+        md(
+            "## 7 · Qué NO decide este notebook, y qué falta\n\n"
+            "1. **No dice de qué está hecho lo que sobra.** Separar «aditivo» de «halo» no "
+            "identifica la causa: cielo residual, luz dispersada en el instrumento, fringing y "
+            "refracción diferencial dejan firmas distintas, y ninguna se mide aquí.\n"
+            "2. **No toca C1 ni la cadena.** Cambiar el modelo obliga a re-correr "
+            "C1 → C2–C6 → D2 → E → F → G, y es decisión científica.\n"
+            "3. **El anillo de fondo de la §5.b no es una decisión nueva**: se barren tres "
+            "radios y lo que se lee es la *tendencia*, no un valor elegido.\n\n"
+            "**Lo que falta, y es la etapa siguiente de este mismo notebook:**\n\n"
+            "- el **mapa (radio, λ)** del residuo, que es donde se vería un anillo de la AO;\n"
+            "- el **perfil azimutal** a 25, 32 y a la separación del compañero;\n"
+            "- **el híbrido que no viaja**: C1 mide este residuo y lo guarda, pero el término no "
+            "entra en `psf_model.json`, así que C2–C6 no lo evalúan (§11 de "
+            "`C1_chromatic_psf_debug`). Recalcular el cromatismo **con él dentro** puede "
+            "enseñar que el término que falta ya estaba medido."
+        ),
+    ]
+
+
 BUILDERS = {
     "C1": ("C1_chromatic_psf_debug", build_c1_cells),
     "APCORR": ("apcorr_debug", build_apcorr_cells),
+    "RESID": ("residuos_debug", build_residuos_cells),
     "A3": ("A3_telluric_debug", build_a3_cells),
     "C2": ("C2_aperture_debug", build_c2_cells),
     "C3": ("C3_optimal_debug", build_c3_cells),

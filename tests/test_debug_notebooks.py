@@ -98,6 +98,12 @@ class InlinedSourceTests(unittest.TestCase):
         # función que este notebook existe para auditar.
         "APCORR": (["import warnings", "import numpy as np"],
                    ["FLAG_BAD_WINDOW", "MAX_INTERIOR_BUMP"]),
+        # `residuos_debug` no copia ninguna constante -- ninguna de sus funciones
+        # se apoya en una -- y sí arrastra `gaussian_filter1d`, que es con lo que
+        # `radial_hybrid_profile` suaviza el perfil: sin él la copia peta justo en
+        # la función que este notebook usa de lupa.
+        "RESID": (["import numpy as np", "from scipy.ndimage import gaussian_filter1d",
+                   "from musepipe.stats import finite_percentile"], []),
     }
 
     def test_the_copy_carries_the_imports_and_constants_it_uses(self):
@@ -127,8 +133,13 @@ class InlinedSourceTests(unittest.TestCase):
             shas = self.bdn.constant_shas(sources)
             seleccion = self.bdn.selected_constants(sources)
             with self.subTest(etapa=stage_id):
-                self.assertTrue(seleccion, "ninguna constante copiada: ¿se rompió la detección?")
                 _imports, esperadas = self.ARRASTRA[stage_id]
+                # Que una etapa no copie constantes es legítimo (`RESID` no usa
+                # ninguna); el canario de «se rompió la detección» lo sostienen
+                # las etapas que SÍ declaran constantes en ARRASTRA.
+                if esperadas:
+                    self.assertTrue(seleccion,
+                                    "ninguna constante copiada: ¿se rompió la detección?")
                 for cte in esperadas:
                     self.assertTrue(any(k.endswith(f":{cte}") for k in shas),
                                     f"{stage_id}: {cte} viaja copiada pero sin sha")
@@ -254,7 +265,13 @@ class GeneratedNotebookTests(unittest.TestCase):
                      # y el calibrado de D2 (que para la estrella tiene el mismo
                      # flujo, solo cambia el eje λ — y el notebook lo comprueba).
                      "APCORR": ["spec_psffit_star.fits",
-                                "spec_calibrated_psffit_star.fits"]}
+                                "spec_calibrated_psffit_star.fits"],
+                     # `residuos_debug` no reproduce un espectro: reconstruye el
+                     # residuo `dato - modelo` desde el CSV de C1, y lo que tiene
+                     # que salir idéntico es el producto que la cadena saca de ese
+                     # mismo residuo — la mediana azimutal de la rama híbrida.
+                     "RESID": ["psf_hybrid_residual.fits",
+                               "stage_e01_psfao_params.csv", "psf_model.json"]}
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
@@ -333,6 +350,13 @@ class ReproducesTheChainTests(unittest.TestCase):
         "apcorr_debug": ["spec_psffit_star.fits", "spec_calibrated_psffit_star.fits",
                          "stage02_xcorr_cube_stack.fits", "psf_model.json",
                          "stage01c_qc.json"],
+        # `residuos_debug` reconstruye los modelos por bin desde el CSV, asi que
+        # necesita el cubo (las imagenes por bin) ademas del producto que compara.
+        # El CSV de psfao NO se exige: solo existe si psfao gano, y el notebook
+        # dice que no aplica cuando la forma elegida es Moffat.
+        "residuos_debug": ["psf_hybrid_residual.fits", "psf_model.json",
+                           "stage_e01_qc.json", "stage01c_qc.json",
+                           "stage02_xcorr_cube_stack.fits"],
     }
     #: (objeto, run) de cada cadena. Estaba fijado a ROXs 12 b, asi que los cinco
     #: notebooks de ROXs 42B b **no los ejecutaba nadie**: se generaban y nadie
