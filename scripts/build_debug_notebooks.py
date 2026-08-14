@@ -177,7 +177,8 @@ INLINE_SOURCES = {
             "psf_roundtrip_error", "radial_hybrid_profile", "evaluate_radial_profile",
         ]),
         ("musepipe/stages/stage_e01_psfao.py", [
-            "_bad_windows", "make_bins", "_ring_residual", "_box3_apcorr", "fit_bin",
+            "_bad_windows", "make_bins", "_ring_residual", "_box3_apcorr",
+            "psfao_fit_weights", "fit_bin",
             "_psfao_param_errors", "_psfao_fit_status", "fit_psfao_bins",
             "_norm_roundtrip", "build_psfao_model_document",
         ]),

@@ -66,7 +66,8 @@ servicio de esa métrica.
   de fuentes, `companion_ring_width_px` (default 3), `psfao_wave_bin_A`
   (default: el propio `psf_bin_A` — ver §5.1), `psfao_grid_reach_px`
   (default 140 px; el alcance de la rejilla con que se construye la PSF de
-  psfao cuando C4 la evalúa sobre toda la imagen).
+  psfao cuando C4 la evalúa sobre toda la imagen), `psf_fit_weighting`
+  (default `stat` — ver §5.2).
 - Material de referencia: los notebooks `04c_airy_ring_moffat_diagnostics` y
   `04d_pca_residual_moffat_diagnostics` documentan la estructura ya conocida
   de esta PSF (anillos tipo Airy del AO). Leerlos para saber qué esperar; no
@@ -177,6 +178,34 @@ Reglas:
   mentiría); un documento sin `param_table` se evalúa con λ exacta.
 - **No hay default numérico**: el histórico era 50 Å, la mitad del ancho de los
   bins, y es exactamente el fallo descrito arriba. No reintroducirlo.
+
+### 5.2 · `psf_fit_weighting` — qué parte de la imagen decide el ajuste
+
+Solo aplica a la forma `psfao`. Con `stat` —1/STAT, lo que se usó siempre— el χ² lo
+**domina el núcleo** por varios órdenes de magnitud y el halo no llega a tener voz. Eso no
+es un detalle: medido en `C1_chromatic_psf_debug` §13.f sobre ROXs 12 b, así el modelo
+reproduce el **28 %** del cromatismo del halo y deja el residuo de anillo en **32 %**.
+
+| valor | pesos | efecto medido (ROXs 12 b, 43 bins) |
+|---|---|---|
+| `stat` | `1/STAT` | croma 28 %, anillo 32.05 % — el histórico, y el **default** |
+| `relative` | `1/STAT ÷ max(\|imagen\|, mediana)²` | croma **45 %**, anillo **4.65 %** |
+| `halo` | `1/STAT`, núcleo a cero | croma **101 %**, anillo 15.84 % |
+
+Reglas:
+
+- **El default es `stat`**: ningún run cambia si no lo declara.
+- La elección **viaja en `psf_model.json`** (`psfao_fit_weighting`) y en el QC
+  (`fit.weighting`), por el mismo motivo que la rejilla: quien lea el producto tiene que
+  poder saber qué decidió el ajuste, no suponerlo.
+- `halo` es **diagnóstico, no default**: recupera todo el cromatismo pero deja el nivel del
+  anillo un 4–14 % bajo y empuja `beta` contra su cota.
+- Con `relative`, `beta` se apila cerca de su tope (5), pero **el resultado no depende de
+  eso**: fijándolo en 1.35 —la mediana histórica, lejos del borde— salen los mismos
+  números (croma 45 %, anillo 4.66 %) con 0 de 43 bins en la cota. Es la degeneración
+  `alpha`–`beta` (r = +0.98), no un ajuste apoyado en el límite.
+- La rama Moffat **no** pasa por aquí: `fit_moffat_image` nunca usó `STAT`, hace mínimos
+  cuadrados con recorte sigma. Las dos formas ya pesaban distinto antes de este knob.
 
 ## 6. Esquema de `stage_e01_qc.json`
 
