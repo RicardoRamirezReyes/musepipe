@@ -111,6 +111,15 @@ servicio de esa métrica.
   anillo del compañero. Elegir la forma con menor residuo mediano (empate →
   Moffat, por simplicidad); decisión y números en QC.
 - Producir el mapa de residuo relativo por bin y el perfil residual azimutal.
+- **La energía encapsulada (V4) se mide para las dos formas y se publica al
+  lado** (`model_comparison.<forma>.encircled_energy`), con la misma máscara de
+  fuentes para ambas. **No elige** —la elección sigue siendo del anillo— pero si
+  la forma elegida se sale de la tolerancia, C1 abre issue: el anillo mira el
+  halo a la separación del compañero y **no ve el núcleo**, y el núcleo es de
+  donde sale la corrección de apertura de C2/C3. Medido el 2026-08-14 en
+  ROXs 42B b: Moffat gana el anillo (6.88 % contra 9.93 % de psfao) con una
+  razón `F(≤25)/F(box3)` **4–5.5× por encima del dato**, mientras la de psfao
+  cae dentro de unos pocos por ciento.
 
 ### 3.5 Modelo híbrido (solo si la métrica falla)
 
@@ -255,10 +264,19 @@ En ROXs 42B b el peso relativo **empeora** el ajuste de psfao (p90 17.95 → 30.
 Moffat sigue ganando y **la elección de forma no cambia** — el riesgo de que el knob voltease
 la forma por haberle dado a psfao una báscula distinta **no se materializa en este objeto**.
 
-Pero la lección es la contraria a la que se esperaba: **el efecto es del objeto, no del
-método**, y no es siquiera del mismo signo. Por qué no está medido; la sospecha razonable es
-la relación señal/ruido del halo (en ROXs 42B b el compañero está a 46.6 px en vez de 71 y hay
-una fuente de campo a 15 px, dentro del radio de ajuste), pero **eso es hipótesis**.
+> **Corregido el 2026-08-14** (`docs/2026-08-14_c1_bascula_moffat_y_nucleo.md`): aquí se
+> escribió que «el efecto es del objeto, no del método». **Era un confundido de geometría.**
+> `relative` corre la atención del ajuste hacia el radio grande, y la métrica se mide a la
+> separación del compañero: en ROXs 12 b eso es 71 px de un radio de ajuste de 78 —el énfasis
+> cae justo sobre el anillo— y en ROXs 42B b 46.6 de 78, o sea fuera. Bajando el radio de
+> ajuste a 55 px en ROXs 42B b, `relative` deja de estorbar y **vuelve a ganar** (anillo 8.91 %
+> contra 9.92 % de `stat`; con radio 78 era 15.23 contra 9.99). La sospecha de la señal/ruido
+> del halo y la de la fuente de campo quedan **descartadas con medida**: cambiar la máscara de
+> la fuente de campo de 12.07 a 15 px mueve el anillo de 9.99 % a 10.06 %.
+>
+> Lo que sí es del objeto es **el suelo**: el halo de ROXs 42B b tiene un **dipolo** que crece
+> con λ hasta el 23 %, y ninguna de las dos formas permitidas puede producir un dipolo (una
+> elipse es simétrica bajo 180°). En ROXs 12 b la asimetría es elíptica y sí se absorbe.
 
 **Consecuencia operativa:** `psf_fit_weighting` se declara **por run, con la sonda hecha
 antes**, nunca en bloque. Para ROXs 42B b la respuesta medida es *no tocarlo*.
@@ -283,9 +301,24 @@ antes**, nunca en bloque. Para ROXs 42B b la respuesta medida es *no tocarlo*.
                               "bins_above_5pct": 0, "after_hybrid": false},
   "hybrid": {"applied": false, "smoothing_scale_px": 0.0},
   "normalization": {"norm_radius_px": 25, "roundtrip_error": 0.0},
+  "encircled_energy": {"spec_check": "V4", "norm_radius_px": 25, "box_size_px": 3,
+                        "core_ratio_data_median": 0.0, "core_ratio_model_median": 0.0,
+                        "core_ratio_error_pct_median": 0.0, "core_ratio_error_pct_p90": 0.0,
+                        "growth_curve_max_abs_diff_pct_median": 0.0,
+                        "tolerance_pct": 3.0, "ok": true, "n_bins": 0},
   "open_issues": []
 }
 ```
+
+`encircled_energy` es V4 (§7) puesta en el QC, y `model_comparison` la publica
+**para las dos formas**. `core_ratio` es `F(<=norm_radius) / F(box3)` medido
+sobre el modelo y sobre el dato con la misma máscara de fuentes: es, cifra por
+cifra, **la corrección de apertura que aplican C2/C3** (allí sale de
+`1 / sum(PSF_normalizada · box3)`, y la PSF vale 1 dentro de `norm_radius_px`).
+Va al lado del anillo porque **el anillo es ciego al núcleo**: una forma puede
+clavar el halo en el radio del compañero con un núcleo del todo equivocado, y
+hasta 2026-08-14 se elegía igual. La tolerancia sale de la propia V4 (3 %) y es
+`psf_encircled_energy_tolerance_pct`.
 
 ## 7. Verificaciones
 

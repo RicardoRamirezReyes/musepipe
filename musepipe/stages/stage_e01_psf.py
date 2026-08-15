@@ -19,6 +19,7 @@ from ..psf import (
     build_psf_model_document,
     companion_ring_metric,
     corner_background,
+    encircled_energy_metric,
     evaluate_moffat_fit,
     evaluate_radial_profile,
     fit_moffat_image,
@@ -343,6 +344,45 @@ def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
     }
 
 
+def _encircled_energy_summary(images, models, backgrounds, primary_yx, exclude_mask, cfg):
+    """V4 de la spec C1, por bin y resumida: la energia encapsulada del modelo
+    contra la del dato.
+
+    Existe porque la metrica que gobierna la etapa —el residuo del anillo en el
+    radio del compañero— es CIEGA AL NUCLEO, y el modelo no se usa solo para el
+    halo: la correccion de apertura de C2/C3 es exactamente `F(<=norm_radius) /
+    F(box3)` evaluado sobre este modelo. Una forma puede clavar el anillo con un
+    nucleo del todo equivocado, y sin esto se elegiria igualmente.
+    """
+
+    norm_radius = float(cfg.get("psf_norm_radius_px", 25.0))
+    filas = []
+    for image, model, background in zip(images, models, backgrounds):
+        filas.append(encircled_energy_metric(
+            image, model, primary_yx,
+            norm_radius_px=norm_radius,
+            # El fondo es el mismo numero para los dos: el modelo de C1 lleva
+            # sumado el fondo fijo con el que se ajusto (§3.2).
+            image_background=float(background), model_background=float(background),
+            exclude_mask=exclude_mask,
+        ))
+    if not filas:
+        return None
+    def _mediana(clave):
+        return float(np.nanmedian([f[clave] for f in filas]))
+    return {
+        "norm_radius_px": norm_radius,
+        "box_size_px": 3,
+        "core_ratio_data_median": _mediana("core_ratio_data"),
+        "core_ratio_model_median": _mediana("core_ratio_model"),
+        "core_ratio_error_pct_median": _mediana("core_ratio_error_pct"),
+        "core_ratio_error_pct_p90": float(np.nanpercentile(
+            np.abs([f["core_ratio_error_pct"] for f in filas]), 90)),
+        "growth_curve_max_abs_diff_pct_median": _mediana("growth_curve_max_abs_diff_pct"),
+        "n_bins": int(len(filas)),
+    }
+
+
 def _apply_hybrid(ring_pcts, images, models, masks, primary_yx, companion_yx, fwhm_med, cfg):
     """Add the azimuthal-median residual (AO ring) hybrid term to the chosen
     form's per-bin models when the ring metric fails on >20% of bins (spec §3.5).
@@ -517,6 +557,25 @@ def compute_stage_e01_products(config) -> StageE01Product:
         if psfao_ok else np.asarray([], dtype=np.float64)
     )
     psfao_median = float(np.nanmedian(psfao_ring)) if psfao_ring.size else float("nan")
+
+    # --- V4 (spec §7): energia encapsulada de CADA forma contra el dato. --------
+    # Se mide antes del hibrido y con la MISMA exclusion de fuentes para las dos,
+    # o una forma cobraria por pixeles que la otra enmascara.
+    excl_radius = float(mask_meta["mask_radius_px"])
+    if psfao_ok:
+        excl_radius = max(excl_radius, float(psfao["inp"]["mask_radius"]))
+    ee_mask = source_mask(images[0].shape, [companion_yx, field_yx], excl_radius)
+    ee_moffat = _encircled_energy_summary(
+        images, models, [row["background"] for row in rows], primary_yx, ee_mask, cfg)
+    ee_psfao = None
+    if psfao_ok:
+        mids_ee = sorted(psfao["recons"])
+        rows_by_wave = {float(r["lambda_A"]): r for r in psfao["rows"]}
+        ee_psfao = _encircled_energy_summary(
+            [psfao["recons"][m][0] for m in mids_ee],
+            [psfao["recons"][m][1] for m in mids_ee],
+            [float(rows_by_wave[m].get("bck", 0.0)) for m in mids_ee],
+            primary_yx, ee_mask, cfg)
 
     if form_cfg == "moffat":
         chosen, reason = "moffat", "forced by config (e01_psf_form=moffat)"
@@ -697,15 +756,45 @@ def compute_stage_e01_products(config) -> StageE01Product:
     if centroid_diff is not None and centroid_diff > 0.3 and chromatic:
         open_issues.append("PSF centroid differs from B3 chromatic centroid story by >0.3 px.")
 
+    # V4 de la spec (§7): «curva de crecimiento modelo vs dato; acuerdo < 3%
+    # hasta norm_radius_px». Estaba escrita y no estaba implementada, y es la
+    # unica verificacion de C1 que mira el nucleo.
+    ee_chosen = ee_moffat if chosen == "moffat" else ee_psfao
+    ee_tolerance = float(cfg.get("psf_encircled_energy_tolerance_pct", 3.0))
+    ee_ok = None
+    if ee_chosen is not None:
+        ee_ok = bool(abs(ee_chosen["core_ratio_error_pct_median"]) <= ee_tolerance)
+        if not ee_ok:
+            open_issues.append(
+                "Encircled-energy check (C1 V4) fails for the chosen form: the model "
+                f"F(<={ee_chosen['norm_radius_px']:g})/F(box3) is "
+                f"{ee_chosen['core_ratio_error_pct_median']:+.1f} pct off the data "
+                f"(tolerance {ee_tolerance:g} pct). That ratio IS the C2/C3 aperture correction."
+            )
+    # §3.2: «los anillos AO no deben cliparse: verificar que la fraccion clipeada
+    # sea < 5% y anotarla». Se anotaba y no se verificaba.
+    clip_limit = float(cfg.get("psf_clip_frac_max", 0.05))
+    clip_max = float(fit_qc.get("clip_frac_max") or 0.0)
+    if chosen == "moffat" and clip_max > clip_limit:
+        open_issues.append(
+            f"Moffat sigma-clipping removed {100 * clip_max:.1f} pct of the fit pixels "
+            f"(spec C1 §3.2 limit: {100 * clip_limit:g} pct); the clipped pixels are the core."
+        )
+
     model_comparison = {
         "metric": "companion_ring_metric.median_pct (canonical, applied to both forms)",
         "selection_mode": form_cfg,
         "form_chosen": chosen,
         "reason": reason,
+        # El anillo elige, pero no es lo unico que hay que saber de una forma: se
+        # publica al lado el error de la energia encapsulada (V4), que es el que
+        # se propaga a la correccion de apertura de C2/C3.
+        "secondary_metric": "encircled_energy.core_ratio_error_pct_median (C1 V4, informativa)",
         "moffat": {
             "ring_residual_pct_median": moffat_median,
             "ring_residual_pct_p90": float(np.nanpercentile(moffat_p90, 90)) if moffat_p90.size else None,
             "n_bins": int(len(rows)),
+            "encircled_energy": ee_moffat,
         },
         "psfao": {
             "status": psfao.get("status"),
@@ -713,6 +802,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
             "ring_residual_pct_p90": float(np.nanpercentile(
                 [r["ring_residual_p90_pct"] for r in psfao["ring_rows"]], 90)) if psfao_ok else None,
             "n_bins": int(len(psfao["ring_rows"])) if psfao_ok else 0,
+            "encircled_energy": ee_psfao,
         },
     }
 
@@ -739,6 +829,15 @@ def compute_stage_e01_products(config) -> StageE01Product:
         "normalization": {
             "norm_radius_px": norm_radius,
             "roundtrip_error": float(roundtrip),
+        },
+        "encircled_energy": None if ee_chosen is None else {
+            **ee_chosen,
+            "spec_check": "V4",
+            "tolerance_pct": ee_tolerance,
+            "ok": ee_ok,
+            "measured_on": "per-bin model before the hybrid term",
+            "note": ("core_ratio = F(<=norm_radius)/F(box3): the same quantity C2/C3 "
+                     "invert as the aperture correction."),
         },
         "model_comparison": model_comparison,
         "open_issues": open_issues,

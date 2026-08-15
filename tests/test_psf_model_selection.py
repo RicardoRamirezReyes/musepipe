@@ -129,6 +129,21 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertEqual(mc["psfao"]["status"], "ok")
         self.assertIsInstance(mc["moffat"]["ring_residual_pct_median"], float)
         self.assertIsInstance(mc["psfao"]["ring_residual_pct_median"], float)
+        # V4 (spec C1 §7) al lado del anillo, y para las DOS formas: el anillo
+        # mira el halo a la separacion del compañero y no ve el nucleo, que es
+        # de donde sale la correccion de apertura de C2/C3.
+        for form in ("moffat", "psfao"):
+            ee = mc[form]["encircled_energy"]
+            self.assertIsNotNone(ee, f"{form} se quedo sin energia encapsulada")
+            for key in ("core_ratio_data_median", "core_ratio_model_median",
+                        "core_ratio_error_pct_median"):
+                self.assertTrue(np.isfinite(ee[key]), f"{form}.{key}")
+            self.assertGreater(ee["n_bins"], 0)
+        bloque = qc["encircled_energy"]
+        self.assertEqual(bloque["spec_check"], "V4")
+        self.assertEqual(bloque["core_ratio_model_median"],
+                         mc[mc["form_chosen"]]["encircled_energy"]["core_ratio_model_median"])
+        self.assertIsInstance(bloque["ok"], bool)
 
     def test_moffat_scene_selects_moffat(self):
         product, written = self._run(_moffat_cube())

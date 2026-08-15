@@ -325,6 +325,96 @@ def companion_ring_metric(image, model, primary_yx, companion_yx, *, width_px=3.
     }
 
 
+def encircled_energy(image, center_yx, radii_px, *, background=0.0, exclude_mask=None):
+    """``F(r <= radio)`` para cada radio, con el fondo restado.
+
+    ``exclude_mask`` quita pixeles (una fuente de campo dentro del radio, p.ej.)
+    y hay que pasarle la MISMA a dato y modelo, o la comparacion no es tal.
+    """
+
+    img = np.asarray(image, dtype=np.float64) - float(background)
+    yy, xx = np.indices(img.shape, dtype=np.float64)
+    cy, cx = map(float, center_yx)
+    rr = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    ok = np.isfinite(img)
+    if exclude_mask is not None:
+        ok &= ~np.asarray(exclude_mask, dtype=bool)
+    return np.asarray(
+        [float(np.sum(np.where(ok & (rr <= float(r)), img, 0.0))) for r in np.atleast_1d(radii_px)],
+        dtype=np.float64,
+    )
+
+
+def core_to_norm_ratio(image, center_yx, *, norm_radius_px=25.0, box_half=1,
+                       background=0.0, exclude_mask=None):
+    """``F(r <= norm_radius) / F(caja)`` alrededor del centro.
+
+    Es, cifra por cifra, la correccion de apertura que aplican C2/C3: alli sale
+    de ``1 / sum(PSF_normalizada * pesos_de_la_caja)`` y la PSF esta normalizada
+    a 1 dentro de ``norm_radius_px``, o sea el mismo cociente evaluado sobre el
+    modelo. Medirlo tambien sobre el DATO es lo que convierte la correccion de
+    apertura en una cantidad verificable en vez de una consecuencia del ajuste.
+
+    La caja se centra en el pixel redondeado, igual para dato y modelo: el
+    interes es la diferencia entre los dos, no el valor absoluto al subpixel.
+    """
+
+    img = np.asarray(image, dtype=np.float64) - float(background)
+    yy, xx = np.indices(img.shape, dtype=np.float64)
+    cy, cx = round(float(center_yx[0])), round(float(center_yx[1]))
+    ok = np.isfinite(img)
+    if exclude_mask is not None:
+        ok &= ~np.asarray(exclude_mask, dtype=bool)
+    caja = ok & (np.abs(yy - cy) <= int(box_half)) & (np.abs(xx - cx) <= int(box_half))
+    total = encircled_energy(image, center_yx, [float(norm_radius_px)],
+                             background=background, exclude_mask=exclude_mask)[0]
+    box = float(np.sum(np.where(caja, img, 0.0)))
+    return float(total / box) if box > 0 else float("nan")
+
+
+def encircled_energy_metric(image, model, center_yx, *, norm_radius_px=25.0, box_half=1,
+                            image_background=0.0, model_background=0.0, exclude_mask=None,
+                            radii_px=None):
+    """V4 de la spec C1: energia encapsulada del MODELO contra la del DATO.
+
+    La metrica del anillo (§3.4) mira el halo en el radio del compañero y es
+    ciega al nucleo. Pero el modelo no se usa solo para el halo: C2/C3 lo usan
+    para pasar de una caja de 3x3 al flujo dentro de ``norm_radius_px``, y una
+    forma puede clavar el anillo con un nucleo completamente equivocado — es lo
+    que hace la Moffat cuando el recorte sigma se come el nucleo del ajuste.
+
+    Devuelve el cociente nucleo/norm de los dos, su error relativo, y la curva
+    de crecimiento normalizada a ``norm_radius_px`` con su desviacion maxima.
+    """
+
+    radii = (np.asarray(radii_px, dtype=np.float64) if radii_px is not None
+             else np.asarray([1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 18.0, float(norm_radius_px)]))
+    razon_dato = core_to_norm_ratio(image, center_yx, norm_radius_px=norm_radius_px,
+                                    box_half=box_half, background=image_background,
+                                    exclude_mask=exclude_mask)
+    razon_modelo = core_to_norm_ratio(model, center_yx, norm_radius_px=norm_radius_px,
+                                      box_half=box_half, background=model_background,
+                                      exclude_mask=exclude_mask)
+    ee_dato = encircled_energy(image, center_yx, radii, background=image_background,
+                               exclude_mask=exclude_mask)
+    ee_modelo = encircled_energy(model, center_yx, radii, background=model_background,
+                                 exclude_mask=exclude_mask)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        curva_dato = ee_dato / ee_dato[-1]
+        curva_modelo = ee_modelo / ee_modelo[-1]
+        error_pct = 100.0 * (razon_modelo / razon_dato - 1.0)
+        curva_diff = 100.0 * np.abs(curva_modelo - curva_dato)
+    return {
+        "radii_px": [float(r) for r in radii],
+        "core_ratio_data": float(razon_dato),
+        "core_ratio_model": float(razon_modelo),
+        "core_ratio_error_pct": float(error_pct),
+        "growth_curve_data": [float(v) for v in curva_dato],
+        "growth_curve_model": [float(v) for v in curva_modelo],
+        "growth_curve_max_abs_diff_pct": float(np.nanmax(curva_diff)) if curva_diff.size else float("nan"),
+    }
+
+
 def smooth_parameter(wavelengths_A, values, *, max_degree=2, wave_ref_A=None, wave_scale_A=1000.0):
     wave = np.asarray(wavelengths_A, dtype=np.float64)
     vals = np.asarray(values, dtype=np.float64)
