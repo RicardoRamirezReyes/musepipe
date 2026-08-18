@@ -292,6 +292,54 @@ B69: a=17.368 px, b=11.047 px, angle=151.7 deg
 | `maoppy_stamp_half_size` | `10` | Semitamano del stamp alrededor de la estrella para el ajuste MAOPPY. | Si el ajuste se queda sin contexto o incluye demasiado fondo. |
 | `maoppy_max_nfev` | `120` | Numero maximo de evaluaciones del ajuste MAOPPY. | Subir si no converge; bajar para velocidad. |
 
+## C1/C1b: Alcance De La PSF (por observacion) Y Resta Antes De Combinar
+
+Desde 2026-08-15 la PSF se ajusta **por exposicion** y se entrega su mezcla; ver
+`docs/spec_C1_v2_codex_chromatic_psf.md` y `docs/2026-08-15_psf_por_observacion.md`.
+
+| Clave `CFG` | Valor por defecto | Explicacion | Cuando cambiarlo |
+|---|---:|---|---|
+| `psf_scope` | `per_observation` | Donde se ajusta la PSF. `per_observation` ajusta cada exposicion **y** el combinado: `psf_model.json` pasa a ser la mezcla y el ajuste analitico se guarda al lado. `combined` reproduce el camino historico bit a bit. Un run sin exposiciones declaradas cae a `combined` diciendolo en el QC. | `combined` para reproducir un resultado antiguo o para un objeto que solo tiene el cubo combinado. |
+| `psf_perobs_fit_weighting` | `stat` | Peso del ajuste **por exposicion**, independiente del `psf_fit_weighting` del combinado. El `relative` del combinado se eligio sobre un halo promediado sobre 29 exposiciones; en una sola ese halo es moteado y `stat` gana en toda la banda (133 % contra 310 % de residuo de anillo a 4800 A). | Solo con una medida que lo justifique, y anotandola. |
+| `psf_perobs_fit_weight_cap` | `None` | Tope del peso relativo por exposicion. Solo tiene efecto con `psf_perobs_fit_weighting="relative"`. | Ver arriba. |
+| `psf_perobs_max_workers` | `None` (→ 4) | Exposiciones ajustadas a la vez. Cada una sostiene su cubo alineado (~1.2 GB entre DATA y STAT), asi que el techo es la memoria, no la CPU. | Bajarlo en una maquina con poca RAM; subirlo con RAM de sobra. |
+| `psf_mixture_as_combined_model` | `true` | Entregar la mezcla como `psf_model.json`. Es exacta por construccion para la razon nucleo/total del combinado (`sum(w*F25)/sum(w*Fbox3)`), verificado en ROXs 12 b a 7000 A: 5.40 contra 5.48 del cubo real. `false` entrega el ajuste analitico al combinado, que es el camino historico. | Para reproducir un resultado anterior. |
+| `x02_psfsub_per_observation` | `true` | En C3, consumir el cubo residual de C1b (`cube_psfsub_perobs.fits`) en vez de restar la primaria del combinado. Si el cubo no esta, C3 resta como siempre y **abre issue** cuando el modelo es una mezcla. | `false` para forzar la resta sobre el combinado. |
+| `x02_psfsub_cube_fits` | `stages/cube_psfsub_perobs.fits` | Ruta del cubo residual de C1b. | Solo para apuntar a un producto fuera del run. |
+
+### E4/H04: con que PSF se inyecta, y en que convencion
+
+| Clave `CFG` | Valor por defecto | Explicacion | Cuando cambiarlo |
+|---|---:|---|---|
+| `h04_injection_norm_convention` | `norm_radius` | En que convencion se expresa `injected_flux`. `norm_radius` fija el flujo **dentro de `norm_radius_px`**, la misma que devuelven los extractores (NORMRAD), y con eso el throughput deja de depender del modelo de PSF. `frame` normaliza sobre todo el recorte: es el camino historico, y con el, cambiar el modelo de C1 movio el throughput de los **seis** metodos -6 % a la vez sin relacion con la calidad de la extraccion (medido 2026-08-17 en ROXs 12 b; la mezcla pone +9.0 % mas luz fuera de 25 px que el ajuste analitico). Con `frame` la perturbacion de PSF de E4 (+-10 % FWHM) es ademas **ciega** para un extractor que suma flujo. | `frame` solo para reproducir un throughput anterior al 2026-08-17. |
+| `h04_injection_psf_model_json` | — (la misma que extrae) | Ruta a la PSF con la que **inyectar**, distinta de la que extrae. Con la misma en los dos lados (default) el throughput mide lo que pierde cada **metodo** dado un modelo, que es lo que E3 calibra. Fijando aqui una PSF de referencia comun se mide la fidelidad de **extraccion**, que es lo unico que permite comparar dos modelos entre si. | Para comparar dos modelos de PSF. |
+| `h04_injection_psf_model` | — | Igual que la anterior pero con el documento en linea, no su ruta. | Tests y diagnosticos. |
+
+El QC publica las dos PSF y la convencion en `psf_provenance`, porque el throughput
+es dependiente del modelo y eso no puede quedar implicito.
+
+### Diagnostico por exposicion (`musepipe/qc/perobs_spectra.py`)
+
+Mide el espectro del companero en **cada** exposicion, con SU modelo de PSF, y publica la
+dispersion entre ellas: N repeticiones independientes de la misma medida, que es la vara
+con la que se lee si la barra de error de D2 es realista. No es una etapa de la cadena y no
+esta en `stage_registry`: nada la consume. **El nivel absoluto no es el de la cadena** (sin
+marco de B1, sin factor de flujo total empirico de A2, fondo de anillo en vez de 04b); lo
+comun a las N exposiciones se cancela en la dispersion fraccional, que es lo que mide.
+Se lanza con `python -m musepipe.qc.perobs_spectra --run-id <RUN>` y necesita C1 corrido con
+`psf_scope=per_observation`.
+
+| Clave `CFG` | Valor por defecto | Explicacion | Cuando cambiarlo |
+|---|---:|---|---|
+| `perobs_spectra_apertures` | el `x01_apertures` del run | Aperturas medidas. Se **leen** de C2 en vez de copiarse: un literal aqui es lo que hizo que el primer notebook de C3 no reprodujera la cadena. | Para medir una apertura que C2 no usa. |
+| `perobs_spectra_background` | `annulus` | Fondo por exposicion. `annulus` usa el anillo de C2 (`x01_annulus_bkg_px`); `none` no resta nada. El producto de 04b no sirve: se ajusta al combinado y no existe por exposicion. | `none` para ver el efecto del fondo sobre la dispersion. |
+| `perobs_spectra_annulus_px` | el `x01_annulus_bkg_px` del run (→ `[8, 14, 30]`) | `(r_in, r_out, radio de exclusion de la primaria)` en px. | Con el companero mas cerca o mas lejos. |
+| `perobs_spectra_psffit` | `true` | Medir tambien con psffit (el metodo canonico de la cadena). | `false` para una primera pasada barata: solo apertura. |
+| `perobs_spectra_psffit_channel_step` | `10` | Submuestreo de canales del psffit. El ajuste por canal cuesta ~11 min por cubo; por N exposiciones son horas, y la dispersion es una cantidad de banda ancha. Es la misma perilla que el notebook debug de C4. | `1` para todos los canales, si sobra maquina. |
+| `perobs_spectra_psffit_full_windows_A` | `[[6520, 6610]]` | Ventanas que van a resolucion completa pese al submuestreo. Por defecto, H alpha. | Anadir una linea que se quiera resolver. |
+| `perobs_spectra_star_radius_px` / `perobs_spectra_comp_radius_px` | los `x03_*` del run (→ 20 / 12) | Radios de la region de ajuste del psffit. Se leen de C4. | Solo para diagnosticar. |
+| `perobs_spectra_max_workers` | `4` | Exposiciones medidas a la vez. Cada una sostiene su cubo alineado. | Igual que `psf_perobs_max_workers`. |
+
 ## Stage06: Inyeccion Y Recuperacion PCA De H Alpha
 
 Stage06 inyecta una senal H alpha artificial en los cubos fake-continuum y la
