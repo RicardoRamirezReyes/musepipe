@@ -127,9 +127,16 @@ def injection_delta_spaxels(wave, line_center_A, lsf_fwhm_A, psf_model, position
     wave = np.asarray(wave, dtype=np.float64)
     profile = gaussian_line_profile(wave, float(line_center_A), float(lsf_fwhm_A))
     profile = np.asarray(profile, dtype=np.float64) * float(total_line_flux)
+    # `frame` EXPLICITO, que es lo que E5 ha usado siempre. El default del
+    # inyector paso a `norm_radius` el 2026-08-17 para que en E4 el flujo
+    # inyectado y el recuperado sean la misma cantidad; E5 tiene la misma
+    # pregunta abierta —su limite de contraste se compara contra flujos medidos
+    # en NORMRAD—, pero cambiarla aqui movería las curvas publicadas, y eso es
+    # una decision aparte. Se fija para que no cambie en silencio.
     psf = normalized_spatial_psf(
         shape, float(position_yx[0]), float(position_yx[1]),
         wavelength_A=float(line_center_A), psf_model=psf_model,
+        norm_convention="frame",
     )
     peak = float(np.nanmax(psf))
     support = psf > 1e-8 * peak if peak > 0 else np.zeros(shape, bool)

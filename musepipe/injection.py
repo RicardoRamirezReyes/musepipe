@@ -69,9 +69,57 @@ def gaussian_line_profile(wavelengths_A, center_A, fwhm_A):
 _scaled_psf_model = scaled_psf_model
 
 
-def normalized_spatial_psf(shape, y, x, *, wavelength_A, psf_model=None, psf_image=None, fwhm_scale=1.0):
-    """Return a finite spatial PSF image normalized to unit sum."""
+#: Convencion historica: la fuente inyectada se normaliza por la suma sobre TODO
+#: el frame, asi que `total_line_flux` es «flujo total dentro del recorte». La
+#: extraccion, en cambio, entrega flujo dentro de `norm_radius_px` (NORMRAD), asi
+#: que inyectado y recuperado NO eran la misma cantidad y el puente entre ellos
+#: dependia del modelo de PSF. Ver `INJECTION_NORM_CONVENTIONS`.
+INJECTION_NORM_CONVENTIONS = ("norm_radius", "frame")
 
+
+def _norm_radius_for_injection(psf_model, norm_radius_px):
+    """El radio de normalizacion, sin default silencioso.
+
+    Se resuelve en orden: lo que pida quien llama -> el que declara el propio
+    documento de PSF -> error. Inventar un radio aqui seria exactamente el tipo
+    de fallback que deforma un flujo calibrado sin que nadie lo vea.
+    """
+
+    if norm_radius_px is not None:
+        return float(norm_radius_px)
+    declared = (psf_model or {}).get("norm_radius_px")
+    if declared is None:
+        raise ValueError(
+            "La convencion de inyeccion `norm_radius` necesita un radio: pasalo en "
+            "`norm_radius_px` o usa un documento de PSF que declare `norm_radius_px`."
+        )
+    return float(declared)
+
+
+def normalized_spatial_psf(shape, y, x, *, wavelength_A, psf_model=None, psf_image=None,
+                           fwhm_scale=1.0, norm_convention="norm_radius", norm_radius_px=None):
+    """La PSF espacial de la fuente inyectada, normalizada a 1.
+
+    ``norm_convention`` decide **que cantidad es** ``total_line_flux``:
+
+    * ``"norm_radius"`` (por defecto) — la suma dentro de ``norm_radius_px`` vale
+      1, asi que el flujo inyectado esta en la MISMA convencion que el que
+      devuelven los extractores (NORMRAD). El throughput deja de depender del
+      modelo por construccion.
+    * ``"frame"`` — la suma sobre todo el recorte vale 1. Es el camino historico.
+
+    Por que importa, MEDIDO el 2026-08-17 en ROXs 12 b: con ``"frame"``, cambiar
+    el modelo de PSF de C1 movio el throughput de los **seis** metodos a la vez
+    (-6.0 %, recorrido -5.7 a -6.6 %), sin ninguna relacion con la calidad de la
+    extraccion — la mezcla por observacion pone +9.0 % mas luz fuera de 25 px que
+    el ajuste analitico, y con la normalizacion sobre el frame eso significa
+    inyectar menos nucleo para el mismo ``total_line_flux`` nominal.
+    """
+
+    if norm_convention not in INJECTION_NORM_CONVENTIONS:
+        raise ValueError(
+            f"norm_convention debe ser uno de {INJECTION_NORM_CONVENTIONS}, no {norm_convention!r}."
+        )
     ny, nx = map(int, shape)
     if psf_image is not None:
         psf = np.asarray(psf_image, dtype=np.float64)
@@ -86,7 +134,18 @@ def normalized_spatial_psf(shape, y, x, *, wavelength_A, psf_model=None, psf_ima
     psf = np.asarray(psf, dtype=np.float64)
     psf[~np.isfinite(psf)] = 0.0
     psf = np.clip(psf, 0.0, None)
-    norm = float(np.nansum(psf))
+    if norm_convention == "frame":
+        norm = float(np.nansum(psf))
+    else:
+        radius = _norm_radius_for_injection(psf_model, norm_radius_px)
+        yy, xx = np.indices((ny, nx), dtype=np.float64)
+        dentro = np.hypot(yy - float(y), xx - float(x)) <= radius
+        if not dentro.any():
+            raise ValueError(
+                f"El radio de normalizacion ({radius} px) no cae dentro del recorte "
+                f"{(ny, nx)} en ({y}, {x}): la fuente inyectada quedaria sin escala."
+            )
+        norm = float(np.nansum(psf[dentro]))
     if not np.isfinite(norm) or norm <= 0:
         raise ValueError("Spatial PSF has invalid normalization.")
     return psf / norm
@@ -111,7 +170,8 @@ def _source_from_mapping(value):
     )
 
 
-def source_template(cube_shape, wavelengths_A, source, *, psf_model=None):
+def source_template(cube_shape, wavelengths_A, source, *, psf_model=None,
+                    norm_convention="norm_radius", norm_radius_px=None):
     """Return the full-cube flux-density template for a source."""
 
     src = _source_from_mapping(source)
@@ -130,6 +190,8 @@ def source_template(cube_shape, wavelengths_A, source, *, psf_model=None):
         psf_model=src.psf_model or psf_model,
         psf_image=src.psf_image,
         fwhm_scale=src.psf_fwhm_scale,
+        norm_convention=norm_convention,
+        norm_radius_px=norm_radius_px,
     )
     line = float(src.total_line_flux) * spectral[:, None, None] * spatial[None, :, :]
     if src.continuum_flux_density:
@@ -137,7 +199,8 @@ def source_template(cube_shape, wavelengths_A, source, *, psf_model=None):
     return line.astype(np.float64)
 
 
-def inject(cube, catalog, *, wavelengths_A, psf_model=None, copy=True):
+def inject(cube, catalog, *, wavelengths_A, psf_model=None, copy=True,
+           norm_convention="norm_radius", norm_radius_px=None):
     """Inject catalog sources into a 3D cube or 4D cube stack.
 
     The cube values are assumed to be flux density per wavelength channel. Each
@@ -152,7 +215,9 @@ def inject(cube, catalog, *, wavelengths_A, psf_model=None, copy=True):
     base_shape = arr.shape if arr.ndim == 3 else arr.shape[1:]
     for item in catalog:
         src = _source_from_mapping(item)
-        template = source_template(base_shape, wave, src, psf_model=psf_model)
+        template = source_template(base_shape, wave, src, psf_model=psf_model,
+                                   norm_convention=norm_convention,
+                                   norm_radius_px=norm_radius_px)
         if arr.ndim == 3:
             arr += template
         else:
