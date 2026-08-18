@@ -194,6 +194,51 @@ class FormIsFrozenPerObjectTests(unittest.TestCase):
         # La condicion tiene que dejar entrar a psfao tambien con moffat forzado.
         self.assertIn('form_cfg in ("auto", "psfao") or comparar', fuente)
 
+    def test_the_change_is_judged_with_one_yardstick(self):
+        """Las dos V4 que se comparan tienen que salir de la MISMA medida.
+
+        Regresion medida el 2026-08-17 en ROXs 12 b: `combined_fit_v4_pct` salia
+        de `ee_chosen` —la rama ganadora, en SUS bins, sobre SUS reconstrucciones
+        y con el `bck` de SU ajuste— mientras la mezcla se medía sobre las
+        imagenes medianas con `corner_background`. Comparados asi, la mezcla
+        parecia empeorar la V4 (+6.77 contra +6.04 %); sobre la misma vara la
+        mejora (+6.77 contra +8.83 %). El bloque existe para juzgar el cambio, y
+        con dos varas no juzga nada.
+        """
+        import inspect
+
+        from musepipe.stages import stage_e01_psf as m
+
+        fuente = inspect.getsource(m._per_observation_model)
+        # El documento del combinado se evalua como lo consume C2/C3, con la
+        # misma funcion, las mismas imagenes y los mismos fondos que la mezcla.
+        self.assertIn("ee_combined_same", fuente)
+        self.assertIn("combined_models = _mixture_bin_models(", fuente)
+        self.assertIn('"combined_fit_v4_pct": (None if ee_combined_same is None', fuente)
+        # Y la de la rama, si se publica, va etiquetada como no comparable.
+        self.assertIn("combined_fit_v4_pct_own_grid", fuente)
+
+    def test_the_runs_on_disk_compare_over_the_same_bins(self):
+        """Y en disco: las dos energias encapsuladas, sobre la misma rejilla."""
+        import json
+
+        raiz = Path(__file__).resolve().parents[1] / "runs"
+        vistos = 0
+        for qc_path in sorted(raiz.glob("*/stages/stage_e01_qc.json")):
+            qc = json.loads(qc_path.read_text(encoding="utf-8"))
+            bloque = ((qc.get("per_observation") or {}).get("delivered_vs_combined_fit") or {})
+            propia = bloque.get("combined_fit_encircled_energy")
+            mezcla = bloque.get("mixture_encircled_energy")
+            if not propia or not mezcla:
+                continue  # run sin mezcla, o QC anterior al arreglo
+            vistos += 1
+            with self.subTest(run=qc_path.parent.parent.name):
+                self.assertEqual(
+                    propia["n_bins"], mezcla["n_bins"],
+                    "las dos V4 del juez estan medidas sobre rejillas distintas")
+        if vistos == 0:
+            self.skipTest("ningun run con la comparacion nueva en este clon")
+
     def test_the_runs_on_disk_declare_the_form_they_already_have(self):
         """Congelar no puede cambiar nada: la forma declarada es la que hay."""
         import json
@@ -209,10 +254,22 @@ class FormIsFrozenPerObjectTests(unittest.TestCase):
             if declarada is None:
                 continue
             vistos += 1
+            documento = json.loads(modelo.read_text(encoding="utf-8"))
             with self.subTest(run=cfg_path.parent.parent.name):
+                if documento["form"] == "mixture":
+                    # Con `psf_scope=per_observation` lo entregado es una mezcla,
+                    # y la forma congelada es la de CADA componente: el documento
+                    # no tiene una forma analitica propia que comparar. El
+                    # invariante no cambia —congelar no puede cambiar nada—, se
+                    # comprueba donde ahora vive.
+                    formas = {c["model"]["form"] for c in documento["components"]}
+                    self.assertEqual(
+                        formas, {declarada},
+                        "la mezcla en disco lleva componentes de una forma que el config no declara")
+                    continue
                 self.assertEqual(
                     declarada,
-                    json.loads(modelo.read_text(encoding="utf-8"))["form"],
+                    documento["form"],
                     "la forma declarada en el config no es la del modelo en disco")
         if vistos == 0:
             self.skipTest("ningun run con forma declarada en este clon")
