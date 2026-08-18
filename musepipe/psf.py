@@ -550,6 +550,55 @@ def _psfao_wave_bin_A(model_doc):
     return 0.0
 
 
+def _psfao_grid_npix(model_doc, dy, dx, norm_radius):
+    """Tamaño de la rejilla en la que se construye la PSF, INDEPENDIENTE de la posición.
+
+    Dos regímenes, los dos dando un ``npix`` que no depende de dónde esté la
+    fuente, para que la caché se reutilice entre estrella, compañero y controles
+    a un mismo λ:
+
+    * quien pide la apcorr / la curva de crecimiento manda desplazamientos
+      dentro de ``norm_radius`` → rejilla pequeña y rápida;
+    * ``psffit`` evalúa sobre la imagen entera; la PSF sólo hace falta sobre la
+      región conjunta del ajuste (separación + radio), así que se usa un alcance
+      fijo (``psfao_grid_reach_px``, 140 px). 140 px es donde converge el flujo
+      del compañero en esta geometría (100 submuestrea el halo AO, ~3 % alto;
+      140/180/250 coinciden al 0.2 %). Más allá de la rejilla se muestrea 0, que
+      es despreciable.
+    """
+
+    max_off = 0.0
+    if dy.size:
+        max_off = max(float(np.nanmax(np.abs(dy))), float(np.nanmax(np.abs(dx))))
+    if max_off <= norm_radius:
+        reach = norm_radius
+    else:
+        reach = max(norm_radius, float(model_doc.get("psfao_grid_reach_px", 140.0)))
+    return 2 * (int(np.ceil(reach)) + 2)  # par, la fuente en npix//2
+
+
+def _psfao_params_at(model_doc, wavelength_A, names=_PSFAO_PARAM_NAMES):
+    """The seven Psfao parameters of a document at one wavelength.
+
+    Split out of ``_evaluate_psfao`` because the mixture form needs exactly the
+    same resolution rule for each of its components: interpolate the per-bin
+    ``param_table`` when there is one (the Psfao PSD parameters are degenerate,
+    so smoothing them independently and rebuilding corrupts the PSF), and only
+    fall back to ``smoothed_poly`` when the document carries no table.
+    """
+
+    table = model_doc.get("param_table")
+    if table:
+        lam = np.asarray(table["lambda_A"], dtype=np.float64)
+        w = float(np.clip(float(wavelength_A), lam.min(), lam.max()))
+        return [float(np.interp(w, lam, np.asarray(table[name], dtype=np.float64))) for name in names]
+    poly = model_doc.get("smoothed_poly") or {}
+    return [
+        float(np.polyval(np.asarray(poly[name], dtype=np.float64), float(wavelength_A)))
+        for name in names
+    ]
+
+
 def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
     """Evaluate a physical AO PSF (maoppy Psfao) on the (dy, dx) offsets,
     normalised so it sums to 1 within ``norm_radius_px``. Mirrors the Moffat
@@ -586,40 +635,11 @@ def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
     # the exact per-call offsets, so per-channel positions/flux stay exact.
     wave_bin = _psfao_wave_bin_A(model_doc)
     w_eff = round(float(wavelength_A) / wave_bin) * wave_bin if wave_bin > 0 else float(wavelength_A)
-    table = model_doc.get("param_table")
-    if table:
-        # Interpolate the per-bin fits (Psfao PSD params are degenerate, so
-        # smoothing them independently then reconstructing corrupts the PSF).
-        lam = np.asarray(table["lambda_A"], dtype=np.float64)
-        w = float(np.clip(w_eff, lam.min(), lam.max()))
-        x = [float(np.interp(w, lam, np.asarray(table[name], dtype=np.float64))) for name in names]
-    else:
-        poly = model_doc.get("smoothed_poly") or {}
-        x = [float(np.polyval(np.asarray(poly[name], dtype=np.float64), w_eff)) for name in names]
+    x = _psfao_params_at(model_doc, w_eff, names)
     system_name = "muse_wfm" if str(model_doc.get("system", "muse_nfm")).lower().endswith("wfm") else "muse_nfm"
     samp = float(muse_nfm.samp(w_eff * 1e-10))
     norm_radius = float(model_doc.get("norm_radius_px", 25.0))
-    # Grid sizing: two regimes, both giving a source-position-INDEPENDENT npix so
-    # the cache is reused across the star/companion/control evaluations at a given
-    # wavelength.
-    #   - apcorr/growth-curve callers pass offsets within norm_radius -> npix from
-    #     norm_radius (small, fast).
-    #   - psffit evaluates over the full image (offsets up to ~image size); the PSF
-    #     is only needed over the joint fit region (source separation + fit radius),
-    #     so use a fixed grid_reach (default 100 px, config `psfao_grid_reach_px`).
-    #     This captures the star halo at the companion (~71 px) while avoiding the
-    #     ~316 px FFTs the full-image offsets would otherwise force; offsets beyond
-    #     the grid sample as 0 (negligible PSF there).
-    max_off = 0.0
-    if dy.size:
-        max_off = max(float(np.nanmax(np.abs(dy))), float(np.nanmax(np.abs(dx))))
-    if max_off <= norm_radius:
-        reach = norm_radius
-    else:
-        # 140 px is where the PSF-fit companion flux converges for this geometry
-        # (100 under-samples the AO halo → ~3% high; 140/180/250 agree to 0.2%).
-        reach = max(norm_radius, float(model_doc.get("psfao_grid_reach_px", 140.0)))
-    npix = 2 * (int(np.ceil(reach)) + 2)  # even, source at npix//2
+    npix = _psfao_grid_npix(model_doc, dy, dx, norm_radius)
     img, total, c = _psfao_image_cached(
         tuple(round(v, 10) for v in x), npix, system_name, round(samp, 10), round(norm_radius, 6)
     )
@@ -629,6 +649,221 @@ def _evaluate_psfao(model_doc, wavelength_A, dy, dx):
     return vals / (total * fwhm_scale ** 2)
 
 
+MIXTURE_FORM = "mixture"
+
+
+def _mixture_component_key(component, wavelength_A):
+    """La componente, reducida a algo hasheable: (forma, parámetros a ese λ).
+
+    La clave es lo que hace cacheable la imagen de la mezcla. Es el mismo truco
+    que ``_psfao_image_cached`` usa con los siete parámetros, extendido a N
+    componentes: dos llamadas al mismo λ producen la misma clave y la suma
+    pesada no se vuelve a construir.
+    """
+
+    model = component["model"]
+    form = str(model.get("form", "moffat")).lower()
+    if form == "psfao":
+        names = tuple(model.get("param_names", _PSFAO_PARAM_NAMES))
+        values = _psfao_params_at(model, wavelength_A, names)
+        return ("psfao", tuple(round(float(v), 10) for v in values))
+    if form == "moffat":
+        params = {
+            key: float(eval_smoothed_parameter(model["coefficients"][key], wavelength_A))
+            for key in PSF_SHAPE_PARAMS
+        }
+        return ("moffat", tuple(round(params[key], 10) for key in PSF_SHAPE_PARAMS))
+    raise ValueError(
+        f"Mixture component has form={form!r}; expected 'moffat' or 'psfao'."
+    )
+
+
+def _mixture_component_weight(component, wavelength_A):
+    """Peso de una componente a ese λ: peso del combinado × flujo de la exposición.
+
+    El combinado es una media **pesada de brillo**, así que la PSF del combinado
+    es la media de las PSF pesada por `w_i · F_i(λ)`, no por `w_i` sola: la
+    transmisión y la masa de aire cambian entre exposiciones y el brillo de la
+    estrella con ellas. `F_i` es el flujo dentro de `norm_radius_px`, que es la
+    región en la que cada componente está normalizada, y lo mide C1 cuando
+    construye el documento — aquí no se re-deriva.
+    """
+
+    weight = float(component.get("weight", 1.0))
+    flux = component.get("flux_norm") or {}
+    lam = np.asarray(flux.get("lambda_A", ()), dtype=np.float64)
+    values = np.asarray(flux.get("value", ()), dtype=np.float64)
+    if lam.size == 0 or values.size != lam.size:
+        raise ValueError(
+            f"Mixture component {component.get('exposure_id', '?')!r} has no usable "
+            "`flux_norm`; the mixture weight is w_i*F_i(lambda) and F_i cannot be guessed."
+        )
+    ok = np.isfinite(lam) & np.isfinite(values) & (values > 0)
+    if not ok.any():
+        raise ValueError(
+            f"Mixture component {component.get('exposure_id', '?')!r} has no finite "
+            "positive `flux_norm` values."
+        )
+    lam_ok, values_ok = lam[ok], values[ok]
+    w = float(np.clip(float(wavelength_A), lam_ok.min(), lam_ok.max()))
+    return weight * float(np.interp(w, lam_ok, values_ok))
+
+
+@functools.lru_cache(maxsize=256)
+def _mixture_image_cached(keys, weights, npix, system_name, samp, norm_radius):
+    """Imagen de la mezcla, normalizada a 1 dentro de ``norm_radius``.
+
+    Se cachea la SUMA, no sólo las componentes: sin esto, cada evaluación de la
+    PSF costaría N veces una evaluación normal (con 29 exposiciones, el ajuste
+    por canal de C4 pasaría de minutos a horas). Con la suma cacheada, una
+    mezcla cuesta lo mismo que una PSF suelta salvo la primera vez a cada λ, y
+    esa primera vez son N construcciones (~0.35 s cada una en la rejilla grande
+    de psffit, ~5 ms en la pequeña de la apcorr).
+
+    Las componentes se construyen **saltándose** ``_psfao_image_cached``: al
+    estar la suma cacheada sólo hacen falta una vez por λ, y dejarlas en esa
+    caché guardaría 29×43 imágenes de 284² (~800 MB) que nadie volvería a
+    mirar. Lo que se retiene es la mezcla, que son ~28 MB.
+    """
+
+    build_component = getattr(_psfao_image_cached, "__wrapped__", _psfao_image_cached)
+    c = npix // 2
+    gy, gx = np.mgrid[0:npix, 0:npix]
+    dy = gy - c
+    dx = gx - c
+    stack = np.zeros((npix, npix), dtype=np.float64)
+    for (kind, params), weight in zip(keys, weights):
+        if kind == "psfao":
+            img, total, _ = build_component(params, npix, system_name, samp, norm_radius)
+            unit = img / total
+        else:
+            unit = normalized_moffat_psf(
+                dy, dx, dict(zip(PSF_SHAPE_PARAMS, params)), norm_radius_px=norm_radius
+            )
+        stack += float(weight) * unit
+    inside = np.hypot(dy, dx) <= float(norm_radius)
+    total = float(np.nansum(stack[inside]))
+    if not np.isfinite(total) or total <= 0:
+        raise RuntimeError("Mixture normalization within norm_radius failed.")
+    return stack / total, c
+
+
+def _evaluate_mixture(model_doc, wavelength_A, dy, dx):
+    """Evalúa una PSF de mezcla: la media pesada de las PSF por observación.
+
+    Existe porque **la mezcla de N PSF no es una PSF**: el combinado suma
+    exposiciones con seeing y calidad de AO distintas, y ninguna Psfao ni
+    Moffat puede describir esa suma. Ajustar una forma analítica al combinado es
+    lo que dejaba la razón núcleo/halo —y con ella la corrección de apertura—
+    sistemáticamente mal. Aquí cada exposición aporta su propio modelo, ajustado
+    a su propio cubo, y la suma se hace con los pesos del combinado.
+
+    El contrato es el mismo que el de las otras dos formas: devuelve la PSF
+    normalizada a 1 dentro de ``norm_radius_px``, así que quien la consuma
+    (apcorr, curva de crecimiento, optimal, psffit, inyección) no necesita
+    saber que es una mezcla.
+    """
+
+    from maoppy.instrument import muse_nfm
+    from scipy.ndimage import map_coordinates
+
+    dy = np.asarray(dy, dtype=np.float64)
+    dx = np.asarray(dx, dtype=np.float64)
+    if dy.shape != dx.shape:
+        raise ValueError("mixture evaluation expects matching dy/dx offset arrays.")
+    components = model_doc.get("components") or ()
+    if not components:
+        raise ValueError("Mixture psf_model has no components.")
+
+    # Misma mecánica geométrica que la rama psfao (ver `scaled_psf_model`): la
+    # escala de FWHM se aplica a la mezcla entera, no componente a componente,
+    # porque una dilatación conmuta con la suma pesada.
+    fwhm_scale = float(model_doc.get("psf_fwhm_scale", 1.0))
+    if not np.isfinite(fwhm_scale) or fwhm_scale <= 0:
+        raise ValueError(f"psf_fwhm_scale must be finite and > 0, got {fwhm_scale!r}.")
+    if fwhm_scale != 1.0:
+        dy = dy / fwhm_scale
+        dx = dx / fwhm_scale
+
+    wave_bin = _psfao_wave_bin_A(model_doc)
+    w_eff = round(float(wavelength_A) / wave_bin) * wave_bin if wave_bin > 0 else float(wavelength_A)
+    keys = tuple(_mixture_component_key(component, w_eff) for component in components)
+    raw = np.asarray(
+        [_mixture_component_weight(component, w_eff) for component in components],
+        dtype=np.float64,
+    )
+    total_weight = float(np.nansum(raw))
+    if not np.isfinite(total_weight) or total_weight <= 0:
+        raise RuntimeError(f"Mixture weights are not usable at {wavelength_A} A.")
+    # Normalizados antes de redondear: así la clave de la caché no depende de la
+    # escala de flujo absoluta, que cambia con λ aunque la mezcla sea la misma.
+    weights = tuple(round(float(v / total_weight), 9) for v in raw)
+
+    system_name = (
+        "muse_wfm"
+        if str(model_doc.get("system", "muse_nfm")).lower().endswith("wfm")
+        else "muse_nfm"
+    )
+    samp = float(muse_nfm.samp(w_eff * 1e-10))
+    norm_radius = float(model_doc.get("norm_radius_px", 25.0))
+    npix = _psfao_grid_npix(model_doc, dy, dx, norm_radius)
+    img, c = _mixture_image_cached(
+        keys, weights, npix, system_name, round(samp, 10), round(norm_radius, 6)
+    )
+    rows = (c + dy).ravel()
+    cols = (c + dx).ravel()
+    vals = map_coordinates(img, [rows, cols], order=1, mode="constant", cval=0.0).reshape(dy.shape)
+    return vals / (fwhm_scale ** 2)
+
+
+def build_mixture_model_document(components, *, norm_radius_px, system, wave_bin_A=None, **extra):
+    """Documento `form="mixture"` a partir de los modelos por observación.
+
+    ``components`` es una secuencia de diccionarios con ``exposure_id``,
+    ``weight`` (el del plan del combinado), ``flux_norm`` (``lambda_A`` y
+    ``value``: el flujo de esa exposición dentro de ``norm_radius_px``) y
+    ``model`` (el documento de PSF ajustado a esa exposición).
+
+    Se valida lo que rompería la mezcla en silencio: que todas las componentes
+    compartan ``norm_radius_px`` —si no, la suma no está normalizada en la misma
+    región y el cociente núcleo/total deja de significar nada— y que ninguna
+    venga sin flujo.
+    """
+
+    components = [dict(component) for component in components]
+    if not components:
+        raise ValueError("A mixture needs at least one component.")
+    for component in components:
+        model = component.get("model")
+        if not isinstance(model, dict):
+            raise ValueError(
+                f"Mixture component {component.get('exposure_id', '?')!r} carries no model document."
+            )
+        component_radius = float(model.get("norm_radius_px", norm_radius_px))
+        if not np.isclose(component_radius, float(norm_radius_px)):
+            raise ValueError(
+                f"Mixture component {component.get('exposure_id', '?')!r} is normalised within "
+                f"{component_radius} px but the mixture declares {norm_radius_px} px."
+            )
+        # Levanta si el flujo no está o no sirve: la validación vive aquí y no en
+        # la evaluación, para que el documento nazca ya utilizable.
+        lam = np.asarray(
+            (component.get("flux_norm") or {}).get("lambda_A", ()), dtype=np.float64
+        )
+        _mixture_component_weight(component, float(lam[0]) if lam.size else float("nan"))
+    document = {
+        "form": MIXTURE_FORM,
+        "system": str(system),
+        "norm_radius_px": float(norm_radius_px),
+        "n_components": len(components),
+        "components": components,
+    }
+    if wave_bin_A is not None:
+        document["psfao_wave_bin_A"] = float(wave_bin_A)
+    document.update(extra)
+    return document
+
+
 def scaled_psf_model(model_doc, fwhm_scale):
     """Return a copy of the PSF model with its spatial FWHM scaled by ``fwhm_scale``.
 
@@ -636,7 +871,7 @@ def scaled_psf_model(model_doc, fwhm_scale):
     (`psf_perturbation_pct`) robustness tests, which perturb the PSF width by
     +-10% and measure how much the recovered flux moves.
 
-    The two forms need different mechanics:
+    The forms need different mechanics:
 
     * **moffat** -- multiply the ``fwhm_maj``/``fwhm_min`` polynomial
       coefficients, as before (frozen behaviour).
@@ -645,6 +880,10 @@ def scaled_psf_model(model_doc, fwhm_scale):
       so no coefficient corresponds to the FWHM. The scale is recorded as
       ``psf_fwhm_scale`` and applied geometrically when the PSF is evaluated
       (see ``_evaluate_psfao``).
+    * **mixture** -- same geometric route as psfao, applied to the mixture as a
+      whole. Scaling every component separately and summing gives the same
+      thing (a dilation commutes with a weighted sum), so the flag lives on the
+      mixture document and the components are left untouched.
 
     Raises on any other form. It used to return the document untouched when it
     found no ``fwhm_maj``/``fwhm_min`` to scale, which with a psfao model (the
@@ -661,12 +900,13 @@ def scaled_psf_model(model_doc, fwhm_scale):
 
     form = str(model_doc.get("form", "moffat")).lower()
     model = deepcopy(model_doc)
-    if form == "psfao":
+    if form in ("psfao", MIXTURE_FORM):
         model["psf_fwhm_scale"] = scale * float(model_doc.get("psf_fwhm_scale", 1.0))
         return model
     if form != "moffat":
         raise ValueError(
-            f"Cannot scale the FWHM of psf_model form={form!r}; expected 'moffat' or 'psfao'."
+            f"Cannot scale the FWHM of psf_model form={form!r}; expected 'moffat', "
+            "'psfao' or 'mixture'."
         )
     scaled_any = False
     for key in ("fwhm_maj", "fwhm_min"):
@@ -686,8 +926,12 @@ def evaluate_psf_model(model_doc, wavelength_A, dy, dx):
     form = str(model_doc.get("form", "moffat")).lower()
     if form == "psfao":
         return _evaluate_psfao(model_doc, wavelength_A, dy, dx)
+    if form == MIXTURE_FORM:
+        return _evaluate_mixture(model_doc, wavelength_A, dy, dx)
     if form != "moffat":
-        raise ValueError(f"Unsupported psf_model form={form!r}; expected 'moffat' or 'psfao'.")
+        raise ValueError(
+            f"Unsupported psf_model form={form!r}; expected 'moffat', 'psfao' or 'mixture'."
+        )
     params = {
         key: eval_smoothed_parameter(model_doc["coefficients"][key], wavelength_A)
         for key in PSF_SHAPE_PARAMS
@@ -742,8 +986,10 @@ def evaluate_radial_profile(shape, center_yx, radii, profile):
 
 
 __all__ = [
+    "MIXTURE_FORM",
     "MoffatFit",
     "PSF_SHAPE_PARAMS",
+    "build_mixture_model_document",
     "build_psf_model_document",
     "companion_ring_metric",
     "corner_background",
