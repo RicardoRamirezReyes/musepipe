@@ -260,20 +260,44 @@ def _cube_files(run_id: str, root: Path) -> list[str]:
     return list(_payload(run_id, root).get("config", {}).get("cube_files") or [])
 
 
-def combine_plan(run_id: str, *, project_root=None) -> dict | None:
-    """`stream_combine_plan.json` del objeto, esté donde esté.
+def _combine_plan_candidates(run_id: str, root: Path) -> list[Path]:
+    """Dónde puede estar el plan del combinado, en orden de preferencia.
 
-    Orden de búsqueda: `runs/<run>/stages/`, `runs/<run>/`, y el directorio del
-    cubo declarado en `cube_files` (ROXs 12 B lo tiene junto al cubo final, en
-    el work-dir, porque el combinado corrió allí).
+    `runs/<run>/stages/`, `runs/<run>/`, y el directorio del cubo declarado en
+    `cube_files` (ROXs 12 B lo tiene junto al cubo final, en el work-dir,
+    porque el combinado corrió allí).
     """
 
-    root = _root(project_root)
     run_dir = root / "runs" / str(run_id)
     candidates = [run_dir / "stages" / "stream_combine_plan.json",
                   run_dir / "stream_combine_plan.json"]
     candidates += [Path(c).parent / "stream_combine_plan.json" for c in _cube_files(run_id, root)]
-    for path in candidates:
+    return candidates
+
+
+def combine_plan_path(run_id: str, *, project_root=None) -> Path | None:
+    """DÓNDE está el `stream_combine_plan.json` del objeto (el que se puede leer).
+
+    Va separado de `combine_plan` porque quien construye una vista por
+    observación (`musepipe.observations`) tiene que **citar** de dónde salió la
+    geometría en su procedencia, no sólo usarla.
+    """
+
+    for path in _combine_plan_candidates(run_id, _root(project_root)):
+        if not path.exists():
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        return path
+    return None
+
+
+def combine_plan(run_id: str, *, project_root=None) -> dict | None:
+    """`stream_combine_plan.json` del objeto, esté donde esté."""
+
+    for path in _combine_plan_candidates(run_id, _root(project_root)):
         if path.exists():
             try:
                 return json.loads(path.read_text(encoding="utf-8"))
