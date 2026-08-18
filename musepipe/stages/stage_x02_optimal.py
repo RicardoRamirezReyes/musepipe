@@ -160,6 +160,29 @@ def _load_stage02_cube(paths, cfg, expected_wave=None):
     return cube, wave, path, bunit
 
 
+def _load_perobs_psfsub_cube(path, *, expected_shape, expected_wave):
+    """El cubo residual de C1b, ya en el marco de B1.
+
+    Se exige que encaje con el cubo de B2 en forma y en eje λ: si no encaja, el
+    encuadre o el binado han dejado de ser los mismos y restar aquí sería
+    comparar dos campos distintos. Falla en vez de recortar por su cuenta.
+    """
+
+    with fits.open(path, memmap=True) as hdul:
+        if "DATA" not in hdul or "WAVELENGTH" not in hdul:
+            raise RuntimeError(f"{path} must contain DATA and WAVELENGTH HDUs.")
+        cube = hdul["DATA"].data.astype(np.float64)
+        wave = hdul["WAVELENGTH"].data.astype(np.float64)
+        bunit = hdul["DATA"].header.get("BUNIT") or hdul[0].header.get("BUNIT")
+    if cube.shape != tuple(expected_shape):
+        raise RuntimeError(
+            f"{path}: forma {cube.shape} != la del cubo de B2 {tuple(expected_shape)}."
+        )
+    if wave.shape != expected_wave.shape or not np.allclose(wave, expected_wave, rtol=0.0, atol=1e-6):
+        raise RuntimeError(f"{path}: el eje λ no es el de B2.")
+    return cube, wave, bunit
+
+
 def _stat_metadata(paths, cfg):
     qc00 = _read_optional_json(paths["stage00q_qc_json"])
     qc01 = _read_optional_json(paths["stage01_qc_json"])
@@ -410,17 +433,43 @@ def compute_stage_x02_products(config, paths=None):
         variant="ls",
         **common,
     )
-    primary_model, psfsub_model_meta = fit_primary_psf_model_cube(
-        stage02_cube,
-        stage02_wave,
-        star_yx,
-        psf_model,
-        variance_zyx=stat_cube,
-        fit_radius_px=float(cfg.get("x02_primary_fit_radius_px", 25.0)),
-        exclude_centers_yx=[object_yx],
-        exclude_radius_px=float(cfg.get("x02_primary_exclude_radius_px", cfg.get("x02_window_radius_px", 8.0))),
-    )
-    psfsub_cube = stage02_cube - primary_model
+    # La resta de la primaria: sobre el combinado (historico) o ya hecha por
+    # exposicion en C1b. Restar aqui obliga a describir con UN modelo la mezcla
+    # de 29-30 PSF distintas; si C1b dejo su cubo, el modelo se aplico en cada
+    # exposicion y esto solo lo consume. No hay eleccion en silencio: lo que se
+    # usa queda escrito en `psfsub_model.source`.
+    perobs_cube_path = Path(cfg.get("x02_psfsub_cube_fits")
+                            or paths["paths"].stage_dir / "cube_psfsub_perobs.fits")
+    use_perobs = bool(cfg.get("x02_psfsub_per_observation", True)) and perobs_cube_path.exists()
+    if use_perobs:
+        psfsub_cube, psfsub_wave, psfsub_bunit = _load_perobs_psfsub_cube(
+            perobs_cube_path, expected_shape=stage02_cube.shape, expected_wave=stage02_wave
+        )
+        psfsub_model_meta = {
+            "source": "C1b_perobs_subtract",
+            "cube": str(perobs_cube_path),
+            "note": ("La primaria se resto en cada exposicion con SU modelo y los residuos se "
+                     "combinaron despues (C1b); aqui no se resta nada."),
+        }
+    else:
+        primary_model, psfsub_model_meta = fit_primary_psf_model_cube(
+            stage02_cube,
+            stage02_wave,
+            star_yx,
+            psf_model,
+            variance_zyx=stat_cube,
+            fit_radius_px=float(cfg.get("x02_primary_fit_radius_px", 25.0)),
+            exclude_centers_yx=[object_yx],
+            exclude_radius_px=float(cfg.get("x02_primary_exclude_radius_px", cfg.get("x02_window_radius_px", 8.0))),
+        )
+        psfsub_cube = stage02_cube - primary_model
+        psfsub_model_meta = dict(psfsub_model_meta, source="combined_cube")
+        if (paths["paths"].stage_dir / "psf_model_mixture.json").exists():
+            open_issues.append(
+                "C1 fitted the PSF per observation but C1b has not run: the primary was "
+                "subtracted from the combined cube with a single model, which is the very "
+                "thing the per-observation fit exists to avoid."
+            )
     psfsub_common = dict(common)
     psfsub_common["bunit"] = bunit or stage02_bunit
     psfsub = make_optimal_product(
@@ -428,7 +477,9 @@ def compute_stage_x02_products(config, paths=None):
         stage02_wave,
         object_yx,
         psf_model,
-        input_cube_path=stage02_path,
+        # La procedencia del cubo del que sale el espectro: si la resta la hizo
+        # C1b, el hash de entrada tiene que ser el de SU cubo, no el de B2.
+        input_cube_path=(perobs_cube_path if use_perobs else stage02_path),
         variant="psfsub",
         **psfsub_common,
     )
