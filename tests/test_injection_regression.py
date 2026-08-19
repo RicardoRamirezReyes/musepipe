@@ -16,10 +16,10 @@ from musepipe.stages.stage_h04_injection import (
 from tests.test_optimal_analytic import constant_model_doc
 
 
-def synthetic_h04_config(run_id, root, matched_sigma):
+def synthetic_h04_config(run_id, root, matched_sigma, **overrides):
     methods = ["aperture", "optimal_ls", "optimal_psfsub", "psffit"]
     null = np.linspace(-1.0, 1.0, 8).tolist()
-    return {
+    cfg = {
         "run_id": run_id,
         "project_root": str(root),
         "h04_positions_yx": [
@@ -41,6 +41,8 @@ def synthetic_h04_config(run_id, root, matched_sigma):
         "h04_historic_recovered_snr": 8.80,
         "h04_historic_tolerance_snr": 0.25,
     }
+    cfg.update(overrides)
+    return cfg
 
 
 def matched_sigma_for_wave(wave, fwhm):
@@ -88,7 +90,13 @@ class InjectionRegressionTests(unittest.TestCase):
             run_id = "synthetic_h04"
             paths = stage_h04_paths(run_id, project_root=root)
             paths["paths"].ensure_base_dirs()
-            cfg = synthetic_h04_config(run_id, root, matched_sigma)
+            # `frame` a proposito: el extractor sintetico SUMA TODO EL CUBO, o sea
+            # que trabaja en esa convencion. El cierre exacto (throughput == 1) solo
+            # tiene sentido cuando inyeccion y extraccion hablan la misma. Con el
+            # default (`norm_radius`) la inyeccion fija el flujo dentro del radio y
+            # este extractor recoge ademas las alas: ver el test de abajo.
+            cfg = synthetic_h04_config(run_id, root, matched_sigma,
+                                       h04_injection_norm_convention="frame")
 
             product = compute_stage_h04_products(
                 cfg,
@@ -104,6 +112,10 @@ class InjectionRegressionTests(unittest.TestCase):
             self.assertTrue(paths["stage_h04_qc_json"].exists())
             self.assertEqual(written["qc"]["regression_historic"]["verdict"], "pass")
             self.assertEqual(written["qc"]["grid"]["n_injections"], 112)
+            # Bajo `frame` la perturbacion de PSF es CIEGA para un extractor que
+            # suma flujo: ensanchar la PSF no cambia el total sobre el recorte.
+            # Eso no es una virtud del contrato, es su limitacion, y por eso el
+            # default cambio — el test de abajo mide lo contrario.
             self.assertEqual(written["qc"]["throughput"]["psf_perturbation_pct"], 0.0)
             self.assertIn("psffit", written["qc"]["throughput"]["per_method_at_snr5"])
 

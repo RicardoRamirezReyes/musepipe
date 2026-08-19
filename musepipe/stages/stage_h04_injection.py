@@ -160,6 +160,10 @@ def stage_h04_config_from_run(
     cfg.setdefault("h04_null_p", DEFAULT_NULL_P)
     cfg.setdefault("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)
     cfg.setdefault("h04_baseline_subtract_throughput", True)
+    # La convencion en la que se expresa `injected_flux`. Con `norm_radius`
+    # coincide con la que devuelven los extractores (NORMRAD), y el throughput
+    # deja de depender del modelo de PSF. `frame` reproduce el camino historico.
+    cfg.setdefault("h04_injection_norm_convention", "norm_radius")
     cfg.setdefault("h04_historic_expected_snr", 8.97)
     cfg.setdefault("h04_historic_tolerance_snr", 0.25)
     cfg.setdefault("h04_require_historic_regression", True)
@@ -617,6 +621,39 @@ def _load_psf_model(paths, config):
     if not path.exists():
         raise FileNotFoundError(path)
     return read_json(path), str(path)
+
+
+def _load_injection_psf_model(paths, config, extraction_model, extraction_source):
+    """La PSF con la que se INYECTA, que por defecto es la misma que extrae.
+
+    Existe porque el throughput de esta etapa es **dependiente del modelo**, y
+    hasta el 2026-08-17 no habia forma de verlo: `normalized_spatial_psf`
+    normaliza la fuente inyectada por la suma sobre TODO el frame, mientras la
+    extraccion lee el modelo en convencion NORMRAD (1 dentro de `norm_radius`).
+    Asi que un modelo con mas alas inyecta menos luz en el nucleo para el mismo
+    `injected_flux` nominal, y todos los metodos recuperan menos por igual.
+
+    MEDIDO en ROXs 12 b: la mezcla por observacion pone +9.0 % mas luz fuera de
+    25 px que el ajuste analitico, lo que predice -8.3 % de throughput; medido
+    salio -6.0 % en los seis metodos a la vez (-5.7 a -6.6 %), sin rastro de la
+    sensibilidad a la FORMA, que habria movido la apertura 3.5x mas que psffit.
+
+    Con el default (inyectar y extraer con el mismo modelo) la etapa mide lo que
+    siempre midio: cuanto pierde cada METODO dado un modelo, que es lo que E3
+    necesita para calibrar. Fijando aqui una PSF de referencia comun se mide
+    otra cosa —la fidelidad de EXTRACCION de cada modelo—, que es lo unico que
+    permite comparar dos modelos sin que la convencion se meta por medio.
+    """
+
+    if config.get("h04_injection_psf_model") is not None:
+        return config["h04_injection_psf_model"], "config.h04_injection_psf_model", True
+    declared = config.get("h04_injection_psf_model_json")
+    if declared is None:
+        return extraction_model, extraction_source, False
+    path = Path(declared)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return read_json(path), str(path), True
 
 
 def _coerce_spectrum_product(result):
@@ -1136,6 +1173,7 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
             "methods": list(methods),
         },
         "runtime_budget": budget,
+        "psf_provenance": config.get("h04_psf_provenance"),
         "continuum_injection": continuum_info,
         "empirical_null_reference": {
             method: {
@@ -1222,7 +1260,8 @@ def _compute_case_rows(case, ctx):
     )
     cube_injected = inject(
         ctx["base_cube"], [source],
-        wavelengths_A=ctx["wavelengths_A"], psf_model=ctx["psf_model"], copy=True,
+        wavelengths_A=ctx["wavelengths_A"], psf_model=ctx["injection_psf_model"], copy=True,
+        norm_convention=ctx["injection_norm_convention"],
     )
     case_rows = []
     for method in methods:
@@ -1335,6 +1374,31 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
         base_cube, wavelengths_A, _cube_path = _load_stage02_cube(paths, cfg)
     if psf_model is None:
         psf_model, _psf_source = _load_psf_model(paths, cfg)
+    else:
+        _psf_source = "caller"
+    injection_psf_model, injection_psf_source, injection_psf_differs = _load_injection_psf_model(
+        paths, cfg, psf_model, _psf_source
+    )
+    # El throughput es dependiente del modelo, asi que de que PSF salio cada
+    # mitad del experimento no puede quedar implicito: viaja al QC.
+    cfg["h04_psf_provenance"] = {
+        "extraction_psf": str(_psf_source),
+        "extraction_psf_form": str((psf_model or {}).get("form", "")),
+        "injection_psf": str(injection_psf_source),
+        "injection_psf_form": str((injection_psf_model or {}).get("form", "")),
+        "injection_psf_differs": bool(injection_psf_differs),
+        "injection_norm_convention": str(cfg.get("h04_injection_norm_convention", "norm_radius")),
+        "note": (
+            "`injection_norm_convention=norm_radius` pone `injected_flux` en la MISMA "
+            "convencion que devuelven los extractores (NORMRAD), y con eso el throughput "
+            "deja de depender del modelo de PSF por construccion. Con `frame` (el camino "
+            "historico) no: la inyeccion normalizaba por la suma sobre todo el recorte, asi "
+            "que un modelo con mas alas inyectaba menos nucleo para el mismo `injected_flux` "
+            "nominal, y en ROXs 12 b cambiar el modelo de C1 movio los SEIS metodos -6 % a la "
+            "vez. `injection_psf` distinta de `extraction_psf` aisla la fidelidad de "
+            "extraccion; con la misma en los dos lados se mide lo que pierde cada METODO."
+        ),
+    }
 
     line_center = _line_center_from_config(cfg)
     lsf_fwhm, _lsf_source = _lsf_fwhm_from_config_or_qc(cfg, paths)
@@ -1351,6 +1415,8 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
         "base_cube": base_cube,
         "wavelengths_A": wavelengths_A,
         "psf_model": psf_model,
+        "injection_psf_model": injection_psf_model,
+        "injection_norm_convention": str(cfg.get("h04_injection_norm_convention", "norm_radius")),
         "extractors": extractors,
         "methods": methods,
         "config": cfg,
@@ -1535,7 +1601,8 @@ def write_stage_h04_products(product: StageH04Product, config, paths):
     return {"table": paths["throughput_csv"], "qc_json": paths["stage_h04_qc_json"], "qc": qc}
 
 
-def _derive_injection_sigma(cfg, paths, extractors, base_cube, wave_A, psf_model):
+def _derive_injection_sigma(cfg, paths, extractors, base_cube, wave_A, psf_model,
+                            injection_psf_model=None):
     """Self-consistent flux scale so input_snr == the reference method's S/N.
 
     The injected source is a broad AO PSF; a given aperture/optimal/psffit
@@ -1570,7 +1637,12 @@ def _derive_injection_sigma(cfg, paths, extractors, base_cube, wave_A, psf_model
         line_center_A=line_center, line_fwhm_A=lsf_fwhm, label="h04_calib",
         continuum_flux_density=0.0, psf_fwhm_scale=1.0,
     )
-    cube_cal = inject(base_cube, [src], wavelengths_A=wave_A, psf_model=psf_model, copy=True)
+    # La calibracion de sigma tiene que inyectar con la MISMA PSF que los casos,
+    # o el `injected_flux` de referencia y el de la rejilla no son la misma escala.
+    cube_cal = inject(base_cube, [src], wavelengths_A=wave_A,
+                      psf_model=(psf_model if injection_psf_model is None else injection_psf_model),
+                      copy=True,
+                      norm_convention=str(cfg.get("h04_injection_norm_convention", "norm_radius")))
     cal_meas = measure_recovery_with_h01_estimator(
         _call_extractor(extractor, cube_cal, wave_A, baseline, method, cfg),
         line_center_A=line_center, line_fwhm_A=lsf_fwhm,
@@ -1624,6 +1696,9 @@ def run_stage_h04(run_id=None, *, project_root=None, overrides=None, allow_run_i
                 )
             base_cube = base_cube[0]
         psf_model, _psf_source = _load_psf_model(paths, cfg)
+        injection_psf_model, _inj_source, _inj_differs = _load_injection_psf_model(
+            paths, cfg, psf_model, _psf_source
+        )
         extractors = build_production_extractors(
             cfg, paths, wave_A=wave_A, psf_model=psf_model, base_cube=base_cube
         )
@@ -1632,6 +1707,7 @@ def run_stage_h04(run_id=None, *, project_root=None, overrides=None, allow_run_i
             sigma_flux, calib_info = _derive_injection_sigma(
                 {**cfg, "h04_real_position_yx": [positions[0]["y"], positions[0]["x"]]},
                 paths, extractors, base_cube, wave_A, psf_model,
+                injection_psf_model=injection_psf_model,
             )
             cfg["h04_injection_flux_sigma"] = sigma_flux
             cfg["h04_sigma_calibration"] = calib_info
@@ -1653,8 +1729,20 @@ def main(argv=None):
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--allow-run-id-mismatch", action="store_true")
     parser.add_argument("--allow-long-run", action="store_true")
+    parser.add_argument(
+        "--injection-psf-model-json", default=None,
+        help=("PSF con la que INYECTAR, distinta de la que extrae. Por defecto la misma, "
+              "y entonces el throughput mide lo que pierde cada metodo. Fijando aqui una "
+              "PSF de referencia comun se mide la fidelidad de EXTRACCION, que es lo unico "
+              "comparable entre dos modelos."),
+    )
     args = parser.parse_args(argv)
-    overrides = {"h04_allow_long_run": True} if args.allow_long_run else None
+    overrides = {}
+    if args.allow_long_run:
+        overrides["h04_allow_long_run"] = True
+    if args.injection_psf_model_json is not None:
+        overrides["h04_injection_psf_model_json"] = args.injection_psf_model_json
+    overrides = overrides or None
     result = run_stage_h04(
         args.run_id,
         project_root=args.project_root,

@@ -2939,6 +2939,68 @@ STAGES: list[dict] = [
         ),
     ),
     dict(
+        id="C1b", slug="C1b_perobs_subtract", title="Resta por exposición y combinado",
+        block="C · Extracción",
+        spec="docs/spec_C1b_codex_perobs_subtraction.md", run_override=None,
+        what=("Resta a cada exposición SU modelo de PSF y combina los residuos, en vez de "
+              "restar un modelo único al cubo ya combinado."),
+        inputs=("`psf_model.json` de forma `mixture` (C1 con `psf_scope=per_observation`), "
+                "`observation_plan.json` y los cubos por exposición"),
+        outputs="`stages/cube_psfsub_perobs.fits` + `stages/stage_e01b_qc.json`",
+        downstream="C3 (variante `psfsub`)",
+        exec=dict(kind="module_main", target="musepipe.stages.stage_e01b_perobs_subtract",
+                  cost="Pesado: una pasada de lectura sobre las 29–30 exposiciones."),
+        qc="stages/stage_e01b_qc.json", qc_optional=True,
+        salient=["input.n_components", "combine.n_exposures", "combine.rejected_fraction",
+                 "subtraction.n_exposures", "subtraction.amplitude_median_spread_pct"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `input.n_components` | Cuántas exposiciones traía la mezcla de C1. | Tiene que ser "
+            "el número de exposiciones que el plan del combinado usa: si falta alguna, el cubo "
+            "residual no es el mismo campo que el combinado. |\n"
+            "| `subtraction.per_exposure[].amplitude_median` | El flujo de la primaria en ESA "
+            "exposición, canal a canal. | Es el número que el combinado promedia; su dispersión "
+            "mide cuánto varía la noche. |\n"
+            "| `subtraction.amplitude_median_spread_pct` | Recorrido de esas medianas. | Grande = "
+            "transmisión/seeing muy variables entre exposiciones, que es justo el motivo de restar "
+            "antes de combinar. |\n"
+            "| `combine.rejected_fraction` | Vóxeles que el sigma-clip tira. | Es lo único que "
+            "rompe la equivalencia entre restar-luego-combinar y combinar-luego-restar. |\n"
+        ),
+        narrative_md=(
+            "## Qué hace C1b y por qué\n\n"
+            "Restar el halo de la primaria sobre el cubo **combinado** obliga a describir con un "
+            "solo modelo la mezcla de 29–30 PSF distintas. Con la PSF ya ajustada por observación "
+            "(C1), la resta se hace **donde el modelo vale** —en su propia exposición— y la "
+            "combinación viene después.\n\n"
+            "Reutiliza el combinado que ya existe (`stream_combine.combine_streaming`) a través de "
+            "su gancho `transform`: cada trozo se recorta y alinea igual que siempre, se le ajusta "
+            "a su modelo la amplitud y el fondo por canal (la misma función que usa C3) y se "
+            "resta. La memoria queda acotada por el trozo, no por el número de exposiciones.\n\n"
+            "**El fondo ajustado no se resta** (igual que en C3: lo que se quita es `amp·PSF`), y "
+            "`STAT` no se toca, porque restar un modelo determinista no cambia la varianza.\n\n"
+            "**Rol en la cadena:** entrega `cube_psfsub_perobs.fits`, que es lo que consume la "
+            "variante `psfsub` de C3. Las demás variantes siguen sobre el cubo combinado."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Con `method=\"mean\"` restar-luego-combinar es **exactamente** combinar-luego-restar "
+            "—la combinación es lineal—, y eso está fijado por test. Con `sigclip` no lo es: la "
+            "diferencia es el recorte, y se publica en `combine.rejected_fraction` en vez de "
+            "suponerse despreciable."
+        ),
+        decisions=[
+            ("El orden es: modelo por exposición → resta → combinado. Restar sobre el combinado "
+             "obliga a describir con un solo modelo la mezcla de 29–30 PSF distintas.",
+             "2026-08-15_psf_por_observacion.md"),
+            ("El fondo ajustado NO se resta (igual que en C3) y `STAT` no se toca: restar un "
+             "modelo determinista no cambia la varianza.", None),
+            ("Sólo la variante `psfsub` de C3 consume este cubo; C2, C4, C5 y C6 siguen sobre el "
+             "combinado de B2.", "spec_C1b_codex_perobs_subtraction.md"),
+        ],
+    ),
+    dict(
         id="04b", slug="C_04b_local_surface", title="Fondo local (superficie)", block="C · Extracción",
         spec=None, run_override=None,
         what="Sustrae una superficie local al fondo alrededor del compañero.",

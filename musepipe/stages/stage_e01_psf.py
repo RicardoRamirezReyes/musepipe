@@ -19,6 +19,8 @@ from ..psf import (
     build_psf_model_document,
     companion_ring_metric,
     corner_background,
+    encircled_energy,
+    encircled_energy_metric,
     evaluate_moffat_fit,
     evaluate_radial_profile,
     fit_moffat_image,
@@ -37,6 +39,15 @@ class StageE01Product:
     hybrid_radii: np.ndarray | None
     psf_form: str = "moffat"
     psfao_rows: list[dict] | None = None
+    #: Con `psf_scope=per_observation`: el ajuste al cubo combinado y la mezcla
+    #: de los modelos por exposicion. Cual de los dos va en `psf_model.json` lo
+    #: decide `psf_mixture_as_combined_model` (por defecto, el del combinado);
+    #: el otro se guarda al lado, porque la comparacion entre ambos es lo que
+    #: mide el emborronado que introduce combinar.
+    combined_psf_model: dict | None = None
+    mixture_psf_model: dict | None = None
+    observation_fits: list | None = None
+    observation_plan: dict | None = None
 
 
 def stage_e01_paths(run_id, project_root=None):
@@ -51,6 +62,15 @@ def stage_e01_paths(run_id, project_root=None):
         "psf_model_json": paths.stage_dir / "psf_model.json",
         "stage_e01_qc_json": paths.stage_dir / "stage_e01_qc.json",
         "psf_hybrid_residual_fits": paths.stage_dir / "psf_hybrid_residual.fits",
+        # Productos del alcance `per_observation`. El modelo que consumen C2-E5
+        # sigue llamandose `psf_model.json` a proposito: siete etapas lo leen por
+        # ruta y todas pasan por `evaluate_psf_model`, asi que ensenandole la
+        # forma `mixture` la cadena entera hereda el cambio sin tocarlas.
+        "psf_perobs_dir": paths.stage_dir / "psf_perobs",
+        "psf_model_perobs_json": paths.stage_dir / "psf_model_perobs.json",
+        "psf_model_mixture_json": paths.stage_dir / "psf_model_mixture.json",
+        "psf_model_combined_json": paths.stage_dir / "psf_model_combined.json",
+        "observation_plan_json": paths.stage_dir / "observation_plan.json",
         "plot_dir": plot_dir,
         "summary_plot": plot_dir / "stage_e01_psf_summary.png",
     }
@@ -76,6 +96,19 @@ def stage_e01_config_from_run(
     cfg.setdefault("stage_e01_input_cube_fits", str(run_config.paths.stage_dir / "stage02_xcorr_cube_stack.fits"))
     cfg.setdefault("stage_e01_positions_qc", str(run_config.paths.stage_dir / "stage01c_qc.json"))
     cfg.setdefault("e01_psf_form", "auto")
+    # DONDE se ajusta la PSF. `per_observation` (el default) la ajusta en cada
+    # exposicion y entrega su mezcla, porque la mezcla de N PSF no es una PSF y
+    # ajustarle una forma analitica al combinado sesga la razon nucleo/halo —que
+    # es la correccion de apertura de C2/C3—. `combined` reproduce el camino
+    # historico bit a bit.
+    cfg.setdefault("psf_scope", "per_observation")
+    cfg.setdefault("psf_perobs_max_workers", None)
+    # El peso del ajuste POR EXPOSICION tiene su propio knob y su propio default
+    # (`stat`): el del combinado (`relative`, tope 5) se eligio sobre un halo
+    # promediado sobre 29 exposiciones, y en una sola ese halo es moteado. Ver
+    # `stage_e01_perobs.PEROBS_DEFAULT_WEIGHTING` para los numeros medidos.
+    cfg.setdefault("psf_perobs_fit_weighting", "stat")
+    cfg.setdefault("psf_perobs_fit_weight_cap", None)
     cfg.setdefault("psf_bin_A", 100.0)
     cfg.setdefault("psf_min_channels_per_bin", 3)
     cfg.setdefault("psf_fit_radius_px", 28.0)
@@ -343,6 +376,46 @@ def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
     }
 
 
+def _encircled_energy_summary(images, models, backgrounds, primary_yx, exclude_mask, cfg):
+    """V4 de la spec C1, por bin y resumida: la energia encapsulada del modelo
+    contra la del dato.
+
+    Existe porque la metrica que gobierna la etapa —el residuo del anillo en el
+    radio del compañero— es CIEGA AL NUCLEO, y el modelo no se usa solo para el
+    halo: la correccion de apertura de C2/C3 es exactamente `F(<=norm_radius) /
+    F(box3)` evaluado sobre este modelo. Una forma puede clavar el anillo con un
+    nucleo del todo equivocado, y sin esto se elegiria igualmente.
+    """
+
+    norm_radius = float(cfg.get("psf_norm_radius_px", 25.0))
+    filas = []
+    for image, model, background in zip(images, models, backgrounds):
+        filas.append(encircled_energy_metric(
+            image, model, primary_yx,
+            norm_radius_px=norm_radius,
+            # El fondo es el mismo numero para los dos: el modelo de C1 lleva
+            # sumado el fondo fijo con el que se ajusto (§3.2), y la mezcla por
+            # observacion se evalua a la escala del dato con ese mismo fondo.
+            image_background=float(background), model_background=float(background),
+            exclude_mask=exclude_mask,
+        ))
+    if not filas:
+        return None
+    def _mediana(clave):
+        return float(np.nanmedian([f[clave] for f in filas]))
+    return {
+        "norm_radius_px": norm_radius,
+        "box_size_px": 3,
+        "core_ratio_data_median": _mediana("core_ratio_data"),
+        "core_ratio_model_median": _mediana("core_ratio_model"),
+        "core_ratio_error_pct_median": _mediana("core_ratio_error_pct"),
+        "core_ratio_error_pct_p90": float(np.nanpercentile(
+            np.abs([f["core_ratio_error_pct"] for f in filas]), 90)),
+        "growth_curve_max_abs_diff_pct_median": _mediana("growth_curve_max_abs_diff_pct"),
+        "n_bins": int(len(filas)),
+    }
+
+
 def _apply_hybrid(ring_pcts, images, models, masks, primary_yx, companion_yx, fwhm_med, cfg):
     """Add the azimuthal-median residual (AO ring) hybrid term to the chosen
     form's per-bin models when the ring metric fails on >20% of bins (spec §3.5).
@@ -469,6 +542,250 @@ def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None):
     }
 
 
+def _mixture_bin_models(mixture, waves_A, shape, primary_yx, fluxes, backgrounds):
+    """Un documento de PSF evaluado por bin, PUESTO A LA ESCALA DEL DATO.
+
+    Sirve para cualquier forma, no sólo `mixture`: se usa también con el ajuste
+    analítico al combinado, para poder compararlos con la misma vara.
+
+
+    La mezcla es una PSF normalizada a 1 dentro de `norm_radius_px`, así que
+    para compararla con el dato —anillo y V4— hay que devolverle la escala: el
+    flujo de la estrella dentro de ese mismo radio, medido en el propio bin, más
+    el fondo con el que se midió. Así el modelo entra en las dos métricas con la
+    misma convención que los modelos analíticos de las dos ramas.
+    """
+
+    from ..psf import evaluate_psf_model
+
+    yy, xx = np.indices(shape, dtype=np.float64)
+    dy = yy - float(primary_yx[0])
+    dx = xx - float(primary_yx[1])
+    models = []
+    for wave, flux, background in zip(waves_A, fluxes, backgrounds):
+        psf = evaluate_psf_model(mixture, float(wave), dy, dx)
+        models.append(psf * float(flux) + float(background))
+    return models
+
+
+def _per_observation_model(cfg, model_doc, chosen, images, rows, primary_yx, companion_yx,
+                           field_yx, ee_mask, ee_chosen, open_issues):
+    """Ajusta la PSF en cada exposición y devuelve la mezcla que describe al combinado.
+
+    Devuelve `(mezcla, modelo_del_combinado, bloque_qc, ajustes, plan)`. El
+    bloque de QC lleva la comparación que justifica el cambio: la V4 —el
+    cociente `F(≤norm)/F(box3)`, que ES la corrección de apertura— de la forma
+    analítica ajustada al combinado contra la de la mezcla, las dos medidas
+    sobre el mismo dato y con la misma máscara.
+    """
+
+    from ..config import ConfigError
+    from ..observations import (
+        ObservationInputError,
+        ObservationPlanMissing,
+        resolve_observation_plan,
+    )
+    from .stage_e01_perobs import fit_all_observations, mixture_from_fits
+
+    paths = stage_e01_paths(cfg["run_id"], project_root=cfg.get("project_root"))
+    cache = paths["observation_plan_json"]
+    try:
+        observations = resolve_observation_plan(
+            cfg["run_id"],
+            project_root=cfg.get("project_root"),
+            plan_json=cache if cache.exists() else None,
+        )
+    except (ObservationPlanMissing, ConfigError, FileNotFoundError) as exc:
+        # El objeto no declara exposiciones (reduccion monolitica, run
+        # historico, escena sintetica): aqui NO aplica ajustar por observacion.
+        # Se cae al camino del combinado, pero dejando dicho por que — un
+        # fallback silencioso en la eleccion de PSF es exactamente lo que no
+        # puede pasar.
+        open_issues.append(
+            "psf_scope=per_observation requested but this run declares no exposures "
+            f"({exc.__class__.__name__}); the PSF was fitted on the combined cube instead."
+        )
+        return model_doc, model_doc, None, {
+            "status": "unavailable",
+            "reason": str(exc).splitlines()[0],
+            "scope_used": "combined",
+        }, None, None
+    except ObservationInputError:
+        if not cache.exists():
+            raise
+        # Una vista guardada que ya no vale (cubos movidos) no puede tapar la
+        # buena: se rehace desde el plan del combinado.
+        observations = resolve_observation_plan(
+            cfg["run_id"], project_root=cfg.get("project_root")
+        )
+
+    # La forma NO la decide cada exposición: su residuo de anillo, medido a la
+    # separación del compañero, es ruido con 300 s de integración (30-310 %
+    # contra el 8-20 % del combinado). Decide quien tiene S/N: el config si la
+    # congela, y si no, la que ganó en el cubo combinado.
+    forced = str(cfg.get("e01_psf_form", "auto")).lower()
+    form_for_exposures = chosen if forced == "auto" else forced
+    observation_fits, failures = fit_all_observations(
+        observations,
+        cfg,
+        {"companion": companion_yx, "field": field_yx},
+        images[0].shape,
+        forced_form=form_for_exposures,
+        n_jobs=cfg.get("psf_perobs_max_workers"),
+    )
+    system_name = model_doc.get("system", "muse_nfm")
+    mixture = mixture_from_fits(
+        observation_fits, cfg, system_name=system_name, provenance=observations.provenance()
+    )
+
+    waves = [float(row["wave_center_A"]) for row in rows]
+    backgrounds = [float(row["background"]) for row in rows]
+    fluxes = [
+        float(
+            encircled_energy(
+                image,
+                primary_yx,
+                [float(cfg.get("psf_norm_radius_px", 25.0))],
+                background=background,
+                exclude_mask=ee_mask,
+            )[0]
+        )
+        for image, background in zip(images, backgrounds)
+    ]
+    mixture_models = _mixture_bin_models(
+        mixture, waves, images[0].shape, primary_yx, fluxes, backgrounds
+    )
+    ee_mixture = _encircled_energy_summary(
+        images, mixture_models, backgrounds, primary_yx, ee_mask, cfg
+    )
+    # El juez del cambio tiene que medir las dos cosas con la MISMA vara.
+    # `ee_chosen` sale de la rama que ganó, y cada rama trae lo suyo: Psfao mide
+    # sobre sus reconstrucciones, en sus bins y con el `bck` de su ajuste,
+    # mientras la mezcla se mide sobre las imágenes medianas con
+    # `corner_background`. Comparar esos dos números decía en ROXs 12 b que la
+    # mezcla EMPEORABA la V4 (+6.77 contra +6.04 %), cuando sobre la misma vara
+    # la MEJORA (+6.77 contra +8.83 %) — medido el 2026-08-17. Así que aquí el
+    # documento del combinado se evalúa igual que lo consume C2/C3, sobre los
+    # mismos bins, imágenes, fondos y máscara que la mezcla.
+    combined_models = _mixture_bin_models(
+        model_doc, waves, images[0].shape, primary_yx, fluxes, backgrounds
+    )
+    ee_combined_same = _encircled_energy_summary(
+        images, combined_models, backgrounds, primary_yx, ee_mask, cfg
+    )
+    ring_mixture = [
+        float(
+            companion_ring_metric(
+                image, model, primary_yx, companion_yx,
+                width_px=float(cfg.get("psf_companion_ring_width_px", 3.0)),
+                source_exclusion_radius_px=float(cfg.get("psf_companion_mask_radius_px", 10.0)),
+            )["median_pct"]
+        )
+        for image, model in zip(images, mixture_models)
+    ]
+
+    forms = {}
+    for fit in observation_fits:
+        forms[fit.form] = forms.get(fit.form, 0) + 1
+    v4_per_exposure = [
+        float(fit.summary["encircled_energy"]["core_ratio_error_pct_median"])
+        for fit in observation_fits
+        if fit.summary.get("encircled_energy")
+    ]
+    tolerance = float(cfg.get("psf_encircled_energy_tolerance_pct", 3.0))
+    if ee_mixture is not None and abs(ee_mixture["core_ratio_error_pct_median"]) > tolerance:
+        open_issues.append(
+            "Encircled-energy check (C1 V4) fails for the per-observation mixture: "
+            f"{ee_mixture['core_ratio_error_pct_median']:+.1f} pct off the data "
+            f"(tolerance {tolerance:g} pct)."
+        )
+    if failures:
+        open_issues.append(
+            f"{len(failures)} of {len(observation_fits) + len(failures)} exposures could not be "
+            "fitted; the mixture is built from the rest."
+        )
+
+    block = {
+        "n_exposures_used": int(len(observation_fits)),
+        "n_exposures_failed": int(len(failures)),
+        "failures": failures,
+        "forms_chosen": forms,
+        "form_source": "config" if forced != "auto" else "combined_fit",
+        "form_used": form_for_exposures,
+        "ring_note": ("El residuo del anillo por exposición se mide y se publica, pero NO elige "
+                      "la forma: a la separación del compañero una exposición de 300 s no tiene "
+                      "señal para decidir."),
+        "form_stable_across_exposures": bool(len(forms) == 1),
+        "weight_mode": observations.plan.weight_mode,
+        "combine_method": observations.plan.method,
+        "source_plan": observations.source,
+        "substituted_paths": list(observations.substituted),
+        "remeasured": [dict(row) for row in observations.remeasured],
+        "exposures": [fit.summary for fit in observation_fits],
+        "v4_per_exposure_pct": {
+            "median": float(np.nanmedian(v4_per_exposure)) if v4_per_exposure else None,
+            "min": float(np.nanmin(v4_per_exposure)) if v4_per_exposure else None,
+            "max": float(np.nanmax(v4_per_exposure)) if v4_per_exposure else None,
+        },
+        # El juez del cambio: las dos varas, sobre el MISMO dato combinado y con
+        # la MISMA rejilla. Las dos cifras que se comparan (`combined_fit_v4_pct`
+        # y `mixture_v4_pct`) salen ya de la misma medida.
+        #
+        # La mezcla NO es exacta por construccion para la V4, aunque el cociente
+        # de las sumas del DATO si lo sea. MEDIDO el 2026-08-15 (ROXs 12 b, 7000
+        # A): la razon nucleo/total de cada exposicion va de 3.24 a 81.88, el
+        # cociente de las sumas sale 5.40 y el cubo en disco 5.48. Pero la mezcla
+        # se monta con MODELOS, y cada uno llega con su propio error de V4
+        # (mediana 4.2 %, hasta 9.8 % en ROXs 12 b): esos errores no se cancelan.
+        # Medido el 2026-08-17 sobre la misma vara: mezcla +6.77 %, ajuste al
+        # combinado +8.83 %. La mezcla gana, y las dos fallan la tolerancia.
+        "delivered_vs_combined_fit": {
+            "note": ("V4 = F(<=norm_radius)/F(box3) del modelo contra el del dato, que ES la "
+                     "correccion de apertura de C2/C3. `combined_fit` es la forma analitica "
+                     "ajustada al cubo combinado. Las dos se evaluan como las consume C2/C3, "
+                     "sobre los mismos bins, imagenes, fondos y mascara: sin eso la "
+                     "comparacion no significa nada, porque cada rama trae su propia rejilla."),
+            "comparable": True,
+            "delivered": ("mixture" if bool(cfg.get("psf_mixture_as_combined_model", True))
+                          else "combined_fit"),
+            "combined_fit_form": chosen,
+            "combined_fit_v4_pct": (None if ee_combined_same is None
+                                    else float(ee_combined_same["core_ratio_error_pct_median"])),
+            "combined_fit_encircled_energy": ee_combined_same,
+            # La de la rama, en SU rejilla: no es comparable con la mezcla y se
+            # publica sólo para poder auditar de dónde sale la diferencia.
+            "combined_fit_v4_pct_own_grid": (None if ee_chosen is None
+                                             else float(ee_chosen["core_ratio_error_pct_median"])),
+            "mixture_v4_pct": (None if ee_mixture is None
+                               else float(ee_mixture["core_ratio_error_pct_median"])),
+            "mixture_encircled_energy": ee_mixture,
+            "mixture_ring_residual_pct_median": (float(np.nanmedian(ring_mixture))
+                                                 if ring_mixture else None),
+        },
+    }
+    # Qué se entrega como `psf_model.json`. Por defecto la MEZCLA, y no es una
+    # preferencia: mide mejor la cantidad que C2/C3 usan. Sobre la misma vara y
+    # en el mismo dato (ROXs 12 b, 44 bins, 2026-08-17): mezcla +6.77 % de V4
+    # contra +8.83 % del ajuste analítico, y el reparto en λ es lo que decide —
+    # la mezcla clava el azul (+0.34 % contra +17.32 % por debajo de 6000 Å, que
+    # es el problema abierto de C1) y paga en el rojo (+8.55 % contra +5.90 %).
+    #
+    # Lo que NO es cierto, aunque se escribió el 2026-08-15: que la mezcla sea
+    # exacta por construcción. El cociente de las sumas del DATO sí lo es (5.40
+    # contra 5.48 del cubo en disco), pero la mezcla se monta con MODELOS y cada
+    # uno trae su propio error de V4, que no se cancela. Las dos siguen fallando
+    # la tolerancia del 3 %.
+    #
+    # Y el rechazo de exposiciones no arregla esto por re-pesado: quitar de la
+    # mezcla las 5 peores la lleva a −12.55 % y las 10 peores a −20.64 %, porque
+    # el cubo combinado SIGUE conteniéndolas. Rechazar exige re-combinar.
+    if bool(cfg.get("psf_mixture_as_combined_model", True)):
+        delivered, kept = mixture, model_doc
+    else:
+        delivered, kept = model_doc, model_doc
+    return delivered, kept, mixture, block, observation_fits, observations.to_json()
+
+
 def compute_stage_e01_products(config) -> StageE01Product:
     cfg = dict(config)
     paths = stage_e01_paths(cfg["run_id"], project_root=cfg.get("project_root"))
@@ -517,6 +834,25 @@ def compute_stage_e01_products(config) -> StageE01Product:
         if psfao_ok else np.asarray([], dtype=np.float64)
     )
     psfao_median = float(np.nanmedian(psfao_ring)) if psfao_ring.size else float("nan")
+
+    # --- V4 (spec §7): energia encapsulada de CADA forma contra el dato. --------
+    # Se mide antes del hibrido y con la MISMA exclusion de fuentes para las dos,
+    # o una forma cobraria por pixeles que la otra enmascara.
+    excl_radius = float(mask_meta["mask_radius_px"])
+    if psfao_ok:
+        excl_radius = max(excl_radius, float(psfao["inp"]["mask_radius"]))
+    ee_mask = source_mask(images[0].shape, [companion_yx, field_yx], excl_radius)
+    ee_moffat = _encircled_energy_summary(
+        images, models, [row["background"] for row in rows], primary_yx, ee_mask, cfg)
+    ee_psfao = None
+    if psfao_ok:
+        mids_ee = sorted(psfao["recons"])
+        rows_by_wave = {float(r["lambda_A"]): r for r in psfao["rows"]}
+        ee_psfao = _encircled_energy_summary(
+            [psfao["recons"][m][0] for m in mids_ee],
+            [psfao["recons"][m][1] for m in mids_ee],
+            [float(rows_by_wave[m].get("bck", 0.0)) for m in mids_ee],
+            primary_yx, ee_mask, cfg)
 
     if form_cfg == "moffat":
         chosen, reason = "moffat", "forced by config (e01_psf_form=moffat)"
@@ -697,15 +1033,73 @@ def compute_stage_e01_products(config) -> StageE01Product:
     if centroid_diff is not None and centroid_diff > 0.3 and chromatic:
         open_issues.append("PSF centroid differs from B3 chromatic centroid story by >0.3 px.")
 
+    # V4 de la spec (§7): «curva de crecimiento modelo vs dato; acuerdo < 3%
+    # hasta norm_radius_px». Estaba escrita y no estaba implementada, y es la
+    # unica verificacion de C1 que mira el nucleo.
+    ee_chosen = ee_moffat if chosen == "moffat" else ee_psfao
+    ee_tolerance = float(cfg.get("psf_encircled_energy_tolerance_pct", 3.0))
+    ee_ok = None
+    if ee_chosen is not None:
+        ee_ok = bool(abs(ee_chosen["core_ratio_error_pct_median"]) <= ee_tolerance)
+        if not ee_ok:
+            open_issues.append(
+                "Encircled-energy check (C1 V4) fails for the chosen form: the model "
+                f"F(<={ee_chosen['norm_radius_px']:g})/F(box3) is "
+                f"{ee_chosen['core_ratio_error_pct_median']:+.1f} pct off the data "
+                f"(tolerance {ee_tolerance:g} pct). That ratio IS the C2/C3 aperture correction."
+            )
+    # §3.2: «los anillos AO no deben cliparse: verificar que la fraccion clipeada
+    # sea < 5% y anotarla». Se anotaba y no se verificaba.
+    clip_limit = float(cfg.get("psf_clip_frac_max", 0.05))
+    clip_max = float(fit_qc.get("clip_frac_max") or 0.0)
+    if chosen == "moffat" and clip_max > clip_limit:
+        open_issues.append(
+            f"Moffat sigma-clipping removed {100 * clip_max:.1f} pct of the fit pixels "
+            f"(spec C1 §3.2 limit: {100 * clip_limit:g} pct); the clipped pixels are the core."
+        )
+
+    # --- Alcance por observacion (spec C1 v2). --------------------------------
+    # Hasta aqui todo ha ajustado el cubo COMBINADO, que es una media pesada de
+    # 29-30 exposiciones con seeing distinto. La mezcla de N PSF no es una PSF:
+    # ninguna forma analitica puede tener a la vez el nucleo de la mejor noche y
+    # el halo de la peor, y ese sesgo cae entero sobre la razon nucleo/halo, que
+    # es la correccion de apertura de C2/C3. Con `psf_scope=per_observation` se
+    # ajusta cada exposicion por separado y se entrega su MEZCLA; el ajuste al
+    # combinado se conserva al lado, porque su comparacion es el juez.
+    scope = str(cfg.get("psf_scope", "per_observation")).lower()
+    if scope not in ("combined", "per_observation"):
+        raise ValueError(f"psf_scope must be combined|per_observation, got {scope!r}.")
+    per_observation = None
+    combined_model_doc = None
+    observation_fits = None
+    observation_plan = None
+    scope_requested = scope
+    mixture_model_doc = None
+    if scope == "per_observation":
+        (model_doc, combined_model_doc, mixture_model_doc, per_observation, observation_fits,
+         observation_plan) = _per_observation_model(
+            cfg, model_doc, chosen, images, rows, primary_yx, companion_yx, field_yx,
+            ee_mask, ee_chosen, open_issues,
+        )
+        # Un objeto sin exposiciones declaradas se queda en el camino del
+        # combinado, y el QC lo dice con nombre y motivo.
+        if per_observation.get("status") == "unavailable":
+            scope = "combined"
+
     model_comparison = {
         "metric": "companion_ring_metric.median_pct (canonical, applied to both forms)",
         "selection_mode": form_cfg,
         "form_chosen": chosen,
         "reason": reason,
+        # El anillo elige, pero no es lo unico que hay que saber de una forma: se
+        # publica al lado el error de la energia encapsulada (V4), que es el que
+        # se propaga a la correccion de apertura de C2/C3.
+        "secondary_metric": "encircled_energy.core_ratio_error_pct_median (C1 V4, informativa)",
         "moffat": {
             "ring_residual_pct_median": moffat_median,
             "ring_residual_pct_p90": float(np.nanpercentile(moffat_p90, 90)) if moffat_p90.size else None,
             "n_bins": int(len(rows)),
+            "encircled_energy": ee_moffat,
         },
         "psfao": {
             "status": psfao.get("status"),
@@ -713,6 +1107,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
             "ring_residual_pct_p90": float(np.nanpercentile(
                 [r["ring_residual_p90_pct"] for r in psfao["ring_rows"]], 90)) if psfao_ok else None,
             "n_bins": int(len(psfao["ring_rows"])) if psfao_ok else 0,
+            "encircled_energy": ee_psfao,
         },
     }
 
@@ -740,7 +1135,19 @@ def compute_stage_e01_products(config) -> StageE01Product:
             "norm_radius_px": norm_radius,
             "roundtrip_error": float(roundtrip),
         },
+        "encircled_energy": None if ee_chosen is None else {
+            **ee_chosen,
+            "spec_check": "V4",
+            "tolerance_pct": ee_tolerance,
+            "ok": ee_ok,
+            "measured_on": "per-bin model before the hybrid term",
+            "note": ("core_ratio = F(<=norm_radius)/F(box3): the same quantity C2/C3 "
+                     "invert as the aperture correction."),
+        },
         "model_comparison": model_comparison,
+        "psf_scope": scope,
+        "psf_scope_requested": scope_requested,
+        "per_observation": per_observation,
         "open_issues": open_issues,
     }
     return StageE01Product(
@@ -749,8 +1156,15 @@ def compute_stage_e01_products(config) -> StageE01Product:
         qc=qc,
         hybrid_profiles=hybrid_profiles,
         hybrid_radii=hybrid_radii,
+        # La forma sigue siendo la que gano en el COMBINADO: es la que manda
+        # sobre los CSV por bin, el termino hibrido y la comparacion de la §3.4.
+        # Que el documento entregado sea una mezcla se dice en `psf_scope`.
         psf_form=chosen,
         psfao_rows=psfao_rows,
+        combined_psf_model=combined_model_doc,
+        mixture_psf_model=mixture_model_doc,
+        observation_fits=observation_fits,
+        observation_plan=observation_plan,
     )
 
 
@@ -761,6 +1175,18 @@ def write_stage_e01_products(product: StageE01Product, config, paths):
     if product.psf_form == "psfao" and product.psfao_rows:
         _write_psfao_csv(paths["paths"].stage_dir / "stage_e01_psfao_params.csv", product.psfao_rows)
     write_json(paths["psf_model_json"], product.psf_model)
+    if product.combined_psf_model is not None:
+        # El ajuste analitico al combinado, siempre al lado: es lo que
+        # `psf_scope=combined` reproduce y la referencia de la comparacion.
+        write_json(paths["psf_model_combined_json"], product.combined_psf_model)
+    if product.mixture_psf_model is not None:
+        # La mezcla, con los modelos por exposicion dentro. La lee C1b para
+        # restar, aunque no sea lo que se entrega como modelo del combinado.
+        write_json(paths["psf_model_mixture_json"], product.mixture_psf_model)
+    if product.observation_plan is not None:
+        write_json(paths["observation_plan_json"], product.observation_plan)
+    if product.observation_fits:
+        _write_per_observation_products(product, paths)
     if product.hybrid_profiles is not None:
         fits.HDUList(
             [
@@ -774,6 +1200,40 @@ def write_stage_e01_products(product: StageE01Product, config, paths):
         product.qc["figures"] = {"summary": str(Path("plots") / "stage_e01" / paths["summary_plot"].name)}
     write_json(paths["stage_e01_qc_json"], product.qc)
     return {"params_csv": paths["stage_e01_params_csv"], "model_json": paths["psf_model_json"], "qc_json": paths["stage_e01_qc_json"], "qc": product.qc}
+
+
+def _write_per_observation_products(product: StageE01Product, paths):
+    """Los ajustes por exposición: el índice y las filas por bin de cada una.
+
+    Los documentos de PSF de cada exposición NO se duplican aquí: viajan dentro
+    de `psf_model.json`, que es la mezcla, y tenerlos dos veces invitaría a que
+    alguien editara la copia que no se evalúa. Lo que sí se escribe aparte son
+    las filas por bin —lo que un notebook querría dibujar— y el resumen.
+    """
+
+    directory = paths["psf_perobs_dir"]
+    directory.mkdir(parents=True, exist_ok=True)
+    index = []
+    for fit in product.observation_fits:
+        safe = str(fit.exposure_id).replace("/", "_")
+        if fit.psfao_rows:
+            _write_psfao_csv(directory / f"params_{safe}_psfao.csv", fit.psfao_rows)
+        if fit.moffat_rows:
+            _write_csv(directory / f"params_{safe}_moffat.csv", fit.moffat_rows)
+        index.append(dict(fit.summary))
+    write_json(
+        paths["psf_model_perobs_json"],
+        {
+            "schema_version": 1,
+            "run_id": product.qc.get("run_id"),
+            "psf_scope": product.qc.get("psf_scope"),
+            "n_exposures": len(index),
+            "delivered_model": str(paths["psf_model_json"].name),
+            "combined_fit_model": str(paths["psf_model_combined_json"].name),
+            "exposures": index,
+            "per_observation": product.qc.get("per_observation"),
+        },
+    )
 
 
 def _write_csv(path, rows):
@@ -871,8 +1331,24 @@ def main(argv=None):
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--allow-run-id-mismatch", action="store_true")
     parser.add_argument("--save-plots", action="store_true")
+    parser.add_argument(
+        "--psf-scope", choices=("per_observation", "combined"), default=None,
+        help=("donde se ajusta la PSF: en cada exposicion y se entrega su mezcla "
+              "(por defecto), o en el cubo combinado (el camino historico)."),
+    )
+    parser.add_argument(
+        "--psf-perobs-max-workers", type=int, default=None,
+        help="exposiciones ajustadas a la vez (cada una sostiene su cubo alineado).",
+    )
     args = parser.parse_args(argv)
-    overrides = {"psf_save_plots": True} if args.save_plots else None
+    overrides = {}
+    if args.save_plots:
+        overrides["psf_save_plots"] = True
+    if args.psf_scope is not None:
+        overrides["psf_scope"] = args.psf_scope
+    if args.psf_perobs_max_workers is not None:
+        overrides["psf_perobs_max_workers"] = int(args.psf_perobs_max_workers)
+    overrides = overrides or None
     result = run_stage_e01(
         args.run_id,
         project_root=args.project_root,

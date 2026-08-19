@@ -113,6 +113,12 @@ STAGES: tuple[Stage, ...] = (
     Stage("B3", "B3_localize", "B", "stages/stage01c_qc.json", exec_kind="script"),
     # ===================== BLOQUE C — extracción =====================
     Stage("C1", "C1_chromatic_psf", "C", "stages/stage_e01_qc.json", exec_kind="script"),
+    # C1b resta la PSF de cada exposicion y combina despues. Es opcional porque
+    # solo aplica a los objetos que declaran exposiciones: un run cuyo cubo no
+    # salga de una combinacion por exposiciones no puede tenerlo, y eso no es un
+    # fallo de la cadena.
+    Stage("C1b", "C1b_perobs_subtract", "C", "stages/stage_e01b_qc.json",
+          qc_optional=True, exec_kind="module_main"),
     Stage("04b", "C_04b_local_surface", "C", "stages/stage04b_qc.json", exec_kind="module_main"),
     Stage("C2", "C2_aperture", "C", "stages/spec_aperture_qc.json", exec_kind="script"),
     Stage("C3", "C3_optimal", "C", "stages/spec_optimal_qc.json", exec_kind="script"),

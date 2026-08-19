@@ -568,6 +568,44 @@ def fit_primary_psf_model_cube(
     exclude_radius_px: float = 8.0,
     n_jobs: int = 1,
 ) -> tuple[np.ndarray, dict]:
+    model, meta, _amplitudes, _backgrounds, _n_fit = fit_primary_psf_amplitudes(
+        cube_zyx,
+        wave_A,
+        primary_yx,
+        psf_model,
+        variance_zyx=variance_zyx,
+        fit_radius_px=fit_radius_px,
+        exclude_centers_yx=exclude_centers_yx,
+        exclude_radius_px=exclude_radius_px,
+        n_jobs=n_jobs,
+    )
+    return model, meta
+
+
+def fit_primary_psf_amplitudes(
+    cube_zyx,
+    wave_A,
+    primary_yx,
+    psf_model,
+    *,
+    variance_zyx=None,
+    fit_radius_px: float | None = None,
+    exclude_centers_yx=(),
+    exclude_radius_px: float = 8.0,
+    n_jobs: int = 1,
+):
+    """Igual que ``fit_primary_psf_model_cube``, pero devolviendo los vectores.
+
+    Existe porque C1b resta la primaria **exposición a exposición** y necesita
+    la amplitud por canal de cada una: es el flujo de la estrella en esa
+    exposición, y con él se comprueba que la resta no se ha comido nada. La
+    matemática es la misma, sin una línea distinta; ``fit_primary_psf_model_cube``
+    se limita a tirar los vectores, que es lo que hacía antes.
+
+    Devuelve ``(model, meta, amplitudes, backgrounds, n_fit)``. El modelo NO
+    lleva el fondo sumado, igual que antes.
+    """
+
     cube = np.asarray(cube_zyx, dtype=np.float64)
     wave = np.asarray(wave_A, dtype=np.float64)
     if cube.ndim != 3:
@@ -628,7 +666,7 @@ def fit_primary_psf_model_cube(
         "fit_radius_px": float(fit_radius),
         "exclude_radius_px": float(exclude_radius_px),
     }
-    return model, meta
+    return model, meta, amplitudes, backgrounds, n_fit
 
 
 # Re-exportado desde `musepipe.psf`: esta copia solo escalaba coeficientes
@@ -643,6 +681,7 @@ __all__ = [
     "control_optimal_spectra",
     "covariance_factor_for_npix",
     "estimate_variance_cube",
+    "fit_primary_psf_amplitudes",
     "fit_primary_psf_model_cube",
     "make_optimal_product",
     "normalized_psf_window",

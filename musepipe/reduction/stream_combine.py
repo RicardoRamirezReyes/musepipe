@@ -341,6 +341,51 @@ def _exposure_id(path) -> str:
     return Path(path).parent.name or Path(path).stem
 
 
+def exposure_from_measurement(
+    measurement: dict, *, index: int, weight: float, crop_npix: int, pad: int
+) -> ExposureAlignment:
+    """Geometría de una exposición a partir de su centroide medido.
+
+    Extraído de ``build_stream_combine_plan`` sin cambiar una línea de la
+    aritmética: la ventana se toma alrededor del píxel REDONDEADO y el resto
+    subpíxel viaja en ``shift``, que es lo que ``_aligned_chunk`` aplica luego.
+    Vive aquí, y no en el constructor del plan, porque ``musepipe.observations``
+    tiene que rehacer esta misma geometría cuando un cubo se re-resuelve y hay
+    que volver a medirlo — y hacerlo con una copia de la fórmula sería tener
+    dos convenciones de alineado con un solo nombre.
+    """
+
+    half = int(crop_npix) // 2
+    reach = half + int(pad)
+    y_center = float(measurement["y_center"])
+    x_center = float(measurement["x_center"])
+    yi = int(np.round(y_center))
+    xi = int(np.round(x_center))
+    window = (yi - reach, yi - reach + int(crop_npix) + 2 * int(pad),
+              xi - reach, xi - reach + int(crop_npix) + 2 * int(pad))
+    _, ny, nx = measurement["shape"]
+    in_bounds = window[0] >= 0 and window[2] >= 0 and window[1] <= ny and window[3] <= nx
+    return ExposureAlignment(
+        index=int(index),
+        file=measurement["file"],
+        exposure_id=_exposure_id(measurement["file"]),
+        shape=tuple(measurement["shape"]),
+        y_center=y_center,
+        x_center=x_center,
+        centroid_fallback=bool(measurement["centroid_fallback"]),
+        window=window,
+        shift_y=float(yi - y_center),
+        shift_x=float(xi - x_center),
+        exptime=measurement["exptime"],
+        weight=float(weight),
+        ra_deg=measurement["ra_deg"],
+        dec_deg=measurement["dec_deg"],
+        crval3=measurement["crval3"],
+        in_bounds=bool(in_bounds),
+        mjd_obs=measurement["mjd_obs"],
+    )
+
+
 def _weights(exptimes: Sequence[float], weight_mode: str) -> list[float]:
     if weight_mode == "none":
         return [1.0] * len(exptimes)
@@ -514,45 +559,19 @@ def build_stream_combine_plan(
         )
 
     half = int(crop_npix) // 2
-    reach = half + int(pad)
     weights = _weights([m["exptime"] for m in measurements], weight_mode)
 
     exposures = []
     for index, (measurement, weight) in enumerate(zip(measurements, weights)):
-        y_center = measurement["y_center"]
-        x_center = measurement["x_center"]
-        yi = int(np.round(y_center))
-        xi = int(np.round(x_center))
-        window = (yi - reach, yi - reach + int(crop_npix) + 2 * int(pad),
-                  xi - reach, xi - reach + int(crop_npix) + 2 * int(pad))
-        _, ny, nx = measurement["shape"]
-        in_bounds = window[0] >= 0 and window[2] >= 0 and window[1] <= ny and window[3] <= nx
-        if not in_bounds:
+        exposure = exposure_from_measurement(
+            measurement, index=index, weight=weight, crop_npix=crop_npix, pad=pad
+        )
+        if not exposure.in_bounds:
             warnings.append(
-                f"{_exposure_id(measurement['file'])}: crop window falls off the cube; "
+                f"{exposure.exposure_id}: crop window falls off the cube; "
                 "missing pixels are NaN-filled"
             )
-        exposures.append(
-            ExposureAlignment(
-                index=index,
-                file=measurement["file"],
-                exposure_id=_exposure_id(measurement["file"]),
-                shape=tuple(measurement["shape"]),
-                y_center=y_center,
-                x_center=x_center,
-                centroid_fallback=measurement["centroid_fallback"],
-                window=window,
-                shift_y=float(yi - y_center),
-                shift_x=float(xi - x_center),
-                exptime=measurement["exptime"],
-                weight=float(weight),
-                ra_deg=measurement["ra_deg"],
-                dec_deg=measurement["dec_deg"],
-                crval3=measurement["crval3"],
-                in_bounds=bool(in_bounds),
-                mjd_obs=measurement["mjd_obs"],
-            )
-        )
+        exposures.append(exposure)
 
     if any(exp.centroid_fallback for exp in exposures):
         failed = [exp.exposure_id for exp in exposures if exp.centroid_fallback]
@@ -720,8 +739,30 @@ def _sigclip_mask(stack: np.ndarray, variance: np.ndarray, k: float, min_n: int)
     return rejected & finite
 
 
-def combine_streaming(plan: StreamCombinePlan, *, progress=None) -> dict:
-    """Combine the planned exposures one wavelength chunk at a time."""
+def wavelength_axis(plan: StreamCombinePlan) -> np.ndarray:
+    """The output wavelength axis of a plan, from the header keywords it froze."""
+
+    meta = plan.wavelength
+    nz = int(meta["n_channels"])
+    crpix = float(meta.get("crpix3", 1.0))
+    return float(meta["crval3"]) + float(meta["cd3_3"]) * (np.arange(nz, dtype=np.float64) + 1.0 - crpix)
+
+
+def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None) -> dict:
+    """Combine the planned exposures one wavelength chunk at a time.
+
+    ``transform(exposure, wave_chunk, data, stat) -> data`` runs on every
+    exposure's chunk **after** it has been cropped and aligned and **before** it
+    is accumulated. That is the hook C1b uses to subtract each exposure's own PSF
+    model before combining — the whole point of modelling the PSF per
+    observation, since the combined cube mixes exposures whose PSF differs.
+    ``stat`` viaja con el dato porque el ajuste de amplitud pesa por varianza,
+    igual que el de C3.
+
+    STAT is deliberately NOT transformed: subtracting a deterministic model does
+    not change the variance of the pixel. Without ``transform`` the behaviour is
+    bit-for-bit the one that produced the cubes on disk.
+    """
 
     npix = int(plan.crop_npix)
     nz = int(plan.wavelength["n_channels"])
@@ -736,6 +777,7 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None) -> dict:
     contributed_total = 0
 
     chunk = max(1, int(plan.chunk_channels))
+    wave = wavelength_axis(plan) if transform is not None else None
     handles = [fits.open(exp.file, memmap=True) for exp in plan.exposures]
     try:
         for z1 in range(0, nz, chunk):
@@ -745,6 +787,8 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None) -> dict:
             if plan.method == "mean":
                 for exposure, hdul in zip(plan.exposures, handles):
                     data, stat, valid = _aligned_chunk(exposure, plan, hdul, z1, z2)
+                    if transform is not None:
+                        data = transform(exposure, wave[z1:z2], data, stat)
                     w = float(exposure.weight)
                     weighted_sum[z1:z2] += np.where(valid, data * w, 0.0)
                     weight_sum[z1:z2] += np.where(valid, w, 0.0)
@@ -757,6 +801,8 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None) -> dict:
             stat_stack = np.empty_like(data_stack)
             for slot, (exposure, hdul) in enumerate(zip(plan.exposures, handles)):
                 data, stat, _ = _aligned_chunk(exposure, plan, hdul, z1, z2)
+                if transform is not None:
+                    data = transform(exposure, wave[z1:z2], data)
                 data_stack[slot] = data
                 stat_stack[slot] = stat
             rejected = _sigclip_mask(data_stack, stat_stack, plan.sigclip_k, plan.sigclip_min_n)
@@ -893,6 +939,7 @@ __all__ = [
     "build_output_header",
     "build_stream_combine_plan",
     "combine_streaming",
+    "exposure_from_measurement",
     "measure_primary_center",
     "plan_from_dict",
     "read_window",

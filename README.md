@@ -63,7 +63,8 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | B1 | Carga/alineación/crop | `musepipe/stages/stage01_align.py` | — | `stage01_qc.json` |
 | B2 | Xcorr / franjas | `musepipe/stages/stage02_xcorr.py` | `scripts/stage02_xcorr.sh` | `stage02_xcorr_qc.json` |
 | B3 | Localización del compañero | `musepipe/stages/stage01c_localize.py` | `scripts/stage01c_localize.sh` | `stage01c_qc.json` |
-| C1 | PSF cromática (Moffat/Psfao) | `musepipe/stages/stage_e01_psf.py` (+`stage_e01_psfao.py`) | `scripts/stage_e01_psf.sh` | `stage_e01_qc.json`, `psf_model.json` |
+| C1 | PSF cromática (Moffat/Psfao), **por observación** por defecto | `musepipe/stages/stage_e01_psf.py` (+`stage_e01_psfao.py`, `stage_e01_perobs.py`) | `scripts/stage_e01_psf.sh` | `stage_e01_qc.json`, `psf_model.json` (forma `mixture`), `psf_model_perobs.json` |
+| C1b | Resta la PSF de cada exposición y combina después | `musepipe/stages/stage_e01b_perobs_subtract.py` | — | `stage_e01b_qc.json`, `cube_psfsub_perobs.fits` |
 | 04b | Fondo local (superficie) | `musepipe/stages/stage04b_local_surface.py` | — | `stage04b_qc.json` |
 | C2 | Extracción por apertura | `musepipe/stages/stage_x01_aperture.py` | `scripts/stage_x01_aperture.sh` | `spec_aperture_qc.json` |
 | C3 | Extracción óptima — **2 variantes**: `optimal_ls` y `optimal_psfsub` | `musepipe/stages/stage_x02_optimal.py` | `scripts/stage_x02_optimal.sh` | `spec_optimal_qc.json` |
