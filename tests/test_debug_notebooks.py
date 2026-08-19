@@ -430,8 +430,14 @@ class ReproducesTheChainTests(unittest.TestCase):
         # cambiar el interpolador de las bandas (parabola -> PCHIP), que dejo los
         # productos de ROXs 42B b describiendo una apcorr que ya no se calcula
         # asi.
+        # A la entrada de codigo se le suma el `psf_model.json` que ya declaran
+        # C2-C6: apcorr_debug tambien EVALUA el modelo de C1 (`fit_psffit_cube`
+        # y `aperture_correction_from_psf`), asi que un modelo mas nuevo que el
+        # producto deja la comparacion midiendo el desfase del run. Paso el
+        # 2026-08-17 al re-ejecutar C1 con `psf_scope=per_observation`: sus seis
+        # hermanos se saltaron y este fallo, por no tener declarada la entrada.
         "apcorr_debug": (("spec_psffit_star.fits", "spec_calibrated_psffit_star.fits"),
-                         "musepipe/growth_curve.py"),
+                         ("psf_model.json", "musepipe/growth_curve.py")),
     }
 
     @classmethod

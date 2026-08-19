@@ -444,6 +444,35 @@ def constant_shas(sources):
 
 
 
+#: El documento ANALÍTICO de C1, que no siempre es `psf_model.json`.
+#:
+#: Con `psf_scope=per_observation` (spec C1 v2) lo que C1 entrega es una
+#: MEZCLA de los modelos por exposición: un documento con `components` y
+#: `forms`, SIN `form` de PSF, `param_names`, `param_table` ni
+#: `coefficients`. Las secciones que auditan el ajuste —las que leen los CSV
+#: por bin y reconstruyen el modelo— hablan del ajuste al combinado, que en
+#: ese modo vive en `psf_model_combined.json`. Sin esta distinción el
+#: notebook de C1 reventaba con `KeyError: 'coefficients'` y el de residuos
+#: leía la mezcla como Moffat (su `.get('form')` no es una forma de PSF) y se
+#: saltaba media auditoría en silencio.
+CARGA_MODELO_ANALITICO = (
+    "PSF_ENTREGADO = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n"
+    "ES_MEZCLA = str(PSF_ENTREGADO.get('form', '')).lower() == 'mixture'\n"
+    "_RUTA_ANALITICO = SD / ('psf_model_combined.json' if ES_MEZCLA else 'psf_model.json')\n"
+    "if ES_MEZCLA and not _RUTA_ANALITICO.exists():\n"
+    "    raise FileNotFoundError(\n"
+    "        f'C1 entregó una mezcla pero falta {_RUTA_ANALITICO.name}: sin el ajuste'\n"
+    "        ' analítico al combinado estas secciones no tienen qué auditar.')\n"
+    "PSF_MODEL = (json.loads(_RUTA_ANALITICO.read_text(encoding='utf-8'))\n"
+    "             if ES_MEZCLA else PSF_ENTREGADO)\n"
+    "if ES_MEZCLA:\n"
+    "    print(f'C1 entregó una MEZCLA de {PSF_ENTREGADO[\"n_components\"]} exposiciones'\n"
+    "          f' (psf_scope={PSF_ENTREGADO.get(\"psf_scope\")!r}).')\n"
+    "    print(f'   lo que auditan estas secciones es el ajuste analítico al combinado:'\n"
+    "          f' {_RUTA_ANALITICO.name}')\n"
+)
+
+
 def drift_cell(code, shas, stage_id):
     """La celda que compara la copia con el fuente actual de `musepipe`.
 
@@ -7679,7 +7708,7 @@ def build_c1_cells(mb, target, run_id):
         code(
             "import datetime as _dt\n\n"
             "QC_C1 = json.loads((SD / 'stage_e01_qc.json').read_text(encoding='utf-8'))\n"
-            "PSF_MODEL = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n"
+            + CARGA_MODELO_ANALITICO +
             "POS = json.loads(Path(E01.get('stage_e01_positions_qc',\n"
             "                             SD / 'stage01c_qc.json')).read_text(encoding='utf-8'))\n"
             "# Lo mismo que hace `_positions_from_qc`: desempaquetar el QC de B3. Es\n"
@@ -7774,15 +7803,21 @@ def build_c1_cells(mb, target, run_id):
             "print(f'forma elegida por la cadena: {FORMA_ELEGIDA}'\n"
             "      f' — {QC_C1[\"model_comparison\"][\"reason\"]}')\n"
             "print(f'filas por bin: psfao {len(FILAS_PSFAO)} · moffat {len(FILAS_MOFFAT)}')\n"
-            "if ES_PSFAO:\n"
+            # Se pregunta por lo que el documento TRAE, no por la forma: un
+            # documento puede no tener ninguna de las dos claves (la mezcla es el
+            # caso), y entonces esto reventaba con KeyError en vez de decirlo.
+            "if 'param_table' in PSF_MODEL:\n"
             "    print(f'el modelo entregado es una TABLA de'\n"
             "          f' {len(PSF_MODEL[\"param_table\"][\"lambda_A\"])} bins que se interpola')\n"
-            "else:\n"
+            "elif 'coefficients' in PSF_MODEL:\n"
             "    print('el modelo entregado son POLINOMIOS por parámetro:',\n"
             "          ', '.join(f'{k}=grado {PSF_MODEL[\"coefficients\"][k][\"degree\"]}'\n"
             "                    for k in NOMBRES))\n"
             "    print('   -> este objeto no pasa por `_evaluate_psfao`: las §8-§9 lo dicen'\n"
-            "          ' y miden lo que sí aplica.')"
+            "          ' y miden lo que sí aplica.')\n"
+            "else:\n"
+            "    print(f'el documento analítico ({_RUTA_ANALITICO.name}) no trae ni'\n"
+            "          ' `param_table` ni `coefficients`: las §8-§12 no tienen qué evaluar.')"
         ),
         md(
             "## 3 · Las funciones copiadas de `musepipe`\n\n"
@@ -11096,7 +11131,7 @@ def build_residuos_cells(mb, target, run_id):
             "RESTA_PERFIL_AZIMUTAL = False\n"
             "CANALES_POR_BIN_MAPAS = 12  # canales leídos por bin en un cubo por exposición\n\n"
             "QC_C1 = json.loads((SD / 'stage_e01_qc.json').read_text(encoding='utf-8'))\n"
-            "PSF_MODEL = json.loads((SD / 'psf_model.json').read_text(encoding='utf-8'))\n"
+            + CARGA_MODELO_ANALITICO +
             "FORMA = str(PSF_MODEL.get('form', 'moffat')).lower()\n"
             "ES_PSFAO = FORMA == 'psfao'\n"
             "NOMBRES = tuple(PSF_MODEL.get('param_names', ()))\n"
