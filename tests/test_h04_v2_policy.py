@@ -13,11 +13,21 @@ from musepipe.stages.stage_h04_injection import (
 from tests.test_compare_verdicts import make_product
 
 
-def null_row(index, *, position="control1", recovered_flux=0.0, recovered_snr=0.0):
+#: Los seis metodos de la cadena, para poder probar la mediana por posicion.
+METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
+
+#: Contra `np.arange(33)`: un flujo de 100 es el maximo (FAP 1/34, extremo) y
+#: uno de 10 no lo es (FAP 24/34).
+EXTREME_FLUX = 100.0
+QUIET_FLUX = 10.0
+
+
+def null_row(index, *, position="control1", recovered_flux=0.0, recovered_snr=0.0,
+             method="aperture"):
     return {
         "injection_id": f"null{index}",
         "variant": "nominal",
-        "method": "aperture",
+        "method": method,
         "position_label": position,
         "template_factor": 1.0,
         "continuum_mode": "none",
@@ -29,11 +39,19 @@ def null_row(index, *, position="control1", recovered_flux=0.0, recovered_snr=0.
 
 def empirical_reference():
     return {
-        "aperture": {
-            "n_controls": 33,
-            "by_factor": {"1": np.arange(33, dtype=np.float64)},
-        }
+        method: {"n_controls": 33, "by_factor": {"1": np.arange(33, dtype=np.float64)}}
+        for method in METHODS
     }
+
+
+def position_rows(position, n_extreme_methods, *, start=0):
+    """Una fila por metodo en `position`, `n_extreme_methods` de ellas extremas."""
+
+    return [
+        null_row(start + i, position=position, method=method,
+                 recovered_flux=EXTREME_FLUX if i < n_extreme_methods else QUIET_FLUX)
+        for i, method in enumerate(METHODS)
+    ]
 
 
 class H04V2NullPolicyTests(unittest.TestCase):
@@ -55,13 +73,64 @@ class H04V2NullPolicyTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["n_extreme"], 0)
 
-    def test_binomial_excess_fails_but_one_extreme_passes(self):
-        one = [null_row(0, recovered_flux=100.0)]
-        one.extend(null_row(i + 1, recovered_flux=10.0) for i in range(9))
-        many = [null_row(i, recovered_flux=100.0) for i in range(10)]
+    def test_many_extreme_rows_in_a_single_position_do_not_fail_the_gate(self):
+        # El defecto que motiva E4 v3: 24 filas extremas eran 24 rechazos
+        # independientes cuando son UNA zona de cielo medida 24 veces.
+        rows = [null_row(i, position="control1", method=method, recovered_flux=EXTREME_FLUX)
+                for i, method in enumerate(METHODS) for _ in range(4)]
+        rows.extend(position_rows("control2", 0, start=100))
+        rows.extend(position_rows("control3", 0, start=200))
 
-        self.assertEqual(_v2_nulls_clean(one, empirical_reference())["status"], "pass")
-        self.assertEqual(_v2_nulls_clean(many, empirical_reference())["status"], "fail")
+        result = _v2_nulls_clean(rows, empirical_reference())
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["n_extreme"], 1, "una posicion extrema, no veinticuatro")
+        self.assertEqual(result["n_positions"], 3)
+
+    def test_two_extreme_positions_of_three_fail_the_gate(self):
+        rows = position_rows("control1", len(METHODS))
+        rows.extend(position_rows("control2", len(METHODS), start=100))
+        rows.extend(position_rows("control3", 0, start=200))
+
+        result = _v2_nulls_clean(rows, empirical_reference())
+
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["n_extreme"], 2)
+
+    def test_the_median_needs_more_than_half_the_methods(self):
+        # Un solo metodo no declara extrema una posicion; la mitad justa tampoco
+        # (cae en el punto medio); cuatro de seis si.
+        for n_extreme_methods, expected in ((1, False), (3, False), (4, True)):
+            with self.subTest(methods=n_extreme_methods):
+                rows = position_rows("control1", n_extreme_methods)
+                result = _v2_nulls_clean(rows, empirical_reference())
+                self.assertEqual(result["positions"][0]["extreme"], expected)
+
+    def test_qc_separates_positions_from_rows(self):
+        rows = position_rows("control1", len(METHODS))
+        rows.extend(position_rows("control2", 0, start=100))
+
+        result = _v2_nulls_clean(rows, empirical_reference())
+
+        self.assertEqual(result["unit"], "control_position")
+        self.assertEqual(result["n_extreme"], 1)
+        self.assertEqual(result["n_extreme_rows"], len(METHODS))
+        self.assertEqual(result["n_rows"], 2 * len(METHODS))
+        self.assertEqual({entry["position_label"] for entry in result["positions"]},
+                         {"control1", "control2"})
+
+    def test_the_low_tail_is_counted_and_does_not_vote(self):
+        # Deficit de flujo donde no se inyecto nada: se informa, no vota.
+        rows = [null_row(i, position=f"control{i + 1}", method="optimal_ls",
+                         recovered_flux=-1000.0) for i in range(3)]
+
+        result = _v2_nulls_clean(rows, empirical_reference())
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["n_extreme"], 0)
+        self.assertFalse(result["low_tail_diagnostics"]["gating"])
+        self.assertEqual(result["low_tail_diagnostics"]["n_extreme_rows"], 3)
+        self.assertEqual(result["low_tail_diagnostics"]["by_method"], {"optimal_ls": 3})
 
 
 class H04V2ContinuumTests(unittest.TestCase):
