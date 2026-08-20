@@ -343,6 +343,7 @@ def make_optimal_product(
     run_id: str,
     input_cube_path: str | Path,
     input_cube_sha: str | None = None,
+    input_cube_source: str | None = None,
     variant: str = "ls",
     star_yx=None,
     variance_zyx=None,
@@ -515,6 +516,14 @@ def make_optimal_product(
         "SCALEREF": ("empirical_total_flux" if "empirical_total" in str(apcorr_mode)
                      else "normrad_total_flux"),
     }
+    # De que cubo sale el espectro, dicho por el producto y no deducido del
+    # hash: cuando C1b resta la primaria en cada exposicion, el psfsub consume
+    # SU cubo y `INCUBESH` deja de coincidir con el de los otros metodos a
+    # proposito. D1 solo puede distinguir eso de una mezcla de cubos erronea si
+    # el producto lo declara (`validate_product_set`). Sin valor no se estampa:
+    # los productos que no tienen nada especial que decir no cambian.
+    if input_cube_source:
+        header["CUBESRC"] = str(input_cube_source)
     product = SpectrumProduct(
         wave_A=wave,
         flux=raw["flux"] * apcorr,
