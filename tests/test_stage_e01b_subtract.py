@@ -25,6 +25,7 @@ from musepipe.reduction.stream_combine import (
     combine_streaming,
     wavelength_axis,
 )
+from musepipe.stages import stage_e01b_perobs_subtract as MOD
 from musepipe.stages.stage_e01b_perobs_subtract import (
     PerObservationSubtractError,
     b1_window,
@@ -78,6 +79,37 @@ class TransformHookTests(unittest.TestCase):
             self.assertEqual(stat_shape, shape)
         # Y no cambia nada si el gancho devuelve el dato tal cual.
         np.testing.assert_array_equal(result["data"], combine_streaming(self.plan)["data"])
+
+    def test_the_hook_gets_the_same_four_arguments_in_every_combine_method(self):
+        """El contrato del gancho no puede depender de como se combine.
+
+        `combine_streaming` tiene dos ramas —`mean` y sigclip/mediana— y la
+        segunda llamaba al gancho con TRES argumentos mientras su docstring y
+        la otra rama prometian cuatro. Los tests de C1b solo ejercitaban `mean`
+        (la equivalencia lineal lo exige), asi que C1b murio con `TypeError` en
+        su primera ejecucion real, sobre un plan que combina con sigclip
+        (2026-08-19). Se fija la firma en las DOS ramas.
+        """
+        for metodo in ("mean", "sigclip"):
+            with self.subTest(metodo=metodo):
+                plan = build_stream_combine_plan(
+                    [str(p) for p in _exposures(self.root / metodo,
+                                                [(30.2, 31.4), (28.6, 33.9), (31.0, 30.0)])],
+                    run_id="obj",
+                    output=str(self.root / f"combined_{metodo}.fits"),
+                    crop_npix=CROP, pad=PAD, chunk_channels=8, method=metodo,
+                )
+                vistos = []
+
+                def transform(exposure, wave_chunk, data, stat):
+                    vistos.append((wave_chunk.shape, data.shape, stat.shape))
+                    return data
+
+                combine_streaming(plan, transform=transform)
+                self.assertTrue(vistos, f"el gancho no se llamo con method={metodo}")
+                for n_wave, shape, stat_shape in vistos:
+                    self.assertEqual(shape[0], n_wave[0])
+                    self.assertEqual(stat_shape, shape)
 
     def test_subtracting_then_combining_equals_combining_then_subtracting(self):
         """El combinado es lineal: el orden no puede cambiar el resultado.
@@ -212,6 +244,35 @@ class MixtureInputTests(unittest.TestCase):
     def test_an_empty_mixture_is_refused(self):
         with self.assertRaises(PerObservationSubtractError):
             models_by_exposure({"form": "mixture", "components": []})
+
+
+class PathsContractTests(unittest.TestCase):
+    """Las claves que la etapa LEE tienen que ser las que su `paths` DECLARA.
+
+    C1b se quedo sin `observation_plan_json` en `stage_e01b_paths` mientras
+    `run_stage_e01b` la consultaba: la etapa moria con `KeyError` en la primera
+    ejecucion real (2026-08-19), y ningun test lo vio porque todos entran por
+    las funciones internas, nunca por el cableado de rutas. Esto lo mira en
+    conjunto, no solo esa clave.
+    """
+
+    MODULO = Path(__file__).resolve().parents[1] / "musepipe" / "stages" / "stage_e01b_perobs_subtract.py"
+
+    def test_every_key_the_stage_reads_is_declared(self):
+        import ast
+        arbol = ast.parse(self.MODULO.read_text(encoding="utf-8"))
+        leidas = {
+            nodo.slice.value
+            for nodo in ast.walk(arbol)
+            if isinstance(nodo, ast.Subscript)
+            and isinstance(nodo.value, ast.Name) and nodo.value.id == "paths"
+            and isinstance(nodo.slice, ast.Constant) and isinstance(nodo.slice.value, str)
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            declaradas = set(MOD.stage_e01b_paths("RUN_X", project_root=tmp))
+        self.assertTrue(leidas, "no se ha encontrado ningun `paths[...]`: revisa el test")
+        self.assertEqual(leidas - declaradas, set(),
+                         "claves leidas y no declaradas en stage_e01b_paths")
 
 
 if __name__ == "__main__":

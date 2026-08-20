@@ -802,7 +802,11 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
             for slot, (exposure, hdul) in enumerate(zip(plan.exposures, handles)):
                 data, stat, _ = _aligned_chunk(exposure, plan, hdul, z1, z2)
                 if transform is not None:
-                    data = transform(exposure, wave[z1:z2], data)
+                    # Los MISMOS cuatro argumentos que la rama `mean` y que el
+                    # contrato del docstring. Esta rama pasaba tres, asi que
+                    # cualquier gancho reventaba en cuanto el plan no combinaba
+                    # por media — que es como combina ROXs 12 b (2026-08-19).
+                    data = transform(exposure, wave[z1:z2], data, stat)
                 data_stack[slot] = data
                 stat_stack[slot] = stat
             rejected = _sigclip_mask(data_stack, stat_stack, plan.sigclip_k, plan.sigclip_min_n)
