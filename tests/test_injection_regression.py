@@ -79,6 +79,45 @@ class InjectionRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(result["expected_snr"], 8.97)
         self.assertAlmostEqual(result["recovered"], 8.80)
 
+    def test_unavailable_is_not_a_failure_and_says_so(self):
+        # "No se evaluo" y "se evaluo y fallo" salian con el mismo texto: el QC
+        # declaraba "did not pass ... not valid for E3" de una comprobacion que
+        # nunca corrio. Decision 2026-08-20: se acepta como `unavailable`.
+        result = historic_regression_check({"h04_historic_expected_snr": 8.97})
+
+        self.assertEqual(result["verdict"], "unavailable")
+        self.assertIsNone(result["recovered"])
+        self.assertIn("not a failed check", result["note"])
+
+    def test_the_open_issue_distinguishes_never_ran_from_failed(self):
+        from musepipe.stages.stage_h04_injection import _qc_from_rows
+
+        def issue_for(regression):
+            qc = _qc_from_rows({"run_id": "synthetic"}, None, [], [], [], {},
+                               regression, {"value": 0.0}, {})
+            return " ".join(qc["open_issues"])
+
+        nunca = issue_for({"verdict": "unavailable"})
+        fallo = issue_for({"verdict": "fail"})
+
+        self.assertIn("never evaluated", nunca)
+        self.assertNotIn("did not pass", nunca)
+        self.assertNotIn("not valid for E3", nunca)
+        self.assertIn("did not pass", fallo)
+
+    def test_the_expected_value_declares_whether_the_run_set_it(self):
+        # El 8.97 es un default de este modulo y su medida no esta en el repo.
+        # Tras el `setdefault` del constructor de config no hay forma de
+        # distinguirlo, asi que se anota antes.
+        propio = historic_regression_check(
+            {"h04_historic_expected_snr": 9.5, "h04_historic_expected_snr_declared": True}
+        )
+        default = historic_regression_check({"h04_historic_expected_snr_declared": False})
+
+        self.assertEqual(propio["expected_snr_source"], "config.h04_historic_expected_snr")
+        self.assertEqual(default["expected_snr_source"], "module_default_undocumented")
+        self.assertAlmostEqual(default["expected_snr"], 8.97)
+
     def test_stage_h04_synthetic_grid_writes_e3_throughput_contract(self):
         wave = np.arange(6525.0, 6601.0, 1.0, dtype=np.float64)
         fwhm = 2.5

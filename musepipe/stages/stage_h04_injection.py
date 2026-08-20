@@ -164,6 +164,11 @@ def stage_h04_config_from_run(
     # coincide con la que devuelven los extractores (NORMRAD), y el throughput
     # deja de depender del modelo de PSF. `frame` reproduce el camino historico.
     cfg.setdefault("h04_injection_norm_convention", "norm_radius")
+    # El 8.97 es un default de ESTE modulo: la medida que lo respalda no esta en
+    # el repo. Se anota si el run lo declara de verdad, porque despues del
+    # `setdefault` ya no hay forma de distinguirlo y el QC acabaria diciendo que
+    # sale de la config cuando sale de aqui (`historic_regression_check`).
+    cfg["h04_historic_expected_snr_declared"] = "h04_historic_expected_snr" in cfg
     cfg.setdefault("h04_historic_expected_snr", 8.97)
     cfg.setdefault("h04_historic_tolerance_snr", 0.25)
     cfg.setdefault("h04_require_historic_regression", True)
@@ -871,18 +876,30 @@ def historic_regression_check(config, paths=None):
         if truth and truth.get("nominal_local_surface_matched_snr") is not None:
             recovered = truth["nominal_local_surface_matched_snr"]
             source = str(paths["stage06_truth_json"])
+    # De donde sale el valor esperado. Publicar `expected_snr` a secas junto a
+    # `recovered: null` se lee como si se hubiera comparado contra algo: el 8.97
+    # es un default del propio modulo y su medida no esta en el repo, asi que la
+    # procedencia se declara en vez de insinuarse.
+    expected_source = ("config.h04_historic_expected_snr"
+                       if config.get("h04_historic_expected_snr_declared")
+                       else "module_default_undocumented")
     if recovered is None:
         return {
             "expected_snr": expected,
+            "expected_snr_source": expected_source,
             "recovered": None,
             "tolerance_snr": float(config.get("h04_historic_tolerance_snr", 0.25)),
             "source": "unavailable",
             "verdict": "unavailable",
+            "note": ("No recovered value: neither `h04_historic_recovered_snr` in the config nor "
+                     "`nominal_local_surface_matched_snr` in the Stage06 truth JSON. Nothing was "
+                     "compared, so this is not a failed check."),
         }
     recovered = float(recovered)
     tol = float(config.get("h04_historic_tolerance_snr", 0.25))
     return {
         "expected_snr": expected,
+        "expected_snr_source": expected_source,
         "recovered": recovered,
         "tolerance_snr": tol,
         "source": source,
@@ -1224,7 +1241,18 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
         "v5_continuum": _v5_continuum(rows, methods, continuum_info),
     }
     open_issues = []
-    if regression["verdict"] != "pass":
+    # "No se evaluo" y "se evaluo y fallo" no son lo mismo, y hasta aqui salian
+    # con el mismo texto: `!= "pass"` metia las dos en el mismo saco y el QC
+    # declaraba "did not pass ... not valid for E3" de una comprobacion que
+    # nunca llego a correr. Decision del usuario (2026-08-20): `unavailable` se
+    # ACEPTA como tal, con la limitacion declarada, y el texto lo dice.
+    if regression["verdict"] == "unavailable":
+        open_issues.append(
+            "Historic Stage06 regression was never evaluated (no reference measurement "
+            "available): its verdict is 'unavailable', not a failure. The throughput is "
+            "delivered with that limitation declared; E3 records the same caveat."
+        )
+    elif regression["verdict"] != "pass":
         open_issues.append("Historic Stage06 regression did not pass; H04 is not valid for E3.")
     for key, check in checks.items():
         if check.get("status") == "fail":
