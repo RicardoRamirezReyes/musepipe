@@ -74,10 +74,17 @@ CADENA: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "stages/stage_h01b_qc.json"),
     ("E2", (PY, "-m", "musepipe.stages.stage_h02_artifacts", "--run-id", "{run}"),
      "stages/stage_h02_qc.json"),
-    ("E3", (PY, "-m", "musepipe.stages.stage_h03_limits", "--run-id", "{run}"),
-     "stages/stage_h03_qc.json"),
+    # E4 ANTES que E3, aunque la letra diga lo contrario: E3 divide su limite de
+    # flujo por el throughput que E4 escribe en
+    # `tables/injection_throughput_by_method.csv`, y E4 no lee nada de E3. Con el
+    # orden por numero, E3 leia el throughput de la corrida ANTERIOR: el
+    # 2026-08-20, con la extraccion nueva, eso dejo el Mdot de E3 calculado con
+    # un throughput un 13-17 % mas bajo del que E4 acababa de medir. La cadena se
+    # ordena por dependencia, no por nombre (`tests/test_rerun_chain.py`).
     ("E4", (PY, "-m", "musepipe.stages.stage_h04_injection", "--run-id", "{run}"),
      "stages/stage_h04_qc.json"),
+    ("E3", (PY, "-m", "musepipe.stages.stage_h03_limits", "--run-id", "{run}"),
+     "stages/stage_h03_qc.json"),
     ("E5", (PY, "-m", "musepipe.stages.stage_h05_contrast", "--run-id", "{run}"),
      "stages/stage_h05_qc.json"),
     ("E6", (PY, "-m", "musepipe.stages.stage_h06_roc", "--run-id", "{run}"),

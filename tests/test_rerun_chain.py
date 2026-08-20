@@ -72,6 +72,12 @@ class RegistryAgreementTests(unittest.TestCase):
                 self.assertIn(qc, RC.qc_del_registro(etapa),
                               f"{etapa}: el QC del conductor no es el del registro")
 
+    def test_E4_runs_before_E3_because_E3_consumes_its_throughput(self):
+        # E3 divide su limite de flujo por el throughput que escribe E4, y E4 no
+        # lee nada de E3. Ordenar por numero hacia que E3 usara el throughput de
+        # la corrida anterior sin que nadie lo viera.
+        self.assertLess(RC.IDS.index("E4"), RC.IDS.index("E3"))
+
     def test_the_chain_runs_C1_first_and_G5_last(self):
         """El orden importa: cada etapa consume el producto de la anterior."""
         self.assertEqual(RC.IDS[0], "C1")
