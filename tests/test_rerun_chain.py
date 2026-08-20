@@ -186,5 +186,89 @@ class LogAndExitCodeTests(unittest.TestCase):
         self.assertNotIn("{run}", " ".join(vistos[0]))
 
 
+class ResumeTests(unittest.TestCase):
+    """`--saltar-hechos`: reanudar una cadena cortada sin repetir lo hecho.
+
+    Ninguna etapa hace checkpoint interno, asi que la unidad de reanudacion es
+    la etapa. Lo que se fija aqui es que el conductor no de por hecha una etapa
+    cuyo producto ya no esta, y que sin el flag no se salte nada.
+    """
+
+    @staticmethod
+    def _corre_una(tmp, run_dir, qc_rel, argv_extra=()):
+        """Corre C1 con una etapa que SI escribe su QC."""
+        qc = run_dir / qc_rel
+
+        def escribe(*_a, **_k):
+            import os
+            import time as _t
+            qc.parent.mkdir(parents=True, exist_ok=True)
+            qc.write_text("{}", encoding="utf-8")
+            os.utime(qc, (_t.time() + 10, _t.time() + 10))
+            return _Proc(0)
+
+        with mock.patch.object(RC.subprocess, "run", side_effect=escribe) as corre:
+            rc = RC.main(["--run-id", "RUN_X", "--project-root", tmp, "--solo", "C1",
+                          *argv_extra])
+        return rc, corre
+
+    def test_a_stage_already_in_the_log_is_not_launched_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_not_called()
+            log = json.loads((run_dir / "logs" / "rerun_log.json").read_text(encoding="utf-8"))
+            self.assertTrue(log[-1]["saltada"])
+
+    def test_without_the_flag_it_runs_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            corre.assert_called_once()
+
+    def test_a_stage_whose_qc_disappeared_is_not_considered_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            (run_dir / "stages" / "stage_e01_qc.json").unlink()
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_called_once()
+
+    def test_a_qc_restored_from_a_snapshot_is_not_considered_done(self):
+        """Restaurar un snapshot hace RETROCEDER el mtime: la etapa vuelve a la cola."""
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            qc = run_dir / "stages" / "stage_e01_qc.json"
+            os.utime(qc, (1000.0, 1000.0))
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_called_once()
+
+    def test_a_failed_stage_is_never_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            with mock.patch.object(RC.subprocess, "run", return_value=_Proc(2, "boom")):
+                RC.main(["--run-id", "RUN_X", "--project-root", tmp, "--solo", "C1"])
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_called_once()
+
+    def test_the_log_accumulates_instead_of_being_overwritten(self):
+        """Sin esto no hay reanudacion posible: la bitacora se pisaba entera."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            log = json.loads((run_dir / "logs" / "rerun_log.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(log), 2)
+            self.assertEqual([f["etapa"] for f in log], ["C1", "C1"])
+
+
 if __name__ == "__main__":
     unittest.main()
