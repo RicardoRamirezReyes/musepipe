@@ -98,11 +98,14 @@ CADENA: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("G2", (PY, "-c", "from musepipe.stages.stage_g2_measure_lines import run_stage_g2;"
                       " print(run_stage_g2('{run}'))"),
      "stages/stage_g2_qc.json"),
-    # G3: aquí va la rodaja de acreción. `run_stage_g3_all` exige la
-    # configuración de «G3 real» (`g3_atmo_av_axis`, plantillas, atmósferas) y
-    # revienta con KeyError antes de tocar nada en un run que no la tenga.
-    ("G3", (PY, "-c", "from musepipe.stages.stage_g3_accretion import run_stage_g3_accretion;"
-                      " print(run_stage_g3_accretion('{run}'))"),
+    # G3: la elige el run, no el conductor. Hay dos —la rodaja de acreción y el
+    # «G3 real», que ademas ajusta plantillas, atmósferas y tracks— y fijar la
+    # rodaja aquí DEGRADABA en silencio a los objetos que tienen el segundo:
+    # ROXs 42B b pasaba de un QC con `atmo`, `spt`, `mass_coverage_by_family` y
+    # manifiestos con sha256 a uno sin nada de eso, y con `rc=0`. Decide
+    # `g3_entry_point`, por lo que el run DECLARA.
+    ("G3", (PY, "-c", "from musepipe.stages.stage_g3_assemble import run_stage_g3;"
+                      " print(run_stage_g3('{run}'))"),
      "stages/stage_g3_qc.json"),
     ("G4", (PY, "-c", "from musepipe.stages.stage_g4_classify import run_stage_g4;"
                       " print(run_stage_g4('{run}'))"),

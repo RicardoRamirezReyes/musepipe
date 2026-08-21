@@ -78,6 +78,14 @@ class RegistryAgreementTests(unittest.TestCase):
         # la corrida anterior sin que nadie lo viera.
         self.assertLess(RC.IDS.index("E4"), RC.IDS.index("E3"))
 
+    def test_G3_goes_through_the_dispatcher_not_a_fixed_variant(self):
+        # Hay dos G3 y elegir mal no da error: correr la rodaja de acrecion
+        # sobre un run que tiene el «G3 real» le degrada el producto con rc=0.
+        cmd = " ".join(next(c for e, c, _q in RC.CADENA if e == "G3"))
+        self.assertIn("run_stage_g3(", cmd)
+        self.assertNotIn("run_stage_g3_accretion(", cmd)
+        self.assertNotIn("run_stage_g3_all(", cmd)
+
     def test_the_chain_runs_C1_first_and_G5_last(self):
         """El orden importa: cada etapa consume el producto de la anterior."""
         self.assertEqual(RC.IDS[0], "C1")
