@@ -27,7 +27,7 @@ from .stage_x10_compare import METHOD_ORDER
 
 C_KMS = 299792.458
 H01_MATCHED_FILTER_POINT = matched_filter_point
-SPEC_VERSION = "E4_v2"
+SPEC_VERSION = "E4_v3"
 DEFAULT_SNR_GRID = (0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0)
 DEFAULT_TEMPLATE_FACTORS = (1.0, 2.0)
 # sgf/lpm added in WP-H2 (docs/2026-07-15_plan_integracion_halosub.md): their
@@ -164,6 +164,11 @@ def stage_h04_config_from_run(
     # coincide con la que devuelven los extractores (NORMRAD), y el throughput
     # deja de depender del modelo de PSF. `frame` reproduce el camino historico.
     cfg.setdefault("h04_injection_norm_convention", "norm_radius")
+    # El 8.97 es un default de ESTE modulo: la medida que lo respalda no esta en
+    # el repo. Se anota si el run lo declara de verdad, porque despues del
+    # `setdefault` ya no hay forma de distinguirlo y el QC acabaria diciendo que
+    # sale de la config cuando sale de aqui (`historic_regression_check`).
+    cfg["h04_historic_expected_snr_declared"] = "h04_historic_expected_snr" in cfg
     cfg.setdefault("h04_historic_expected_snr", 8.97)
     cfg.setdefault("h04_historic_tolerance_snr", 0.25)
     cfg.setdefault("h04_require_historic_regression", True)
@@ -871,18 +876,30 @@ def historic_regression_check(config, paths=None):
         if truth and truth.get("nominal_local_surface_matched_snr") is not None:
             recovered = truth["nominal_local_surface_matched_snr"]
             source = str(paths["stage06_truth_json"])
+    # De donde sale el valor esperado. Publicar `expected_snr` a secas junto a
+    # `recovered: null` se lee como si se hubiera comparado contra algo: el 8.97
+    # es un default del propio modulo y su medida no esta en el repo, asi que la
+    # procedencia se declara en vez de insinuarse.
+    expected_source = ("config.h04_historic_expected_snr"
+                       if config.get("h04_historic_expected_snr_declared")
+                       else "module_default_undocumented")
     if recovered is None:
         return {
             "expected_snr": expected,
+            "expected_snr_source": expected_source,
             "recovered": None,
             "tolerance_snr": float(config.get("h04_historic_tolerance_snr", 0.25)),
             "source": "unavailable",
             "verdict": "unavailable",
+            "note": ("No recovered value: neither `h04_historic_recovered_snr` in the config nor "
+                     "`nominal_local_surface_matched_snr` in the Stage06 truth JSON. Nothing was "
+                     "compared, so this is not a failed check."),
         }
     recovered = float(recovered)
     tol = float(config.get("h04_historic_tolerance_snr", 0.25))
     return {
         "expected_snr": expected,
+        "expected_snr_source": expected_source,
         "recovered": recovered,
         "tolerance_snr": tol,
         "source": source,
@@ -986,6 +1003,17 @@ def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_al
         )
         observed = float(row["recovered_flux"])
         fap = empirical_fap(observed, reference)
+        # La misma FAP de rango, por abajo. La puerta es unilateral por diseno
+        # (busca falsos positivos), asi que una fila muy NEGATIVA sale con
+        # `empirical_fap = 1.0` y nunca es extrema. Eso dejaba fuera de la vista
+        # la sobre-sustraccion de continuo de `optimal_ls` (docs/noise_model.md
+        # y el continuo negativo de C3). Se informa, no se vota.
+        finite_reference = reference[np.isfinite(reference)]
+        fap_low = (
+            float((int(np.sum(finite_reference <= observed)) + 1) / (finite_reference.size + 1))
+            if finite_reference.size and np.isfinite(observed)
+            else np.nan
+        )
         diagnostics.append(
             {
                 "injection_id": row["injection_id"],
@@ -995,22 +1023,80 @@ def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_al
                 "continuum_mode": row["continuum_mode"],
                 "recovered_flux": observed,
                 "empirical_fap": _finite_or_none(fap),
+                "empirical_fap_low": _finite_or_none(fap_low),
                 "n_controls": int(np.count_nonzero(np.isfinite(reference))),
             }
         )
-    pvals = np.asarray(
+    # La unidad de la puerta es la POSICION de control, no la fila (E4 v3 §3).
+    # Las filas de una posicion son la misma zona de cielo medida seis veces
+    # (los metodos), con dos anchos de filtro y dos modos de continuo: no son
+    # tiradas independientes, y contarlas como tales convertia UN hecho espacial
+    # en tantos rechazos como filas. El resumen por posicion es la MEDIANA de
+    # sus FAP —"lo que ve el metodo tipico ahi"—, que no deja que un solo
+    # extractor con un defecto conocido decida por los demas ni permite que la
+    # mayoria lo tape.
+    rows_pval = np.asarray(
         [np.nan if row["empirical_fap"] is None else float(row["empirical_fap"]) for row in diagnostics],
         dtype=np.float64,
     )
-    extreme = np.isfinite(pvals) & (pvals < float(p_null))
-    n_extreme = int(np.count_nonzero(extreme))
-    if pvals.size:
+    n_extreme_rows = int(np.count_nonzero(np.isfinite(rows_pval) & (rows_pval < float(p_null))))
+
+    positions = []
+    for label in sorted({str(row["position_label"]) for row in diagnostics}):
+        mine = [row for row in diagnostics if str(row["position_label"]) == label]
+        faps = np.asarray(
+            [float(row["empirical_fap"]) for row in mine if row["empirical_fap"] is not None],
+            dtype=np.float64,
+        )
+        faps = faps[np.isfinite(faps)]
+        position_fap = float(np.median(faps)) if faps.size else np.nan
+        by_method = {}
+        for method in sorted({str(row["method"]) for row in mine}):
+            per = np.asarray(
+                [float(row["empirical_fap"]) for row in mine
+                 if str(row["method"]) == method and row["empirical_fap"] is not None],
+                dtype=np.float64,
+            )
+            per = per[np.isfinite(per)]
+            by_method[method] = _finite_or_none(float(np.median(per)) if per.size else np.nan)
+        positions.append(
+            {
+                "position_label": label,
+                "n_rows": len(mine),
+                "position_fap": _finite_or_none(position_fap),
+                "extreme": bool(np.isfinite(position_fap) and position_fap < float(p_null)),
+                "by_method_fap": by_method,
+            }
+        )
+
+    # Cola baja: cuenta y de quien es, sin entrar en el veredicto.
+    low_pval = np.asarray(
+        [np.nan if row["empirical_fap_low"] is None else float(row["empirical_fap_low"])
+         for row in diagnostics],
+        dtype=np.float64,
+    )
+    low_extreme = np.isfinite(low_pval) & (low_pval < float(p_null))
+    low_methods = {}
+    for row, flag in zip(diagnostics, low_extreme):
+        if flag:
+            low_methods[str(row["method"])] = low_methods.get(str(row["method"]), 0) + 1
+    low_tail = {
+        "gating": False,
+        "n_extreme_rows": int(np.count_nonzero(low_extreme)),
+        "by_method": dict(sorted(low_methods.items())),
+        "note": ("Deficit de flujo donde no se inyecto nada: sobre-sustraccion, no falso "
+                 "positivo. La puerta V2 es unilateral por diseno y no lo vota."),
+    }
+
+    n_positions = len(positions)
+    n_extreme = int(sum(1 for entry in positions if entry["extreme"]))
+    if n_positions:
         from scipy import stats as scipy_stats
 
-        excess_p = float(scipy_stats.binom.sf(n_extreme - 1, pvals.size, float(p_null))) if n_extreme else 1.0
+        excess_p = float(scipy_stats.binom.sf(n_extreme - 1, n_positions, float(p_null))) if n_extreme else 1.0
     else:
         excess_p = np.nan
-    passed = bool(pvals.size and np.isfinite(excess_p) and excess_p >= float(gate_alpha))
+    passed = bool(n_positions and np.isfinite(excess_p) and excess_p >= float(gate_alpha))
     science = [
         row
         for row in rows
@@ -1021,11 +1107,19 @@ def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_al
     return {
         "status": "pass" if passed else "fail",
         "population": "control_positions_only",
-        "n_rows": int(pvals.size),
+        # `n_extreme` cuenta lo que cuenta la puerta. Hasta E4 v2 eran filas y
+        # el nombre no lo decia; ahora `unit` lo declara y `n_extreme_rows`
+        # conserva el numero viejo, que sigue siendo el detalle util.
+        "unit": "control_position",
+        "n_positions": n_positions,
         "n_extreme": n_extreme,
+        "n_rows": int(rows_pval.size),
+        "n_extreme_rows": n_extreme_rows,
         "p_null": float(p_null),
         "excess_p": _finite_or_none(excess_p),
         "gate_alpha": float(gate_alpha),
+        "positions": positions,
+        "low_tail_diagnostics": low_tail,
         "rows": diagnostics,
         "science_position_diagnostics": {
             "n_rows": len(science),
@@ -1147,7 +1241,18 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
         "v5_continuum": _v5_continuum(rows, methods, continuum_info),
     }
     open_issues = []
-    if regression["verdict"] != "pass":
+    # "No se evaluo" y "se evaluo y fallo" no son lo mismo, y hasta aqui salian
+    # con el mismo texto: `!= "pass"` metia las dos en el mismo saco y el QC
+    # declaraba "did not pass ... not valid for E3" de una comprobacion que
+    # nunca llego a correr. Decision del usuario (2026-08-20): `unavailable` se
+    # ACEPTA como tal, con la limitacion declarada, y el texto lo dice.
+    if regression["verdict"] == "unavailable":
+        open_issues.append(
+            "Historic Stage06 regression was never evaluated (no reference measurement "
+            "available): its verdict is 'unavailable', not a failure. The throughput is "
+            "delivered with that limitation declared; E3 records the same caveat."
+        )
+    elif regression["verdict"] != "pass":
         open_issues.append("Historic Stage06 regression did not pass; H04 is not valid for E3.")
     for key, check in checks.items():
         if check.get("status") == "fail":

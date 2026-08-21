@@ -64,6 +64,10 @@ def stage_e01b_paths(run_id, project_root=None):
         # propio fichero, aunque normalmente sea tambien lo que va en
         # `psf_model.json`: asi C1b no depende de que knob eligio C1.
         "psf_model_mixture_json": paths.stage_dir / "psf_model_mixture.json",
+        # La geometria por exposicion que dejo C1. Si no esta, `resolve_observation_plan`
+        # la vuelve a derivar; lo que no vale es no declararla, porque
+        # `run_stage_e01b` la consulta.
+        "observation_plan_json": paths.stage_dir / "observation_plan.json",
         "stage01_qc_json": paths.stage_dir / "stage01_qc.json",
         "stage01c_qc_json": paths.stage_dir / "stage01c_qc.json",
         "stage02_cube_fits": paths.stage_dir / "stage02_xcorr_cube_stack.fits",

@@ -24,6 +24,7 @@ from ..extraction.scale_check import pair_scale_check
 from ..io import read_json, write_csv, write_json
 from ..paths import RunPaths
 from ..spectral import continuum_running_median
+from ..stage_registry import by_id
 from ..stats import robust_sigma_axis0
 
 
@@ -33,6 +34,13 @@ BAD_COMPARISON_FLAGS = FLAG_BAD_WINDOW | FLAG_SKYLINE
 # comparison set. Historical runs with spec_version="D1_v2" QC keep their
 # 4-method interpretation.
 METHOD_ORDER = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
+
+#: Procedencias de cubo que justifican un `INCUBESH` distinto al de los demas
+#: metodos. Hoy solo una: C1b resta la primaria en cada exposicion y combina
+#: los residuos, asi que el psfsub sale de ese cubo y no del apilado de B2.
+#: Se compara contra `CUBESRC`, que estampa C3. Anadir una entrada aqui es
+#: declarar que esa procedencia produce el MISMO dato en otra combinacion.
+DERIVED_CUBE_SOURCES = frozenset({by_id("C1b").slug})
 CONTINUUM_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
 CONTINUUM_COMPARISON_MODE = "raw_total_continuum"
 LINE_COMPARISON_MODE = "local_continuum_subtracted_throughput_line"
@@ -252,7 +260,7 @@ def empirical_sigma_diff(control_i, control_j, *, smooth_channels=1, min_sigma=1
     return sigma
 
 
-def validate_product_set(products: dict[str, SpectrumProduct], *, required=METHOD_ORDER) -> None:
+def validate_product_set(products: dict[str, SpectrumProduct], *, required=METHOD_ORDER) -> list[str]:
     missing = [name for name in required if name not in products]
     if missing:
         raise ValueError(f"Missing required SpectrumProducts: {missing}")
@@ -270,6 +278,7 @@ def validate_product_set(products: dict[str, SpectrumProduct], *, required=METHO
     incubesh_ref = str(ref.header["INCUBESH"])
     run_id_ref = str(ref.header["RUNID"])
     normrad_ref = float(ref.header["NORMRAD"])
+    derived_inputs: dict[str, str] = {}
 
     for name in required[1:]:
         product = products[name]
@@ -282,7 +291,22 @@ def validate_product_set(products: dict[str, SpectrumProduct], *, required=METHO
         if str(product.header["WFRAME"]) != wframe_ref:
             raise ValueError(f"{name} WFRAME differs from {ref_name}.")
         if str(product.header["INCUBESH"]) != incubesh_ref:
-            raise ValueError(f"{name} INCUBESH differs from {ref_name}.")
+            # "Mismo cubo madre" (spec D1 §1) dejo de ser literal cuando C1b
+            # resta la primaria en CADA exposicion y combina los residuos: el
+            # psfsub sale de ESE cubo y su hash no puede coincidir con el de los
+            # otros cinco. Lo que sigue siendo obligatorio es que el producto lo
+            # DECLARE (`CUBESRC`, estampado por C3) y que sea una procedencia
+            # reconocida; un hash distinto sin declarar sigue siendo una mezcla
+            # de cubos y sigue siendo error duro. Malla de lambda, RUNID,
+            # WFRAME y NORMRAD se siguen exigiendo iguales aqui arriba.
+            source = str(product.header.get("CUBESRC", "")).strip()
+            if source not in DERIVED_CUBE_SOURCES:
+                raise ValueError(
+                    f"{name} INCUBESH differs from {ref_name} and declares no recognized "
+                    f"derived-cube source (CUBESRC={source or 'absent'!s}; "
+                    f"expected one of {sorted(DERIVED_CUBE_SOURCES)})."
+                )
+            derived_inputs[name] = source
         normrad = float(product.header["NORMRAD"])
         if not np.isclose(normrad, normrad_ref, rtol=0.0, atol=1.0e-6):
             raise ValueError(f"{name} NORMRAD differs from {ref_name}.")
@@ -290,6 +314,11 @@ def validate_product_set(products: dict[str, SpectrumProduct], *, required=METHO
     # Scale-convention headers (spec v2 §3.1): missing -> warning (pre-v2
     # products), present but inconsistent SCALEREF -> hard error.
     warnings_list = []
+    for name, source in sorted(derived_inputs.items()):
+        warnings_list.append(
+            f"{name} was extracted from a derived cube ({source}), so its INCUBESH differs "
+            f"from {ref_name}; wavelength grid, RUNID, WFRAME and NORMRAD were verified equal."
+        )
     scalerefs = {}
     for name in required:
         header = products[name].header
@@ -1834,6 +1863,7 @@ __all__ = [
     "COMPARISON_BANDS",
     "CONTINUUM_METHODS",
     "DEFAULT_PAIRS",
+    "DERIVED_CUBE_SOURCES",
     "FALLBACK_PRIMARY_PAIRS",
     "METHOD_ORDER",
     "PRIMARY_PAIRS",

@@ -77,5 +77,29 @@ class OptimalAnalyticTests(unittest.TestCase):
         self.assertEqual(extraction.error_mode, "stat")
 
 
+    def test_cubesrc_is_stamped_only_when_the_caller_declares_it(self):
+        # La procedencia del cubo viaja con el dato o no existe: D1 la lee del
+        # header (`CUBESRC`) para aceptar un `INCUBESH` distinto. Un producto
+        # que no tenga nada especial que decir no cambia de cabecera.
+        model = constant_model_doc()
+        wave = np.linspace(6500.0, 6900.0, 5)
+        center = (30.0, 30.0)
+        cube = synthetic_psf_cube(model, wave, np.full(wave.size, 100.0), center_yx=center)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cube_path = Path(tmp) / "cube.fits"
+            cube_path.write_bytes(b"synthetic")
+            common = dict(run_id="synthetic", input_cube_path=cube_path,
+                          variance_zyx=np.full_like(cube, 4.0),
+                          aperture_correction="psf_growth_curve",
+                          window_radius_px=7.0, clip_sigma=None)
+            plain = make_optimal_product(cube, wave, center, model, **common)
+            declared = make_optimal_product(cube, wave, center, model,
+                                            input_cube_source="C1b_perobs_subtract", **common)
+
+        self.assertNotIn("CUBESRC", plain.product.header)
+        self.assertEqual(declared.product.header["CUBESRC"], "C1b_perobs_subtract")
+
+
 if __name__ == "__main__":
     unittest.main()

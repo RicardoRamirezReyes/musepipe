@@ -12,14 +12,26 @@ con estado a medias.
 
 Escribe `rerun_log.json` en el directorio del run (`runs/<RUN>/logs/`): por
 etapa, `rc`, segundos y si el QC se reescribió — que es la única prueba de que
-la etapa hizo algo. Para parar limpio entre etapas: crear el fichero `PARAR`
-junto a la bitácora.
+la etapa hizo algo. La bitácora se **acumula** entre invocaciones. Para parar
+limpio entre etapas: crear el fichero `PARAR` junto a la bitácora.
+
+Ninguna etapa hace checkpoint interno: la que esté corriendo cuando se corte la
+máquina pierde su trabajo y vuelve a empezar. Lo que sí sobrevive es todo lo
+anterior, y `--saltar-hechos` lo aprovecha para reanudar sin repetirlo:
+
+    python scripts/rerun_chain.py --run-id X --desde C1 --hasta E6 --saltar-hechos
+
+Salta una etapa solo si la bitácora la da con `rc=0` y QC reescrito **y** ese
+QC sigue en disco sin haber retrocedido en el tiempo. No mira si el código o
+las entradas han cambiado desde entonces: es para reanudar una corrida cortada,
+no para decidir qué hace falta re-correr.
 
 Sale con código ≠ 0 si alguna etapa falla, para poder encadenarlo.
 """
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import subprocess
 import sys
@@ -62,10 +74,17 @@ CADENA: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "stages/stage_h01b_qc.json"),
     ("E2", (PY, "-m", "musepipe.stages.stage_h02_artifacts", "--run-id", "{run}"),
      "stages/stage_h02_qc.json"),
-    ("E3", (PY, "-m", "musepipe.stages.stage_h03_limits", "--run-id", "{run}"),
-     "stages/stage_h03_qc.json"),
+    # E4 ANTES que E3, aunque la letra diga lo contrario: E3 divide su limite de
+    # flujo por el throughput que E4 escribe en
+    # `tables/injection_throughput_by_method.csv`, y E4 no lee nada de E3. Con el
+    # orden por numero, E3 leia el throughput de la corrida ANTERIOR: el
+    # 2026-08-20, con la extraccion nueva, eso dejo el Mdot de E3 calculado con
+    # un throughput un 13-17 % mas bajo del que E4 acababa de medir. La cadena se
+    # ordena por dependencia, no por nombre (`tests/test_rerun_chain.py`).
     ("E4", (PY, "-m", "musepipe.stages.stage_h04_injection", "--run-id", "{run}"),
      "stages/stage_h04_qc.json"),
+    ("E3", (PY, "-m", "musepipe.stages.stage_h03_limits", "--run-id", "{run}"),
+     "stages/stage_h03_qc.json"),
     ("E5", (PY, "-m", "musepipe.stages.stage_h05_contrast", "--run-id", "{run}"),
      "stages/stage_h05_qc.json"),
     ("E6", (PY, "-m", "musepipe.stages.stage_h06_roc", "--run-id", "{run}"),
@@ -79,11 +98,14 @@ CADENA: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("G2", (PY, "-c", "from musepipe.stages.stage_g2_measure_lines import run_stage_g2;"
                       " print(run_stage_g2('{run}'))"),
      "stages/stage_g2_qc.json"),
-    # G3: aquí va la rodaja de acreción. `run_stage_g3_all` exige la
-    # configuración de «G3 real» (`g3_atmo_av_axis`, plantillas, atmósferas) y
-    # revienta con KeyError antes de tocar nada en un run que no la tenga.
-    ("G3", (PY, "-c", "from musepipe.stages.stage_g3_accretion import run_stage_g3_accretion;"
-                      " print(run_stage_g3_accretion('{run}'))"),
+    # G3: la elige el run, no el conductor. Hay dos —la rodaja de acreción y el
+    # «G3 real», que ademas ajusta plantillas, atmósferas y tracks— y fijar la
+    # rodaja aquí DEGRADABA en silencio a los objetos que tienen el segundo:
+    # ROXs 42B b pasaba de un QC con `atmo`, `spt`, `mass_coverage_by_family` y
+    # manifiestos con sha256 a uno sin nada de eso, y con `rc=0`. Decide
+    # `g3_entry_point`, por lo que el run DECLARA.
+    ("G3", (PY, "-c", "from musepipe.stages.stage_g3_assemble import run_stage_g3;"
+                      " print(run_stage_g3('{run}'))"),
      "stages/stage_g3_qc.json"),
     ("G4", (PY, "-c", "from musepipe.stages.stage_g4_classify import run_stage_g4;"
                       " print(run_stage_g4('{run}'))"),
@@ -129,6 +151,45 @@ def comprueba_run(run_dir: Path, run_id: str) -> None:
             " que significa.")
 
 
+def bitacora_previa(logs: Path) -> list[dict]:
+    """Las filas que dejaron invocaciones anteriores, si las hay.
+
+    Hasta ahora la bitacora se SOBRESCRIBIA en cada invocacion, asi que
+    reanudar una cadena cortada perdia el registro de lo ya hecho — justo lo
+    que hace falta para saber por donde seguir. Ahora se acumula.
+    """
+    fichero = logs / "rerun_log.json"
+    if not fichero.exists():
+        return []
+    try:
+        datos = json.loads(fichero.read_text(encoding="utf-8"))
+    except ValueError:
+        return []
+    return [f for f in datos if isinstance(f, dict)] if isinstance(datos, list) else []
+
+
+def etapas_hechas(previas: list[dict], run_dir: Path) -> dict[str, dict]:
+    """Etapa -> ultima fila que la da por terminada Y sigue respaldada por su QC.
+
+    No basta con que la bitacora diga `rc=0`: el QC tiene que seguir en disco y
+    no haber RETROCEDIDO en el tiempo. Si alguien restaura un snapshot encima
+    del run, el mtime del QC vuelve atras y la etapa deja de contar como hecha,
+    que es exactamente lo que se quiere — el producto que hay ya no es el que
+    escribio aquella corrida.
+    """
+    hechas: dict[str, dict] = {}
+    for fila in previas:
+        if fila.get("rc") != 0 or not fila.get("qc_reescrito"):
+            continue
+        marca = fila.get("qc_mtime")
+        qc = run_dir / str(fila.get("qc", ""))
+        if marca is None or not qc.exists():
+            continue
+        if qc.stat().st_mtime + 1e-6 >= float(marca):
+            hechas[str(fila.get("etapa"))] = fila
+    return hechas
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--run-id", required=True)
@@ -136,6 +197,9 @@ def main(argv=None) -> int:
     ap.add_argument("--hasta", default=None, choices=IDS, metavar="ETAPA")
     ap.add_argument("--solo", default=None, help="lista separada por comas")
     ap.add_argument("--dry-run", action="store_true", help="imprime el plan y no lanza nada")
+    ap.add_argument("--saltar-hechos", action="store_true", dest="saltar_hechos",
+                    help="salta las etapas que la bitacora ya da por terminadas"
+                         " (rc=0, QC reescrito y ese QC todavia en disco)")
     ap.add_argument("--project-root", default=str(ROOT))
     args = ap.parse_args(argv)
 
@@ -146,19 +210,40 @@ def main(argv=None) -> int:
 
     logs = run_dir / "logs"
     parar = logs / "PARAR"
+    previas = bitacora_previa(logs)
+    hechas = etapas_hechas(previas, run_dir) if args.saltar_hechos else {}
     print(f"cadena de {args.run_id}: {len(sel)} etapas ({sel[0][0]} → {sel[-1][0]})", flush=True)
+    if hechas:
+        ya = [e for e, _c, _q in sel if e in hechas]
+        print(f"  --saltar-hechos: {len(ya)} ya en la bitácora ({', '.join(ya) or '-'})", flush=True)
     if args.dry_run:
         for etapa, cmd, qc in sel:
-            print(f"  {etapa:4s} {qc:52s} {' '.join(cmd).replace('{run}', args.run_id)[:70]}")
+            marca = "SALTA " if etapa in hechas else "      "
+            print(f"  {marca}{etapa:4s} {qc:52s} {' '.join(cmd).replace('{run}', args.run_id)[:70]}")
         print("\n--dry-run: no se ha lanzado nada.")
         return 0
 
     logs.mkdir(parents=True, exist_ok=True)
-    bitacora, t_total, fallos = [], time.time(), 0
+    nuevas, t_total, fallos, saltadas = [], time.time(), 0, 0
+
+    def guarda():
+        """La bitacora, con lo previo delante: se acumula, no se pisa."""
+        (logs / "rerun_log.json").write_text(
+            json.dumps(previas + nuevas, indent=1, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+
     for etapa, cmd, qc_rel in sel:
         if parar.exists():
             print(f"{parar.name} presente: parada limpia antes de {etapa}.", flush=True)
             break
+        if etapa in hechas:
+            saltadas += 1
+            nuevas.append({"etapa": etapa, "rc": 0, "segundos": 0.0,
+                           "qc_reescrito": False, "qc": qc_rel, "saltada": True,
+                           "saltada_por": hechas[etapa].get("terminado_utc")})
+            print(f"  {etapa:4s} SALTA          -   {qc_rel}", flush=True)
+            guarda()
+            continue
         qc = run_dir / qc_rel
         antes = qc.stat().st_mtime if qc.exists() else 0.0
         t0 = time.time()
@@ -167,21 +252,26 @@ def main(argv=None) -> int:
         dt = time.time() - t0
         reescrito = qc.exists() and qc.stat().st_mtime > antes
         fila = {"etapa": etapa, "rc": proc.returncode, "segundos": round(dt, 1),
-                "qc_reescrito": bool(reescrito), "qc": qc_rel}
+                "qc_reescrito": bool(reescrito), "qc": qc_rel,
+                # Lo que `--saltar-hechos` necesita para decidir si esta fila
+                # todavia describe lo que hay en disco.
+                "qc_mtime": qc.stat().st_mtime if qc.exists() else None,
+                "terminado_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
         if proc.returncode != 0:
             fallos += 1
             fila["stderr"] = proc.stderr[-2000:]
-        bitacora.append(fila)
+        nuevas.append(fila)
         marca = ("OK " if proc.returncode == 0 and reescrito
                  else "rc!=0" if proc.returncode else "SIN QC")
         print(f"  {etapa:4s} {marca:6s} {dt:7.1f}s   {qc_rel}", flush=True)
         if proc.returncode != 0 and proc.stderr.strip():
             print("      " + proc.stderr.strip().splitlines()[-1][:200], flush=True)
-        (logs / "rerun_log.json").write_text(
-            json.dumps(bitacora, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        guarda()
 
-    ok = sum(1 for f in bitacora if f["rc"] == 0)
-    print(f"\ntotal {time.time() - t_total:.0f}s; {ok} de {len(bitacora)} con rc=0"
+    corridas = [f for f in nuevas if not f.get("saltada")]
+    ok = sum(1 for f in corridas if f["rc"] == 0)
+    extra = f"; {saltadas} saltadas" if saltadas else ""
+    print(f"\ntotal {time.time() - t_total:.0f}s; {ok} de {len(corridas)} con rc=0{extra}"
           f"  ·  bitácora en {logs / 'rerun_log.json'}", flush=True)
     return 1 if fallos else 0
 

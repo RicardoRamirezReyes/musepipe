@@ -72,6 +72,20 @@ class RegistryAgreementTests(unittest.TestCase):
                 self.assertIn(qc, RC.qc_del_registro(etapa),
                               f"{etapa}: el QC del conductor no es el del registro")
 
+    def test_E4_runs_before_E3_because_E3_consumes_its_throughput(self):
+        # E3 divide su limite de flujo por el throughput que escribe E4, y E4 no
+        # lee nada de E3. Ordenar por numero hacia que E3 usara el throughput de
+        # la corrida anterior sin que nadie lo viera.
+        self.assertLess(RC.IDS.index("E4"), RC.IDS.index("E3"))
+
+    def test_G3_goes_through_the_dispatcher_not_a_fixed_variant(self):
+        # Hay dos G3 y elegir mal no da error: correr la rodaja de acrecion
+        # sobre un run que tiene el «G3 real» le degrada el producto con rc=0.
+        cmd = " ".join(next(c for e, c, _q in RC.CADENA if e == "G3"))
+        self.assertIn("run_stage_g3(", cmd)
+        self.assertNotIn("run_stage_g3_accretion(", cmd)
+        self.assertNotIn("run_stage_g3_all(", cmd)
+
     def test_the_chain_runs_C1_first_and_G5_last(self):
         """El orden importa: cada etapa consume el producto de la anterior."""
         self.assertEqual(RC.IDS[0], "C1")
@@ -184,6 +198,90 @@ class LogAndExitCodeTests(unittest.TestCase):
         self.assertTrue(vistos)
         self.assertIn("RUN_X", vistos[0])
         self.assertNotIn("{run}", " ".join(vistos[0]))
+
+
+class ResumeTests(unittest.TestCase):
+    """`--saltar-hechos`: reanudar una cadena cortada sin repetir lo hecho.
+
+    Ninguna etapa hace checkpoint interno, asi que la unidad de reanudacion es
+    la etapa. Lo que se fija aqui es que el conductor no de por hecha una etapa
+    cuyo producto ya no esta, y que sin el flag no se salte nada.
+    """
+
+    @staticmethod
+    def _corre_una(tmp, run_dir, qc_rel, argv_extra=()):
+        """Corre C1 con una etapa que SI escribe su QC."""
+        qc = run_dir / qc_rel
+
+        def escribe(*_a, **_k):
+            import os
+            import time as _t
+            qc.parent.mkdir(parents=True, exist_ok=True)
+            qc.write_text("{}", encoding="utf-8")
+            os.utime(qc, (_t.time() + 10, _t.time() + 10))
+            return _Proc(0)
+
+        with mock.patch.object(RC.subprocess, "run", side_effect=escribe) as corre:
+            rc = RC.main(["--run-id", "RUN_X", "--project-root", tmp, "--solo", "C1",
+                          *argv_extra])
+        return rc, corre
+
+    def test_a_stage_already_in_the_log_is_not_launched_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_not_called()
+            log = json.loads((run_dir / "logs" / "rerun_log.json").read_text(encoding="utf-8"))
+            self.assertTrue(log[-1]["saltada"])
+
+    def test_without_the_flag_it_runs_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            corre.assert_called_once()
+
+    def test_a_stage_whose_qc_disappeared_is_not_considered_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            (run_dir / "stages" / "stage_e01_qc.json").unlink()
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_called_once()
+
+    def test_a_qc_restored_from_a_snapshot_is_not_considered_done(self):
+        """Restaurar un snapshot hace RETROCEDER el mtime: la etapa vuelve a la cola."""
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            qc = run_dir / "stages" / "stage_e01_qc.json"
+            os.utime(qc, (1000.0, 1000.0))
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_called_once()
+
+    def test_a_failed_stage_is_never_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            with mock.patch.object(RC.subprocess, "run", return_value=_Proc(2, "boom")):
+                RC.main(["--run-id", "RUN_X", "--project-root", tmp, "--solo", "C1"])
+            _rc, corre = self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json",
+                                         ("--saltar-hechos",))
+            corre.assert_called_once()
+
+    def test_the_log_accumulates_instead_of_being_overwritten(self):
+        """Sin esto no hay reanudacion posible: la bitacora se pisaba entera."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            self._corre_una(tmp, run_dir, "stages/stage_e01_qc.json")
+            log = json.loads((run_dir / "logs" / "rerun_log.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(log), 2)
+            self.assertEqual([f["etapa"] for f in log], ["C1", "C1"])
 
 
 if __name__ == "__main__":

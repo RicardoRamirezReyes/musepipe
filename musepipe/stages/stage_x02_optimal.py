@@ -23,6 +23,7 @@ from ..extraction.optimal import (
 from ..extraction.product import SpectrumProduct
 from ..io import read_json, resolve_bunit, write_json
 from ..paths import RunPaths
+from ..stage_registry import by_id
 from .stage_x01_aperture import (
     _best_indices_from_stage04b,
     _load_positions,
@@ -158,6 +159,14 @@ def _load_stage02_cube(paths, cfg, expected_wave=None):
     else:
         raise RuntimeError(f"Unexpected CUBES shape in {path}: {cubes.shape}")
     return cube, wave, path, bunit
+
+
+#: Como se llama, en los productos y en el QC, el cubo que deja C1b. Es el
+#: slug de la etapa en `stage_registry` —la fuente de verdad— y no una copia:
+#: D1 compara `CUBESRC` contra ese mismo slug para aceptar que el psfsub
+#: venga de otro cubo, y dos literales sueltos se separarian sin que nadie
+#: lo viera (`tests/test_perobs_cube_source.py`).
+PEROBS_CUBE_SOURCE = by_id("C1b").slug
 
 
 def _load_perobs_psfsub_cube(path, *, expected_shape, expected_wave):
@@ -446,7 +455,7 @@ def compute_stage_x02_products(config, paths=None):
             perobs_cube_path, expected_shape=stage02_cube.shape, expected_wave=stage02_wave
         )
         psfsub_model_meta = {
-            "source": "C1b_perobs_subtract",
+            "source": PEROBS_CUBE_SOURCE,
             "cube": str(perobs_cube_path),
             "note": ("La primaria se resto en cada exposicion con SU modelo y los residuos se "
                      "combinaron despues (C1b); aqui no se resta nada."),
@@ -480,6 +489,9 @@ def compute_stage_x02_products(config, paths=None):
         # La procedencia del cubo del que sale el espectro: si la resta la hizo
         # C1b, el hash de entrada tiene que ser el de SU cubo, no el de B2.
         input_cube_path=(perobs_cube_path if use_perobs else stage02_path),
+        # Y la declara el producto, para que D1 pueda aceptar un `INCUBESH`
+        # distinto sin tener que fiarse de que alguien no mezclo dos cubos.
+        input_cube_source=str(psfsub_model_meta.get("source", "")),
         variant="psfsub",
         **psfsub_common,
     )

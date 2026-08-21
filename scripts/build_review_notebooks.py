@@ -5432,10 +5432,10 @@ STAGES: list[dict] = [
         ),
     ),
     dict(
-        id="E4", slug="E4_injection", title="Inyección-recuperación (v2, nulo empírico)", block="E · Resultado",
-        spec="spec_E4_v2_codex_injection_recovery.md", run_override=None,
+        id="E4", slug="E4_injection", title="Inyección-recuperación (v3, nulo empírico)", block="E · Resultado",
+        spec="spec_E4_v3_codex_injection_recovery.md", run_override=None,
         what=("Inyecta señal sintética y mide el throughput de cada método, con **continuo plano no "
-              "nulo medido** y el gate de nulos calculado sobre **posiciones de control** (v2)."),
+              "nulo medido** y el gate de nulos que cuenta **posiciones de control, no filas** (v3)."),
         inputs="Extractores reales (C2–C6) + PSF + espectros de control de producción",
         outputs="`stages/stage_h04_qc.json`, `tables/injection_throughput_by_method.csv`",
         downstream="E3 (throughput), G1",
@@ -5493,12 +5493,29 @@ STAGES: list[dict] = [
             "configurado, E4 **mide** el continuo en las bandas laterales [6500,6540] y [6585,6625] Å "
             "sobre los cuatro productos que preservan continuo, lo lleva a escala NORMRAD y adopta la "
             "mediana de los valores positivos. V5 falla si `flat` es cero o idéntico a `none` |\n\n"
-            "**El gate global ya no exige cero extremos.** Con `K` filas extremas de `N`, falla solo si "
+            "**El gate global ya no exige cero extremos.** Con `K` extremos de `N`, falla solo si "
             "`P(X≥K | N, p_null=0.0455) < alpha=0.01`: un test binomial unilateral, el mismo que el "
             "gate de controles de D1. Eso prueba **exceso** de falsos positivos sin fingir "
             "independencia gaussiana canal a canal.\n\n"
-            "Lo que v2 **no** toca: la grilla, los anchos, las posiciones, las perturbaciones de PSF, "
-            "los extractores ni la definición de throughput."
+            "**Qué cambia en v3** ([`docs/spec_E4_v3_codex_injection_recovery.md`](../docs/spec_E4_v3_codex_injection_recovery.md), "
+            "congelada 2026-08-20). v2 aplicaba ese binomial a las **filas**, y las filas no son "
+            "independientes: las 72 filas nulas son 3 posiciones × 6 métodos × 2 anchos × 2 modos de "
+            "continuo **sobre el mismo cubo**, o sea la misma zona de cielo medida muchas veces (el "
+            "modo de continuo mueve el número un 0.8 %). En ROXs 12 b eso convertía **una** posición "
+            "con exceso —`control3`, en 4 de los 6 métodos— en 16 rechazos de 72, y daba "
+            "`excess_p = 1.2e-07`. v3 cuenta **posiciones**: el resumen de una posición es la "
+            "**mediana** de las FAP de sus filas (hace falta más de la mitad de las medidas, así que "
+            "ni un extractor con un defecto conocido decide solo ni la mayoría tapa un artefacto "
+            "real), y el binomial corre sobre `n_positions`. Con 3 posiciones el gate solo puede "
+            "fallar si **2 de las 3** son extremas: poca potencia, y la spec lo dice en vez de "
+            "disimularlo con filas — subirla pide **más posiciones de control**, no más filas.\n\n"
+            "v3 añade también `empirical_fap_low` y `low_tail_diagnostics`: la FAP de v2 es "
+            "unilateral hacia arriba porque el gate busca falsos positivos, así que una fila muy "
+            "negativa nunca era extrema y la sobre-sustracción de continuo de `optimal_ls` quedaba "
+            "invisible. Se informa **sin voto**: un déficit donde no se inyectó nada es "
+            "sobre-sustracción, no un falso positivo.\n\n"
+            "Lo que v2 y v3 **no** tocan: la grilla, los anchos, las posiciones, las perturbaciones "
+            "de PSF, los extractores, la definición de throughput ni los dos umbrales congelados."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -5510,10 +5527,11 @@ STAGES: list[dict] = [
             "q = nb.load_qc('stages/stage_h04_qc.json', RUN_ID)\n"
             "spec = q.get('spec_version')\n"
             "print(f\"spec del QC en disco : {spec}\")\n"
-            "if spec != 'E4_v2':\n"
-            "    print('   ⚠ QC anterior a la spec v2: su gate de nulos incluía la posición REAL del\\n'\n"
-            "          '     compañero y su continuo `flat` pudo correr con amplitud cero. Hay que\\n'\n"
-            "          '     re-ejecutar E4 para leerlo con la política nueva.')\n"
+            "if spec != 'E4_v3':\n"
+            "    print('   ⚠ QC anterior a la spec v3: su gate de nulos contaba FILAS, no posiciones,\\n'\n"
+            "          '     así que un exceso concentrado en una sola posición de control salía\\n'\n"
+            "          '     multiplicado por el número de métodos, anchos y modos de continuo. Hay\\n'\n"
+            "          '     que re-ejecutar E4 para leerlo con la política nueva.')\n"
             "ci = q.get('continuum_injection')\n"
             "if ci:\n"
             "    print(f\"\\ncontinuo inyectado : {ci['value']:.3g} ({ci['scale']}, fuente: {ci['source']})\")\n"
@@ -5535,14 +5553,31 @@ STAGES: list[dict] = [
             "v2 = q['checks'].get('v2_nulls_clean') or {}\n"
             "if 'n_rows' in v2:\n"
             "    print(f\"\\nV2 · nulo empírico sobre {v2.get('population')}\")\n"
-            "    print(f\"   {v2['n_extreme']} filas extremas de {v2['n_rows']} \"\n"
-            "          f\"(esperadas ~{v2['n_rows'] * v2['p_null']:.1f} con p_null={v2['p_null']})\")\n"
+            "    n_pos = v2.get('n_positions')\n"
+            "    if n_pos is None:\n"
+            "        print(f\"   {v2['n_extreme']} filas extremas de {v2['n_rows']} (QC v2: la unidad\"\n"
+            "              f\" era la fila)\")\n"
+            "    else:\n"
+            "        print(f\"   unidad del gate: {v2['unit']}\")\n"
+            "        print(f\"   {v2['n_extreme']} posiciones extremas de {n_pos} \"\n"
+            "              f\"(esperadas ~{n_pos * v2['p_null']:.2f} con p_null={v2['p_null']})\")\n"
+            "        print(f\"   detalle: {v2['n_extreme_rows']} filas extremas de {v2['n_rows']} — \"\n"
+            "              f\"las filas de una posición son la misma zona medida varias veces\")\n"
+            "        for e in v2.get('positions', []):\n"
+            "            mark = '  <- extrema' if e['extreme'] else ''\n"
+            "            fap = e['position_fap']\n"
+            "            print(f\"      {e['position_label']:10s} FAP mediana {fap:.4g} \"\n"
+            "                  f\"de {e['n_rows']} filas{mark}\")\n"
             "    print(f\"   exceso binomial p = {v2['excess_p']:.3g}  vs alpha = {v2['gate_alpha']}\"\n"
             "          f\"   -> {v2['status'].upper()}\")\n"
             "    rows = [r for r in v2.get('rows', []) if r.get('empirical_fap', 1.0) < v2['p_null']]\n"
             "    if rows:\n"
             "        from collections import Counter\n"
-            "        print('   extremos por método:', dict(Counter(r['method'] for r in rows)))\n"
+            "        print('   filas extremas por método:', dict(Counter(r['method'] for r in rows)))\n"
+            "    low = v2.get('low_tail_diagnostics') or {}\n"
+            "    if low.get('n_extreme_rows'):\n"
+            "        print(f\"   cola baja (NO vota, v3 §3): {low['n_extreme_rows']} filas con déficit\"\n"
+            "              f\" de flujo — {low['by_method']}\")\n"
             "print('\\nopen_issues:')\n"
             "for s in q['open_issues']:\n"
             "    print('  -', s)"
@@ -5623,6 +5658,8 @@ STAGES: list[dict] = [
             ("**La significancia sale de los controles de producción**, no de `recovered_snr`: con STAT en rojo, el error interno del extractor no cumple el modelo de ruido canónico. FAP de rango sobre la distribución nula empírica de cada método.", "noise_model.md"),
             ("**El continuo `flat` se mide** si no está configurado (bandas laterales de Hα, cuatro productos que preservan continuo, escala NORMRAD, mediana de los positivos). Antes corría a cero y V5 era vacuo.", "spec_E4_v2_codex_injection_recovery.md"),
             ("**El gate es binomial, no de tolerancia cero**: falla por *exceso* de extremos (`P(X≥K|N,p_null) < 0.01`), el mismo criterio que el gate de controles de D1. No se mueve el umbral mirando el run.", None),
+            ("**La unidad del gate es la posición de control, no la fila.** Las filas de una posición son la misma zona de cielo medida por seis métodos, dos anchos y dos modos de continuo: contarlas como pruebas independientes multiplicaba un hecho espacial. El resumen por posición es la mediana de sus FAP.", "spec_E4_v3_codex_injection_recovery.md"),
+            ("**La cola baja se informa y no vota.** Un déficit de flujo donde no se inyectó nada es sobre-sustracción —el continuo negativo de `optimal_ls`—, no un falso positivo: `low_tail_diagnostics` lo cuenta con `gating: false`.", "spec_E4_v3_codex_injection_recovery.md"),
             ("Salvedad heredada: la regresión histórica de Stage06 sigue sin pasar ('H04 no válido para E3' formalmente); los throughputs se usan con esa salvedad declarada.", None),
         ],
         checks=None,

@@ -144,16 +144,15 @@ ACCEPTED_LIMITATIONS = {
             "companion position); the CANONICAL psffit throughput is well-behaved (~0.67) and "
             "unaffected, and determinism is test-guaranteed."
         ),
-        # Accepted 2026-07-15 (user decision, 6-method E4 re-run): diagnosed as a
-        # SINGLE unique zero-injection case, present identically in the previous
-        # 4-method E4 (pre-existing, not introduced by the sgf/lpm extension).
-        "checks.v2_nulls_clean.status": (
-            "v2 nulls: 2/96 hits are ONE unique case duplicated across continuum modes: the psffit "
-            "zero-injection baseline at control3 measures z=+5.0029 vs the 5.0 threshold - a "
-            "threshold-grazing noise fluctuation fully consistent with the empirical 33-control FAP "
-            "used everywhere downstream (E1/E3 use empirical nulls, never this binary check). The "
-            "canonical throughput and the Mdot limit are unaffected."
-        ),
+        # Retirada 2026-08-20 con E4 v3. Esta aceptacion existia porque el gate
+        # contaba FILAS: el diagnostico de 2026-07-15 ya decia que los aciertos
+        # eran "UN unico caso duplicado entre modos de continuo" en control3, o
+        # sea el defecto de multiplicidad que v3 arregla contando POSICIONES
+        # (docs/spec_E4_v3_codex_injection_recovery.md §0). Con la causa
+        # corregida, dejar la llave seria auto-aceptar `v2_nulls_clean` sea cual
+        # sea la razon: un fallo legitimo de dos posiciones de tres entraria como
+        # nota aceptada sin que nadie lo viera. Ademas su texto ya no describia
+        # este run —hablaba de 2/96 filas y de `psffit`, que hoy no es extremo.
     },
     "D2_calibrate": {
         # Accepted ONLY after full diagnosis (docs/2026-07-10_d2_red_continuum_diagnosis.md):

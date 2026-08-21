@@ -341,6 +341,49 @@ def _build_models(cfg, run_paths, atmo_qc, template_json, ext, lsf):
 # --------------------------------------------------------------------------- #
 # Orchestrator
 # --------------------------------------------------------------------------- #
+#: Lo que un run tiene que DECLARAR para que le corresponda el «G3 real» (tipo
+#: espectral, Teff y masa contra bibliotecas externas). `run_stage_g3_all` las
+#: usa todas: sin ellas revienta con KeyError o con el RuntimeError de
+#: `library_root`.
+G3_REAL_KEYS = ("g3_libraries_root", "g3_atmo_teff_axis_k",
+                "g3_atmo_logg_axis", "g3_atmo_av_axis")
+
+
+def g3_entry_point(cfg) -> str:
+    """Cual de las dos G3 le toca a este run, decidido por lo que DECLARA.
+
+    Hay dos G3 y no se parecen: la **rodaja de acreccion**
+    (`run_stage_g3_accretion`) y el **G3 real** (`run_stage_g3_all`), que ademas
+    ajusta plantillas, atmosferas y tracks. Elegir mal no da error: correr la
+    rodaja sobre un run que tiene el G3 real le DEGRADA el producto —de un QC
+    con `atmo`, `spt`, `mass_coverage_by_family` y manifiestos con sha256 a uno
+    sin nada de eso— y sale con `rc=0`, que es la peor forma de romper algo.
+
+    La declaracion decide, y una declaracion a medias es un error de config, no
+    una excusa para bajar de categoria en silencio.
+    """
+
+    declared = [key for key in G3_REAL_KEYS if key in cfg]
+    if not declared:
+        return "accretion_slice"
+    missing = [key for key in G3_REAL_KEYS if key not in cfg]
+    if missing:
+        raise RuntimeError(
+            f"G3: el run declara {declared} pero le faltan {missing}. Una configuracion "
+            "de «G3 real» a medias no se degrada a la rodaja de acrecion: se arregla."
+        )
+    return "all"
+
+
+def run_stage_g3(run_id, *, project_root=None, make_figures=True):
+    """La G3 que le toca a este run. Ver `g3_entry_point`."""
+
+    rc = load_run_config(run_id, project_root=project_root)
+    if g3_entry_point(rc.config) == "accretion_slice":
+        return run_stage_g3_accretion(run_id, project_root=project_root)
+    return run_stage_g3_all(run_id, project_root=project_root, make_figures=make_figures)
+
+
 def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
     rc = load_run_config(run_id, project_root=project_root)
     cfg = dict(rc.config)
@@ -515,4 +558,5 @@ def finalize_systematics_limited(run_id, *, project_root=None):
     return {"rows": final, "qc": qc, "consistency": consistency, "mdot_literature": mdot_lit}
 
 
-__all__ = ["finalize_systematics_limited", "run_stage_g3_all", "stage_g3_assemble_paths"]
+__all__ = ["G3_REAL_KEYS", "finalize_systematics_limited", "g3_entry_point", "run_stage_g3",
+           "run_stage_g3_all", "stage_g3_assemble_paths"]
