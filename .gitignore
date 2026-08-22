@@ -49,6 +49,11 @@ reports/**/*.out
 reports/**/*.toc
 reports/**/*.synctex.gz
 
+# Guias y documentos LaTeX de estructura: viven fuera del repo, y ademas traen
+# sus artefactos de compilacion (.aux/.log/.out/.toc), que aqui no estan ignorados
+# como si lo estan bajo reports/
+docs/structure/
+
 # Paper draft: shared via Overleaf, not in this repo (yet)
 paper/
 
