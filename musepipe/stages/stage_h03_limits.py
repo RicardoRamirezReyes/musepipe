@@ -51,6 +51,8 @@ TABLE_FIELDS = [
     "tail_extrapolated_5sigma",
     "matched_sigma",
     "sigma_source",
+    "sigma_h01_table",
+    "sigma_table_vs_recomputed_pct",
     "f_stat_99",
     "f_stat_5sigma_extrap",
     "throughput",
@@ -855,12 +857,59 @@ def _merge_sigma_maps(*maps):
 
 
 def matched_sigma_for_method_factor(paths, cfg, h01_qc, h01_rows, method, factor):
-    merged = _merge_sigma_maps(_matched_sigmas_from_h01_table(h01_rows), _matched_sigmas_from_config(cfg))
-    by_factor = merged.get(method, {})
+    """El sigma del filtro adaptado, por UNA via, y con la otra declarada.
+
+    Habia dos definiciones de la misma cantidad —el valor que E1 dejo en su
+    tabla de deteccion y el recalculo sobre el producto calibrado— y la eleccion
+    entre ellas no la hacia nadie: la tabla de E1 trae UNA fila por metodo, con
+    el ancho de plantilla que E1 prefirio, asi que E3 acertaba o fallaba segun
+    esa preferencia. Medido el 2026-08-21 sobre ROXs 12 b: la epoca de 22
+    exposiciones cayo en la tabla (E1 prefirio factor 1.0) y las otras dos en el
+    recalculo (E1 prefirio 2.0), y donde ambas vias apuntan al MISMO factor
+    discrepan un 3.3 %. Poco para las conclusiones —esta muy dentro de los
+    0.3 dex de la relacion— pero era un ~3 % arbitrario que nadie declaraba.
+
+    Ahora: la perilla de config manda (es una declaracion explicita); si no, se
+    recalcula SIEMPRE al factor pedido, que es la via que siempre esta
+    disponible y siempre responde a la pregunta correcta. Si la tabla de E1
+    tiene valor a ese mismo factor, se compara y la discrepancia VIAJA en el
+    resultado en vez de decidirse en silencio.
+    """
+
+    by_factor = _matched_sigmas_from_config(cfg).get(method, {})
     for key, payload in by_factor.items():
         if np.isclose(float(key), float(factor), rtol=0.0, atol=1e-6):
-            return payload
-    return _matched_sigma_from_product(paths, h01_qc, method, factor)
+            return dict(payload)
+
+    tabla = _matched_sigmas_from_h01_table(h01_rows).get(method, {})
+    del_tabla = None
+    for key, entry in tabla.items():
+        if np.isclose(float(key), float(factor), rtol=0.0, atol=1e-6):
+            del_tabla = float(entry["matched_sigma"])
+            break
+
+    try:
+        payload = dict(_matched_sigma_from_product(paths, h01_qc, method, factor))
+    except RuntimeError:
+        # No hay producto calibrado para este metodo (p.ej. `sgf` en un run que
+        # no lo entrega). La tabla de E1 es el respaldo, pero solo al MISMO
+        # factor —un filtro mas ancho es otra cantidad— y queda dicho en
+        # `sigma_source` en vez de pasar por el camino preferente.
+        if del_tabla is None or not np.isfinite(del_tabla):
+            raise
+        return {"matched_sigma": float(del_tabla),
+                "sigma_source": "h01_detection_table (fallback: sin producto calibrado)",
+                "sigma_h01_table": float(del_tabla),
+                "sigma_table_vs_recomputed_pct": None}
+    payload["sigma_h01_table"] = del_tabla
+    if del_tabla is not None and np.isfinite(del_tabla) and payload["matched_sigma"] > 0:
+        payload["sigma_table_vs_recomputed_pct"] = float(
+            (del_tabla / float(payload["matched_sigma"]) - 1.0) * 100.0
+        )
+    else:
+        # `None` distingue "no habia con que comparar" de "comparado y coincide".
+        payload["sigma_table_vs_recomputed_pct"] = None
+    return payload
 
 
 def _canonical_method(cfg, paths):
@@ -940,6 +989,8 @@ def _row_from_limits(
         "tail_extrapolated_5sigma": tail["tail_extrapolated_5sigma"],
         "matched_sigma": sigma_payload["matched_sigma"],
         "sigma_source": sigma_payload["sigma_source"],
+        "sigma_h01_table": sigma_payload.get("sigma_h01_table"),
+        "sigma_table_vs_recomputed_pct": sigma_payload.get("sigma_table_vs_recomputed_pct"),
         "throughput": throughput_payload["throughput"],
         "throughput_err": throughput_payload["throughput_err"],
         "snr_for_throughput": throughput_payload["snr_for_throughput"],
