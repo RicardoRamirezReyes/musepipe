@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ from musepipe.reduction.stream_combine import (
     build_stream_combine_plan,
     combine_streaming,
     measure_primary_center,
+    plan_from_dict,
     read_window,
     shift_data_chunk,
     shift_variance_chunk,
@@ -436,6 +438,116 @@ class CombineTests(unittest.TestCase):
             self.assertAlmostEqual(hdul[1].header["CRVAL3"], CRVAL3, places=3)
         with self.assertRaises(StreamCombineError):
             write_combined_cube(result, plan, output)
+
+
+class TransmisionPorExposicionTests(unittest.TestCase):
+    """La via «molecfit por exposicion» de A3, que entra ANTES de combinar.
+
+    El punto duro es el STAT. El hook `transform` que ya existia devuelve solo
+    DATA y no toca la varianza —correcto para restar un modelo determinista,
+    falso para dividir por T—, asi que corregir por ahi dejaria un cubo cuyo
+    error miente justo donde mas se corrigio. Por eso la T viaja en el plan.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.files = [
+            make_cube(self.tmp / f"{i}.fits", y_center=30.0, x_center=30.0,
+                      amplitude=1000.0, variance=4.0, exptime=300.0,
+                      mjd_obs=59819.0 + 0.01 * i)
+            for i in range(2)
+        ]
+
+    def _plan(self, **kwargs):
+        kwargs.setdefault("crop_npix", 20)
+        kwargs.setdefault("pad", 4)
+        kwargs.setdefault("centering_method", "peak")
+        kwargs.setdefault("chunk_channels", 7)
+        kwargs.setdefault("weight_mode", "none")
+        return build_stream_combine_plan(
+            self.files, run_id="synthetic", output=str(self.tmp / "cube.fits"), **kwargs)
+
+    def _transmision(self, plan, valores):
+        rutas = {}
+        for exposure, valor in zip(plan.exposures, valores):
+            ruta = self.tmp / f"t_{exposure.index}.npy"
+            np.save(ruta, np.full(NZ, float(valor)))
+            rutas[exposure.file] = str(ruta)
+        return rutas
+
+    def test_data_is_divided_by_t_and_stat_by_t_squared(self):
+        base = combine_streaming(self._plan())
+        plan = self._plan()
+        plan = replace(plan, transmission_by_exposure=self._transmision(plan, [0.5, 0.5]))
+
+        result = combine_streaming(plan)
+
+        centre = plan.crop_npix // 2
+        np.testing.assert_allclose(result["data"][:, centre, centre],
+                                   base["data"][:, centre, centre] / 0.5, rtol=1e-5)
+        np.testing.assert_allclose(result["stat"][:, centre, centre],
+                                   base["stat"][:, centre, centre] / 0.25, rtol=1e-5)
+
+    def test_each_exposure_gets_its_own(self):
+        # Lo que distingue esta granularidad: dos exposiciones, dos atmosferas.
+        plan = self._plan()
+        plan = replace(plan, transmission_by_exposure=self._transmision(plan, [0.5, 1.0]))
+
+        result = combine_streaming(plan)
+
+        centre = plan.crop_npix // 2
+        # (1001/0.5 + 1001/1.0) / 2 = 1501.5
+        self.assertAlmostEqual(float(result["data"][0, centre, centre]), 1501.5, places=1)
+
+    def test_a_missing_exposure_is_refused_instead_of_half_corrected(self):
+        plan = self._plan()
+        rutas = self._transmision(plan, [0.5, 0.5])
+        rutas.pop(plan.exposures[1].file)
+        plan = replace(plan, transmission_by_exposure=rutas)
+
+        with self.assertRaises(StreamCombineError):
+            combine_streaming(plan)
+
+    def test_a_wrong_length_is_caught_before_the_hours_of_work(self):
+        plan = self._plan()
+        ruta = self.tmp / "corta.npy"
+        np.save(ruta, np.ones(NZ - 3))
+        rutas = {exp.file: str(ruta) for exp in plan.exposures}
+        plan = replace(plan, transmission_by_exposure=rutas)
+
+        with self.assertRaises(StreamCombineError):
+            combine_streaming(plan)
+
+    def test_the_key_is_the_file_because_the_exposure_id_is_not_unique(self):
+        # `exposure_id` sale del directorio padre, y los cubos por exposicion se
+        # llaman todos DATACUBE_FINAL.fits: dos que compartan carpeta comparten
+        # ID. Aqui los dos ficheros son hermanos, asi que el ID SI colisiona.
+        plan = self._plan()
+        self.assertEqual(plan.exposures[0].exposure_id, plan.exposures[1].exposure_id)
+
+        plan = replace(plan, transmission_by_exposure=self._transmision(plan, [0.5, 1.0]))
+
+        self.assertEqual(len(plan.transmission_by_exposure), 2, "una T por exposicion")
+
+    def test_it_travels_in_the_plan_json_and_in_the_qc(self):
+        plan = self._plan()
+        rutas = self._transmision(plan, [0.5, 0.5])
+        plan = replace(plan, transmission_by_exposure=rutas)
+
+        vuelta = plan_from_dict(plan.as_dict())
+        qc = combine_streaming(plan)["qc"]
+
+        self.assertEqual(vuelta.transmission_by_exposure, rutas)
+        self.assertEqual(set(qc["transmission_by_exposure"]), set(rutas))
+
+    def test_without_it_the_combine_is_bit_for_bit_what_it_was(self):
+        antes = combine_streaming(self._plan())
+        despues = combine_streaming(replace(self._plan(), transmission_by_exposure={}))
+
+        np.testing.assert_array_equal(antes["data"], despues["data"])
+        np.testing.assert_array_equal(antes["stat"], despues["stat"])
 
 
 if __name__ == "__main__":

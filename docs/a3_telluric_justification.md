@@ -13,8 +13,22 @@
 > umbral del 3 %, así que ningún veredicto de este documento cambia. Ver
 > `docs/spec_A3_v2_codex_telluric.md` §3.4.
 >
+> **Nota 2026-08-22 (A3 v3).** Una precisión y un cambio:
+>
+> 1. **`a1a_molecfit_crosscheck` está en el QC del run REALINEADO**, no en el del crudo:
+>    `runs/ROXs12b_realigned/stages/stage00r_qc.json`. Buscarlo en
+>    `runs/ROXs12b_raw/stages/stage00r_qc.json` —que es a donde apunta la lectura literal de
+>    «Fuente principal», y donde lo busqué primero— no lo encuentra, porque ese QC tiene otras
+>    11 claves. La cita de §6 es correcta; lo que faltaba era decir **de qué run**.
+> 2. **La etapa ya no elige por texto.** `docs/spec_A3_v3_codex_telluric.md` define una A3
+>    que ajusta las dos vías, las puntúa con la misma métrica y se queda con la mejor —con
+>    empate a favor de molecfit—. Mientras `apply` no se haya corrido sobre un run, **lo que
+>    hay aplicado en disco sigue siendo lo que describe este documento**: STD_TELLURIC
+>    escalada por masa de aire, y en los cubos por OB la del propio DRS (`muse_scipost`
+>    consumiendo `STD_TELLURIC`, tarjeta `ESO PRO REC2 CAL6`), sin QC de etapa.
+>
 > Escrito: 2026-07-10; verificación A1a añadida 2026-07-19. Fuente principal:
-> `runs/ROXs12b_raw/stages/stage00t_qc.json`, `.../stage00r_qc.json → a1a_molecfit_crosscheck`.
+> `runs/ROXs12b_raw/stages/stage00t_qc.json`.
 
 ---
 
@@ -202,7 +216,11 @@ transmisión de O₂ **coincide con STD_TELLURIC al ~4.5 %** (integrado) / 0.8 %
 banda B adyacente a Hα y al ~6 % en la banda A. Esto es una **corroboración independiente** de
 la corrección A3 STD_TELLURIC. **A1b (STD_TELLURIC justificado) sigue siendo el cierre del
 paper**; A1a convierte el antiguo caveat "molecfit no convergió" en un contraste positivo.
-Registrado en `stage00r_qc.json` → `a1a_molecfit_crosscheck`.
+Registrado en `runs/ROXs12b_realigned/stages/stage00r_qc.json` →
+`a1a_molecfit_crosscheck` (**el del run realineado**, no el del crudo; comprobado 2026-08-22).
+Los productos están en `raw_reduction/molecfit_a1a/` y el gráfico en
+`plots/stage00t_a1a_molecfit_vs_std.png`. Desde A3 v3 existe además una comparación que emite
+la propia etapa, en `stage00t_qc.json → arbiter`.
 
 *Nota operativa:* `molecfit_calctrans` (transmisión de rango completo) no se produjo — esta build
 rechaza `MAPPING_ATMOSPHERIC` para un SCIENCE de una sola BINTABLE (perfil atmosférico NULL pese

@@ -16,6 +16,15 @@ la misma preparación que usó A1a y se lanza `molecfit_model`. Salida:
 Nada de esto entra en la cadena: no escribe en `stages/`, no toca ningún QC y no
 sustituye a A3. Es material de diagnóstico.
 
+**Desde 2026-08-22 la implementación canónica de la vía molecfit vive en
+`musepipe/reduction/molecfit.py`** (A3 v3), y este script **no** delega en ella a
+propósito: aquel módulo elige las ventanas por la profundidad medida en el cubo y
+completa la cabecera del combinado, o sea que **no reproduce estos productos**. Lo
+que hay bajo `runs/*/molecfit_granularity/` es la evidencia de la comparación de
+granularidad del 2026-08-06 y de la §5.4 de las indicaciones, y sigue siendo
+reproducible **solo** con este script tal como está. Si algún día hay que
+regenerarla, regenérala con esto; para producción, usa la etapa.
+
 TRES PARÁMETROS SIN LOS CUALES ESTO NO CONVERGE, medidos el 2026-08-06
 (§5.2a del documento):
 

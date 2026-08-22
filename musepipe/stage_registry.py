@@ -94,13 +94,22 @@ STAGES: tuple[Stage, ...] = (
     # corrió A2). Con `--upstream A2` escrito a mano, y sin `--qc`, el comando
     # publicado no se podía ejecutar en ningún objeto — se resuelven en
     # `notebooks/_nbcommon._upstream_evidence`.
+    # A3 v3 (2026-08-22) lanza `measure`, no `decision`: la etapa dejo de ser «mide
+    # la profundidad y decide si hace falta» para ser «ajusta las DOS vias
+    # (molecfit y STD_TELLURIC), puntualas con la misma metrica y quedate con la
+    # mejor». `decision` sigue existiendo y sigue siendo reproducible — es el
+    # comando bajo el que se emitieron los tres QC congelados— pero no es lo que
+    # se lanza hoy. `measure` no toca ningun cubo; el que escribe es `apply`, y
+    # ese va detras de un checkpoint humano a proposito.
+    #
+    # El cubo, la posicion de la primaria y el radio ya NO van en el comando: los
+    # resuelve `resolve_a3_inputs` desde el run (`cube_files`, `m3_primary_yx`,
+    # `a3_radius_px`), que es lo que permite lanzarlo igual en los dos objetos.
     Stage("A3", "A3_telluric", "A", None,
           qc_aliases=("stages/stage00t_qc.json", "stages/stage00t_realigned_qc.json"),
           exec_kind="launch",
-          launch={"*": ("bash scripts/telluric.sh decision --run-id {run_id} "
-                        "--input-cube {cube} --upstream {upstream} --qc {upstream_qc} "
-                        "--primary-y {primary_y} --primary-x {primary_x} "
-                        "--radius-px 8.0 --science-needs-red-continuum "
+          launch={"*": ("bash scripts/telluric.sh measure --run-id {run_id} "
+                        "--upstream {upstream} --qc {upstream_qc} "
                         "--qc-output {stage_dir}/stage00t_qc.json")}),
     Stage("A4", "A4_cube_qc", "A", "stages/stage00q_qc.json", exec_kind="launch",
           launch={"*": ("python -m musepipe.qc.cube_qc m3-flux --run-id {run_id} "
