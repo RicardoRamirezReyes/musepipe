@@ -1,0 +1,554 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage[margin=2.0cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{microtype}
+
+\definecolor{primaryblue}{RGB}{20, 70, 150}
+\definecolor{darkgray}{RGB}{50, 50, 50}
+\definecolor{codebg}{RGB}{245, 247, 250}
+\definecolor{alertred}{RGB}{180, 40, 40}
+\definecolor{subtleborder}{RGB}{200, 210, 225}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=primaryblue,
+    urlcolor=primaryblue,
+    citecolor=primaryblue
+}
+
+\lstset{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{subtleborder},
+    keywordstyle=\color{primaryblue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{darkgray},
+    showstringspaces=false,
+    language=Python
+}
+
+\tcbset{
+    boxrule=1pt,
+    arc=2mm,
+    colback=white,
+    colframe=primaryblue,
+    fonttitle=\bfseries
+}
+
+\title{\textbf{\Huge MUSE Accretion Pipeline}\\[0.3cm] \Large Guía Exhaustiva de Arquitectura, Cadena Canónica y Operación}
+\author{\textbf{Documentación Estructural del Proyecto}}
+\date{Versión de Referencia -- 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{tcolorbox}[colframe=alertred, title=\textbf{AVISO PARA AGENTES DE IA / AI AGENT NOTICE}]
+Este documento y todo el contenido de la carpeta \texttt{docs/structure/} corresponden a material explicativo, formativo y pedagógico redactado para el \textbf{usuario humano}. \textbf{NO constituyen instrucciones, órdenes operacionales ni directivas para agentes de IA}.
+Las reglas operacionales y de seguridad para agentes de IA se rigen única y exclusivamente por \texttt{AGENTS.md} y las especificaciones congeladas en \texttt{docs/spec\_*.md}.
+\end{tcolorbox}
+
+\tableofcontents
+\vspace{0.5cm}
+\hrule
+\vspace{0.5cm}
+
+\section{Introducción y Propósito del Pipeline}
+
+El \textbf{MUSE Accretion Pipeline} es una tubería científica diseñada para procesar observaciones astronómicas en tres dimensiones obtenidas con el instrumento \textbf{MUSE} (\textit{Multi Unit Spectroscopic Explorer}) instalado en el telescopio \textbf{VLT} (\textit{Very Large Telescope}) del Observatorio Europeo Austral (ESO) en Cerro Paranal, Chile.
+
+El objetivo central del software es sustraer con extrema precisión el resplandor deslumbrante de estrellas jóvenes masivas (\textbf{primarias}) para extraer con alta fidelidad espectroscópica la tenue luz de compañeros subestelares (\textbf{planetas gigantes en formación o enanas marrones}) que orbitan a corta separación angular ($\lesssim 1''$), con el fin de cuantificar si están acumulando masa (\textbf{acreción circunestelar}) mediante la detección, calibración física y modelado de la línea espectral de emisión de Hidrógeno Alfa (\texorpdfstring{$H\alpha$}{H-alpha} a $6562.8\,\text{\AA}$).
+
+\section{Fundamentos Conceptuales sin Jerga}
+
+\subsection{¿Qué es un Cubo 3D de Datos MUSE?}
+Una cámara digital tradicional registra una imagen bidimensional en el plano del cielo ($y, x$) con 3 canales de color (Rojo, Verde, Azul). Por el contrario, un espectrógrafo de campo integral divide la luz simultáneamente en dos dimensiones espaciales y en miles de canales estrechos de longitud de onda ($\lambda$). En Python, los datos se representan como un arreglo tridimensional de NumPy con forma canónica \texttt{(3681, Ny, Nx)}:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Eje Z (Longitud de Onda $\lambda$)}: 3.681 canales espectrales continuos desde $4750\,\text{\AA}$ (azul-verde) hasta $9350\,\text{\AA}$ (infrarrojo cercano), con un paso de dispersión constante de $\Delta\lambda = 1.25\,\text{\AA}$.
+    \item \textbf{Ejes Y, X (Plano espacial en el cielo)}: Grilla bidimensional de elementos espaciales o \textit{spaxels} (\textit{spatial pixels}), típicamente recortada a una sub-caja cuadrada centrada de $100 \times 100$ píxeles ($\sim 2.5'' \times 2.5''$ en modo NFM).
+\end{itemize}
+Cada corte en el eje Z (\texttt{data[k, :, :]}) es una imagen monocromática del cielo en una longitud de onda específica, mientras que cada vector a lo largo del eje Z para un spaxel dado (\texttt{data[:, y, x]}) representa el espectro continuo completo de la luz emitida en esa coordenada celeste.
+
+\subsection{El Desafío de Alto Contraste y la PSF}
+La estrella primaria es típicamente entre $100\times$ y $10.000\times$ más brillante que su compañero cercano. Al atravesar la atmósfera terrestre, la turbulencia óptica distorsiona los frentes de onda, esparciendo la luz estelar en un halo brillante extendido conocido como \textbf{PSF} (\textit{Point Spread Function} o Función de Dispersión de Punto). Aunque el sistema de Óptica Adaptativa (AO) de MUSE compensa activamente gran parte de esta distorsión, el halo residual inunda por completo la posición del compañero. Modelar y sustraer este halo sin introducir falsas señales ni erosionar el flujo real del objeto constituye el núcleo algorítmico del pipeline.
+
+\subsection{Acreción y la Línea \texorpdfstring{$H\alpha$}{H-alpha}}
+Cuando el gas circunestelar cae a cientos de kilómetros por segundo hacia el pozo gravitacional del planeta en formación, choca violentamente contra la superficie o la magnetosfera del objeto. En este frente de choque térmico, los átomos de hidrógeno se ionizan y, al recombinarse, sus electrones caen del nivel cuántico $n=3$ al $n=2$, emitiendo fotones con una longitud de onda exacta de:
+$$\lambda_{H\alpha} = 6562.8\,\text{\AA}\quad (656.28\,\text{nm})$$
+Un exceso de emisión estrecho e intenso sobre esta longitud de onda proporciona la firma física inequívoca de acreción activa de materia.
+
+\subsection{Modelo de Ruido y Aperturas de Control}
+En datos reducidos por software astronómico estándar, se provee una matriz de varianza teórica denominada \texttt{STAT}. Sin embargo:
+\begin{tcolorbox}[colframe=alertred, title=\textbf{Regla de Oro: El Problema de la Varianza Teórica (STAT)}]
+Nunca se debe utilizar \texttt{STAT} directamente como la barra de error $\sigma$, ni asumir que los píxeles vecinos son independientes. Debido a la interpolación y remuestreo 3D en la reconstrucción del cubo, los píxeles adyacentes comparten información (\textbf{ruido correlacionado espacialmente}), lo que provoca que \texttt{STAT} subestime el ruido real en un factor de $\mathbf{4.0\times}$ a $\mathbf{6.5\times}$.
+\end{tcolorbox}
+Para derivar barras de error estadísticamente rigurosas, el pipeline coloca \textbf{aperturas de control} sintéticas ubicadas a la misma distancia radial $R$ de la primaria (donde el halo estelar y el nivel de ruido son físicamente idénticos) pero distribuidas en ángulos libres de fuentes. Cada apertura de control se procesa a través del mismo extractor espectral que el compañero; la dispersión empírica ($\sigma_\text{emp}$) resultante constituye la verdadera incertidumbre observacional.
+
+\section{Estructura, Organización y Paradigma Arquitectónico}
+
+\subsection{Organización General de Módulos}
+El código sigue una estricta separación de responsabilidades:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{musepipe/}: Paquete modular principal donde reside toda la lógica matemática, física y astronómica pura.
+    \item \texttt{scripts/}: Lanzadores ejecutables por consola (Bash y Python) para cada etapa individual del pipeline.
+    \item \texttt{notebooks/}: Cuadernos Jupyter interactivos organizados por objeto (\texttt{ROXs12b}, \texttt{ROXs42Bb}) para auditoría visual y validación.
+    \item \texttt{targets/}: Fichas JSON estáticas con metadatos astronómicos a priori (coordenadas, distancias, magnitudes).
+    \item \texttt{runs/}: Directorio de trabajo local donde residen las salidas de cada ejecución (cubos FITS, tablas CSV, figuras PNG y archivos QC JSON; excluido de Git).
+\end{itemize}
+
+\subsection{Paradigma Arquitectónico: ¿Funciones o Clases? Fundamentos de Diseño}
+
+Una decisión central de ingeniería de software en el \textbf{MUSE Accretion Pipeline} es la adopción de un \textbf{paradigma híbrido orientado a datos (\textit{Data-Oriented Programming})}:
+
+\begin{enumerate}[leftmargin=1.0cm]
+    \item \textbf{Clases Inmutables de Datos (\texttt{@dataclass(frozen=True)})}: Utilizadas exclusivamente para definir \textbf{estructuras de datos, contratos formales y productos de dominio}.
+    \item \textbf{Funciones Puras y Sin Estado (\textit{Pure Stateless Functions})}: Utilizadas para \textbf{todos los algoritmos de cálculo, transformaciones científicas, modelos matemáticos y ejecutores de etapas}.
+\end{enumerate}
+
+\subsubsection{¿Dónde y Por Qué se Usan Clases (Dataclasses Inmutables)?}
+En Python, el paquete utiliza clases decoradas con \texttt{@dataclass(frozen=True)} para representar entidades bien delimitadas:
+\begin{itemize}[leftmargin=1.0cm]
+    \item \texttt{SpectrumProduct} (\texttt{musepipe/extraction/product.py}): Contrato canónico de un espectro extraído. Encapsula los vectores de longitud de onda (\texttt{wave\_A}), flujo (\texttt{flux}), incertidumbre empírica (\texttt{flux\_err\_emp}), corrección de apertura (\texttt{apcorr}), banderas de calidad (\texttt{flags}), metadatos de cabecera y matrices de covarianza.
+    \item \texttt{RunPaths} (\texttt{musepipe/paths.py}): Estructura inmutable que encapsula el álgebra de directorios y rutas estándar dentro de \texttt{runs/<RUN\_ID>/}.
+    \item \texttt{Stage} y \texttt{StageRegistry} (\texttt{musepipe/stage\_registry.py}): Catálogo formal de etapas, nombres canónicos, tipos de ejecución y archivos QC asociados.
+    \item \texttt{MoffatFit} (\texttt{musepipe/psf.py}) y \texttt{LineFitResult} (\texttt{musepipe/lines.py}): Contenedores estructurados de resultados de ajustes no lineales.
+\end{itemize}
+
+\noindent\textbf{¿Por qué clases inmutables para estos componentes?}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Inmutabilidad Estricta (\texttt{frozen=True})}: Evita que etapas posteriores muten accidentalmente arrays numéricos o metadatos de un producto intermedio, previniendo errores de estado fantasma entre canales espectrales.
+    \item \textbf{Validación y Autocontención}: Las clases centralizan métodos de validación (\texttt{validate}) y de serialización (\texttt{as\_table\_hdu}, \texttt{write}, \texttt{read}), garantizando que todo espectro cumpla al 100\% el estándar FITS del proyecto.
+    \item \textbf{Tipado Estático}: Permite a los analizadores estáticos y linters verificar tipos en tiempo de desarrollo.
+\end{itemize}
+
+\subsubsection{¿Dónde y Por Qué se Usan Funciones Puras para los Algoritmos?}
+Toda la lógica científica nuclear está implementada mediante \textbf{funciones puras} (por ejemplo: extractores espectrales en \texttt{extraction/}, perfiles analíticos de PSF en \texttt{psf.py}, ajustes de líneas en \texttt{lines.py}, física de acreción en \texttt{models/} y ejecutores en \texttt{stages/}):
+
+\noindent\textbf{¿Por qué funciones sin estado en lugar de objetos con métodos?}
+\begin{enumerate}[leftmargin=1.0cm]
+    \item \textbf{Statelessness y Determinismo Científico}: En pipelines astrofísicos que procesan cientos de megabytes en matrices tridimensionales, los objetos con estado mutable interno (\texttt{self.data}, \texttt{self.cache}) generan efectos secundarios (\textit{side-effects}) impredecibles dependiendo del orden de llamada. Una función pura $f(\text{cubo}, \text{parámetros}) \rightarrow \text{resultado}$ garantiza que la misma entrada produzca exactamente la misma salida sin memoria residual.
+    \item \textbf{Gestión Eficiente de Memoria RAM}: Los cubos 3D de MUSE contienen millones de puntos flotantes. Con funciones puras, los arreglos NumPy temporales creados dentro del cuerpo de la función se destruyen y son liberados de inmediato por el recolector de basura (\textit{Garbage Collector}) al retornar, evitando fugas de memoria catastróficas.
+    \item \textbf{Testabilidad Unitaria Exhaustiva y Rápida}: Probar una función científica con \texttt{pytest} toma milisegundos: basta con suministrarle matrices NumPy sintéticas y evaluar la salida numérica, sin necesidad de instanciar complejas jerarquías de clases ni simular contextos de ejecución.
+    \item \textbf{Paralelización Trivilalmente Segura (\textit{Process-Safety})}: Al no compartir estado mutable en memoria, las funciones se pueden despachar directamente a grupos de procesos en paralelo (\texttt{multiprocessing} o \texttt{concurrent.futures}) para evaluar los 3.681 canales espectrales o decenas de aperturas de control simultáneamente, sin bloqueos de concurrencia (\textit{locks}) ni condiciones de carrera (\textit{race conditions}).
+    \item \textbf{Composabilidad y Modularidad}: Permite comparar directamente los seis métodos de extracción (C2 a C6) con una firma de función homogénea, facilitando la auditoría científica y el reemplazo modular de componentes.
+\end{enumerate}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}llp{3.5cm}X@{}}
+\toprule
+\textbf{Elemento} & \textbf{Paradigma} & \textbf{Ejemplo Clave} & \textbf{Justificación de Diseño} \\
+\midrule
+Entidades de Datos & Dataclass Inmutable & \texttt{SpectrumProduct} & Contrato formal, validación rígida y serialización FITS/JSON idéntica en todo el pipeline. \\
+Álgebra de Rutas & Dataclass Inmutable & \texttt{RunPaths} & Centraliza nombres de archivos y carpetas evitando rutas relativas dispersas. \\
+Registro de Etapas & Dataclass Inmutable & \texttt{Stage} & Fuente única de verdad para nombres, slugs, scripts y archivos QC. \\
+Algoritmos Numéricos & Funciones Puras & \texttt{extract\_psffit()} & Determinismo matemático, sin estado oculto, liberación inmediata de memoria RAM. \\
+Ajustes y Modelos & Funciones Puras & \texttt{fit\_gaussian\_line()} & Testables con datos sintéticos en \texttt{pytest} en milisegundos. \\
+Ejecutores de Etapa & Funciones CLI/Python & \texttt{run\_stage\_01()} & Interfaz limpia invocable vía script Bash, terminal o notebook. \\
+\bottomrule
+\end{tabularx}
+\caption{Resumen del Paradigma Arquitectónico: Separación entre Datos Inmutables y Algoritmos Funcionales.}
+\end{table}
+
+\section{La Cadena Canónica de Procesamiento (A1 a G5 en Profundidad)}
+
+A continuación se detalla exhaustivamente cada una de las etapas que componen el flujo científico de datos:
+
+\subsection{Bloque A: Reducción Cruda y Control de Calidad del Cubo}
+
+El Bloque A constituye los cimientos observacionales de todo el pipeline. Su misión es transformar los datos binarios crudos provenientes de los 24 detectores del telescopio en un cubo tridimensional calibrado astrométrica, fotométrica y espectroscópicamente, libre de emisiones atmosféricas y absorciones telúricas, y auditado mediante una batería estricta de control de calidad.
+
+\subsubsection{Contexto Instrumental: El Espectrógrafo MUSE en el VLT}
+MUSE opera montado en el foco Nasmyth del telescopio UT4 (\textit{Yepun}, 8.2 metros de diámetro) en Paranal. En su modo de campo estrecho (\textbf{NFM} o \textit{Narrow Field Mode}):
+\begin{itemize}[leftmargin=1.0cm]
+    \item La luz del telescopio se divide ópticamente entre \textbf{24 Unidades de Campo Integral (IFUs)}, cada una equipada con un detector CCD de $4096 \times 4096$ píxeles, totalizando casi 400 millones de píxeles por exposición cruda.
+    \item Cada IFU contiene un divisor óptico (\textit{image slicer}) que segmenta el campo en 48 rebanadas finas (\textit{slitlets}), proyectándolas a través de redes de difracción hacia los detectores.
+    \item El sistema de Óptica Adaptativa Asistida por Láser (\textbf{GALACSI / 4LGSF}) proyecta cuatro haces láser hacia la mesosfera terrestre (a $\sim 90\,\text{km}$ de altitud) para excitar átomos de sodio y crear estrellas guía artificiales. Sensores de frente de onda miden la turbulencia a $1.000\,\text{Hz}$, deformando activamente el espejo secundario del telescopio (DSM) para entregar imágenes en el límite de difracción espacial ($\sim 0.06'' - 0.08''$).
+\end{itemize}
+
+\subsubsection{Etapa A1 (\texttt{A1\_raw\_reduction}): Reducción Cruda y Reconstrucción 3D}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Insumos Crudos y Calibraciones Maestras}:
+    \begin{itemize}
+        \item \texttt{RAW\_SCIENCE}: Exposiciones científicas crudas de la estrella y el compañero.
+        \item \texttt{MASTER\_BIAS}: Mapas de offset electrónico y calibración de ruido de lectura (\textit{readout noise}).
+        \item \texttt{MASTER\_FLAT}: Mapas de iluminación uniforme para corregir la respuesta de ganancia píxel a píxel y trazar con precisión geométrica los bordes de los 1.152 slitlets.
+        \item \texttt{ARC\_LAMPS}: Exposiciones de lámparas de arco espectral (HgCd, Ne, Xe, CuAr) con líneas atómicas de emisión conocidas en laboratorio con precisión sub-miliangstrom.
+        \item \texttt{TWILIGHT\_FLAT} e \texttt{ILLUM\_FLAT}: Exposiciones de cielo crepuscular para corregir gradientes de iluminación de gran escala y viñeteo instrumental.
+        \item \texttt{ASTROMETRY\_FIELD}: Campos estelares densos estándar para calibrar la solución astrométrica WCS y las distorsiones ópticas geométricas.
+    \end{itemize}
+    \item \textbf{Recetas Oficiales ESO (\texttt{esorex} / CPL)}:
+    \begin{enumerate}
+        \item \texttt{muse\_bias} y \texttt{muse\_flat}: Calibración de detector y normalización de slitlets.
+        \item \texttt{muse\_wavecal}: Ajuste de polinomios 2D de dispersión espectral para mapear cada píxel espacial $(x, y)$ a su longitud de onda física $\lambda$.
+        \item \texttt{muse\_lsf}: Medición de la función de dispersión instrumental (\textit{Line Spread Function}) para cuantificar el ensanchamiento intrínseco del espectrógrafo en cada IFU.
+        \item \texttt{muse\_scibasic}: Pre-procesamiento de cada uno de los 24 detectores IFU en tablas de píxeles individuales (\textit{pixel tables}).
+        \item \texttt{muse\_scipost}: Ensamblado geométrico y remuestreo 3D de los millones de píxeles dispersos sobre una grilla regular cartesiana tridimensional, corrección heliocéntrica y baricéntrica de velocidad radial, y calibración preliminar de flujo con estrellas estándar.
+    \end{enumerate}
+    \item \textbf{Modos de Ejecución}:
+    \begin{itemize}
+        \item \textbf{Modo Monolítico} (\texttt{reduce\_raw.sh}): Procesa la secuencia completa de exposiciones en una sola llamada de sistema.
+        \item \textbf{Modo Cascada / Streaming} (\texttt{reduce\_cascade.py}): Reduce las exposiciones de forma aislada y las combina mediante un promedio ponderado por la varianza empírica y el seeing instantáneo medido, optimizando drásticamente la memoria RAM y descartando exposiciones degradadas.
+    \end{itemize}
+    \item \textbf{Salida}: Cubo tridimensional reconstruido \texttt{DATACUBE\_FINAL.fits} (con extensiones \texttt{DATA} y \texttt{STAT}) y archivo de control de calidad \texttt{stage00r\_qc.json} (o \texttt{cube\_telcorr\_qc.json}).
+\end{itemize}
+
+\subsubsection{Etapa A2 (\texttt{A2\_sky\_zap}): Sustracción de Líneas de Emisión del Cielo Nocturno}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Física del Fondo de Cielo (\textit{Airglow})}: La alta atmósfera terrestre emite copiosamente radiación en líneas estrechas debido a la desexcitación química de radicales hidroxilo ($\text{OH}^-$), líneas atómicas de oxígeno ($[\text{O\,I}]\,5577\,\text{\AA}, 6300\,\text{\AA}, 6364\,\text{\AA}$) y el doblete de Sodio ($\text{Na\,I}\,5890, 5896\,\text{\AA}$). La intensidad de estas líneas varía rápidamente en escalas de minutos y a lo largo del campo de visión.
+    \item \textbf{El Algoritmo ZAP (\textit{Zurich Atmosphere Purge})}:
+    \begin{enumerate}
+        \item \textbf{Enmascaramiento de Fuentes}: Genera una máscara espacial rigurosa sobre la estrella primaria y cualquier fuente visible, aislando spaxels de cielo puro.
+        \item \textbf{Análisis de Componentes Principales (PCA)}: Construye una matriz con los espectros de cielo y extrae los autovectores ortogonales que describen los modos dominantes de variación espacial y espectral de las líneas atmosféricas.
+        \item \textbf{Reconstrucción Adaptativa y Sustracción}: Proyecta los autovectores sobre cada spaxel del cubo (incluso bajo la estrella primaria y el compañero), sustrayendo con precisión las componentes residuales de las líneas de cielo sin alterar la forma del continuo astronómico ni distorsionar el flujo puntual.
+        \item \textbf{Truncamiento de Autovalores}: Controla el número de componentes retenidas para prevenir la sobre-sustracción (\textit{over-subtraction}) y la inyección de ruido espurio.
+    \end{enumerate}
+    \item \textbf{Salida}: Cubo con cielo sustraído y archivo de métricas \texttt{stages/stage00s\_qc.json}.
+\end{itemize}
+
+\subsubsection{Etapa A3 (\texttt{A3\_telluric}): Corrección de Absorción Telúrica Molecular}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Física de la Absorción Atmosférica}: Moléculas de vapor de agua ($H_2O$) y oxígeno ($O_2$) presentes en la atmósfera absorben fotones astronómicos en bandas espectrales específicas:
+    \begin{itemize}
+        \item Banda A de $O_2$ a $\sim 7600\,\text{\AA}$ (absorción profunda) y Banda B de $O_2$ a $\sim 6870\,\text{\AA}$.
+        \item Bandas de vapor de agua ($H_2O$) centradas en $7200\,\text{\AA}$, $8200\,\text{\AA}$ y absorción infrarroja a $9300\,\text{\AA}$.
+    \end{itemize}
+    \item \textbf{Metodología de Corrección}:
+    \begin{enumerate}
+        \item \textbf{Estándar Telúrico}: Utiliza la observación de una estrella estándar caliente (tipo B o enana blanca sin líneas intrínsecas) tomada en la misma noche y a masa de aire similar $X_\text{std} = \sec(z_\text{std})$.
+        \item \textbf{Curva de Transmisión Empírica}: Se divide el espectro observado de la estrella estándar por su modelo continuo teórico suave para aislar la curva de transmisión atmosférica $T_0(\lambda)$.
+        \item \textbf{Escalamiento de Masa de Aire}: Aplica la ley de Beer-Lambert para escalar la absorción a la masa de aire exacta de la ciencia:
+        $$T(\lambda) = \left[ T_0(\lambda) \right]^{X_\text{sci} / X_\text{std}}$$
+        \item \textbf{División del Cubo}: Se divide el cubo de datos spaxel a spaxel por la curva $T(\lambda)$ exclusivamente dentro de las ventanas telúricas.
+    \end{enumerate}
+    \item \textbf{Salida}: Cubo \texttt{cube\_telcorr.fits} corregido y reporte QC en \texttt{stage00t\_qc.json}.
+\end{itemize}
+
+\subsubsection{Etapa A4 (\texttt{A4\_cube\_qc}): Batería Exhaustiva de Control de Calidad del Cubo}
+Antes de ingresar a las etapas de modelado y extracción, A4 ejecuta la \textbf{primera compuerta formal de calidad científica (\textit{QC Gate 0})}, evaluando cinco métricas canónicas:
+\begin{enumerate}[leftmargin=1.0cm]
+    \item \textbf{Métrica $M_1$ (Integridad Geométrica, WCS y Preservación de Flujo)}: Verifica que las dimensiones del arreglo sean exactamente tridimensionales \texttt{(3681, Ny, Nx)} con $\Delta\lambda = 1.25\,\text{\AA}$; comprueba la presencia e integridad de las cabeceras astrométricas WCS (\texttt{CRVAL}, \texttt{CDELT}, \texttt{CRPIX}, \texttt{CTYPE}); y audita que la integración espacial del flujo se conserve estrictamente tras las correcciones de A2 y A3.
+    \item \textbf{Métrica $M_2$ (Calidad de Enfoque Espacial y FWHM Cromático)}: Ajusta perfiles espaciales 2D a la estrella primaria en $\sim 43$ ventanas espectrales a lo largo del rango $4750 - 9350\,\text{\AA}$, midiendo la resolución espacial ($FWHM$) y la elipticidad en función de $\lambda$ para validar el rendimiento nominal del lazo de óptica adaptativa.
+    \item \textbf{Métrica $M_3$ (Calibración Fotométrica Absoluta vs Catálogos Gaia)}: Integra sintéticamente el cubo a través de las curvas de transmisión de los filtros $G$, $G_{BP}$ y $G_{RP}$ de la misión espacial Gaia DR3. Compara el flujo resultante con las magnitudes a priori del catálogo estelar y fija formalmente el factor de escala canónico en unidades CGS:
+    $$\text{\texttt{flux\_unit\_cgs}} = 10^{-20}\,\text{erg}\,\text{s}^{-1}\,\text{cm}^{-2}\,\text{\AA}^{-1}$$
+    \item \textbf{Métrica $M_4$ (Diagnóstico de Ruido de Fondo: Discrepancia STAT vs Empírico)}: Mide la dispersión empírica $\sigma_\text{emp}$ en regiones libres de fuentes astronómicas y calcula cuantitativamente el factor de correlación espacial:
+    $$k_\text{corr} = \frac{\sigma_\text{emp}}{\sqrt{\langle \text{STAT} \rangle}} \approx 4.0 - 6.5$$
+    Almacena este factor y emite advertencias si se detectan spaxels saturados o ruido anómalo.
+    \item \textbf{Métrica $M_5$ (Censo de Reflexiones Ópticas Internas / \textit{Ghosts})}: Realiza un escaneo sistemático en busca de reflexiones internas producidas entre los divisores ópticos y los filtros de bloqueo del láser de óptica adaptativa ($5890\,\text{\AA}$), verificando que ningún artefacto espurio coincida espacialmente con la posición del compañero ni espectralmente con la ventana de detección de $H\alpha$ ($6540 - 6585\,\text{\AA}$).
+\end{enumerate}
+\noindent\textbf{Salida}: Archivo \texttt{stages/stage00q\_qc.json} con banderas de aprobación (\texttt{PASS/WARN/FAIL}), valores numéricos exactos y hashes SHA256 de procedencia.
+
+\subsection{Bloque B: Geometría, Corrección de Franjas y Alineación Espacial}
+
+El Bloque B establece el marco de referencia espacial de alta precisión necesario para la extracción espectral de alto contraste. Sus objetivos son centrar la estrella primaria en el origen, eliminar artefactos espaciales periódicos del espectrógrafo y medir con precisión submétrica la posición relativa del compañero.
+
+\subsubsection{Etapa B1 (\texttt{B1\_load\_align\_crop}): Centrado y Recorte Espacial Centrado}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Propósito y Entradas}: Recibe el cubo calibrado del Bloque A (\texttt{cube\_telcorr.fits}). Su objetivo es determinar la posición del centroide estelar con precisión sub-spaxel y aislar una sub-región de alta relación señal-ruido.
+    \item \textbf{Algoritmo Numérico}:
+    \begin{enumerate}
+        \item Colapsa una banda espectral libre de líneas intensas para generar una imagen colapsada 2D de alta señal.
+        \item Ajusta un modelo 2D (gaussiano elíptico o modelo de difracción AO \texttt{maoppy}) para determinar las coordenadas sub-píxel $(y_c, x_c)$ del núcleo estelar con incertidumbre $< 0.05$ spaxels ($< 1.25\,\text{mas}$).
+        \item Recorta una sub-caja espacial cuadrada centrada (típicamente $100 \times 100$ spaxels, $\sim 2.5'' \times 2.5''$) alrededor de $(y_c, x_c)$.
+        \item Traslada el origen de coordenadas al centro estelar, de modo que la estrella primaria quede ubicada exactamente en $(y=0, x=0)$.
+    \end{enumerate}
+    \item \textbf{Salida}: Cubo recortado \texttt{cube\_cropped.fits} y reporte de métricas en \texttt{stages/stage01\_qc.json}.
+\end{itemize}
+
+\subsubsection{Etapa B2 (\texttt{B2\_xcorr\_stripes}): Filtrado de Franjas Instrumentales (\textit{Destriping})}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Origen del Patrón de Franjas (\textit{Stripes})}: Las divisiones ópticas entre los 1.152 slitlets y las discontinuidades microscópicas de respuesta en los divisores de haz de MUSE inducen un patrón espacial periódico y coherente de franjas de baja amplitud que modula el continuo estelar.
+    \item \textbf{Algoritmo de Filtrado por Correlación Cruzada}:
+    \begin{enumerate}
+        \item Calcula matrices de correlación cruzada direccional a lo largo de las direcciones del slicer entre canales espectrales continuos vecinos.
+        \item Aísla los modos espaciales periódicos de modulación sin alterar la simetría radial del halo estelar ni fuentes puntuales asimétricas.
+        \item Sustrae armónicamente las componentes periódicas espaciales canal por canal.
+    \end{enumerate}
+    \item \textbf{Salida}: Cubo des-estriado \texttt{cube\_destriped.fits} y archivo \texttt{stages/stage02\_xcorr\_qc.json} (reportando la reducción en varianza residual).
+\end{itemize}
+
+\subsubsection{Etapa B3 (\texttt{B3\_localize}): Localización Submétrica del Compañero y Geometría Angular}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Propósito y Entradas}: Recibe el cubo des-estriado de B2 y la estimación a priori de la posición del compañero desde el archivo \texttt{targets/<TARGET>.json}.
+    \item \textbf{Algoritmo}:
+    \begin{enumerate}
+        \item Define una ventana local centrada en las coordenadas aproximadas del compañero.
+        \item Ajusta un modelo 2D de fuente puntual sobre el fondo del halo para medir con precisión submétrica las coordenadas relativas definitivas $[y_0, x_0]$ en píxeles.
+        \item Calcula la separación angular proyectada ($R$) y el ángulo de posición ($PA$):
+        $$R_\text{px} = \sqrt{y_0^2 + x_0^2}, \qquad R_\text{arcsec} = R_\text{px} \times s_\text{scale}, \qquad PA = \text{atan2}(x_0, y_0) \pmod{360^\circ}$$
+        donde $s_\text{scale} = 0.025''/\text{spaxel}$ en modo NFM.
+        \item Fija la geometría radial $R$ para la colocación automática de las aperturas de control azimutales en las etapas de extracción y modelado de ruido.
+    \end{enumerate}
+    \item \textbf{Salida}: Archivo \texttt{stages/stage01c\_qc.json} (define los metadatos geométricos congelados del run).
+\end{itemize}
+
+\subsection{Bloque C: Modelado PSF Cromático y los Seis Métodos de Extracción}
+
+El Bloque C representa el núcleo de procesamiento espectroscópico de alto contraste. Modela la estructura cromática de la estrella primaria y ejecuta seis métodos de extracción independientes para desacoplar el espectro del compañero.
+
+\subsubsection{Etapa C1 (\texttt{C1\_chromatic\_psf}): Modelado Cromático de la PSF Estelar}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Dependencia Cromática de la PSF}: En sistemas con óptica adaptativa, la relación de Strehl y la forma de la PSF varían fuertemente con la longitud de onda $\lambda$: en el azul ($4750\,\text{\AA}$), la PSF presenta un núcleo más ancho y alas dominadas por turbulencia atmosférica no corregida; en el rojo e infrarrojo ($9350\,\text{\AA}$), el núcleo es más nítido y cercano al límite de difracción.
+    \item \textbf{Algoritmo de Ajuste}:
+    \begin{enumerate}
+        \item Divide los 3.681 canales espectrales en $\sim 43$ bins de banda ancha ($\Delta\lambda \approx 100\,\text{\AA}$).
+        \item En cada bin ajusta dos familias de modelos espaciales 2D:
+        \begin{itemize}
+            \item \textbf{Moffat Elíptico}: Perfil analítico empírico con radio de núcleo $\alpha$, parámetro de pendiente de alas $\beta$, elipticidad y ángulo de orientación $\theta$:
+            $$I(r) = I_0 \left[ 1 + \left(\frac{r}{\alpha}\right)^2 \right]^{-\beta}$$
+            \item \textbf{Psfao}: Modelo físico de óptica adaptativa que modela explícitamente el núcleo de difracción corregido por AO y el halo turbulento residual según la estadística de Kolmogorov/von Kármán.
+        \end{itemize}
+        \item Selecciona el modelo que minimice el residuo cuadrático en la corona anular correspondiente a la distancia radial $R$ del compañero.
+        \item Ajusta polinomios continuos suaves a los parámetros geométricos ($\alpha(\lambda), \beta(\lambda), \theta(\lambda)$) a lo largo de todo el espectro para permitir la evaluación analítica de la PSF en cualquiera de los 3.681 canales.
+    \end{enumerate}
+    \item \textbf{Salida}: Archivo \texttt{psf\_model.json} y reporte \texttt{stages/stage\_e01\_qc.json}.
+\end{itemize}
+
+\subsubsection{Etapa C1b (\texttt{C1b\_perobs\_subtract}) y Etapa 04b (\texttt{C\_04b\_local\_surface})}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{C1b (\texttt{C1b\_perobs\_subtract} -- Opcional)}: Sustrae el modelo de PSF en cada marco de exposición individual antes de la combinación final. Emite \texttt{stage\_e01b\_qc.json}.
+    \item \textbf{Etapa 04b (\texttt{C\_04b\_local\_surface})}: En una ventana local alrededor de $[y_0, x_0]$, enmascara el núcleo del compañero y ajusta una superficie bidimensional polinómica suave (plano inclinado $z = c_0 + c_1 x + c_2 y$ o paraboloide 2D) para modelar el gradiente local del halo estelar independientemente del modelo global de PSF. Emite \texttt{stages/stage04b\_qc.json}.
+\end{itemize}
+
+\subsubsection{Los Seis Métodos Canónicos de Extracción Espectral (C2 a C6)}
+Cada método aborda el desacoplamiento espectral mediante una hipótesis física y matemática distinta:
+\begin{enumerate}[leftmargin=1.0cm]
+    \item \textbf{C2 (\texttt{aperture}) -- Fotometría de Apertura Circular Clásica}:
+    Suma el flujo de los spaxels dentro de un radio circular $r_\text{ap}$ (típicamente $1.5 - 2.5$ spaxels), sustrae la mediana del fondo en un anillo exterior $[r_\text{in}, r_\text{out}]$ y aplica la corrección de apertura cromática calculada a partir de la PSF de C1:
+    $$F_\text{ap}(\lambda) = \frac{\sum_{r \le r_\text{ap}} D(y, x, \lambda) - N_\text{pix} \cdot \text{mediana}(B)}{\int_{r \le r_\text{ap}} \text{PSF}(y, x, \lambda) \, dy \, dx}$$
+    Emite \texttt{spec\_aperture.fits}.
+    \item \textbf{C3 Variante 1 (\texttt{optimal\_ls}) -- Extracción Óptima con Superficie Local}:
+    Aplica el algoritmo de extracción óptima ponderada por la PSF (Horne 1986), usando como fondo local el plano ajustado en la etapa 04b:
+    $$F_\text{opt}(\lambda) = \frac{\sum_{xy} \frac{P(y, x, \lambda) \cdot [D(y, x, \lambda) - B_\text{local}(y, x, \lambda)]}{\sigma^2(y, x, \lambda)}}{\sum_{xy} \frac{P^2(y, x, \lambda)}{\sigma^2(y, x, \lambda)}}$$
+    donde $P(y, x, \lambda)$ es el perfil normalizado de la PSF del compañero. Emite \texttt{spec\_optimal\_ls.fits}.
+    \item \textbf{C3 Variante 2 (\texttt{optimal\_psfsub}) -- Extracción Óptima con Fondo de PSF Global}:
+    Igual que la variante anterior, pero utilizando como fondo $B(y, x, \lambda)$ el modelo analítico global de la PSF estelar ajustado en C1. Emite \texttt{spec\_optimal\_psfsub.fits}.
+    \item \textbf{C4 (\texttt{psffit}) -- Ajuste Simultáneo de Dos PSF (Método Canónico de Referencia)}:
+    Plantea un modelo lineal multicanal donde la intensidad observada es la superposición de dos fuentes puntuales más un fondo constante:
+    $$D(y, x, \lambda) = a(\lambda) \cdot \text{PSF}_\text{star}(y, x, \lambda) + b(\lambda) \cdot \text{PSF}_\text{comp}(y - y_0, x - x_0, \lambda) + c(\lambda)$$
+    Resuelve el sistema mediante regresión lineal por mínimos cuadrados ponderados:
+    $$\begin{pmatrix} a(\lambda) \\ b(\lambda) \\ c(\lambda) \end{pmatrix} = \left(\mathbf{X}^T \mathbf{W} \mathbf{X}\right)^{-1} \mathbf{X}^T \mathbf{W} \mathbf{D}$$
+    Desacopla de forma analítica exacta el espectro del compañero $b(\lambda)$ y el espectro estelar de la primaria $a(\lambda)$, calculando simultáneamente la matriz de covarianza analítica completa $\mathbf{C} = (\mathbf{X}^T \mathbf{W} \mathbf{X})^{-1}$ y el coeficiente de correlación cruzada $\rho(a, b)$. Emite \texttt{spec\_psffit.fits} y \texttt{spec\_psffit\_star.fits}.
+    \item \textbf{C5 (\texttt{sgf}) -- Sustracción de Halo por Filtrado Savitzky-Golay}:
+    Extrae el perfil radial del halo estelar y aplica un filtro polinomial deslizante de Savitzky-Golay a lo largo del eje espectral para modelar la componente continua del halo sin afectar las emisiones estrechas del compañero. Emite \texttt{spec\_sgf.fits}.
+    \item \textbf{C6 (\texttt{lpm}) -- Modelado de Halo con Polinomios Ortogonales de Legendre}:
+    Modela el continuo del halo estelar mediante polinomios ortogonales de Legendre, enmascarando rigurosamente las ventanas de líneas de emisión conocidas para evitar la erosión del flujo astrofísico real. Emite \texttt{spec\_lpm.fits}.
+\end{enumerate}
+
+\subsection{Bloque D: Comparación de Métodos y Calibración Espectral Definitiva}
+
+El Bloque D evalúa la concordancia física entre los extractores y construye los productos espectrales definitivos calibrados en flujo absoluto CGS.
+
+\subsubsection{Etapa D1 (\texttt{D1\_method\_compare}): Evaluación de Consistencia Inter-Método}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Propósito y Entradas}: Recibe los 6 espectros del compañero generados independientemente en las etapas C2 a C6.
+    \item \textbf{Algoritmo}:
+    \begin{enumerate}
+        \item Calcula las matrices de correlación cruzada de Pearson entre los espectros de los 6 métodos.
+        \item Mide los cocientes relativos de flujo y la dispersión cuadrática residual en el continuo y en las ventanas de líneas diagnósticas ($H\alpha, H\beta, \text{Ca\,II}$).
+        \item Audita que las señales detectadas sean consistentes entre algoritmos y no correspondan a artefactos numéricos de un extractor particular.
+    \end{enumerate}
+    \item \textbf{Salida}: Archivo \texttt{stage\_x10\_qc.json} y gráfico de comparación \texttt{plots/stage\_x10\_compare.png}.
+\end{itemize}
+
+\subsubsection{Etapa D2 (\texttt{D2\_calibrate}): Calibración en Flujo CGS y Presupuesto de Error}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Algoritmo de Calibración}:
+    \begin{enumerate}
+        \item Aplica el factor de escala absoluto fotométrico fijado en la etapa A4, convirtiendo el flujo instrumental a unidades físicas canónicas del sistema CGS:
+        $$F_\text{cal}(\lambda) = F_\text{inst}(\lambda) \times \text{\texttt{flux\_scale}} \quad \left[10^{-20}\,\text{erg}\,\text{s}^{-1}\,\text{cm}^{-2}\,\text{\AA}^{-1}\right]$$
+        \item Construye formalmente el \textbf{Presupuesto Total de Incertidumbres Cuadráticas}:
+        $$\sigma_\text{total}^2(\lambda) = \sigma_\text{emp}^2(\lambda) + \sigma_\text{sys,phot}^2(\lambda) + \sigma_\text{sys,tell}^2(\lambda) + \sigma_\text{sys,mod}^2(\lambda)$$
+        donde:
+        \begin{itemize}
+            \item $\sigma_\text{emp}(\lambda)$: Dispersión empírica medida a partir de las aperturas de control azimutales al radio idéntico $R$.
+            \item $\sigma_\text{sys,phot}(\lambda)$: Error sistemático de calibración fotométrica absoluta con Gaia ($\sim 3-5\%$).
+            \item $\sigma_\text{sys,tell}(\lambda)$: Incertidumbre residual de la corrección telúrica en bandas moleculares.
+            \item $\sigma_\text{sys,mod}(\lambda)$: Incertidumbre sistemática de modelado de la PSF.
+        \end{itemize}
+        \item Empaqueta y valida los productos bajo el contrato inmutable \texttt{SpectrumProduct}, generando tablas FITS binarias con HDUs \texttt{SPECTRUM} y \texttt{COVARIANCE}.
+    \end{enumerate}
+    \item \textbf{Salida}:
+    \begin{itemize}
+        \item Espectros calibrados del compañero: \texttt{spec\_calibrated\_*\_object.fits}.
+        \item Espectro estelar de la primaria: \texttt{spec\_calibrated\_psffit\_star.fits}.
+        \item Reporte QC: \texttt{stage\_x11\_qc.json} y atlas de figuras en \texttt{plots/stage\_x11\_spectra.png}.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Bloque E: Detección de Acreción, Batería de Tests de Artefactos y Límites}
+
+El Bloque E somete las detecciones a un riguroso escrutinio estadístico mediante pruebas de falsos positivos y calcula límites formales de acreción.
+
+\subsubsection{Etapa E1 (\texttt{E1\_halpha\_detect}) y Etapa E1b (\texttt{E1b\_fov\_detection})}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{E1 (\texttt{E1\_halpha\_detect})}: Ajusta un modelo compuesto (perfil gaussiano + continuo lineal) en la ventana espectral de $H\alpha$ ($6540 - 6585\,\text{\AA}$):
+    $$F(\lambda) = c_0 + c_1(\lambda - \lambda_0) + \frac{A}{\sqrt{2\pi}\sigma_\lambda} \exp\left(-\frac{(\lambda - \lambda_0)^2}{2\sigma_\lambda^2}\right)$$
+    Calcula el flujo integrado de la línea $F_{H\alpha} = A$ y la significancia formal contra las aperturas de control:
+    $$(S/N)_{H\alpha} = \frac{F_{H\alpha}}{\sigma_\text{emp}(H\alpha)}$$
+    Emite \texttt{stages/stage\_h01\_qc.json}.
+    \item \textbf{E1b (\texttt{E1b\_fov\_detection} -- Opcional)}: Ejecuta el detector spaxel a spaxel en todo el campo para construir un mapa 2D de $S/N$ y verificar que la emisión sea puntual y confinada al compañero. Emite \texttt{stages/stage\_h01b\_qc.json}.
+\end{itemize}
+
+\subsubsection{Etapa E2 (\texttt{E2\_artifacts}): Batería Exhaustiva de Seis Pruebas de Falsos Positivos}
+Somete la detección en $H\alpha$ a seis pruebas estadísticas independientes:
+\begin{enumerate}[leftmargin=1.0cm]
+    \item \textbf{Desplazamiento Espacial}: Desplaza la apertura en una grilla $\pm 1 - 2$ spaxels; el flujo debe decaer según el perfil de la PSF.
+    \item \textbf{Desplazamiento en Longitud de Onda}: Aplica el ajuste en ventanas de continuo adyacentes fuera de $H\alpha$; no deben encontrarse picos estadísticamente significativos.
+    \item \textbf{Tasa de Falsa Alarma en Controles Azimutales}: Verifica que los valores de $S/N$ en las aperturas de control sigan una distribución normal $\mathcal{N}(0, 1)$ sin desviaciones extremas.
+    \item \textbf{Consistencia Inter-Exposiciones}: Audita que la señal esté presente de forma coherente en sub-integraciones temporales independientes y no sea originada por rayos cósmicos.
+    \item \textbf{Ancho de Línea vs LSF Instrumental}: Comprueba que el ancho de la línea sea consistente con la resolución espectral ($\text{FWHM} \ge \text{LSF} \approx 2.4\,\text{\AA}$).
+    \item \textbf{Chequeo de Fantasmas Ópticos}: Descarta coincidencias con reflexiones internas del tren óptico y del filtro láser de óptica adaptativa ($5890\,\text{\AA}$).
+\end{enumerate}
+\noindent\textbf{Salida}: Archivo \texttt{stages/stage\_h02\_qc.json} con veredictos booleanos y puntuación de confianza.
+
+\subsubsection{Etapas E3, E4, E5 y E6: Límites Superiores, Inyección y Curvas de Contraste}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{E3 (\texttt{E3\_upper\_limits})}: En caso de no detección ($S/N < 3$), calcula el límite superior formal $3\sigma$ en flujo de $H\alpha$ y tasa de acreción máxima $\dot{M}_\text{max}$. Emite \texttt{stages/stage\_h03\_qc.json}.
+    \item \textbf{E4 (\texttt{E4\_injection})}: Inyecta fuentes sintéticas con flujos conocidos y perfiles de PSF a diferentes separaciones radiales y contrastes ($10^{-2}$ a $10^{-5}$), midiendo el \textit{throughput} y la completitud ($>95\%$). Emite \texttt{stages/stage\_h04\_qc.json}.
+    \item \textbf{E5 y E6 (\texttt{E5\_contrast\_curves} y \texttt{E6\_roc\_curves})}: E5 calcula las curvas de contraste límite detectable a $5\sigma$ en función de la separación angular $R$. E6 genera curvas ROC (\textit{Receiver Operating Characteristic}) evaluando la probabilidad de detección frente a la probabilidad de falsa alarma. Emite \texttt{stages/stage\_h05\_qc.json} y \texttt{stages/stage\_h06\_qc.json}.
+\end{itemize}
+
+\subsection{Bloques F y G: Síntesis Astrofísica, Líneas Espectrales y Acreción de Masa}
+
+Los Bloques F y G realizan la síntesis científica final, transformando los espectros calibrados en propiedades astrofísicas fundamentales del sistema subestelar.
+
+\subsubsection{Etapas F1, G0 y G1: Aseguramiento de Calidad y Validación de Covarianza}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{F1 (\texttt{F1\_final\_report})}: Compuerta final de aseguramiento de calidad (\textit{Final QC Gate}). Audita la cadena completa de hashes criptográficos SHA256 de todas las etapas previas y compila el informe consolidado en \texttt{report/run\_summary.json}.
+    \item \textbf{G0 (\texttt{G0\_real\_cube})}: Verifica la procedencia temporal entre los cubos FITS y los productos derivados para evitar discrepancias de versión. Emite \texttt{stages/stage\_g0\_qc.json}.
+    \item \textbf{G1 (\texttt{G1\_extraction\_validation})}: Evalúa la matriz de correlación espectral inter-canal para confirmar que los algoritmos de extracción no hayan inducido artefactos de alta frecuencia ni modulaciones espurias. Emite \texttt{stages/stage\_g1\_qc.json}.
+\end{itemize}
+
+\subsubsection{Etapa G2 (\texttt{G2\_measure\_lines}): Medición de Líneas de Emisión y Cinemática}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Líneas Espectrales Analizadas}: Somete a ajuste espectral múltiple un conjunto completo de transiciones atómicas diagnósticas:
+    \begin{itemize}
+        \item Serie de Balmer: $H\alpha$ ($6562.8\,\text{\AA}$) y $H\beta$ ($4861.3\,\text{\AA}$).
+        \item Triplete de Calcio Ionizado (\text{Ca\,II IRT}): $\lambda\lambda 8498, 8542, 8662\,\text{\AA}$.
+        \item Líneas Prohibidas de Choques y Vientos: $[\text{O\,I}]\,6300\,\text{\AA}$ y $[\text{S\,II}]\,6716, 6731\,\text{\AA}$.
+    \end{itemize}
+    \item \textbf{Parámetros Físicos Medidos}: Flujo integrado de línea ($F_\text{line}$), ancho equivalente ($EW$), velocidad radial heliocéntrica ($v_\text{rad}$) y ensanchamiento Doppler ($\sigma_v$).
+    \item \textbf{Salida}: Archivo \texttt{stages/stage\_g2\_qc.json} con tablas estructuradas de mediciones.
+\end{itemize}
+
+\subsubsection{Etapa G3 (\texttt{G3\_accretion}): Inferencia Física de la Tasa de Acreción de Masa (\texorpdfstring{$\dot{M}$}{Mdot})}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{Formulación Física}:
+    \begin{enumerate}
+        \item \textbf{Corrección por Extinción}: Corrige el flujo de $H\alpha$ por absorción interestelar intrínseca $A_V$ mediante la ley de extinción de Cardelli et al. (1989):
+        $$F_\text{int}(\lambda) = F_\text{obs}(\lambda) \cdot 10^{0.4 A_\lambda}$$
+        \item \textbf{Luminosidad de Línea}: Convierte el flujo intrínseco en luminosidad a partir de la distancia $d$ en pársecs:
+        $$L_{H\alpha} = 4\pi d^2 F_\text{int}(H\alpha)$$
+        \item \textbf{Luminosidad Total de Acreción}: Aplica relaciones empíricas de escala calibradas para objetos jóvenes de muy baja masa (e.g. Rigliaco et al. 2012, Alcalá et al. 2014, 2017):
+        $$\log_{10}\left(\frac{L_\text{acc}}{L_\odot}\right) = a \cdot \log_{10}\left(\frac{L_{H\alpha}}{L_\odot}\right) + b$$
+        \item \textbf{Tasa de Acreción de Masa}: En el marco de caída libre magnetosférica desde el radio de truncamiento interno del disco ($R_\text{in} \approx 5 R_*$):
+        $$\dot{M} \approx \left(1 - \frac{R_*}{R_\text{in}}\right)^{-1} \frac{L_\text{acc} R_*}{G M_*}$$
+        donde la masa $M_*$ y el radio $R_*$ del objeto se obtienen a partir de modelos de evolución y enfriamiento subestelar (Baraffe / BT-Settl / Sonora) para la edad del sistema.
+    \end{enumerate}
+    \item \textbf{Salida}: Archivo \texttt{stages/stage\_g3\_qc.json} con valores centrales e intervalos de confianza del 68\% y 95\%.
+\end{itemize}
+
+\subsubsection{Etapas G4 y G5: Clasificación Espectral y Síntesis Final}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{G4 (\texttt{G4\_classify})}: Ajusta rejillas de modelos atmosféricos sintéticos BT-Settl y bibliotecas empíricas de enanas marrones para determinar la temperatura efectiva $T_\text{eff}$, gravedad superficial $\log g$ y tipo espectral (tipos M, L, T). Emite \texttt{stages/stage\_g4\_classification.json}.
+    \item \textbf{G5 (\texttt{G5\_final\_synthesis})}: Compila el paquete definitivo de publicación científica: tablas LaTeX completas con todos los parámetros astronómicos derivados y atlas de figuras espectrales en \texttt{report/characterization/}.
+\end{itemize}
+
+\subsubsection{Diagnósticos Auxiliares (S0 y S1)}
+\begin{itemize}[leftmargin=1.0cm]
+    \item \textbf{S0 (\texttt{S0\_wavesol\_map})}: Mapea espacialmente la estabilidad de la calibración en longitud de onda en los 24 canales IFU de MUSE usando líneas atmosféricas de cielo. Emite \texttt{stages/stageS0\_qc.json}.
+    \item \textbf{S1 (\texttt{S1\_halpha\_map})}: Genera mapas 2D del ensanchamiento instrumental LSF y del cociente de contraste línea/continuo en la región de $H\alpha$. Emite \texttt{stages/stageS1\_qc.json}.
+\end{itemize}
+
+\section{Guía Operacional y Ejemplos en Python}
+
+\subsection{Activación y Selección de Run}
+\begin{lstlisting}[language=bash]
+# 1. Activar el entorno reproducible
+conda activate MUSE
+
+# 2. Definir el Run activo en la terminal
+export MUSE_RUN_ID=ROXs12b
+\end{lstlisting}
+
+\subsection{Tres Formas Equivalentes de Ejecutar una Etapa}
+\begin{lstlisting}[language=bash]
+# Forma A: Mediante script Bash en scripts/
+./scripts/stage_x03_psffit.sh --run-id ROXs12b
+
+# Forma B: Mediante el CLI del modulo de Python
+python -m musepipe.stages.stage_x03_psffit --run-id ROXs12b
+\end{lstlisting}
+
+\begin{lstlisting}
+# Forma C: Mediante la API programatica en Python
+from musepipe.stages import run_stage_x03_psffit
+
+qc_resultado = run_stage_x03_psffit(run_id="ROXs12b")
+print("QC guardado en:", qc_resultado.get("output_qc_file"))
+\end{lstlisting}
+
+\subsection{Ejemplo Completo: Cargar Configuración, QC y Graficar Espectro Calibrado}
+\begin{lstlisting}
+import json
+import matplotlib.pyplot as plt
+from astropy.io import fits
+from musepipe.config import load_run_config
+from musepipe.paths import RunPaths
+
+# 1. Cargar configuracion y rutas estandar del Run
+run_cfg = load_run_config(run_id="ROXs12b")
+paths = RunPaths(project_root=".", run_id="ROXs12b")
+
+# 2. Leer metricas de calidad QC de C4 (Ajuste PSF)
+qc_path = paths.stage_dir / "spec_psffit_qc.json"
+if qc_path.exists():
+    with open(qc_path, "r") as f:
+        qc_c4 = json.load(f)
+    print("Estado C4:", qc_c4.get("status"))
+    print("Separacion [arcsec]:", qc_c4.get("separation_arcsec"))
+
+# 3. Leer y graficar el espectro definitivo calibrado (D2)
+spec_path = paths.stage_dir / "spec_calibrated_psffit_object.fits"
+if spec_path.exists():
+    with fits.open(spec_path) as hdul:
+        data = hdul[1].data
+        wave, flux, err = data["WAVELENGTH"], data["FLUX"], data["FLUX_ERR"]
+
+    plt.figure(figsize=(9, 4.5))
+    plt.plot(wave, flux, label="Espectro ROXs 12 b (psffit)", color="navy", lw=1.2)
+    plt.fill_between(wave, flux - err, flux + err, alpha=0.25, color="royalblue", label=r"Incertidumbre $1\sigma_\text{emp}$")
+    plt.axvline(6562.8, color="crimson", linestyle="--", lw=1.2, label=r"Linea $H\alpha$ ($6562.8\,\AA$)")
+    plt.xlabel(r"Longitud de Onda [$\AA$]")
+    plt.ylabel(r"Flujo [$10^{-20}\,\text{erg}\,\text{s}^{-1}\,\text{cm}^{-2}\,\AA^{-1}$]")
+    plt.title("Espectro Calibrado de Publicacion -- ROXs 12 b")
+    plt.grid(True, linestyle=":", alpha=0.5)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig("espectro_calibrado.png", dpi=150)
+    print("Figura guardada en 'espectro_calibrado.png'.")
+\end{lstlisting}
+
+\section{Verificación y Validación}
+\begin{lstlisting}[language=bash]
+# Ejecutar la suite de pruebas unitarias rapidas
+python -m pytest tests/ -q -m "not slow"
+
+# Verificar compilacion estatica de sintaxis en todo el paquete
+python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
+\end{lstlisting}
+
+\end{document}

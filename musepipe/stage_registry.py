@@ -118,7 +118,13 @@ STAGES: tuple[Stage, ...] = (
                         "--qc-output {stage_dir}/stage00q_qc.json")}),
     # ===================== BLOQUE B — alineado =====================
     Stage("B1", "B1_load_align_crop", "B", "stages/stage01_qc.json", exec_kind="module_run"),
-    Stage("B2", "B2_xcorr_stripes", "B", "stages/stage02_xcorr_qc.json", exec_kind="script"),
+    # B2 escribe su QC con DOS nombres segun cuando se corriera: `stage02_qc.json`
+    # es el viejo y `stage02_xcorr_qc.json` el de ahora. ROXs 12 b tiene los dos
+    # (identicos byte a byte); ROXs 42B b, corrido el 2026-07-22, solo tiene el
+    # viejo — y sin este alias la etapa se leia como NO CORRIDA cuando lo estaba,
+    # con sus cuatro productos en disco desde entonces.
+    Stage("B2", "B2_xcorr_stripes", "B", "stages/stage02_xcorr_qc.json",
+          qc_aliases=("stages/stage02_qc.json",), exec_kind="script"),
     Stage("B3", "B3_localize", "B", "stages/stage01c_qc.json", exec_kind="script"),
     # ===================== BLOQUE C — extracción =====================
     Stage("C1", "C1_chromatic_psf", "C", "stages/stage_e01_qc.json", exec_kind="script"),
