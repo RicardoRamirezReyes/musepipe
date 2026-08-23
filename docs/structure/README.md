@@ -54,19 +54,19 @@ Esta guía se divide en tres documentos temáticos secuenciales y un archivo PDF
 5. **[05. Reporte Técnico de Resultados en Bloque B](05_results_block_b.md)**
    - Centrado sub-píxel con perfiles de óptica adaptativa (`maoppy`) y recorte centrado (B1).
    - Filtrado y des-estriado por correlación cruzada direccional de slitlets (B2).
-   - Localización submétrica, solución astrométrica ($R = 1.8025'' \pm 0.0042''$, $PA = 240.103^\circ \pm 0.133^\circ$) y corrección de coordenadas heredadas (B3).
+   - Localización submétrica, solución astrométrica por objeto —ROXs 12 b: $R = 1.8008'' \pm 0.0027''$, $PA = 240.295^\circ \pm 0.084^\circ$; ROXs 42B b: $R = 1.1802'' \pm 0.0019''$, $PA = 270.352^\circ \pm 0.094^\circ$— y corrección de coordenadas heredadas (B3).
 
 6. **[06. Reporte Técnico de Resultados en Bloque C](06_results_block_c.md)**
    - Modelado cromático de la PSF estelar con óptica adaptativa (`psfao` / `maoppy`) y modelo de mezcla C1 v2.
    - Ajuste de superficie bidimensional del halo local en sub-caja centrada (04b).
    - Extracción espectral completa en los seis métodos independientes (C2 a C6) para **ROXs 12 b** y **ROXs 42B b**.
-   - Métricas de desacoplamiento estelar ($\rho_{ab} \approx 0.025-0.032$), preservación analítica de líneas de emisión ($100.000\%$) y matriz comparativa consolidada.
+   - Métricas de desacoplamiento estelar ($\rho_{ab} \approx 0.025-0.032$), preservación analítica de líneas de emisión ($100.000\%$) y matriz comparativa consolidada, con el veredicto de cada compuerta de la spec al lado de su cifra.
 
 7. **Documentos en Formato PDF (Compilados con LaTeX)**:
    - **Guía Completa de Arquitectura y Operación**: [`guia_arquitectura_y_operacion.pdf`](guia_arquitectura_y_operacion.pdf) (16 páginas).
    - **Reporte Técnico de Resultados en Bloque A**: [`reporte_resultados_bloque_a.pdf`](reporte_resultados_bloque_a.pdf) (6 páginas).
-   - **Reporte Técnico de Resultados en Bloque B**: [`reporte_resultados_bloque_b.pdf`](reporte_resultados_bloque_b.pdf) (4 páginas).
-   - **Reporte Técnico de Resultados en Bloque C**: [`reporte_resultados_bloque_c.pdf`](reporte_resultados_bloque_c.pdf) (8 páginas).
+   - **Reporte Técnico de Resultados en Bloque B**: [`reporte_resultados_bloque_b.pdf`](reporte_resultados_bloque_b.pdf) (5 páginas).
+   - **Reporte Técnico de Resultados en Bloque C**: [`reporte_resultados_bloque_c.pdf`](reporte_resultados_bloque_c.pdf) (12 páginas).
 
 ---
 
