@@ -129,6 +129,10 @@ def main(argv=None):
     import matplotlib.pyplot as plt
 
     runs = [args.epoca1, args.epoca2]
+    #: Cuantos puntos de flujo tiene cada epoca. NO tiene por que ser el mismo
+    #: numero, y el pie lo dice: la rejilla se inyecta en la escala de S/N de cada
+    #: cubo, y solo la de la epoca 1 se bajo para que su transicion entrara.
+    n_puntos_por_epoca = []
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(9.6, 4.0), width_ratios=(1.35, 1.0))
 
     # ---- Panel A: completitud vs flujo inyectado ---------------------------
@@ -149,6 +153,7 @@ def main(argv=None):
                      markersize=6.5, linewidth=2.0, capsize=0, elinewidth=1.2,
                      label=etiqueta_epoca(run), zorder=3)
         n_por_punto = puntos[0][1]["n"]
+        n_puntos_por_epoca.append(len(puntos))
 
     axA.set_xscale("log")
     axA.set_ylim(-0.04, 1.08)
@@ -196,9 +201,16 @@ def main(argv=None):
             ax.spines[lado].set_linewidth(0.8)
         ax.tick_params(colors=TINTA_SUAVE, labelsize=8.5, length=3)
 
+    rejillas = ("misma rejilla de flujo en las dos épocas"
+                if len(set(n_puntos_por_epoca)) == 1 else
+                f"las rejillas de flujo NO son la misma ({' y '.join(str(n) for n in n_puntos_por_epoca)} "
+                f"puntos): cada época se inyecta en su propia escala de S/N, y solo la primera se bajó "
+                f"para que su transición entrara en el rango. El eje es flujo, así que las curvas siguen "
+                f"siendo comparables")
     pie = (f"Método {args.metodo} (canónico). Completitud = fracción de inyecciones recuperadas "
            f"a $\\geq$5$\\sigma$ sobre {n_por_punto} posiciones por punto; barras = intervalo de "
-           f"Wilson a 1$\\sigma$, que no está centrado en la fracción medida.\nEl umbral y la FAP "
+           f"Wilson a 1$\\sigma$, que no está centrado en la fracción medida. Panel a: {rejillas}.\n"
+           f"El umbral y la FAP "
            f"son empíricos, medidos sobre los espectros de control del mismo método (E4 v3). "
            f"Panel b: {n_nulos} nulos por época, solo en posiciones de control; la posición real "
            f"del compañero es dato científico y no entra.")
