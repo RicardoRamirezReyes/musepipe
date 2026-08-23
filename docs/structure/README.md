@@ -49,7 +49,7 @@ Esta guía se divide en tres documentos temáticos secuenciales y un archivo PDF
    - Resultados de reducción cruda (A1) y verificación de las compuertas V1 a V6.
    - Diagnóstico físico de líneas de cielo y veredicto de ZAP (A2).
    - Medición de absorción molecular ($O_2, H_2O$) y corrección telúrica (A3).
-   - Auditoría de calidad M1 a M5 y comparación contra los productos estándar de archivo (ADP) de ESO (A4).
+   - Auditoría de calidad M1 a M5 —que cierra en rojo por M5, y de ahí sale la decisión `use_empirical_controls`— y la comparación contra los productos estándar de archivo (ADP) de ESO, que vive en el run de la era ADP (A4).
 
 5. **[05. Reporte Técnico de Resultados en Bloque B](05_results_block_b.md)**
    - Centrado sub-píxel con perfiles de óptica adaptativa (`maoppy`) y recorte centrado (B1).
@@ -64,7 +64,7 @@ Esta guía se divide en tres documentos temáticos secuenciales y un archivo PDF
 
 7. **Documentos en Formato PDF (Compilados con LaTeX)**:
    - **Guía Completa de Arquitectura y Operación**: [`guia_arquitectura_y_operacion.pdf`](guia_arquitectura_y_operacion.pdf) (16 páginas).
-   - **Reporte Técnico de Resultados en Bloque A**: [`reporte_resultados_bloque_a.pdf`](reporte_resultados_bloque_a.pdf) (6 páginas).
+   - **Reporte Técnico de Resultados en Bloque A**: [`reporte_resultados_bloque_a.pdf`](reporte_resultados_bloque_a.pdf) (10 páginas).
    - **Reporte Técnico de Resultados en Bloque B**: [`reporte_resultados_bloque_b.pdf`](reporte_resultados_bloque_b.pdf) (5 páginas).
    - **Reporte Técnico de Resultados en Bloque C**: [`reporte_resultados_bloque_c.pdf`](reporte_resultados_bloque_c.pdf) (12 páginas).
 
