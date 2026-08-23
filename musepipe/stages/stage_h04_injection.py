@@ -385,6 +385,20 @@ def _same_radius_control_positions(star_yx, target_yx, *, n_controls=3):
 
 
 def resolve_h04_positions(config, paths=None):
+    """La rejilla de posiciones: la real del companero + N controles al mismo radio.
+
+    `h04_n_control_positions` (por defecto 3, que es lo que habia) manda sobre las
+    tres cosas a la vez, porque son la misma: el `n` de `completeness_at_5sigma`
+    —que con 3 controles solo puede valer 0, 0.25, 0.5, 0.75 o 1—, la poblacion
+    nula de V2 y la potencia de su puerta. La spec E4 v3 §2 ya lo dice: con 3
+    posiciones la puerta solo puede fallar si 2 de 3 son extremas, y subir eso
+    pide mas POSICIONES, no mas filas por posicion. Anadirlas no necesita spec
+    nueva: `n_positions` sale de los datos.
+    """
+
+    n_controls = int(config.get("h04_n_control_positions", 3))
+    if n_controls < 1:
+        raise RuntimeError("H04 needs at least one control position.")
     raw_positions = config.get("h04_positions_yx")
     if raw_positions:
         out = []
@@ -399,7 +413,9 @@ def resolve_h04_positions(config, paths=None):
                 x = float(item[1])
             out.append({"label": label, "y": y, "x": x})
         if len(out) != 4:
-            raise RuntimeError("H04 grid requires exactly 4 positions: real + 3 controls.")
+            raise RuntimeError(
+                f"H04 grid requires exactly {n_controls + 1} positions: real + {n_controls} "
+                f"controls (h04_n_control_positions={n_controls}); got {len(out)}.")
         return out
 
     real = config.get("h04_real_position_yx")
@@ -410,8 +426,10 @@ def resolve_h04_positions(config, paths=None):
             {"label": f"control{index + 1}", "y": float(y), "x": float(x)}
             for index, (y, x) in enumerate(controls)
         )
-        if len(out) != 4:
-            raise RuntimeError("H04 requires exactly 3 control positions.")
+        if len(out) != n_controls + 1:
+            raise RuntimeError(
+                f"H04 requires exactly {n_controls} control positions "
+                f"(h04_n_control_positions); got {len(out) - 1}.")
         return out
 
     if paths is None:
@@ -422,7 +440,8 @@ def resolve_h04_positions(config, paths=None):
     out = [{"label": "real", "y": float(target[0]), "x": float(target[1])}]
     out.extend(
         {"label": f"control{index + 1}", "y": float(y), "x": float(x)}
-        for index, (y, x) in enumerate(_same_radius_control_positions(star, target, n_controls=3))
+        for index, (y, x) in enumerate(
+            _same_radius_control_positions(star, target, n_controls=n_controls))
     )
     return out
 

@@ -106,6 +106,23 @@ class StreamCombinePlan:
     wavelength: dict
     exposures: tuple[ExposureAlignment, ...]
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    #: {ruta del cubo de la exposición: ruta a un .npy con T(λ) sobre el eje de
+    #: salida}. La clave es el **fichero** y no `exposure_id` porque ese ID no es
+    #: único: sale del **directorio padre** (los cubos por exposición se llaman
+    #: todos `DATACUBE_FINAL.fits`), así que dos exposiciones que compartan carpeta
+    #: comparten ID — y la T acabaría en la exposición equivocada sin que nada
+    #: fallara. Es la vía
+    #: «molecfit por exposición» de A3: cada exposición se corrige **con la suya**
+    #: antes de entrar al combinado, que es lo único que distingue esa granularidad
+    #: de aplicar una T única al cubo ya combinado.
+    #:
+    #: Va en el plan y no en un gancho a propósito. El hook `transform` existe,
+    #: pero devuelve **solo DATA y deliberadamente no toca STAT** —correcto para
+    #: restar un modelo determinista, falso para dividir por T, que exige
+    #: `STAT/T²`—, así que usarlo dejaría el error sin escalar en todo el cubo.
+    #: Y estando en el plan es procedencia: queda escrito qué T entró en cada
+    #: exposición.
+    transmission_by_exposure: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -129,6 +146,7 @@ class StreamCombinePlan:
             "n_exposures": len(self.exposures),
             "exposures": [exp.as_dict() for exp in self.exposures],
             "warnings": list(self.warnings),
+            "transmission_by_exposure": dict(self.transmission_by_exposure),
         }
 
 
@@ -690,6 +708,7 @@ def plan_from_dict(payload: dict) -> StreamCombinePlan:
         wavelength=dict(payload["wavelength"]),
         exposures=exposures,
         warnings=tuple(payload.get("warnings", [])),
+        transmission_by_exposure=dict(payload.get("transmission_by_exposure", {})),
     )
 
 
@@ -748,6 +767,48 @@ def wavelength_axis(plan: StreamCombinePlan) -> np.ndarray:
     return float(meta["crval3"]) + float(meta["cd3_3"]) * (np.arange(nz, dtype=np.float64) + 1.0 - crpix)
 
 
+def _load_transmissions(plan: StreamCombinePlan, nz: int) -> dict:
+    """{indice de exposicion: T(λ)} desde las rutas que declara el plan.
+
+    Se carga UNA vez y se valida la longitud aquí: un desajuste de eje descubierto
+    a mitad del combine deja un cubo a medias, y este combine dura horas.
+    """
+
+    if not plan.transmission_by_exposure:
+        return {}
+    por_indice: dict[int, np.ndarray] = {}
+    for exposure in plan.exposures:
+        ruta = (plan.transmission_by_exposure.get(exposure.file)
+                or plan.transmission_by_exposure.get(str(Path(exposure.file).resolve())))
+        if ruta is None:
+            raise StreamCombineError(
+                f"transmission_by_exposure is declared but {exposure.file} has none: "
+                "correcting only some exposures would combine two different calibrations "
+                "into one cube.")
+        trans = np.asarray(np.load(str(ruta)), dtype=np.float64)
+        if trans.shape != (nz,):
+            raise StreamCombineError(
+                f"transmission for {exposure.exposure_id} has {trans.shape} rows, "
+                f"the output axis has {nz}.")
+        if not np.all(np.isfinite(trans)) or np.nanmin(trans) <= 0:
+            raise StreamCombineError(
+                f"transmission for {exposure.exposure_id} is not positive and finite.")
+        por_indice[int(exposure.index)] = trans
+    return por_indice
+
+
+def _apply_transmission_chunk(trans: np.ndarray, z1: int, z2: int, data, stat):
+    """DATA/T y STAT/T^2, los dos en el mismo sitio.
+
+    Que estén juntos no es estilo: es lo que hace imposible aplicar uno sin el
+    otro. Dividir el dato por T sin escalar la varianza deja un cubo cuyo error
+    miente justo donde más se corrigió.
+    """
+
+    escala = trans[z1:z2][:, None, None]
+    return data / escala, stat / (escala ** 2)
+
+
 def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None) -> dict:
     """Combine the planned exposures one wavelength chunk at a time.
 
@@ -777,7 +838,8 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
     contributed_total = 0
 
     chunk = max(1, int(plan.chunk_channels))
-    wave = wavelength_axis(plan) if transform is not None else None
+    transmissions = _load_transmissions(plan, nz)
+    wave = wavelength_axis(plan) if (transform is not None or transmissions) else None
     handles = [fits.open(exp.file, memmap=True) for exp in plan.exposures]
     try:
         for z1 in range(0, nz, chunk):
@@ -787,6 +849,9 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
             if plan.method == "mean":
                 for exposure, hdul in zip(plan.exposures, handles):
                     data, stat, valid = _aligned_chunk(exposure, plan, hdul, z1, z2)
+                    trans = transmissions.get(int(exposure.index))
+                    if trans is not None:
+                        data, stat = _apply_transmission_chunk(trans, z1, z2, data, stat)
                     if transform is not None:
                         data = transform(exposure, wave[z1:z2], data, stat)
                     w = float(exposure.weight)
@@ -801,6 +866,9 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
             stat_stack = np.empty_like(data_stack)
             for slot, (exposure, hdul) in enumerate(zip(plan.exposures, handles)):
                 data, stat, _ = _aligned_chunk(exposure, plan, hdul, z1, z2)
+                trans = transmissions.get(int(exposure.index))
+                if trans is not None:
+                    data, stat = _apply_transmission_chunk(trans, z1, z2, data, stat)
                 if transform is not None:
                     # Los MISMOS cuatro argumentos que la rama `mean` y que el
                     # contrato del docstring. Esta rama pasaba tres, asi que
@@ -855,6 +923,9 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
         "empty_voxel_fraction": float(np.mean(empty)),
         "finite_fraction": float(np.isfinite(data).mean()),
         "interp_kernel": {"data": "cubic_spline_per_plane", "stat": "bilinear_kernel_squared"},
+        "transmission_by_exposure": {exp.file: str(plan.transmission_by_exposure[exp.file])
+                                     for exp in plan.exposures
+                                     if exp.file in plan.transmission_by_exposure},
     }
     return {
         "data": data.astype(np.float32),
