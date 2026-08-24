@@ -76,10 +76,17 @@ INLINE_SOURCES = {
         ("musepipe/reduction/verify.py", [
             "VerificationError", "circular_aperture_mask", "extract_aperture_spectrum",
         ]),
+        ("musepipe/stats.py", ["finite_values", "robust_sigma"]),
         ("musepipe/reduction/telluric.py", [
             "TelluricError", "TelluricDecision", "wavelength_axis_from_header",
             "window_mask", "protected_mask", "local_continuum_linear",
             "measure_telluric_depths", "decide_telluric",
+            # El sesgo del estimador sube a musepipe (2026-08-24): estaba solo aqui,
+            # como `_h4_*`, contra la regla de que la logica reutilizable vive en
+            # `musepipe/`. Ahora A3 lo usa para escribir el sistematico telurico y
+            # el notebook lo copia, que es lo que hace que el guardian de deriva
+            # signifique algo.
+            "clean_control_mask", "estimator_bias_by_band", "telluric_systematic_block",
             "enforce_protected_transmission", "validate_transmission_physical",
             "apply_transmission_to_arrays", "verify_outside_bands_unchanged",
         ]),

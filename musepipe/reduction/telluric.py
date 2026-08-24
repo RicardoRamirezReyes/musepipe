@@ -386,6 +386,173 @@ def measure_telluric_depths(
     return depths
 
 
+#: Paso del barrido y radio del vecindario del estimador de sesgo, en Å.
+CONTROL_STEP_A = 10.0
+CONTROL_NEIGHBOURHOOD_A = 300.0
+
+#: Rasgos estelares fuertes: dentro de una ventana de control marcarían
+#: profundidad que no es curvatura del continuo, y contaminarían el sesgo.
+STELLAR_FEATURES_A = ((5880.0, 5900.0), (8490.0, 8510.0), (8530.0, 8555.0), (8650.0, 8675.0))
+
+
+def clean_control_mask(wave, *, protected=PROTECTED_WINDOWS):
+    """Canales donde el catálogo dice que NO hay telúrico ni rasgo estelar fuerte.
+
+    El catálogo de bandas (`musepipe.telluric_lines.TELLURIC_BANDS`) es un dato, no
+    un cálculo: una sola definición de «dónde hay telúrico», la misma que usan la
+    figura del paper y las máscaras de G3.
+    """
+
+    from ..telluric_lines import AO_LASER_WINDOW_A, TELLURIC_BANDS as CATALOGUE
+
+    wave_arr = np.asarray(wave, dtype=np.float64)
+    dirty = np.zeros(wave_arr.shape, dtype=bool)
+    for band in CATALOGUE:
+        dirty |= window_mask(wave_arr, (band["lo_A"], band["hi_A"]))
+    for win in tuple(protected) + STELLAR_FEATURES_A + (AO_LASER_WINDOW_A,):
+        dirty |= window_mask(wave_arr, win)
+    return (~dirty) & np.isfinite(wave_arr)
+
+
+def estimator_bias_by_band(
+    wave,
+    spectrum,
+    bands: Mapping[str, tuple[float, float]] = TELLURIC_BANDS,
+    *,
+    side_width_A: float = 40.0,
+    gap_A: float = 10.0,
+    protected=PROTECTED_WINDOWS,
+) -> dict[str, dict | None]:
+    """Cuánta profundidad fabrica el estimador donde no hay nada que medir.
+
+    Corre el **mismo estimador de la etapa, sin tocarlo**, sobre trozos del propio
+    espectro donde el catálogo dice que no hay telúrico, con la misma anchura de
+    banda, los mismos laterales y el mismo hueco. Lo que marca ahí lo ha fabricado
+    de la nada: es el sesgo local del método, y se descuenta de la profundidad
+    medida antes de declararla como sistemático.
+
+    Es la invariante de la casa —un control procesado igual que el objeto— y por eso
+    no necesita elegir ningún modelo de continuo: sustituir la cuerda por una
+    parábola no mide el sesgo, solo cambia de estimador (y la parábola resultó ser
+    3× más ruidosa; ver `docs/2026-08-02_a3_continuo_sesgo.md` §3c).
+
+    Devuelve, por banda, `{bias_pct, sigma_pct, n, blue, red}` o **`None`** cuando no
+    hay ventanas limpias suficientes en su entorno — que es el caso real de H₂O 7200,
+    donde el catálogo deja poco sitio entre esa banda y sus vecinas. `None` se declara,
+    no se rellena.
+
+    La σ suma en cuadratura dos términos empíricos: la dispersión entre ventanas y la
+    deriva azul-rojo (la curvatura cambia con λ y la banda cae entre los dos
+    vecindarios).
+    """
+
+    from ..stats import robust_sigma
+
+    wave_arr = np.asarray(wave, dtype=np.float64)
+    spec = np.asarray(spectrum, dtype=np.float64)
+    clean = clean_control_mask(wave_arr, protected=protected) & np.isfinite(spec)
+    out: dict[str, dict | None] = {}
+
+    for name, band in bands.items():
+        lo, hi = float(band[0]), float(band[1])
+        width = hi - lo
+        centre = 0.5 * (lo + hi)
+        if not clean.any():
+            out[name] = None
+            continue
+        readings: list[tuple[float, float]] = []
+        pos = float(wave_arr[clean].min()) + gap_A + side_width_A
+        top = float(wave_arr[clean].max()) - width - gap_A - side_width_A
+        while pos <= top:
+            span = window_mask(wave_arr, (pos - gap_A - side_width_A,
+                                          pos + width + gap_A + side_width_A))
+            if span.any() and clean[span].all():
+                depth = measure_telluric_depths(
+                    wave_arr, spec, bands={"c": (pos, pos + width)},
+                    side_width_A=side_width_A, gap_A=gap_A, clip_negative=False,
+                )["c"]
+                if np.isfinite(depth):
+                    readings.append((pos + width / 2.0, float(depth)))
+            pos += CONTROL_STEP_A
+        if len(readings) < 3:
+            out[name] = None
+            continue
+        centres = np.array([c for c, _ in readings])
+        values = np.array([d for _, d in readings])
+        near = np.abs(centres - centre) <= CONTROL_NEIGHBOURHOOD_A
+        if near.sum() < 3:
+            near = np.abs(centres - centre) <= 2 * CONTROL_NEIGHBOURHOOD_A
+        if near.sum() < 3:
+            out[name] = None
+            continue
+        blue, red = near & (centres < centre), near & (centres > centre)
+        drift = (0.5 * abs(np.median(values[blue]) - np.median(values[red]))
+                 if blue.any() and red.any() else 0.0)
+        out[name] = {
+            "bias_pct": float(np.median(values[near])),
+            "sigma_pct": float(np.hypot(robust_sigma(values[near]), drift)),
+            "n": int(near.sum()),
+            "blue": int(blue.sum()),
+            "red": int(red.sum()),
+        }
+    return out
+
+
+def telluric_systematic_block(
+    wave,
+    spectrum,
+    depth_pct_by_band: Mapping[str, float],
+    bands: Mapping[str, tuple[float, float]] = TELLURIC_BANDS,
+    *,
+    side_width_A: float = 40.0,
+    gap_A: float = 10.0,
+) -> tuple[dict[str, float], dict[str, dict]]:
+    """`(telluric_systematic_frac_by_band, detalle)` para el QC de A3.
+
+    D2 lee `telluric_systematic_frac_by_band` como **fracción** de primer nivel
+    (`stage_x11_calibrate._telluric_fracs_from_qc`) y la aplica dentro de la banda
+    como `|flujo| × frac` (`_telluric_sys`). Hasta hoy nadie la escribía, así que el
+    término telúrico del presupuesto de error de D2 era **exactamente cero** en los
+    dos objetos — un `open_issue` de prioridad `major` en F1.
+
+    El valor es `|profundidad − sesgo| / 100`. El signo se pierde a propósito: lo que
+    D2 necesita es la magnitud del sistemático, y una banda sobre-corregida
+    (profundidad negativa) contamina el flujo igual que una infra-corregida.
+
+    Donde no hay ventanas de control limpias —el caso real de H₂O 7200— **no se
+    inventa un sesgo**: se declara la profundidad sin descontar y `source` lo dice.
+    """
+
+    sesgos = estimator_bias_by_band(wave, spectrum, bands,
+                                    side_width_A=side_width_A, gap_A=gap_A)
+    fracs: dict[str, float] = {}
+    detalle: dict[str, dict] = {}
+    for name, depth in depth_pct_by_band.items():
+        depth = float(depth)
+        medida = sesgos.get(name)
+        if medida is None:
+            descontada, fuente = depth, "no_clean_control_windows"
+            sesgo = sigma = None
+        else:
+            sesgo, sigma = medida["bias_pct"], medida["sigma_pct"]
+            descontada, fuente = depth - sesgo, "control_windows"
+        fracs[name] = abs(descontada) / 100.0
+        detalle[name] = {
+            "depth_pct": depth,
+            "bias_pct": sesgo,
+            "sigma_pct": sigma,
+            "discounted_pct": descontada,
+            "source": fuente,
+            "n_control_windows": None if medida is None else medida["n"],
+        }
+    detalle["_nota"] = (
+        "frac = |profundidad - sesgo| / 100. El sesgo es lo que el MISMO estimador "
+        "marca en ventanas limpias de la misma geometria (estimator_bias_by_band); "
+        "donde no hay ventanas limpias se declara sin descontar y se dice."
+    )
+    return fracs, detalle
+
+
 def decide_telluric(
     depth_pct_by_band: Mapping[str, float],
     *,
@@ -394,7 +561,14 @@ def decide_telluric(
 ) -> TelluricDecision:
     depths = {str(key): float(value) for key, value in depth_pct_by_band.items()}
     finite_depths = [value for value in depths.values() if np.isfinite(value)]
-    max_depth = max(finite_depths) if finite_depths else float("nan")
+    # DOS COLAS (2026-08-24). Antes se comparaba `max(profundidades)` con el
+    # umbral, y eso no puede fallar por SOBRE-corrección: una banda a -2.5 % está
+    # tan mal como una a +2.5 %, pero solo la segunda disparaba. Medido: el
+    # `not_needed_shallow` de la noche del 29 de ROXs 12 b escondía un -9.43 % en
+    # O2 A, el residuo más grande de los dos objetos. Un signo negativo es una
+    # banda ya corregida —corregida de más—, no una banda limpia.
+    # Ver `docs/2026-08-23_a3_umbral_una_cola.md`.
+    max_depth = max((abs(value) for value in finite_depths), default=float("nan"))
     if not science_needs_red_continuum:
         decision = "not_needed_science"
         applied = False
@@ -1129,7 +1303,12 @@ def measure_phase(args: argparse.Namespace) -> int:
     # Las profundidades del cubo TAL CUAL mandan sobre qué se ajusta: una banda
     # por debajo del umbral no necesita correccion, y meterla en el ajuste le da a
     # molecfit señal fotosferica con la que ajustar una columna atmosferica.
-    profundidades = measure_telluric_depths(wave, spec_raw)
+    # `clip_negative=False`: el signo es informacion. Un negativo es una banda YA
+    # corregida —corregida de mas—, y aplastarlo contra 0 era lo que hacia que la
+    # puerta no pudiera fallar por sobre-correccion (docs/2026-08-23_a3_umbral_una_cola.md).
+    profundidades = measure_telluric_depths(wave, spec_raw, clip_negative=False)
+    sistematico_frac, sistematico_detalle = telluric_systematic_block(
+        wave, spec_raw, profundidades)
     umbral = float(entradas.config.get("a3_threshold_pct", 3.0))
     ventanas = mf.select_fit_windows(profundidades, threshold_pct=umbral)
     decision = decide_telluric(profundidades, science_needs_red_continuum=True,
@@ -1149,6 +1328,8 @@ def measure_phase(args: argparse.Namespace) -> int:
                                   aperture_radius_px=entradas.radius_px,
                                   environment=check_molecfit_environment(esorex=args.esorex))
         qc["spec_version"] = "A3_v3"
+        qc["telluric_systematic_frac_by_band"] = sistematico_frac
+        qc["telluric_systematic_detail"] = sistematico_detalle
         qc["decision"].update({
             "depth_pct_by_band": profundidades,
             "telluric_applied": False,
@@ -1323,6 +1504,8 @@ def measure_phase(args: argparse.Namespace) -> int:
                               aperture_radius_px=entradas.radius_px,
                               environment=check_molecfit_environment(esorex=args.esorex))
     qc["spec_version"] = "A3_v3"
+    qc["telluric_systematic_frac_by_band"] = sistematico_frac
+    qc["telluric_systematic_detail"] = sistematico_detalle
     qc["decision"].update({
         "depth_pct_by_band": profundidades,
         "telluric_applied": veredicto["winner"] != "sin_corregir",
