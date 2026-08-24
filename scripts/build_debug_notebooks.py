@@ -710,8 +710,15 @@ def build_a3_cells(mb, target, run_id):
             "    dec = qc.get('decision', {}); ent = qc.get('input', {}); pro = qc.get('products', {})\n"
             "    REDUCCIONES.append(dict(\n"
             "        etiqueta=etiqueta,\n"
-            "        canonica=(QC_CAN is not None and qc.get('input', {}).get('sha256') == QC_CAN.get('input', {}).get('sha256')\n"
-            "                  and dec.get('verdict') == QC_CAN.get('decision', {}).get('verdict')),\n"
+            # La canonica se reconoce por el CUBO que declara, no por su sha256:
+            # desde A3 v3 los QC traen `input.sha256` VACIO, asi que `'' == ''` daba
+            # cierto para cualquier pareja y la canonicidad se reducia a «mismo
+            # veredicto». Con eso, `OB3445598` y el combinado —los dos
+            # `not_needed_shallow`— salian canonicos a la vez, y §12 comparaba el
+            # espectro del combinado contra las profundidades del OB (0.48 % en O2 B
+            # contra 0.00 %): DIFIERE garantizado sin que nada estuviera mal.
+            "        canonica=(QC_CAN is not None and resolver(ent.get('cube')) is not None\n"
+            "                  and resolver(ent.get('cube')) == resolver(QC_CAN.get('input', {}).get('cube'))),\n"
             "        qc=qc,\n"
             "        pre=resolver(ent.get('cube')),\n"
             "        post=resolver(pro.get('cube_telcorr')),\n"
@@ -1390,9 +1397,22 @@ def build_a3_cells(mb, target, run_id):
             "        dec = decide_telluric(mias, science_needs_red_continuum=NEEDS_RED_CONT,\n"
             "                              threshold_pct=THRESHOLD_PCT)\n"
             "        suyo = r['qc'].get('decision', {})\n"
+            # `telluric_applied` y `checkpoint_required` dejaron de ser funcion de
+            # `decide_telluric` en A3 v3: si el arbitro concluye que NINGUNA via
+            # mejora el dato (`method: sin_corregir` con veredicto `needed`), el QC
+            # los escribe en False aunque la decision pedia corregir. Este notebook
+            # copia `decide_telluric`, no el arbitro, asi que ahi no puede reproducir
+            # el QC — y contarlo como DIFIERE ponia en rojo a ROXs 42B b, que es
+            # justo el objeto donde el arbitro manda. El veredicto SI se compara.
+            "        arbitro_mando = (suyo.get('method') == 'sin_corregir'\n"
+            "                         and suyo.get('verdict') == 'needed')\n"
             "        for campo, mio, ref in (('veredicto', dec.decision, suyo.get('verdict')),\n"
             "                                ('aplicado', dec.telluric_applied, suyo.get('telluric_applied')),\n"
             "                                ('checkpoint', dec.checkpoint_required, suyo.get('checkpoint_required'))):\n"
+            "            if arbitro_mando and campo in ('aplicado', 'checkpoint'):\n"
+            "                print(f\"    {campo:26s} {str(mio):>12s}  QC {str(ref):>12s}\"\n"
+            "                      '   (lo fijó el árbitro, no `decide_telluric`)')\n"
+            "                continue\n"
             "            igual = (ref is None) or (mio == ref)\n"
             "            print(f\"    {campo:26s} {str(mio):>12s}  QC {str(ref):>12s}\"\n"
             "                  f\"{'' if igual else '   <-- DIFIERE'}\")\n"
@@ -1400,6 +1420,15 @@ def build_a3_cells(mb, target, run_id):
             "        continue\n"
             "    par = PARES.get(r['etiqueta'])\n"
             "    if par is None:\n"
+            "        # Una reducción que NO aplicó corrección no tiene par antes/después\n"
+            "        # **por diseño**, y eso no es un desacuerdo: desde A3 v3 la etapa\n"
+            "        # `measure` mide y no escribe cubo (aplicar va detrás de un\n"
+            "        # checkpoint humano), así que sus QC traen `cube_telcorr` y\n"
+            "        # `transmission` vacíos. Contarlo como DIFIERE ponía en rojo este\n"
+            "        # notebook en los dos objetos sin que difiriera ningún número.\n"
+            "        # Si SÍ se aplicó y aun así falta el par, el hueco es real.\n"
+            "        if not r['aplicado_de_verdad']:\n"
+            "            print('    no aplicó corrección: no hay par que comparar'); continue\n"
             "        print('    sin par antes/después en disco: no se compara'); ok = False; continue\n"
             "    w, antes, despues = par\n"
             "    mias = measure_telluric_depths(w, antes, bands=BANDS_A)\n"

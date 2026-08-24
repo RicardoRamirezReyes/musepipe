@@ -14,7 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, MutableMapping, Sequence
 
 import numpy as np
 from astropy.io import fits
@@ -1007,6 +1007,47 @@ def m1m2_sky_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Orden de severidad de los estados de M1-M5. `unavailable` no es un fallo,
+#: pero impide declarar el cubo en verde: no se puede certificar lo que no se
+#: ha medido.
+_M_SEVERITY = ("green", "yellow", "red")
+_M_KEYS = ("m1_wavelength", "m2_lsf", "m3_flux", "m4_sky", "m5_stat")
+
+
+def aggregate_status(qc: MutableMapping[str, object]) -> dict:
+    """Estado global del cubo a partir de M1-M5, con quien lo decide.
+
+    Hasta ahora nadie lo calculaba: el `status: "red"` del QC de ROXs 12 b se
+    escribio a mano, y el de ROXs 42B b sencillamente no existia, asi que la
+    rojez de M5 solo se veia leyendo las cinco metricas una por una.
+
+    Rojo si alguna esta roja; amarillo si alguna esta amarilla; verde solo si
+    las cinco estan medidas y verdes. `unavailable` se cuenta aparte y degrada a
+    `incomplete`, que no es lo mismo que un fallo.
+    """
+
+    states = {}
+    for key in _M_KEYS:
+        block = qc.get(key) or {}
+        states[key] = str(block.get("status") or "unavailable") if isinstance(block, Mapping) else "unavailable"
+    missing = sorted(k for k, v in states.items() if v not in _M_SEVERITY)
+    worst = "green"
+    driver = None
+    for key, state in states.items():
+        if state in _M_SEVERITY and _M_SEVERITY.index(state) > _M_SEVERITY.index(worst):
+            worst, driver = state, key
+    if worst == "green" and missing:
+        worst = "incomplete"
+    return {"status": worst, "driven_by": driver, "by_metric": states, "unavailable": missing}
+
+
+def _patch_status(qc: MutableMapping[str, object]) -> str:
+    summary = aggregate_status(qc)
+    qc["status"] = summary["status"]
+    qc["status_detail"] = summary
+    return summary["status"]
+
+
 def m4m5_phase(args: argparse.Namespace) -> int:
     cube_path = Path(args.cube).expanduser()
     mask_path = Path(args.source_mask).expanduser()
@@ -1069,6 +1110,7 @@ def m4m5_phase(args: argparse.Namespace) -> int:
     qc = json.loads(qc_path.read_text(encoding="utf-8")) if qc_path.exists() else {}
     qc["m4_sky"] = m4
     qc["m5_stat"] = m5
+    _patch_status(qc)
     qc_path.parent.mkdir(parents=True, exist_ok=True)
     qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
     print(
