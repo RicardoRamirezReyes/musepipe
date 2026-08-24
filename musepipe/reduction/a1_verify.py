@@ -246,7 +246,12 @@ def _v4(cube: Path, adps: dict[str, Path]) -> dict:
     best = None
     for night, adp in sorted(adps.items()):
         res = verify.verify_whitelight_vs_adp_psf_matched(cube, adp, half_window=V4_HALF_WINDOW_PX)
-        by_night[night] = {"corr": res.value, "ok": bool(res.passed), "message": res.message}
+        # `passes_threshold`, NO `ok`: esto es una MEDIDA por noche, y el veredicto
+        # es el de arriba ("pasa con la mejor"). F1 recorre los estados anidados y
+        # trata cualquier `ok: false` como rojo bloqueante, asi que publicar aqui
+        # un `ok` convertia una cifra informativa en una compuerta.
+        by_night[night] = {"corr": res.value, "passes_threshold": bool(res.passed),
+                           "message": res.message}
         if best is None or (res.value or 0) > (best[1].value or 0):
             best = (night, res)
     night, res = best
@@ -273,8 +278,8 @@ def _v5(cube: Path, adps: dict[str, Path], primary_yx) -> dict:
             cube, adp, star_yx=primary_yx, adp_star_yx=(float(ay), float(ax)),
             radius=V5_APERTURE_RADIUS_PX,
         )
-        by_night[night] = {"ratio_rms": res.value, "ok": bool(res.passed), "message": res.message,
-                           "adp_star_yx": [float(ay), float(ax)]}
+        by_night[night] = {"ratio_rms": res.value, "passes_threshold": bool(res.passed),
+                           "message": res.message, "adp_star_yx": [float(ay), float(ax)]}
         if best is None or (res.passed and not best[1].passed):
             best = (night, res)
     night, res = best
