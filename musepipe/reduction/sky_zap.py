@@ -55,6 +55,35 @@ class InputCubeInfo:
     a1_not_applicable: bool
     has_data: bool
     has_stat: bool
+    #: Verificaciones de A1 cuyo veredicto se dedujo de un escalar (§`verification_verdict`).
+    a1_scalar_verdicts: tuple[str, ...] = ()
+
+
+def verification_verdict(entry):
+    """Veredicto de una verificación de A1, en cualquiera de sus dos formas.
+
+    El QC de A1 publica cada V de dos maneras: como **dict** `{ok, value,
+    message}` —la que escribe `a1_verify`, con `ok` booleano explícito— o como
+    **escalar** heredado, que es lo que hay en las reducciones antiguas.
+
+    La puerta hacía `bool(verification.get(key))` sobre las dos, y eso no
+    verifica nada en cuanto el valor es un número: `bool(0.00122)` es `True`, y
+    un residuo de 0.00122 no significa que la prueba pasara. Con la forma dict
+    pasa lo mismo por otra vía: cualquier dict no vacío es verdadero.
+
+    Aquí el dict manda (`ok`), el booleano se respeta, y `None` es «sin medir»
+    —que **no** satisface una verificación exigida—. El escalar se sigue
+    aceptando para no romper las reducciones ya validadas, pero quien lo use
+    queda anotado en `a1_scalar_verdicts` y viaja al QC de A2.
+    """
+
+    if isinstance(entry, dict):
+        return bool(entry.get("ok")) if entry.get("ok") is not None else False
+    if isinstance(entry, bool):
+        return entry
+    if entry is None:
+        return False
+    return bool(entry)
 
 
 @dataclass(frozen=True)
@@ -146,6 +175,7 @@ def resolve_input_cube(
 
     a1_gates_ok = False
     a1_not_applicable = provenance == "adp"
+    scalar_verdicts: list[str] = []
     if provenance == "raw_reduction":
         if a1_qc_path is None:
             raise SkyZapError("A1 QC path is required for provenance='raw_reduction'.")
@@ -162,12 +192,17 @@ def resolve_input_cube(
             "v5_adp_star_spec_ratio_rms",
             "v6_sky_mask_clean",
         )
-        a1_gates_ok = required_gates.issubset(gates) and all(
-            bool(verification.get(key)) for key in required_verifications
+        verdicts = {key: verification_verdict(verification.get(key)) for key in required_verifications}
+        scalar_verdicts = sorted(
+            key for key in required_verifications
+            if not isinstance(verification.get(key), (bool, dict, type(None)))
         )
+        a1_gates_ok = required_gates.issubset(gates) and all(verdicts.values())
         if not a1_gates_ok or open_issues:
+            failed = sorted(k for k, v in verdicts.items() if not v)
+            detail = f" (V sin veredicto favorable: {', '.join(failed)})" if failed else ""
             raise SkyZapError(
-                "A1 QC is not green for sky-sensitive gates; fix/report A1 before A2."
+                "A1 QC is not green for sky-sensitive gates; fix/report A1 before A2." + detail
             )
 
     return InputCubeInfo(
@@ -178,6 +213,7 @@ def resolve_input_cube(
         a1_not_applicable=a1_not_applicable,
         has_data=has_data,
         has_stat=has_stat,
+        a1_scalar_verdicts=tuple(scalar_verdicts),
     )
 
 
@@ -570,6 +606,7 @@ def stage00s_qc_skeleton(
             "provenance": input_info.provenance,
             "a1_gates_ok": input_info.a1_gates_ok,
             "a1_not_applicable": input_info.a1_not_applicable,
+            "a1_scalar_verdicts": list(input_info.a1_scalar_verdicts),
         },
         "decision": {
             "R_skyline_over_continuum": None,

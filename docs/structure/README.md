@@ -64,7 +64,7 @@ Esta guía se divide en tres documentos temáticos secuenciales y un archivo PDF
 
 7. **Documentos en Formato PDF (Compilados con LaTeX)**:
    - **Guía Completa de Arquitectura y Operación**: [`guia_arquitectura_y_operacion.pdf`](guia_arquitectura_y_operacion.pdf) (16 páginas).
-   - **Reporte Técnico de Resultados en Bloque A**: [`reporte_resultados_bloque_a.pdf`](reporte_resultados_bloque_a.pdf) (10 páginas).
+   - **Reporte Técnico de Resultados en Bloque A**: [`reporte_resultados_bloque_a.pdf`](reporte_resultados_bloque_a.pdf) (11 páginas).
    - **Reporte Técnico de Resultados en Bloque B**: [`reporte_resultados_bloque_b.pdf`](reporte_resultados_bloque_b.pdf) (5 páginas).
    - **Reporte Técnico de Resultados en Bloque C**: [`reporte_resultados_bloque_c.pdf`](reporte_resultados_bloque_c.pdf) (12 páginas).
 

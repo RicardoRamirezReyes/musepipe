@@ -191,14 +191,20 @@ MIN_FINITE_FRACTION = 0.5
 
 
 def _check_a1_upstream(qc: Mapping[str, object], cube: Path, qc_path) -> tuple[str, ...]:
-    """Puerta de A1, que tiene DOS esquemas segun `chain.reduction_profile`.
+    """Puerta de A1, que acepta DOS documentos distintos.
 
-    En perfil `monolithic` A1 emite `stage00r_qc.json` con sus fases, y la puerta
-    es que esten las cuatro. En `cascade` no hay fases: A1 es la reduccion por
-    exposicion mas un combine por voxel, y su QC (`cube_telcorr_qc.json`, esquema
-    `stream_combine_v1`) no tiene `gates_passed` **porque no tiene fases**.
-    Exigirselas rechazaba todo objeto reducido en cascada — es lo que impedia
-    lanzar A3 sobre ROXs 42B b.
+    A1 deja dos QC y no son intercambiables. El **envoltorio**
+    (`stage00r_qc.json`, `stage: 00r_raw_reduction`) declara la reduccion entera
+    con sus fases y su bateria V1-V6; el del **combine** (`cube_telcorr_qc.json`,
+    esquema `stream_combine_v1`) documenta un solo paso y no tiene `gates_passed`.
+    Cuando lo que llega es el segundo, exigirle fases lo rechaza siempre — es lo
+    que impedia lanzar A3 sobre ROXs 42B b.
+
+    CORREGIDO 2026-08-23: esto NO es una propiedad del perfil `cascade`. Los dos
+    objetos de la cosecha son `cascade` y el envoltorio de ROXs 12 b
+    (`ROXs12b_multinight_raw_20260728`) trae `gates_passed = [fase0..fase3,
+    V1..V6]` con `stream_combine` entre sus recetas. Lo que faltaba en ROXs 42B b
+    era el envoltorio, no las fases; lo reconstruye `musepipe.reduction.a1_verify`.
 
     Para ese esquema la puerta fuerte es de **identidad**: que el QC describa
     exactamente el cubo que se va a medir. Es mejor garantia que una lista de
