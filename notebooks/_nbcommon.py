@@ -655,7 +655,35 @@ def _launch_context(run_id: str) -> dict:
         # captura a propósito: es «no hay run activo», y eso sí hay que verlo.)
         ctx["primary_y"] = ctx["primary_x"] = None
     ctx["upstream"], ctx["upstream_qc"] = _upstream_evidence(run_id)
+    # Los SKY_SPECTRUM por exposición que consume A4/M1-M2. Viven FUERA del run
+    # (en el árbol de trabajo de la reducción) y no hay forma de derivarlos de
+    # él, así que el run los declara. Deliberadamente NO se reutiliza
+    # `perexp_dir`: en ROXs 12 b apunta a un árbol de 7 exposiciones mientras que
+    # su A4 declara haber medido M1 con 29, así que tomarla habría reproducido
+    # una medida distinta de la que está en el QC.
+    ctx["sky_spectra"] = _sky_spectra(cfg)
     return ctx
+
+
+def _sky_spectra(cfg: dict) -> str | None:
+    """La lista de SKY_SPECTRUM declarada por el run, ya expandida.
+
+    Acepta una lista de rutas o un patrón glob. Devuelve ``None`` —y por tanto
+    el marcador queda en `missing`— si la clave no está o si no casa ningún
+    fichero: un comando con una lista vacía mediría sobre nada y lo diría en
+    forma de traza, no de aviso.
+    """
+    import glob as _glob
+
+    declared = cfg.get("a4_sky_spectra")
+    if not declared:
+        return None
+    paths = [declared] if isinstance(declared, str) else list(declared)
+    resolved: list[str] = []
+    for entry in paths:
+        hits = sorted(_glob.glob(str(entry)))
+        resolved.extend(hits if hits else ([str(entry)] if "*" not in str(entry) else []))
+    return " ".join(resolved) if resolved else None
 
 
 def _upstream_evidence(run_id: str) -> tuple[str | None, str | None]:
@@ -692,10 +720,16 @@ def _upstream_evidence(run_id: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def launch_command(stage_id: str, run_id: str | None = None) -> tuple[str, str, list[str]]:
-    """Comando real de una etapa `launch` para ESTE objeto.
+def launch_command(stage_id: str, run_id: str | None = None) -> tuple[list[str], str, list[str]]:
+    """Comandos reales de una etapa `launch` para ESTE objeto.
 
-    -> (comando, run que lo ejecuta, marcadores sin resolver)
+    -> (lista de comandos EN ORDEN, run que los ejecuta, marcadores sin resolver)
+
+    Es una lista porque una etapa puede necesitar varios: A4 son cuatro
+    subcomandos y publicar solo uno es lo que dejo a un objeto un mes sin M4 ni
+    M5. Se ejecutan en orden y se abortan al primer fallo; `missing` es la union
+    de lo que le falta a cualquiera de ellos, porque una secuencia a medias deja
+    el QC en un estado peor que no haberla lanzado.
 
     El run puede no ser el activo: A1 suele correr en el run de reducción
     (`chain.stage_runs['A1']`). El perfil (`chain.reduction_profile`) elige entre
@@ -716,18 +750,24 @@ def launch_command(stage_id: str, run_id: str | None = None) -> tuple[str, str, 
     chain = chain_of(active)
     target_run = (chain.get("stage_runs") or {}).get(stage_id, active)
     profile = chain.get("reduction_profile", "*")
-    template = stage.launch.get(profile) or stage.launch.get("*")
-    if template is None:
-        return "", target_run, [
+    commands = stage.launch.get(profile) or stage.launch.get("*")
+    if commands is None:
+        return [], target_run, [
             f"perfil {profile!r} sin plantilla para {stage_id} "
             f"(disponibles: {', '.join(sorted(stage.launch))})"
         ]
 
     ctx = _launch_context(target_run)
-    needed = [f for _, f, _, _ in string.Formatter().parse(template) if f]
-    missing = [f for f in needed if ctx.get(f) in (None, "")]
     safe = {k: ("{" + k + "}" if v in (None, "") else v) for k, v in ctx.items()}
-    return template.format(**{k: safe.get(k, "{" + k + "}") for k in needed}), target_run, missing
+    resolved: list[str] = []
+    missing: list[str] = []
+    for template in commands:
+        needed = [f for _, f, _, _ in string.Formatter().parse(template) if f]
+        for f in needed:
+            if ctx.get(f) in (None, "") and f not in missing:
+                missing.append(f)
+        resolved.append(template.format(**{k: safe.get(k, "{" + k + "}") for k in needed}))
+    return resolved, target_run, missing
 
 
 class evidence_guard:

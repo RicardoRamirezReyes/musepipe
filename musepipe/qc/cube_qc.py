@@ -1211,6 +1211,14 @@ def m1m2_sky_phase(args: argparse.Namespace) -> int:
     stamp = utc_now_iso()
     m1["measured_utc"] = stamp
     m2["measured_utc"] = stamp
+    # QUE ficheros se midieron, no solo cuantos. Sin esto, `m1["source"]` era una
+    # frase y reproducir la medida exigia adivinar el arbol: hay dos con 29
+    # ficheros para un objeto, y otro con 31 para el que A4 uso 30. Con la lista
+    # escrita, la plantilla de `stage_registry` se puede verificar contra el QC.
+    resolved = [str(Path(p).expanduser()) for p in args.sky_spectrum]
+    m1["sky_spectrum_files"] = resolved
+    m2["sky_spectrum_files"] = resolved
+    m1["n_sky_spectrum_files"] = len(resolved)
 
     qc_path = Path(args.qc_output)
     payload = {"m1_wavelength": m1, "m2_lsf": m2}
@@ -1687,7 +1695,14 @@ def finalize_phase(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """El parser de A4, construido aparte para poder INSPECCIONARLO.
+
+    `tests/test_stage_registry.py` saca de aqui los subcomandos y exige que
+    `stage_registry` los publique todos: es lo que impide que vuelva a haber un
+    subcomando que escribe en el QC y que lanzar la etapa no ejecuta.
+    """
+
     parser = argparse.ArgumentParser(description="A4 cube QC helpers.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1753,7 +1768,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     m4m5_parser.add_argument("--radial-bin-px", type=float, default=2.0)
     m4m5_parser.set_defaults(func=m4m5_phase)
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     return int(args.func(args))
 
 
@@ -1777,6 +1796,7 @@ __all__ = [
     "derive_open_issues",
     "detect_primary_yx",
     "empty_aperture_centers",
+    "build_parser",
     "finalize_qc",
     "resolve_qc_wavelength_frame",
     "patch_status",

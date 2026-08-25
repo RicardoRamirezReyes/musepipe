@@ -40,10 +40,18 @@ class Stage:
     exec_kind: str = "audit"
     #: variante de esquema del QC, por perfil de reducción (solo cuando difiere)
     qc_schema_variant: dict[str, str] = field(default_factory=dict)
-    #: plantillas de comando por perfil de reducción, para `exec_kind="launch"`.
+    #: SECUENCIA de comandos por perfil de reducción, para `exec_kind="launch"`.
     #: Los `{marcadores}` se resuelven contra el config del run que ejecuta la
     #: etapa (ver `notebooks/_nbcommon.launch_command`). Clave "*" = cualquiera.
-    launch: dict[str, str] = field(default_factory=dict)
+    #:
+    #: Es una tupla y no una cadena porque una etapa puede necesitar VARIOS
+    #: comandos: A4 son cinco subcomandos y aquí se publicaba uno, así que
+    #: lanzarla desde su notebook no medía M4 ni M5 — y ROXs 42B b estuvo un mes
+    #: sin ellas, con `stat_factor_box3` cayendo al 1.0 por defecto y el error
+    #: declarado a la mitad del real. Los comandos se ejecutan EN ORDEN y se
+    #: abortan al primer fallo. Una etapa de un solo comando lleva una tupla de
+    #: un elemento: una sola forma, sin ramas en los consumidores.
+    launch: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def qc_paths(self) -> tuple[str, ...]:
@@ -69,9 +77,9 @@ STAGES: tuple[Stage, ...] = (
           exec_kind="launch",
           launch={
               "monolithic": ("bash scripts/reduce_raw.sh phase0 --run-id {run_id} "
-                             "--raw-data-dir {raw_data_dir}"),
+                             "--raw-data-dir {raw_data_dir}",),
               "cascade": ("python scripts/reduce_cascade.py --run-id {run_id} "
-                          "--raw-data-dir {raw_data_dir} --work-dir {work_dir} --execute"),
+                          "--raw-data-dir {raw_data_dir} --work-dir {work_dir} --execute",),
           }),
     # A2/A3 no tienen un QC "canónico" declarado en el builder (sus notebooks
     # auditan el QC de A4 y el del run de reducción), pero sus ficheros existen y
@@ -82,7 +90,7 @@ STAGES: tuple[Stage, ...] = (
           launch={"*": ("bash scripts/sky_zap.sh decision --run-id {run_id} "
                         "--input-cube {cube} --provenance {provenance} "
                         "--output-dir {stage_dir} "
-                        "--qc-output {stage_dir}/stage00s_qc.json")}),
+                        "--qc-output {stage_dir}/stage00s_qc.json",)}),
     # `--science-needs-red-continuum` no es opcional aunque lo parezca: es un
     # `store_true`, y sin él `decide_telluric` cortocircuita a
     # `not_needed_science`. Los tres QC de A3 en disco registran `true`, así que
@@ -110,12 +118,46 @@ STAGES: tuple[Stage, ...] = (
           exec_kind="launch",
           launch={"*": ("bash scripts/telluric.sh measure --run-id {run_id} "
                         "--upstream {upstream} --qc {upstream_qc} "
-                        "--qc-output {stage_dir}/stage00t_qc.json")}),
+                        "--qc-output {stage_dir}/stage00t_qc.json",)}),
+    # A4 son CINCO subcomandos y aqui se publicaba uno (`m3-flux`), asi que
+    # lanzar la etapa desde su notebook no media M4 ni M5. No es cosmetico:
+    # C2 lee `m5_stat.status`, y con `unavailable` se queda con la STAT nativa y
+    # `stat_factor_box3` cae al 1.0 por defecto — el error a la mitad del real.
+    # ROXs 42B b vivio asi un mes (docs/2026-08-24_a4_arrugas_contabilidad_y_suelo.md).
+    #
+    # El orden importa: M1/M2 y M3 parchean el documento, `m4m5` anade M4/M5 y
+    # `finalize` recalcula lo derivado (estado, issues, decision) a partir de las
+    # cinco. Poner `finalize` en medio dejaria un rollup de metricas incompletas.
+    #
+    # `check-cube` NO esta aqui a proposito: reescribe el documento ENTERO y es
+    # el paso de arranque, no el de re-medida. Desde 2026-08-24 se niega a borrar
+    # metricas ya medidas sin `--force`, asi que incluirlo haria abortar cualquier
+    # re-ejecucion en el primer paso. Se lanza a mano la primera vez.
     Stage("A4", "A4_cube_qc", "A", "stages/stage00q_qc.json", exec_kind="launch",
-          launch={"*": ("python -m musepipe.qc.cube_qc m3-flux --run-id {run_id} "
-                        "--cube {cube} --aperture-correction growth_curve "
-                        "--truncation-correction "
-                        "--qc-output {stage_dir}/stage00q_qc.json")}),
+          launch={"*": (
+              # M1 (solucion en lambda) y M2 (LSF) desde el airglow por exposicion.
+              # `{sky_spectra}` sale de la clave `a4_sky_spectra` del run: esos
+              # ficheros viven FUERA del run y no hay forma de derivarlos de el.
+              # Si el run no la declara, `launch_command` lo devuelve en `missing`
+              # y el notebook se niega a lanzar diciendo que falta.
+              "python -m musepipe.qc.cube_qc m1m2-sky "
+              "--sky-spectrum {sky_spectra} "
+              "--qc-output {stage_dir}/stage00q_qc.json",
+              # M3 (flujo absoluto vs Gaia RP).
+              "python -m musepipe.qc.cube_qc m3-flux --run-id {run_id} "
+              "--cube {cube} --aperture-correction growth_curve "
+              "--truncation-correction "
+              "--qc-output {stage_dir}/stage00q_qc.json",
+              # M4 (estadistica de cielo + diagnostico radial) y M5 (factores STAT).
+              # La mascara de fuentes la escribe A2 en el mismo `stage_dir`.
+              "python -m musepipe.qc.cube_qc m4m5 "
+              "--cube {cube} --source-mask {stage_dir}/zap_source_mask.fits "
+              "--products-dir {stage_dir} "
+              "--qc-output {stage_dir}/stage00q_qc.json",
+              # Lo derivado, a partir de las cinco metricas ya escritas.
+              "python -m musepipe.qc.cube_qc finalize --run-id {run_id} "
+              "--qc-output {stage_dir}/stage00q_qc.json",
+          )}),
     # ===================== BLOQUE B — alineado =====================
     Stage("B1", "B1_load_align_crop", "B", "stages/stage01_qc.json", exec_kind="module_run"),
     # B2 escribe su QC con DOS nombres segun cuando se corriera: `stage02_qc.json`

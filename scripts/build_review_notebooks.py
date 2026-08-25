@@ -707,10 +707,25 @@ def build_cells(s: dict) -> list[dict]:
     if s["exec"]["kind"] == "launch":
         cells.append(md("## Ejecutar o auditar"))
         cells.append(code(
-            f"cmd, target_run, missing = nb.launch_command({s['id']!r}, RUN_ID)\n"
+            f"cmds, target_run, missing = nb.launch_command({s['id']!r}, RUN_ID)\n"
             "print('run que ejecuta esta etapa:', target_run)\n"
-            "print('comando resuelto para este objeto:')\n"
-            "print('   ', cmd or '(sin plantilla)')\n"
+            "# Una etapa puede necesitar VARIOS comandos: A4 son cuatro (M1/M2, M3,\n"
+            "# M4/M5 y el recalculo de lo derivado). Se lanzan EN ORDEN y se abortan\n"
+            "# al primer fallo; publicar solo uno es lo que dejo a un objeto un mes\n"
+            "# sin M4 ni M5.\n"
+            "print(f'comandos resueltos para este objeto ({len(cmds)}):')\n"
+            "for i, c in enumerate(cmds, 1):\n"
+            "    # Un comando puede llevar decenas de rutas absolutas (A4/M1-M2 pasa\n"
+            "    # un SKY_SPECTRUM por exposición): en una sola línea es ilegible, así\n"
+            "    # que se abrevia para mirarlo y el completo queda en `cmds[i-1]`.\n"
+            "    if len(c) > 400:\n"
+            "        print(f'   {i}. {c[:200]} … [{len(c)} caracteres] … {c[-120:]}')\n"
+            "    else:\n"
+            "        print(f'   {i}. {c}')\n"
+            "if any(len(c) > 400 for c in cmds):\n"
+            "    print('   (comando(s) abreviado(s) arriba; el texto completo está en cmds[i])')\n"
+            "if not cmds:\n"
+            "    print('   (sin plantilla)')\n"
             "if missing:\n"
             "    print()\n"
             "    print('NO se puede lanzar: faltan datos en el config del run.')\n"
@@ -719,19 +734,23 @@ def build_cells(s: dict) -> list[dict]:
             "\n"
             "RUN = False   # -> True para LANZAR (trabajo largo: revisa el coste arriba)\n"
             "\n"
-            "if RUN and not missing:\n"
+            "if RUN and cmds and not missing:\n"
             "    import subprocess, time\n"
             "    from pathlib import Path\n"
             f"    log = Path(nb.run_dir(target_run)) / 'logs' / f'{s['id'].lower()}_launch.log'\n"
             "    log.parent.mkdir(parents=True, exist_ok=True)\n"
-            "    with open(log, 'w') as fh:\n"
-            "        proc = subprocess.Popen(cmd, shell=True, cwd=str(nb.project_root()),\n"
+            "    # `&&` da la secuencia y el aborto al primer fallo sin cambiar lo que\n"
+            "    # esta celda ya hacia: un lanzamiento de fondo, un pid, un log. El log\n"
+            "    # se abre en modo append porque ahora escriben varios pasos.\n"
+            "    with open(log, 'a') as fh:\n"
+            "        proc = subprocess.Popen(' && '.join(cmds), shell=True,\n"
+            "                                cwd=str(nb.project_root()),\n"
             "                                stdout=fh, stderr=subprocess.STDOUT)\n"
-            "    print(f'lanzado en segundo plano (pid {proc.pid}); log -> {log}')\n"
+            "    print(f'lanzados {len(cmds)} comandos en segundo plano (pid {proc.pid}); log -> {log}')\n"
             "    print('sigue el progreso con:  !tail -f', log)\n"
             "elif RUN:\n"
             "    print"
-            "('RUN=True pero hay datos sin resolver: no se lanza nada.')\n"
+            "('RUN=True pero no hay comandos o hay datos sin resolver: no se lanza nada.')\n"
             "else:\n"
             "    print()\n"
             "    print('Modo auditoría (RUN=False): abajo se carga el QC existente.')"
@@ -2231,12 +2250,12 @@ STAGES: list[dict] = [
         what="Métricas de calidad del cubo: solución en λ (M1/M2), flujo absoluto (M3), STAT (M5).",
         inputs="`cube_telcorr.fits`, SKY_SPECTRUM, Gaia DR3", outputs="`stages/stage00q_qc.json`",
         downstream="D2/E1 (usan σ empírico), E3 (flujo)",
-        exec=dict(kind="launch",
-                  hist_cmd=("# M1/M2 (LSF) desde el airglow cacheado:\n"
-                            "python -m musepipe.qc.cube_qc m1m2-sky --sky-spectrum <SKY_SPECTRUM...> --qc-output <...>\n"
-                            "# M3 (flujo absoluto vs Gaia RP, con growth-curve + truncación):\n"
-                            "python -m musepipe.qc.cube_qc m3-flux --cube <cube_telcorr.fits> --run-id $RUN \\\n"
-                            "    --aperture-correction growth_curve --truncation-correction --qc-output <...>")),
+        # Sin `hist_cmd`: la secuencia real (m1m2-sky -> m3-flux -> m4m5 ->
+        # finalize) la publica `stage_registry` y la resuelve la celda de
+        # lanzamiento. El `hist_cmd` que habia aqui mostraba dos de los cuatro
+        # comandos con marcadores `<...>` no ejecutables, asi que era una tercera
+        # version de la verdad que discrepaba de las otras dos.
+        exec=dict(kind="launch"),
         qc="stages/stage00q_qc.json",
         salient=["m1_wavelength.status", "m2_lsf.status", "m3_flux.status", "m4_sky.status", "m5_stat.status"],
         narrative_md=(

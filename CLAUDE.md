@@ -16,7 +16,7 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (1259 tests + 1118 subtests, ~50 min)
+python -m pytest tests/ -q                       # full suite (1261 tests + 1118 subtests, ~50 min)
 python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3.5 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
@@ -56,15 +56,18 @@ the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) an
 `runs/<RUN>/stages/`:
 
 - **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5).
-  A4 is four subcommands, not one: `check-cube` (which rewrites the WHOLE document and now
+  A4 is five subcommands, not one: `check-cube` (which rewrites the WHOLE document and now
   refuses to discard measured metrics without `--force`), `m3-flux`, `m1m2-sky` and `m4m5`,
   plus `finalize` — a pure JSON→JSON pass that recomputes everything **derived**
   (`status`/`status_detail`, `open_issues` with a declared `priority`,
   `downstream_decision`, per-metric `measured_utc`). Those five fields used to be
   hand-written or vintage-dependent, which is why the six `stage00q_qc.json` on disk had
-  four different shapes. `stage_registry` publishes a launch template for `m3-flux` **only**,
-  so re-running A4 from a notebook does not measure M4/M5 — that is how one object went a
-  month without them
+  four different shapes. `stage_registry` publishes the **whole sequence**
+  (`m1m2-sky` → `m3-flux` → `m4m5` → `finalize`, in that order); it used to publish `m3-flux`
+  alone, which is how one object went a month without M4/M5. `check-cube` stays out on
+  purpose — it rewrites the whole document, so in the sequence it would abort every re-run.
+  A test in `tests/test_stage_registry.py` introspects A4's argparse and fails if a
+  subcommand is not published
 - **B1–B3** load/align/crop → xcorr stripes → companion localization
 - **C1, 04b, C2–C6** chromatic PSF → local-surface background → **five stages but six
   extraction methods**: C3 emits two variants as separate products, so `METHOD_ORDER` is
@@ -90,8 +93,9 @@ V1–V6 battery, and `cube_telcorr_qc.json`, the voxel-combine QC, which documen
 The wrapper is what the A2 gate reads; `musepipe/reduction/a1_verify.py` rebuilds it from
 disk. This is **not** a `monolithic`/`cascade` split: both objects of this harvest are
 `cascade` and ROXs 12 b's wrapper carries `fase0…fase3` + `V1…V6`), its `exec_kind`, and the
-launch command template. It is **stdlib-only** because notebooks import it without the
-scientific stack. `scripts/build_review_notebooks.py`, `notebooks/_nbcommon.py` and
+launch command **sequence** (a stage can need several commands — `Stage.launch` maps a
+reduction profile to a tuple of them, run in order and aborted on the first failure). It is
+**stdlib-only** because notebooks import it without the scientific stack. `scripts/build_review_notebooks.py`, `notebooks/_nbcommon.py` and
 `musepipe/report.py` (F1) all resolve against it — adding or renaming a stage means editing
 this registry, not scattering strings. F1 did keep its own copy of the filenames until
 2026-08-24, and that cost it two false blocking `required QC missing` on ROXs 42B b.
@@ -124,8 +128,9 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    stage fills in defaults the run does not spell out, and hardcoding them is precisely what
    made the first C3 notebook fail to reproduce the chain. Living in `debug/` is deliberate:
    `--check` and `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb`
-   non-recursively (note `--check` is **not** read-only: it regenerates all 33 review
-   notebooks). Covered: **C1**, **A3**, **C2**, **C3** (its two variants), **C4** (the
+   non-recursively (note `--check` is **not** read-only: it regenerates the review notebooks
+   — but of **one** target only, so after a change to the launch cell the other object keeps
+   the stale one until you re-run with an explicit `--target`). Covered: **C1**, **A3**, **C2**, **C3** (its two variants), **C4** (the
    canonical psffit, with a channel-subsampling knob because the per-channel fit costs ~11 min
    for all 3681), **C5** and **C6** (which share one builder: same skeleton, different
    subtraction), and **D2** — the only one about the **primary star** rather than the companion:
