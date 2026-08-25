@@ -16,8 +16,8 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (723 tests, ~4.5 min)
-python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~90 s)
+python -m pytest tests/ -q                       # full suite (1215 tests + 1099 subtests, ~45 min)
+python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
@@ -32,8 +32,8 @@ of files are pytest-only). If a dependency is missing, report it — do not inst
 
 Products live in `runs/<RUN_ID>/{config,stages,tables,plots,logs,report}` and are
 gitignored. A run is resolved as: explicit `run_id`/`--run-id` → `MUSE_RUN_ID` env var →
-first non-comment line of `active_run.txt` (a local smoke-test default, usually
-`ROXs12b_short` — never rely on it).
+first non-comment line of `active_run.txt` (a local default, currently
+`ROXs12b_realigned` — never rely on it).
 
 ```bash
 MUSE_RUN_ID=ROXs12b python -c "from musepipe.config import load_run_config; print(load_run_config().run_id)"
@@ -52,7 +52,7 @@ historical run only.
 ### Canonical chain A→G
 
 Stages are lettered blocks, each with a frozen spec in `docs/spec_<ID>_codex_*.md` (read
-the highest version, e.g. `spec_D1_v3_*`) and a JSON QC product under
+the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) and a JSON QC product under
 `runs/<RUN>/stages/`:
 
 - **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5)
@@ -74,12 +74,18 @@ the highest version, e.g. `spec_D1_v3_*`) and a JSON QC product under
 - **S0/S1** wavelength-solution and Hα maps (side diagnostics)
 
 `musepipe/stage_registry.py` is the machine-readable source of truth for this chain: for
-each stage, its QC path (plus `qc_aliases` for QC names that differ by reduction profile,
-e.g. A1 emits `stages/stage00r_qc.json` in the `monolithic` profile and
-`cube_telcorr_qc.json` in `cascade`), its `exec_kind`, and the launch command template. It
-is **stdlib-only** because notebooks import it without the scientific stack.
-`scripts/build_review_notebooks.py` and `notebooks/_nbcommon.py` both validate against it —
-adding or renaming a stage means editing this registry, not scattering strings.
+each stage, its QC path (plus `qc_aliases` for the other names that QC has had: B2 wrote
+`stage02_qc.json` before `stage02_xcorr_qc.json`, and A1 leaves **two different documents** —
+the wrapper `stage00r_qc.json`, which declares the whole reduction with its phases and the
+V1–V6 battery, and `cube_telcorr_qc.json`, the voxel-combine QC, which documents one step.
+The wrapper is what the A2 gate reads; `musepipe/reduction/a1_verify.py` rebuilds it from
+disk. This is **not** a `monolithic`/`cascade` split: both objects of this harvest are
+`cascade` and ROXs 12 b's wrapper carries `fase0…fase3` + `V1…V6`), its `exec_kind`, and the
+launch command template. It is **stdlib-only** because notebooks import it without the
+scientific stack. `scripts/build_review_notebooks.py`, `notebooks/_nbcommon.py` and
+`musepipe/report.py` (F1) all resolve against it — adding or renaming a stage means editing
+this registry, not scattering strings. F1 did keep its own copy of the filenames until
+2026-08-24, and that cost it two false blocking `required QC missing` on ROXs 42B b.
 
 ### Three entry-point layers
 
@@ -103,19 +109,23 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    function whose source no longer matches `musepipe`, and a **comparison cell** against the
    stage's real product — with default knobs it must report identical, and
    `tests/test_debug_notebooks.py` executes each notebook end to end to enforce exactly that
-   (marked `slow`, ~90 s each — that is the bulk of the suite's runtime). Knobs are read from
+   (marked `slow`, ~2 min each across 20 notebooks — that is the bulk of the suite's runtime).
+   Knobs are read from
    the **resolved** stage config (`stage_xNN_config_from_run`), never copied as literals: the
    stage fills in defaults the run does not spell out, and hardcoding them is precisely what
    made the first C3 notebook fail to reproduce the chain. Living in `debug/` is deliberate:
    `--check` and `test_notebook_qc_resolution.py` glob `notebooks/<obj>/*.ipynb`
-   non-recursively. Covered: **C1**, **A3**, **C2**, **C3** (its two variants), **C4** (the
+   non-recursively (note `--check` is **not** read-only: it regenerates all 33 review
+   notebooks). Covered: **C1**, **A3**, **C2**, **C3** (its two variants), **C4** (the
    canonical psffit, with a channel-subsampling knob because the per-channel fit costs ~11 min
    for all 3681), **C5** and **C6** (which share one builder: same skeleton, different
    subtraction), and **D2** — the only one about the **primary star** rather than the companion:
    it redoes D2's star calibration (cheap and exact) and then measures the primary **in each
    per-exposure cube** (`perexp_cubes`/`perexp_dir` in the run config), which no stage does. Its
    comparison also guards freshness: a calibrated product older than its C4 input means D2 has
-   not been re-run, and the slow test skips instead of failing.
+   not been re-run, and the slow test skips instead of failing. Two more live in `debug/` and
+   are **not** stage notebooks: `apcorr_debug` (recomputes the aperture correction with today's
+   code) and `residuos_debug`.
 
    **C1 is the exception to the "compare against the product" rule**, because C1 does not emit a
    spectrum: it emits `psf_model.json`, the PSF every other stage consumes. Its per-bin fit is
@@ -128,8 +138,11 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    advertises `polynomial_deg2` smoothing but while `param_table` exists the polynomial is never
    evaluated; what varies per channel is a linear interpolation of the bin table, on a λ snapped
    to 50 Å. **Both PSF forms travel in the copy**: C1 always fits Moffat and Psfao and keeps the
-   lower ring residual, and the winner is per-object (ROXs 12 b → `psfao`, ROXs 42B b →
-   `moffat`), so a notebook that knew only one would crash on the other object.
+   lower ring residual. **Since 2026-08-14 both objects deliver `psfao`, imposed by config**
+   (`e01_psf_form`) rather than selected: in ROXs 42B b the ring metric actually prefers Moffat
+   (6.88 % vs 10.05 %), and what rules Moffat out is its encircled energy, +356 % off the data.
+   The copy still carries both forms, so a notebook that knew only one would crash if that knob
+   changed back.
 
 ### Multi-object layout
 

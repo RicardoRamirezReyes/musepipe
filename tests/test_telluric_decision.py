@@ -14,7 +14,9 @@ from musepipe.reduction.telluric import (
     TelluricError,
     check_molecfit_environment,
     decide_telluric,
+    estimator_bias_by_band,
     measure_telluric_depths,
+    telluric_systematic_block,
     resolve_input_cube,
     stage00t_qc_skeleton,
 )
@@ -273,6 +275,96 @@ class TelluricDecisionTests(unittest.TestCase):
 
             env = check_molecfit_environment(esorex=str(exe), runner=runner)
             self.assertIn("molecfit_correct", env["molecfit_recipes"])
+
+
+class PuertaDeDosColasTests(unittest.TestCase):
+    """El umbral mira |profundidad|: una banda sobre-corregida tambien falla.
+
+    Antes se comparaba `max(profundidades)`, asi que un residuo NEGATIVO —una
+    banda corregida de mas— no podia disparar la puerta. Medido en ROXs 12 b: el
+    `not_needed_shallow` de la noche del 29 escondia un -9.43 % en O2 A.
+    """
+
+    def _decide(self, depths):
+        return decide_telluric(depths, science_needs_red_continuum=True, threshold_pct=3.0)
+
+    def test_una_banda_muy_negativa_pide_correccion(self):
+        d = self._decide({"O2_B": 0.483, "O2_A": -9.430, "H2O_7200": -1.356, "H2O_8200": -0.755})
+        self.assertEqual(d.decision, "needed")
+        self.assertTrue(d.checkpoint_required)
+
+    def test_el_caso_positivo_no_cambia(self):
+        # Lo que hoy dispara la puerta la sigue disparando igual.
+        self.assertEqual(self._decide({"O2_A": 5.088, "O2_B": -0.019}).decision, "needed")
+
+    def test_negativos_pequenos_siguen_sin_pedir_correccion(self):
+        # El combinado canonico de ROXs 12 b: max|.| = 2.49 < 3.
+        d = self._decide({"O2_B": -1.004, "O2_A": -0.773, "H2O_7200": -1.557, "H2O_8200": -2.488})
+        self.assertEqual(d.decision, "not_needed_shallow")
+        self.assertFalse(d.telluric_applied)
+
+    def test_el_signo_no_lo_decide_el_orden_de_las_bandas(self):
+        base = {"a": -4.0, "b": 1.0}
+        self.assertEqual(self._decide(base).decision,
+                         self._decide(dict(reversed(list(base.items())))).decision)
+
+
+def _espectro_sintetico(n=3600, lo=4750.0, paso=1.25, curvatura=0.0):
+    wave = lo + np.arange(n) * paso
+    x = (wave - wave.mean()) / (0.5 * (wave[-1] - wave[0]))
+    return wave, 100.0 * (1.0 + curvatura * x**2)
+
+
+class SesgoDelEstimadorTests(unittest.TestCase):
+    """`estimator_bias_by_band`: lo que el estimador marca donde no hay nada."""
+
+    def test_sobre_un_continuo_plano_el_sesgo_es_cero(self):
+        wave, spec = _espectro_sintetico()
+        out = estimator_bias_by_band(wave, spec)
+        medidos = [v for v in out.values() if v is not None]
+        self.assertTrue(medidos, "ninguna banda pudo medirse sobre el continuo plano")
+        for v in medidos:
+            self.assertAlmostEqual(v["bias_pct"], 0.0, places=6)
+
+    def test_con_curvatura_inyectada_el_metodo_responde(self):
+        # Control positivo: si su cero no fuera un cero, no serviria de nada.
+        wave, plano = _espectro_sintetico()
+        _, curvo = _espectro_sintetico(curvatura=0.12)
+        b0 = estimator_bias_by_band(wave, plano)
+        b1 = estimator_bias_by_band(wave, curvo)
+        banda = next(k for k, v in b0.items() if v is not None and b1.get(k) is not None)
+        self.assertGreater(abs(b1[banda]["bias_pct"]), abs(b0[banda]["bias_pct"]))
+
+    def test_una_banda_sin_ventanas_limpias_devuelve_None(self):
+        # Un tramo corto no deja sitio para ventanas de control de la misma geometria.
+        wave, spec = _espectro_sintetico(n=60, lo=7580.0)
+        self.assertIsNone(estimator_bias_by_band(wave, spec)["O2_A"])
+
+
+class SistematicoTelluricoTests(unittest.TestCase):
+    """El bloque que D2 lee para dejar de declarar telurico = 0."""
+
+    def test_la_fraccion_es_la_profundidad_descontada_y_en_tanto_por_uno(self):
+        wave, spec = _espectro_sintetico()
+        fracs, detalle = telluric_systematic_block(wave, spec, {"O2_A": -2.5})
+        self.assertIn("O2_A", fracs)
+        d = detalle["O2_A"]
+        self.assertAlmostEqual(fracs["O2_A"], abs(d["discounted_pct"]) / 100.0, places=12)
+        self.assertGreaterEqual(fracs["O2_A"], 0.0)
+
+    def test_el_signo_se_pierde_a_proposito(self):
+        # A D2 le hace falta la MAGNITUD: sobre-corregir contamina igual.
+        wave, spec = _espectro_sintetico()
+        neg, _ = telluric_systematic_block(wave, spec, {"O2_A": -2.5})
+        pos, _ = telluric_systematic_block(wave, spec, {"O2_A": +2.5})
+        self.assertAlmostEqual(neg["O2_A"], pos["O2_A"], places=12)
+
+    def test_sin_ventanas_limpias_se_declara_sin_descontar(self):
+        wave, spec = _espectro_sintetico(n=60, lo=7580.0)
+        fracs, detalle = telluric_systematic_block(wave, spec, {"O2_A": -2.5})
+        self.assertEqual(detalle["O2_A"]["source"], "no_clean_control_windows")
+        self.assertIsNone(detalle["O2_A"]["bias_pct"])
+        self.assertAlmostEqual(fracs["O2_A"], 0.025, places=12)
 
 
 if __name__ == "__main__":

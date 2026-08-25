@@ -14,6 +14,7 @@ import shutil
 import numpy as np
 
 from .config import load_run_config
+from .stage_registry import STAGES
 from .extraction.aperture import sha256_file
 from .extraction.product import SpectrumProduct
 from .io import read_json
@@ -325,10 +326,77 @@ def resolve_product_path(path_value, run_paths):
     return _first_existing(candidates) or path
 
 
-def read_qc_payloads(run_paths):
+def _registry_stage_by_qc(filename):
+    """La etapa del registry que declara ese QC, por cualquiera de sus nombres.
+
+    `STAGE_DEFINITIONS` mantiene su propia lista de ficheros, y ese es justo el
+    problema: cuando el registry gana un alias o la cadena reparte una etapa a
+    otro run, F1 no se entera. El registry es la fuente de verdad declarada en
+    `CLAUDE.md`; aquí solo se usa para AMPLIAR los sitios donde buscar, nunca
+    para cambiar qué etapas son obligatorias.
+    """
+
+    for stage in STAGES:
+        if any(Path(qc).name == filename for qc in stage.qc_paths):
+            return stage
+    return None
+
+
+def _qc_candidates(item, run_paths, stage_runs):
+    """Rutas donde puede estar el QC de una etapa, en orden de preferencia.
+
+    Dos cosas que la ruta fija `stage_dir / item["qc"]` no ve, y que en
+    ROXs 42B b daban dos `required QC missing` FALSOS y bloqueantes:
+
+    * **Los alias del registry.** B2 escribe `stage02_qc.json` o
+      `stage02_xcorr_qc.json` segun cuando se corriera; el registry declara los
+      dos y F1 solo miraba el nuevo.
+    * **`chain.stage_runs`.** A1 puede vivir en otro run (en ROXs 42B b, en
+      `ROXs42Bb_raw`), que es el reparto que el propio config declara.
+    """
+
+    stage = _registry_stage_by_qc(item["qc"])
+    names = [item["qc"]]
+    if stage is not None:
+        names += [qc for qc in stage.qc_paths if Path(qc).name != item["qc"]]
+
+    # El run que declara `chain.stage_runs` MANDA sobre el fichero que por
+    # casualidad esté en este run: `ROXs12b_realigned/stages/stage00r_qc.json`
+    # existe pero describe OTRA reducción (7 exposiciones, V2/V5/V6
+    # `unavailable`), mientras la que alimenta la cadena vive en
+    # `ROXs12b_multinight_raw_20260728`. Leer la de al lado es exactamente la
+    # trampa que el reparto de la cadena existe para evitar.
+    roots = []
+    other = (stage_runs or {}).get(stage.id) if stage is not None else None
+    if other and other != run_paths.run_id:
+        roots.append(RunPaths.from_project_root(other, run_paths.project_root))
+    roots.append(run_paths)
+
+    # El nombre CANONICO se busca en todos los runs antes de bajar a los alias:
+    # en ROXs 42B b el alias `cube_telcorr_qc.json` existe en el propio run y el
+    # canonico `stage00r_qc.json` en el run que declara `chain.stage_runs`, y el
+    # bueno es el segundo — el envoltorio, con sus fases y su bateria V1-V6; el
+    # alias es el QC del combine, que documenta un solo paso.
+    out = []
+    for name in names:
+        rel = Path(name)
+        for paths in roots:
+            out.append(paths.run_dir / rel if rel.parts[:1] == ("stages",) else paths.stage_dir / rel.name)
+            out.append(paths.run_dir / rel.name)
+    return out
+
+
+def read_qc_payloads(run_paths, stage_runs=None):
+    if stage_runs is None:
+        try:
+            payload = load_run_config(run_paths.run_id, project_root=run_paths.project_root).payload
+            stage_runs = ((payload or {}).get("chain") or {}).get("stage_runs") or {}
+        except Exception:  # noqa: BLE001 - sin config, se busca solo en este run
+            stage_runs = {}
     payloads = {}
     for item in STAGE_DEFINITIONS:
-        path = run_paths.stage_dir / item["qc"]
+        candidates = _qc_candidates(item, run_paths, stage_runs)
+        path = _first_existing(candidates) or candidates[0]
         payloads[item["id"]] = {"path": path, "exists": path.exists(), "qc": read_json(path) if path.exists() else None}
     return payloads
 
