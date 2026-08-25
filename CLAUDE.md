@@ -16,8 +16,8 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (1215 tests + 1099 subtests, ~45 min)
-python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3 min)
+python -m pytest tests/ -q                       # full suite (1259 tests + 1118 subtests, ~50 min)
+python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3.5 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
@@ -55,7 +55,16 @@ Stages are lettered blocks, each with a frozen spec in `docs/spec_<ID>_codex_*.m
 the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) and a JSON QC product under
 `runs/<RUN>/stages/`:
 
-- **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5)
+- **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5).
+  A4 is four subcommands, not one: `check-cube` (which rewrites the WHOLE document and now
+  refuses to discard measured metrics without `--force`), `m3-flux`, `m1m2-sky` and `m4m5`,
+  plus `finalize` — a pure JSON→JSON pass that recomputes everything **derived**
+  (`status`/`status_detail`, `open_issues` with a declared `priority`,
+  `downstream_decision`, per-metric `measured_utc`). Those five fields used to be
+  hand-written or vintage-dependent, which is why the six `stage00q_qc.json` on disk had
+  four different shapes. `stage_registry` publishes a launch template for `m3-flux` **only**,
+  so re-running A4 from a notebook does not measure M4/M5 — that is how one object went a
+  month without them
 - **B1–B3** load/align/crop → xcorr stripes → companion localization
 - **C1, 04b, C2–C6** chromatic PSF → local-surface background → **five stages but six
   extraction methods**: C3 emits two variants as separate products, so `METHOD_ORDER` is
@@ -202,6 +211,19 @@ telluric bands and accretion lines) and its ECSV export.
   from A4's QC, and raises otherwise. The declared knob wins on purpose (astropy parses
   MUSE's `BUNIT` as `1.0000000000000001e-20`, and making it authoritative would move
   frozen results in the last bit). Never reintroduce a `1.0`/`1e-20` fallback.
+- **Wavelength frame**: same rule, same reason. `_wavelength_frame`
+  (`stages/stage_x01_aperture.py`, shared by C2–C5) resolves the declared knob
+  (`x0N_wframe`/`wavelength_frame`) → A4's `cube.wavelength_frame` → `unavailable`, and
+  stamps `WFRAME` on the product. It used to read the QC first with the knob as a mere
+  `.get` default, so an A4 that said `unknown` — the cube header carries no `SPECSYS`
+  — silently discarded the run's `barycentric` and stamped `topocentric` on ROXs 42B b's
+  definitive spectra (vbary = −29.64 km/s ≈ 0.65 Å at Hα). Nothing shifts λ by vbary, so
+  no number moved; what failed were the gates, all disabled by that same `unknown`. Never
+  reintroduce a silent `topocentric` fallback.
+- **Positions cross frames silently**: `m3_primary_yx` of ROXs 12 b is declared in the
+  uncropped 338×330 cube while A4 measures on a 200×200 one. Verify a declared position
+  against the data (`cube_qc.resolve_primary_yx` checks it against the brightness peak)
+  instead of trusting the key.
 - **Conventions**: cubes are `zyx`, positions are `[y, x]`, quantities carry unit suffixes
   (`_A`, `_kms`, `_px`, `_arcsec`). Preserve deterministic seeds, sha256 hash chains, spec
   versions, QC schemas, and provenance fields — F1/G0/G5 verify them.

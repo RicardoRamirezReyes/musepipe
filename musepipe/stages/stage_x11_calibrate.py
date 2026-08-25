@@ -380,7 +380,16 @@ def calibration_corrections_from_qc(qc00, qc_psf=None, qc_sky=None, qc_telluric=
     telluric_fracs, telluric_issues = _telluric_fracs_from_qc(qc_telluric)
     issues.extend(telluric_issues)
     cube = qc00.get("cube", {})
-    frame = str(cube.get("wavelength_frame", cfg.get("wavelength_frame", "unknown")))
+    # El knob declarado por delante del QC, igual que en C2 (`_wavelength_frame`):
+    # un A4 que dice `unknown` no puede descartar lo que el run declara.
+    declared = str(cfg.get("wavelength_frame") or "").strip().lower()
+    from_qc = str(cube.get("wavelength_frame") or "").strip().lower()
+    frame = declared if declared in {"topocentric", "barycentric"} else (from_qc or "unknown")
+    if frame not in {"topocentric", "barycentric"}:
+        issues.append(
+            f"Wavelength frame is {frame!r}: the WFRAME cross-check against the products is not "
+            "performed, so a mislabeled frame would go unnoticed here."
+        )
     return CalibrationCorrections(
         wavelength_status=status,
         wavelength_offset_A=offset,

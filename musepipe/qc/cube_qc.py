@@ -704,6 +704,181 @@ def measure_sky_statistics(
     }
 
 
+def measure_sky_radial_profile(
+    cube: np.ndarray,
+    wave: Sequence[float],
+    source_mask: np.ndarray,
+    valid_mask: np.ndarray,
+    primary_yx: Sequence[float],
+    *,
+    bin_px: float = 2.0,
+    min_pixels: int = 20,
+) -> dict[str, object]:
+    """El suelo de continuo por anillos alrededor de la primaria.
+
+    M4 publica su `median_bias` sobre TODA la mascara de cielo (~43 % del campo)
+    sin dependencia radial: mide que hay un suelo, pero no puede decir de que
+    es. Esto lo separa por radio. Si cae con el radio es el halo AO de la
+    primaria; si es plano, es cielo residual — y en un campo NFM de 7.5" la
+    mascara de "cielo" esta entera dentro del halo, asi que la pregunta no es
+    retorica.
+
+    Reutiliza `measure_sky_statistics` anillo a anillo: el MISMO estimador de
+    M4, con las mismas ventanas de continuo, para que el diagnostico sea
+    conmensurable con la metrica que explica. La unica diferencia es
+    deliberada: aqui el suelo se colapsa CON SIGNO, mientras que M4 publica
+    |mediana| y por tanto no distingue sobre- de sub-sustraccion.
+
+    Salvedades que NO se redescubren aqui: la mediana azimutal subestima por la
+    curvatura del arco (~0.7 px, `reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`)
+    y el anillo tiene asimetria azimutal por speckles y spikes.
+    """
+
+    data = np.asarray(cube)
+    sources = np.asarray(source_mask, dtype=bool)
+    valid = np.asarray(valid_mask, dtype=bool)
+    if sources.shape != data.shape[1:] or valid.shape != data.shape[1:]:
+        raise RuntimeError(
+            f"source/valid masks {sources.shape}/{valid.shape} do not match the cube frame "
+            f"{data.shape[1:]}: a position is not valid outside its frame."
+        )
+    cy, cx = float(primary_yx[0]), float(primary_yx[1])
+    ny, nx = data.shape[1:]
+    yy, xx = np.ogrid[:ny, :nx]
+    radius = np.hypot(yy - cy, xx - cx)
+    # `r_complete` es hasta donde el anillo cabe ENTERO en el campo. No se corta
+    # ahi: la mascara de fuentes de A2 tapa todo el interior (en ROXs 12 b, hasta
+    # r ~ 85 px), asi que cortar en r_complete = 99 dejaria 8 anillos y tiraria
+    # las esquinas, que es donde esta la mayor parte del cielo. Para una MEDIANA
+    # la cobertura parcial no sesga como sesgaria una curva de crecimiento —solo
+    # importa si el halo es azimutalmente asimetrico— asi que se mide hasta el
+    # borde y cada anillo declara su cobertura.
+    r_complete = float(min(cy, ny - 1 - cy, cx, nx - 1 - cx))
+    r_max = float(radius.max())
+    cont_mask = wavelength_mask(wave, CONTINUUM_WINDOWS)
+
+    edges = np.arange(0.0, r_max + float(bin_px), float(bin_px))
+    centers: list[float] = []
+    floors: list[float] = []
+    rms: list[float] = []
+    counts: list[int] = []
+    coverage: list[float] = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        in_frame = int(((radius >= lo) & (radius < hi)).sum())
+        expected = float(np.pi * (hi ** 2 - lo ** 2))
+        coverage.append(float(in_frame / expected) if expected > 0 else 0.0)
+        ring = (radius >= lo) & (radius < hi) & (~sources) & valid
+        n_pix = int(ring.sum())
+        counts.append(n_pix)
+        if n_pix < int(min_pixels):
+            centers.append(float(0.5 * (lo + hi)))
+            floors.append(float("nan"))
+            rms.append(float("nan"))
+            continue
+        # El radio MEDIDO de los pixeles que contribuyen, no el centro
+        # geometrico del anillo: en un anillo hay mas pixeles fuera que dentro,
+        # asi que el mediano cae mas lejos, y usar (lo+hi)/2 sesga la pendiente
+        # de una ley de potencias. Es la curvatura del arco de
+        # `reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md`, medida en vez
+        # de arrastrada.
+        centers.append(float(np.median(radius[ring])))
+        stats = measure_sky_statistics(data, wave, ring)
+        median_by_channel = np.asarray(stats["median_by_channel"], dtype=np.float64)
+        floors.append(float(np.nanmedian(median_by_channel[cont_mask])))
+        rms.append(float(stats["rms_continuum"]))
+
+    r_centers = np.asarray(centers, dtype=np.float64)
+    profile = np.asarray(floors, dtype=np.float64)
+    cov = np.asarray(coverage, dtype=np.float64)
+    finite = np.isfinite(profile)
+
+    def _fit(selection):
+        from musepipe.growth_curve import fit_halo_and_sky
+
+        usable = selection & finite
+        if int(usable.sum()) < 10:
+            return {"n_annuli": int(usable.sum()), "fit": None}
+        radii = np.where(usable, r_centers, np.nan)
+        values = np.where(usable, profile, np.nan)
+        lo = float(np.nanmin(radii[usable]))
+        hi = float(np.nanmax(radii[usable]))
+        try:
+            fit = fit_halo_and_sky(radii, values, (max(lo, 1.0), hi))
+        except Exception:  # noqa: BLE001 - un ajuste que no converge no es un fallo de la medida
+            fit = None
+        return {
+            "n_annuli": int(usable.sum()),
+            "r_range_px": [lo, hi],
+            "fit": None if fit is None else {"amp": fit[0], "power": fit[1], "sky": fit[2]},
+        }
+
+    # El ajuste `A*r^-p + S` NO es estable: con poco brazo radial, p y S se
+    # canjean y p se dispara (medido en ROXs 12 b: p = 32.4 con cobertura > 0.4,
+    # 3.17 con > 0.1, 2.80 con todo). Publicar un solo numero invitaria a citarlo
+    # como si estuviera medido, asi que se publica la familia y se deja ver que
+    # no lo esta. Lo que SI es robusto es la caida del suelo con el radio.
+    stability = {
+        f"coverage_gt_{int(round(threshold * 100)):02d}": _fit(cov > threshold)
+        for threshold in (0.9, 0.4, 0.1, 0.0)
+    }
+    best = stability["coverage_gt_00"]
+    halo_fit = best["fit"]
+    fit_range = best.get("r_range_px")
+
+    def _decline(selection, threshold):
+        usable = selection & finite
+        if int(usable.sum()) < 2:
+            return None
+        radii = r_centers[usable]
+        values = profile[usable]
+        return {
+            "coverage_threshold": threshold,
+            "n_annuli": int(usable.sum()),
+            "r_inner_px": float(radii[0]),
+            "r_outer_px": float(radii[-1]),
+            "floor_inner": float(values[0]),
+            "floor_outer": float(values[-1]),
+            "floor_ratio_inner_over_outer": (
+                float(values[0] / values[-1]) if values[-1] != 0 else None
+            ),
+            "monotonic_decreasing": bool(np.all(np.diff(values) <= 1e-9)),
+        }
+
+    # `decline` se mide donde el anillo esta bien cubierto. Mas afuera solo
+    # quedan las esquinas del campo (cobertura < 0.15) y ahi el perfil de
+    # ROXs 42B b se aplana o repunta: puede ser un suelo real o el sesgo de
+    # muestrear cuatro direcciones azimutales. No se mezcla lo uno con lo otro.
+    decline = _decline(cov > 0.4, 0.4)
+    decline_full = _decline(np.ones_like(cov, dtype=bool), 0.0)
+
+    return {
+        "r_centers_px": [float(v) for v in r_centers],
+        "floor_by_annulus": [None if not np.isfinite(v) else float(v) for v in profile],
+        "rms_by_annulus": [None if not np.isfinite(v) else float(v) for v in rms],
+        "n_pixels_by_annulus": counts,
+        "azimuthal_coverage_frac": [round(float(v), 4) for v in coverage],
+        "bin_px": float(bin_px),
+        "r_last_complete_annulus_px": r_complete,
+        "r_max_px": r_max,
+        "fit_range_px": fit_range,
+        "n_annuli_fitted": int(finite.sum()),
+        "primary_yx": [cy, cx],
+        "halo_fit": halo_fit,
+        "halo_fit_stability": stability,
+        "decline": decline,
+        "decline_full_range": decline_full,
+        # Diagnostico, no compuerta: decidir "halo" contra "cielo" pediria un
+        # umbral que la spec A4 no define, y la §4 prohibe inventarlos.
+        "note": (
+            "Signed continuum floor per annulus around the primary; diagnostic only, "
+            "no threshold and no semaphore. M4's own status is unaffected. The robust "
+            "result is `decline` (how much the floor falls with radius); `halo_fit` is "
+            "NOT stable against the fitted radial range -- see halo_fit_stability before "
+            "quoting its power."
+        ),
+    }
+
+
 def empty_aperture_centers(
     source_mask: np.ndarray,
     valid_mask: np.ndarray,
@@ -858,8 +1033,28 @@ def check_cube_phase(args: argparse.Namespace) -> int:
             print(f"ERROR: no 3D DATA cube found in {cube}", file=sys.stderr)
             return 2
         frame, vbary = detect_wavelength_frame(data_hdu.header)
+        source = "cube header"
         if frame == "unknown":
             frame, vbary = detect_wavelength_frame(hdul[0].header)
+    if frame == "unknown":
+        # La cabecera del cubo de ROXs 42B b no trae SPECSYS ni RVCORR, asi que
+        # la deteccion devolvia "unknown" — y ese "unknown" viajaba hasta C2,
+        # que descartaba en silencio el knob del config y estampaba
+        # `WFRAME = topocentric` en los espectros definitivos de un cubo
+        # barycentrico. El knob declarado manda, igual que con la unidad de
+        # flujo: nunca un default silencioso.
+        frame, vbary, source = _frame_from_config(args, frame, vbary)
+    output = Path(args.qc_output)
+    if output.exists() and not getattr(args, "force", False):
+        existing = json.loads(output.read_text(encoding="utf-8"))
+        measured = [k for k in _M_KEYS if _metric_status(existing, k) != "unavailable"]
+        if measured:
+            print(
+                f"ERROR: {output} already has measured metrics ({', '.join(measured)}) and "
+                "check-cube rewrites the whole document. Re-run with --force to discard them.",
+                file=sys.stderr,
+            )
+            return 2
     qc = stage00q_qc_skeleton(
         run_id=args.run_id,
         cube_file=cube,
@@ -869,11 +1064,29 @@ def check_cube_phase(args: argparse.Namespace) -> int:
         vbary_kms=vbary,
         skyline_source_cube=args.skyline_source_cube,
     )
-    output = Path(args.qc_output)
+    qc["cube"]["wavelength_frame_source"] = source
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(qc["cube"], indent=2))
     return 0
+
+
+def _frame_from_config(args: argparse.Namespace, frame: str, vbary: float | None):
+    """El marco de lambda declarado en el config, cuando la cabecera no lo trae."""
+
+    try:
+        from musepipe.config import load_run_config
+
+        rc = load_run_config(
+            args.run_id, project_root=getattr(args, "project_root", None), allow_run_id_mismatch=True
+        )
+        cfg = dict(rc.config)
+    except Exception:  # noqa: BLE001 - sin config resoluble, se queda en unknown
+        return frame, vbary, "undetermined (no SPECSYS/RVCORR in header, no run config)"
+    declared = str(cfg.get("wavelength_frame") or "").strip().lower()
+    if declared in {"topocentric", "barycentric"}:
+        return declared, cfg.get("vbary_kms", vbary), "run config knob 'wavelength_frame'"
+    return frame, vbary, "undetermined (no SPECSYS/RVCORR in header, none declared in config)"
 
 
 def _load_cube_and_wave(cube_path: Path, data_ext, stat_ext=None):
@@ -941,10 +1154,13 @@ def m3_flux_phase(args: argparse.Namespace) -> int:
         bunit=cube_bunit(cube_path, ext=data_ext),
     )
     m3["cube_file"] = str(cube_path)
+    m3["measured_utc"] = utc_now_iso()
     qc_path = Path(args.qc_output)
     if qc_path.exists():
         qc = json.loads(qc_path.read_text(encoding="utf-8"))
         qc["m3_flux"] = m3
+        qc["timestamp_utc"] = m3["measured_utc"]
+        finalize_qc(qc)
         qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
         print(f"Patched m3_flux in {qc_path}: status={m3.get('status')} factor={m3.get('flux_factor')}")
     else:
@@ -992,11 +1208,17 @@ def m1m2_sky_phase(args: argparse.Namespace) -> int:
     m2["n_exposures"] = n_files
     m2["source"] = "MUSE SKY_SPECTRUM (esoreflex scipost cache) airglow LSF, pooled over exposures"
 
+    stamp = utc_now_iso()
+    m1["measured_utc"] = stamp
+    m2["measured_utc"] = stamp
+
     qc_path = Path(args.qc_output)
     payload = {"m1_wavelength": m1, "m2_lsf": m2}
     if qc_path.exists():
         qc = json.loads(qc_path.read_text(encoding="utf-8"))
         qc.update(payload)
+        qc["timestamp_utc"] = stamp
+        finalize_qc(qc)
         qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
     else:
         qc_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1041,11 +1263,285 @@ def aggregate_status(qc: MutableMapping[str, object]) -> dict:
     return {"status": worst, "driven_by": driver, "by_metric": states, "unavailable": missing}
 
 
-def _patch_status(qc: MutableMapping[str, object]) -> str:
+def patch_status(qc: MutableMapping[str, object]) -> str:
     summary = aggregate_status(qc)
     qc["status"] = summary["status"]
     qc["status_detail"] = summary
     return summary["status"]
+
+
+#: Alias historico. `m4m5_phase` lo llamaba cuando era privado y era su unico
+#: uso; ahora `finalize_qc` tambien lo necesita desde fuera del modulo.
+_patch_status = patch_status
+
+
+_METRIC_LABEL = {
+    "m1_wavelength": "M1 (wavelength solution)",
+    "m2_lsf": "M2 (LSF)",
+    "m3_flux": "M3 (flux scale)",
+    "m4_sky": "M4 (sky statistics)",
+    "m5_stat": "M5 (STAT validation)",
+}
+
+
+def _metric_status(qc: Mapping[str, object], key: str) -> str:
+    block = qc.get(key)
+    if not isinstance(block, Mapping):
+        return "unavailable"
+    return str(block.get("status") or "unavailable")
+
+
+def _metric_block(qc: Mapping[str, object], key: str) -> Mapping[str, object]:
+    block = qc.get(key)
+    return block if isinstance(block, Mapping) else {}
+
+
+def _fmt(value: object, spec: str = ".3f") -> str:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "unavailable"
+    if not np.isfinite(number):
+        return "unavailable"
+    return format(number, spec)
+
+
+def derive_open_issues(qc: Mapping[str, object]) -> list[dict]:
+    """Los `open_issues` de A4, derivados de M1-M5 en vez de escritos a mano.
+
+    Hasta ahora no los escribia nadie: el esqueleto los dejaba en `[]`, y los
+    dos que tenia ROXs 12 b eran manuscritos — asi que ROXs 42B b salia con la
+    lista vacia teniendo la MISMA M4 en amarillo y la MISMA M5 en rojo. Que
+    sean derivados es lo que hace que los seis runs digan lo mismo del mismo
+    hecho.
+
+    Cada entrada declara su `priority`, y eso es lo que impide que una nota
+    informativa acabe publicada como bloqueante: F1 escalaba a `blocking`
+    cualquier `open_issue` de una etapa roja, incluida la de M4 cuyo propio
+    texto decia «retain as a systematic diagnostic»
+    (ver `report.aggregate_open_issues`).
+    """
+
+    issues: list[dict] = []
+
+    for key in _M_KEYS:
+        state = _metric_status(qc, key)
+        block = _metric_block(qc, key)
+        label = _METRIC_LABEL[key]
+
+        if state == "unavailable":
+            if key == "m5_stat":
+                text = (
+                    f"{label} is unavailable: the STAT factors were never measured. Not measuring "
+                    "is not passing — C2/C3 fall back to native STAT with stat_factor_box3 = 1.0, "
+                    "which is an error budget half the real one."
+                )
+            else:
+                text = f"{label} is unavailable: not measured, so the cube cannot be certified on it."
+            issues.append({"issue": text, "priority": "major", "metric": key, "source": "derived"})
+            continue
+
+        if state == "red":
+            if key == "m5_stat":
+                # La limitacion ya aceptada por la politica de compuerta de F1
+                # (`ACCEPTED_LIMITATIONS["A4_cube_qc"]["m5_stat.status"]`): es la
+                # covarianza del remuestreo, inherente al formato del cubo.
+                text = (
+                    f"M5 is red: native STAT underestimates empirical variance by factors "
+                    f"{_fmt(block.get('factor_spaxel_median'))} at spaxel scale and "
+                    f"{_fmt(block.get('factor_box3_median'))} for 3x3 apertures. Downstream "
+                    "significance must use identically processed empirical controls, never "
+                    "native STAT as sigma."
+                )
+                issues.append({"issue": text, "priority": "accepted", "metric": key, "source": "derived"})
+            else:
+                issues.append({
+                    "issue": f"{label} is red; the cube fails this gate.",
+                    "priority": "blocking",
+                    "metric": key,
+                    "source": "derived",
+                })
+            continue
+
+        if state == "yellow":
+            if key == "m4_sky":
+                rms = block.get("rms_continuum")
+                bias = block.get("median_bias")
+                ratio = None
+                try:
+                    ratio = float(bias) / float(rms)  # type: ignore[arg-type]
+                except (TypeError, ValueError, ZeroDivisionError):
+                    ratio = None
+                text = (
+                    f"M4 is yellow: residual-sky median bias is {_fmt(ratio)} times the continuum "
+                    f"RMS despite R={_fmt(block.get('R'), '.3f')}; retain as a systematic diagnostic."
+                )
+                radial = block.get("radial")
+                if isinstance(radial, Mapping):
+                    decline = radial.get("decline")
+                    if isinstance(decline, Mapping):
+                        # Se cita la CAIDA, que es lo robusto, y no la potencia
+                        # del ajuste, que depende del brazo radial admitido.
+                        text += (
+                            " Radial diagnostic: the continuum floor falls x"
+                            f"{_fmt(decline.get('floor_ratio_inner_over_outer'), '.2f')} between "
+                            f"r={_fmt(decline.get('r_inner_px'), '.0f')} and "
+                            f"r={_fmt(decline.get('r_outer_px'), '.0f')} px from the primary, so it "
+                            "is not a flat sky residual (see m4_sky.radial)."
+                        )
+                issues.append({"issue": text, "priority": "info", "metric": key, "source": "derived"})
+            elif key == "m2_lsf":
+                issues.append({
+                    "issue": (
+                        f"M2 is yellow: the measured LSF deviates "
+                        f"{_fmt(block.get('max_dev_vs_nominal_pct'), '.1f')}% from "
+                        f"{MUSE_LSF_REFERENCE_SHORT}; downstream stages use the MEASURED LSF, "
+                        "so this is a comparison caveat, not a defect."
+                    ),
+                    "priority": "info",
+                    "metric": key,
+                    "source": "derived",
+                })
+            else:
+                issues.append({
+                    "issue": f"{label} is yellow; retain as a systematic diagnostic.",
+                    "priority": "info",
+                    "metric": key,
+                    "source": "derived",
+                })
+
+    return issues
+
+
+def _normalized_issue_text(text: object) -> str:
+    return " ".join(str(text).split()).lower()
+
+
+def _preserved_open_issues(previous: object, derived: Sequence[Mapping[str, object]]) -> list[dict]:
+    """Las notas manuscritas que `derive_open_issues` no puede reconstruir.
+
+    `ROXs12b_raw` guarda cuatro que no salen de ningun campo del QC (que
+    `gaia_passbands/` solo tiene un README, que `factor_box3` puede salir Inf
+    en los bordes NaN...). Derivar no puede significar tirarlas, asi que se
+    conservan marcadas `source: manual`.
+
+    Lo unico que se descarta es el DUPLICADO LITERAL: las dos notas de
+    ROXs 12 b son palabra por palabra lo que la derivacion reconstruye, y
+    conservarlas seria repetir el mismo hecho dos veces, que es justo el
+    defecto que este trabajo arregla. La comparacion es por texto exacto
+    (normalizando espacios) a proposito: una nota que diga algo distinto,
+    aunque sea de la misma metrica, se queda.
+    """
+
+    if not isinstance(previous, list):
+        return []
+    derived_texts = {_normalized_issue_text(item.get("issue")) for item in derived}
+    kept: list[dict] = []
+    for item in previous:
+        if isinstance(item, Mapping):
+            if str(item.get("source", "")) == "derived":
+                continue
+            entry = dict(item)
+            entry.setdefault("priority", "info")
+            entry.setdefault("source", "manual")
+        elif str(item).strip():
+            entry = {"issue": str(item), "priority": "info", "source": "manual"}
+        else:
+            continue
+        if _normalized_issue_text(entry.get("issue")) in derived_texts:
+            continue
+        kept.append(entry)
+    return kept
+
+
+def derive_downstream_decision(qc: Mapping[str, object]) -> dict | None:
+    """La decision de ruido que M5 impone, derivada en vez de manuscrita.
+
+    `docs/structure/04_results_block_a.md` la presenta como algo que «A4
+    escribe» y la llama el origen formal de las aperturas de control, pero no
+    la escribia ningun codigo del repo: solo ROXs 12 b la tenia, a mano.
+    """
+
+    state = _metric_status(qc, "m5_stat")
+    if state == "unavailable":
+        return None
+    previous = qc.get("downstream_decision")
+    previous = previous if isinstance(previous, Mapping) else {}
+    empirical = state in {"red", "yellow"}
+    decision = {
+        "decision": "use_empirical_controls" if empirical else "native_stat_ok",
+        "native_stat_as_sigma": not empirical,
+        "require_identically_processed_controls": empirical,
+        "driven_by": f"m5_stat.status={state}",
+        "reference": "docs/noise_model.md",
+    }
+    # No se reescribe la fecha de una decision ya tomada. Sin ella, la de la
+    # medida: inventar `utc_now_iso()` aqui haria que `finalize` no fuese
+    # idempotente.
+    approved = previous.get("approved_utc") or _metrics_measured_utc(qc)
+    if approved:
+        decision["approved_utc"] = str(approved)
+    return decision
+
+
+def _metrics_measured_utc(qc: Mapping[str, object]) -> str | None:
+    stamps = []
+    for key in _M_KEYS:
+        stamp = _metric_block(qc, key).get("measured_utc")
+        if stamp:
+            stamps.append(str(stamp))
+    return max(stamps) if stamps else None
+
+
+def finalize_qc(qc: MutableMapping[str, object]) -> MutableMapping[str, object]:
+    """Recalcula todo lo DERIVADO del QC de A4. Funcion pura JSON -> JSON.
+
+    No abre el cubo: cuanto necesita esta ya en el documento. Eso es lo que
+    permite homogeneizar los seis QC en segundos en vez de re-medir 2 GB por
+    run, y lo que la hace verificable — sobre un QC ya correcto no cambia un
+    byte.
+    """
+
+    patch_status(qc)
+    derived = derive_open_issues(qc)
+    qc["open_issues"] = derived + _preserved_open_issues(qc.get("open_issues"), derived)
+    decision = derive_downstream_decision(qc)
+    if decision is not None:
+        qc["downstream_decision"] = decision
+    measured = _metrics_measured_utc(qc)
+    if measured:
+        qc["metrics_measured_utc"] = measured
+    return qc
+
+
+#: Cuanto puede alejarse del pico de brillo una posicion declarada antes de
+#: considerarse de OTRO frame. Cinco pixeles: el pico esta a nivel de spaxel y
+#: un centroide fino no se aleja tanto.
+PRIMARY_YX_PEAK_TOLERANCE_PX = 5.0
+
+
+def resolve_primary_yx(data: np.ndarray, wave, declared=None):
+    """La primaria de ESTE cubo, verificada contra su pico de brillo.
+
+    No se toma `m3_primary_yx` a ciegas: en ROXs 12 b esa clave vale [166, 168]
+    y su propia nota dice que es del `cube_telcorr.fits` SIN recortar, de
+    338x330 — mientras que A4 mide sobre un `DATACUBE_FINAL.fits` de 200x200,
+    donde la primaria esta en [100, 100]. Usarla habria centrado los anillos en
+    una esquina vacia sin que nada protestara. Una posicion no vale fuera de su
+    frame, asi que aqui se comprueba contra el dato en vez de creerse.
+    """
+
+    peak = detect_primary_yx(data, wave)
+    if declared is None:
+        return peak, "brightest spaxel of this cube"
+    candidate = (float(declared[0]), float(declared[1]))
+    offset = float(np.hypot(candidate[0] - peak[0], candidate[1] - peak[1]))
+    if offset > PRIMARY_YX_PEAK_TOLERANCE_PX:
+        return None, (
+            f"declared primary {list(candidate)} is {offset:.1f} px from this cube's brightness "
+            f"peak {list(peak)}: it belongs to a different frame"
+        )
+    return candidate, f"declared, {offset:.2f} px from this cube's brightness peak"
 
 
 def m4m5_phase(args: argparse.Namespace) -> int:
@@ -1087,6 +1583,16 @@ def m4m5_phase(args: argparse.Namespace) -> int:
     m5 = measure_stat_factors(data, stat, sky_mask, box_centers_yx=centers)
     m4["sampled_pixel_fraction"] = m4.pop("sky_fraction")
     m4["sky_fraction"] = float(np.mean((~source_mask) & valid_mask))
+
+    primary_yx, primary_source = resolve_primary_yx(data, wave, getattr(args, "primary_yx", None))
+    if primary_yx is None:
+        print(f"ERROR: {primary_source}", file=sys.stderr)
+        return 2
+    radial = measure_sky_radial_profile(
+        data, wave, source_mask, valid_mask, primary_yx, bin_px=args.radial_bin_px
+    )
+    radial["primary_yx_source"] = primary_source
+    m4["radial"] = radial
     products_dir = Path(args.products_dir)
     products_dir.mkdir(parents=True, exist_ok=True)
     curves_path = products_dir / "stage00q_m4_m5_curves.npz"
@@ -1105,18 +1611,78 @@ def m4m5_phase(args: argparse.Namespace) -> int:
     m4["curves"] = str(curves_path)
     m5["n_apertures"] = len(centers)
     m5["curves"] = str(curves_path)
+    stamp = utc_now_iso()
+    m4["measured_utc"] = stamp
+    m5["measured_utc"] = stamp
 
     qc_path = Path(args.qc_output)
     qc = json.loads(qc_path.read_text(encoding="utf-8")) if qc_path.exists() else {}
     qc["m4_sky"] = m4
     qc["m5_stat"] = m5
-    _patch_status(qc)
+    qc["timestamp_utc"] = stamp
+    finalize_qc(qc)
     qc_path.parent.mkdir(parents=True, exist_ok=True)
     qc_path.write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
     print(
         f"m4 R={m4['R']:.4f} bias/rms={m4['median_bias'] / m4['rms_continuum']:.4f} "
         f"({m4['status']}) | m5 spaxel={m5['factor_spaxel_median']:.3f} "
         f"box3={m5['factor_box3_median']:.3f} ({m5['status']}) | apertures={len(centers)}"
+    )
+    return 0
+
+
+def resolve_qc_wavelength_frame(qc: MutableMapping[str, object], cfg: Mapping[str, object]) -> bool:
+    """Rellena `cube.wavelength_frame` desde el config cuando A4 dice `unknown`.
+
+    La §5 de la spec declara el enum `barycentric|topocentric`: `"unknown"` esta
+    fuera de contrato, y viajaba hasta C2 para estampar `WFRAME = topocentric`
+    en los espectros de un cubo barycentrico. Solo rellena lo que falta: un
+    marco ya resuelto no se toca, asi que la funcion es idempotente.
+    """
+
+    cube = qc.get("cube")
+    if not isinstance(cube, MutableMapping):
+        return False
+    current = str(cube.get("wavelength_frame") or "").strip().lower()
+    if current in {"topocentric", "barycentric"}:
+        return False
+    declared = str(cfg.get("wavelength_frame") or "").strip().lower()
+    if declared not in {"topocentric", "barycentric"}:
+        return False
+    cube["wavelength_frame"] = declared
+    if cube.get("vbary_kms") is None and cfg.get("vbary_kms") is not None:
+        cube["vbary_kms"] = cfg.get("vbary_kms")
+    cube["wavelength_frame_source"] = "run config knob 'wavelength_frame'"
+    return True
+
+
+def finalize_phase(args: argparse.Namespace) -> int:
+    qc_path = Path(args.qc_output)
+    if not qc_path.exists():
+        print(f"ERROR: QC does not exist: {qc_path}", file=sys.stderr)
+        return 2
+    before = qc_path.read_text(encoding="utf-8")
+    qc = json.loads(before)
+    if getattr(args, "run_id", None):
+        from musepipe.config import load_run_config
+
+        rc = load_run_config(
+            args.run_id, project_root=getattr(args, "project_root", None), allow_run_id_mismatch=True
+        )
+        if resolve_qc_wavelength_frame(qc, dict(rc.config)):
+            print(f"  wavelength_frame resolved from config: {qc['cube']['wavelength_frame']}")
+    finalize_qc(qc)
+    after = json.dumps(qc, indent=2) + "\n"
+    if after == before:
+        print(f"{qc_path}: already finalized, unchanged")
+        return 0
+    qc_path.write_text(after, encoding="utf-8")
+    detail = qc.get("status_detail") or {}
+    issues = qc.get("open_issues") or []
+    print(
+        f"{qc_path}: status={qc.get('status')} (driven_by={detail.get('driven_by')}) "
+        f"| open_issues={len(issues)} "
+        f"| decision={(qc.get('downstream_decision') or {}).get('decision')}"
     )
     return 0
 
@@ -1132,7 +1698,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_parser.add_argument("--qc-output", required=True)
     check_parser.add_argument("--skyline-source-cube", default="same")
     check_parser.add_argument("--skip-checksum", action="store_true")
+    check_parser.add_argument("--project-root", default=None)
+    check_parser.add_argument(
+        "--force", action="store_true",
+        help="Rewrite the QC even if it already carries measured M1-M5 (they are discarded).",
+    )
     check_parser.set_defaults(func=check_cube_phase)
+
+    finalize_parser = subparsers.add_parser(
+        "finalize",
+        help="Recompute everything DERIVED in a stage00q QC (status, open_issues, decision). Pure JSON, no cube.",
+    )
+    finalize_parser.add_argument("--qc-output", required=True)
+    finalize_parser.add_argument(
+        "--run-id", default=None,
+        help="If given, resolve cube.wavelength_frame from the run config when A4 left it unknown.",
+    )
+    finalize_parser.add_argument("--project-root", default=None)
+    finalize_parser.set_defaults(func=finalize_phase)
 
     m3_parser = subparsers.add_parser("m3-flux", help="Compute A4/M3 absolute flux scale from the primary vs Gaia and patch the QC.")
     m3_parser.add_argument("--cube", required=True)
@@ -1165,6 +1748,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     m4m5_parser.add_argument("--aperture-radius", type=int, default=2)
     m4m5_parser.add_argument("--spacing-px", type=int, default=10)
     m4m5_parser.add_argument("--max-apertures", type=int, default=32)
+    m4m5_parser.add_argument("--primary-yx", nargs=2, type=float, default=None, metavar=("Y", "X"),
+                             help="Primary position for the M4 radial diagnostic, in THIS cube's frame.")
+    m4m5_parser.add_argument("--radial-bin-px", type=float, default=2.0)
     m4m5_parser.set_defaults(func=m4m5_phase)
 
     args = parser.parse_args(argv)
@@ -1185,15 +1771,23 @@ __all__ = [
     "MUSE_LSF_POLY_BACON2017",
     "MUSE_LSF_REFERENCE",
     "MUSE_LSF_REFERENCE_SHORT",
+    "aggregate_status",
     "compute_m3_flux",
+    "derive_downstream_decision",
+    "derive_open_issues",
     "detect_primary_yx",
     "empty_aperture_centers",
+    "finalize_qc",
+    "resolve_qc_wavelength_frame",
+    "patch_status",
     "flux_factor_from_reference",
     "load_passband_csv",
     "measure_m1_m2_from_sky_spectrum",
     "read_sky_spectrum_fits",
     "measure_line_moments",
     "measure_lsf",
+    "measure_sky_radial_profile",
+    "resolve_primary_yx",
     "measure_sky_statistics",
     "measure_skylines",
     "measure_stat_factors",

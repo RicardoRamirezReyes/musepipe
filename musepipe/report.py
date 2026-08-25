@@ -425,6 +425,54 @@ def _walk_statuses(payload, prefix=""):
     return statuses
 
 
+#: Como se traduce la `priority` que un QC DECLARA en su `open_issue` a la del
+#: reporte. `accepted`/`info` no bloquean: son diagnosticos, y escalarlos era lo
+#: que publicaba la nota de M4 —cuyo texto dice literalmente «retain as a
+#: systematic diagnostic»— como bloqueante de la compuerta final.
+_DECLARED_ISSUE_PRIORITY = {
+    "accepted": "minor",
+    "info": "minor",
+    "minor": "minor",
+    "major": "major",
+    "blocking": "blocking",
+}
+
+
+def _issue_text(issue):
+    """El texto de un `open_issue`, sea cadena suelta o dict con `priority`."""
+
+    if isinstance(issue, dict):
+        return str(issue.get("issue", issue))
+    return str(issue)
+
+
+def _issue_texts(open_issues):
+    return [_issue_text(issue) for issue in open_issues]
+
+
+def _declared_priority(issue):
+    if not isinstance(issue, dict):
+        return None
+    declared = issue.get("priority")
+    if declared is None:
+        return None
+    return _DECLARED_ISSUE_PRIORITY.get(str(declared).strip().lower(), "major")
+
+
+#: Rutas que NO son un hecho propio sino el rollup de las hojas del mismo QC.
+#: Solo se tratan como derivadas cuando el documento declara quien decide su
+#: estado (`status_detail.driven_by`), que es lo que permite re-evaluarlas
+#: contra las hojas en vez de creerlas a ciegas.
+_ROLLUP_PATHS = ("status", "status_detail.status")
+
+
+def _rollup_paths(qc):
+    detail = qc.get("status_detail") if isinstance(qc, dict) else None
+    if not isinstance(detail, dict) or "driven_by" not in detail:
+        return ()
+    return _ROLLUP_PATHS
+
+
 def stage_status(stage_id, qc, *, required=True, accepted=None):
     """Return (status, issues, accepted_applied) for one stage.
 
@@ -432,6 +480,15 @@ def stage_status(stage_id, qc, *, required=True, accepted=None):
     justification; a matching red token is DOWNGRADED to a yellow accepted
     limitation (kept in the issue list, annotated) rather than making the stage
     red. Non-matching red tokens still make the stage red.
+
+    Un rollup NO es un hecho nuevo. A4 publica `status` (y `status_detail.status`)
+    como agregado de M1-M5, asi que el rojo de M5 —que la politica YA acepta—
+    volvia a entrar por esas dos rutas, que no estan en la lista, y dejaba la
+    etapa en rojo contando tres veces el mismo hecho. Aqui se re-evaluan contra
+    las hojas: si toda hoja roja esta aceptada, el rollup se anota como derivado
+    en vez de bloquear; si queda UNA hoja roja sin aceptar, el rollup sigue rojo.
+    Meter "status" en ACCEPTED_LIMITATIONS habria sido lo contrario: auto-aceptar
+    cualquier rojo futuro de la etapa.
     """
 
     if qc is None:
@@ -445,17 +502,36 @@ def stage_status(stage_id, qc, *, required=True, accepted=None):
     red_tokens = {"fail", "failed", "red", "blocked", "error", "uninterpretable"}
     yellow_tokens = {"mixed", "unknown", "unavailable", "not_checked", "not_run", "skipped"}
     red_items = [(path, token) for path, token in statuses if token in red_tokens]
-    genuine_red = [(p, t) for p, t in red_items if p not in accepted]
-    accepted_red = [(p, t) for p, t in red_items if p in accepted]
+    rollups = _rollup_paths(qc)
+    leaf_red = [(p, t) for p, t in red_items if p not in rollups]
+    rollup_red = [(p, t) for p, t in red_items if p in rollups]
+    genuine_red = [(p, t) for p, t in leaf_red if p not in accepted]
+    accepted_red = [(p, t) for p, t in leaf_red if p in accepted]
     yellow = [f"{path}={token}" for path, token in statuses if token in yellow_tokens]
     open_issues = list(qc.get("open_issues", [])) if isinstance(qc, dict) and isinstance(qc.get("open_issues", []), list) else []
     accepted_applied = [{"path": p, "token": t, "reason": accepted[p]} for p, t in accepted_red]
     accepted_notes = [f"{p}={t} [accepted limitation: {accepted[p]}]" for p, t in accepted_red]
     if genuine_red:
-        genuine = [f"{p}={t}" for p, t in genuine_red]
-        return "red", genuine + accepted_notes + yellow + [str(issue) for issue in open_issues], accepted_applied
+        # Con una hoja roja sin aceptar, el rollup describe un fallo real: se
+        # cuenta como rojo igual que antes.
+        genuine = [f"{p}={t}" for p, t in genuine_red + rollup_red]
+        return "red", genuine + accepted_notes + yellow + _issue_texts(open_issues), accepted_applied
+    if rollup_red and accepted_red:
+        driver = (qc.get("status_detail") or {}).get("driven_by")
+        reason = (
+            f"Rollup of this stage's own metrics, driven by {driver}, whose red is already an "
+            "accepted limitation; counting it again would report one fact twice."
+        )
+        for path, token in rollup_red:
+            accepted_applied.append({"path": path, "token": token, "reason": reason})
+            accepted_notes.append(f"{path}={token} [accepted limitation: {reason}]")
+    elif rollup_red:
+        # Rollup rojo sin ninguna hoja roja: el documento se contradice a si
+        # mismo y eso no se silencia.
+        genuine = [f"{p}={t} (rollup with no red metric underneath)" for p, t in rollup_red]
+        return "red", genuine + yellow + _issue_texts(open_issues), accepted_applied
     if accepted_red or yellow or open_issues:
-        return "yellow", accepted_notes + yellow + [str(issue) for issue in open_issues], accepted_applied
+        return "yellow", accepted_notes + yellow + _issue_texts(open_issues), accepted_applied
     return "green", [], []
 
 
@@ -467,12 +543,18 @@ def aggregate_open_issues(stage_rows, qc_payloads):
         if not isinstance(qc, dict):
             continue
         for issue in qc.get("open_issues", []) or []:
-            priority = "minor"
-            if stage_status_by_id.get(stage_id) == "red":
-                priority = "blocking"
-            elif stage_id.startswith(("E", "D", "C")):
-                priority = "major"
-            out.append({"stage": stage_id, "priority": priority, "issue": str(issue)})
+            # Una prioridad DECLARADA manda sobre la heuristica: quien escribe el
+            # QC sabe si su nota es un diagnostico o un fallo. La heuristica sigue
+            # para los `open_issues` que son cadenas sueltas, que son los de todas
+            # las demas etapas.
+            priority = _declared_priority(issue)
+            if priority is None:
+                priority = "minor"
+                if stage_status_by_id.get(stage_id) == "red":
+                    priority = "blocking"
+                elif stage_id.startswith(("E", "D", "C")):
+                    priority = "major"
+            out.append({"stage": stage_id, "priority": priority, "issue": _issue_text(issue)})
     for row in stage_rows:
         if row["status"] == "red":
             out.append({"stage": row["stage"], "priority": "blocking", "issue": row["summary"]})
