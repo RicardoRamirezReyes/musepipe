@@ -363,7 +363,7 @@ def compute_stage_x02_products(config, paths=None):
         open_issues.append(f"STAT unavailable for X02 ({stat_state}); using empirical errors and estimated variance weights.")
     if str(stat_status).lower() == "red":
         open_issues.append("A4/M5 STAT status is red; products use empirical flux_err.")
-    wframe = _wavelength_frame(cfg, qc00, open_issues)
+    wframe = _wavelength_frame(cfg, qc00, open_issues, knob="x02_wframe")
 
     # Convencion de flujo: "normrad" (historica, por defecto) o "total"
     # (factor empirico de la curva de crecimiento). Falla ruidosamente si se

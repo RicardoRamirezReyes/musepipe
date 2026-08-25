@@ -85,7 +85,9 @@ def build_g0(run_id, project_root=None, legacy_run=None, pytest_after=None, no_l
         "file": f"runs/{run_id}/stages/stage02_xcorr_cube_stack.fits",
         "sha256": _sha256(cube_path),
         "extensions": exts,
-        "wave_frame": q00q.get("wavelength_frame", "barycentric"),
+        "wave_frame": (q00q.get("cube") or {}).get("wavelength_frame")
+        or q00q.get("wavelength_frame")
+        or "unavailable",
         "nan_fraction_data": round(nan_frac, 4),
         "entry_point": "realigned_cube" if "realigned" in run_id else "adp",
         "note": "self-reduced, manually re-aligned cube (WP-1 exp_align fix)" if "realigned" in run_id else "",

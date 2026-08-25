@@ -242,3 +242,67 @@ si no hay ninguna, devuelve `status: unavailable` con
 `reason: flux_unit_unknown` en vez de suponerla. El QC de M3 anota además
 `flux_unit_cgs`, `flux_unit_source` y `bunit`; esa unidad es la **tercera
 fuente** que E3/G3/D2 usan cuando un producto viejo perdió su `BUNIT`.
+
+## Errata (2026-08-24) — lo derivado del documento, y el suelo de M4
+
+Aditivo. **Ni un umbral ni un semáforo de la §6 cambian**, y M1–M5 conservan sus
+valores y sus estados: la cadena los consume (`stage_x01_aperture.py` y
+`stage_x02_optimal.py` leen `m5_stat` para elegir entre `STAT` y errores
+empíricos), así que moverlos sería mover resultados.
+
+**Lo que A4 escribe ahora y antes no escribía nadie.** Cinco campos del QC eran
+manuscritos o dependían de la cosecha, y por eso los seis `stage00q_qc.json` en
+disco tenían cuatro formas distintas: ROXs 12 b traía un `status: "red"` a mano y
+dos `open_issues` a mano, ROXs 42B b tenía `status_detail` pero cero issues con la
+misma M4 amarilla y la misma M5 roja, y los dos runs por-OB no tenían ni `status`.
+Se derivan ahora, todos, de M1–M5:
+
+- `status` + `status_detail` (ya existía `aggregate_status`, pero su único
+  llamador era la fase `m4m5`, que necesita el cubo);
+- `open_issues`, **con `priority` declarada** (`info`, `accepted`, `major`,
+  `blocking`). Es lo que impide que una nota de diagnóstico acabe publicada como
+  bloqueante de F1, que es lo que le pasaba a la de M4;
+- `downstream_decision`, derivado del estado de M5;
+- `measured_utc` por métrica y `metrics_measured_utc`. El `timestamp_utc` era del
+  esqueleto y no se refrescaba nunca: el de ROXs 42B b decía 2026-07-23 con M4 y M5
+  medidas el 08-23. Ahora cada fase lo refresca, como ya hacían `qc/ghost_census.py`
+  y `qc/noise_decomposition.py`.
+
+Subcomando nuevo **`finalize`**: recalcula todo lo anterior como función pura
+JSON → JSON, sin abrir el cubo, e idempotente. Las notas manuscritas se conservan
+marcadas `source: manual`; solo se descarta el duplicado literal.
+
+`check-cube` reescribe el documento entero, así que ahora **se niega a hacerlo** si
+el QC ya trae métricas medidas, salvo `--force`.
+
+**`wavelength_frame`: precedencia y sin `"unknown"`.** La §5 declara el enum
+`barycentric|topocentric`, pero `detect_wavelength_frame` devuelve `"unknown"`
+cuando la cabecera no trae `SPECSYS` ni `RVCORR` — que es el caso del cubo de
+ROXs 42B b — y ese valor viajaba hasta C2, donde el knob declarado por el run era
+solo el *default* de un `.get` y se descartaba en silencio: los espectros
+definitivos de un cubo baricéntrico salieron estampados `WFRAME = topocentric`
+(vbary = −29.64 km/s ≈ 0.65 Å en Hα, comparable a la LSF). La precedencia es ahora
+**knob declarado → cabecera → `unavailable`**, la misma convención que la unidad de
+flujo, y nunca un `topocentric` supuesto. `wavelength_frame_source` deja de ser
+manuscrito.
+
+**`m4_sky.radial`: diagnóstico, sin semáforo.** M4 publica `median_bias` sobre toda
+la máscara de cielo sin dependencia radial: mide que hay un suelo, no de qué es. El
+bloque nuevo lo separa por anillos alrededor de la primaria, reutilizando
+`measure_sky_statistics` anillo a anillo — el mismo estimador, las mismas ventanas
+de continuo — con dos diferencias deliberadas: el suelo se colapsa **con signo** (M4
+publica el valor absoluto y no distinguiría sobre- de sub-sustracción), y el centro
+de cada anillo es el **radio mediano medido** de sus píxeles, no `(lo+hi)/2`, que
+sesgaba la pendiente.
+
+No lleva estado ni umbral, y es a propósito: decidir «halo» contra «cielo» pediría
+un umbral que esta spec no define, y la §4 prohíbe inventarlos. Publica el perfil,
+la cobertura azimutal por anillo, la caída (`decline`, medida donde la cobertura
+supera 0.4) y `halo_fit_stability` — porque el ajuste `A·r^-p + S` **no es estable**
+frente al rango radial admitido y su `power` no debe citarse como medido.
+
+La posición de la primaria se **verifica contra el pico de brillo del propio cubo**
+en vez de creerse: `m3_primary_yx` de ROXs 12 b vale `[166, 168]` y su propia nota
+dice que es del `cube_telcorr.fits` sin recortar de 338×330, mientras que A4 mide
+sobre un `DATACUBE_FINAL.fits` de 200×200 donde la primaria está en `[100, 100]`.
+Tomarla a ciegas habría centrado los anillos en una esquina vacía.

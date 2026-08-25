@@ -94,26 +94,39 @@ def test_exec_entries_match_real_entry_points(builder):
             assert stage is not None and stage.launch, (
                 f"{s['id']}: exec.kind=launch pero el registro no trae plantillas"
             )
-            for profile, template in stage.launch.items():
-                tokens = template.split()
-                if tokens[0] == "bash":
-                    path = ROOT / tokens[1]
-                    assert path.exists(), f"{s['id']}/{profile}: falta {tokens[1]}"
-                    assert '"$@"' in path.read_text(), (
-                        f"{s['id']}/{profile}: {tokens[1]} no reenvía argumentos"
+            for profile, commands in stage.launch.items():
+                assert commands, f"{s['id']}/{profile}: secuencia de comandos vacía"
+                for n, template in enumerate(commands, 1):
+                    donde = f"{s['id']}/{profile}[{n}]"
+                    tokens = template.split()
+                    if tokens[0] == "bash":
+                        path = ROOT / tokens[1]
+                        assert path.exists(), f"{donde}: falta {tokens[1]}"
+                        assert '"$@"' in path.read_text(), (
+                            f"{donde}: {tokens[1]} no reenvía argumentos"
+                        )
+                    elif "-m" in tokens:
+                        target = tokens[tokens.index("-m") + 1]
+                        mod = importlib.import_module(target)
+                        assert callable(getattr(mod, "main", None)), (
+                            f"{donde}: {target} no define main()"
+                        )
+                    else:
+                        path = ROOT / tokens[1]
+                        assert path.exists(), f"{donde}: falta {tokens[1]}"
+                    # Lo que este invariante siempre quiso cazar es un comando que
+                    # corra contra el run EQUIVOCADO. Exigir `--run-id` literal ya
+                    # no vale: los subcomandos de A4 que escriben M1/M2, M4/M5 y lo
+                    # derivado no aceptan esa bandera, y fijan el run por la ruta
+                    # del QC. Vale cualquiera de las dos formas de fijarlo; ninguna
+                    # de las dos es un fallo.
+                    fija_el_run = ("--run-id {run_id}" in template
+                                   or "{stage_dir}" in template
+                                   or "{run_dir}" in template)
+                    assert fija_el_run, (
+                        f"{donde}: no fija el run (ni --run-id {{run_id}} ni una ruta "
+                        f"bajo {{stage_dir}}/{{run_dir}}): correría contra el run activo"
                     )
-                elif "-m" in tokens:
-                    target = tokens[tokens.index("-m") + 1]
-                    mod = importlib.import_module(target)
-                    assert callable(getattr(mod, "main", None)), (
-                        f"{s['id']}/{profile}: {target} no define main()"
-                    )
-                else:
-                    path = ROOT / tokens[1]
-                    assert path.exists(), f"{s['id']}/{profile}: falta {tokens[1]}"
-                assert "--run-id {run_id}" in template, (
-                    f"{s['id']}/{profile}: la plantilla no pasa --run-id"
-                )
         else:
             raise AssertionError(f"{s['id']}: exec.kind desconocido {kind!r}")
 

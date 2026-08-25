@@ -62,6 +62,59 @@ class RegistryShapeTests(unittest.TestCase):
                         f"{stage.id}: perfil {profile!r} sin plantilla de lanzamiento",
                     )
 
+    def test_launch_sequences_are_non_empty_tuples_of_strings(self):
+        """`launch` es una SECUENCIA: una etapa puede necesitar varios comandos."""
+        for stage in reg.STAGES:
+            for profile, commands in stage.launch.items():
+                self.assertIsInstance(commands, tuple, f"{stage.id}/{profile}")
+                self.assertTrue(commands, f"{stage.id}/{profile}: secuencia vacía")
+                for cmd in commands:
+                    self.assertIsInstance(cmd, str, f"{stage.id}/{profile}")
+                    self.assertTrue(cmd.strip(), f"{stage.id}/{profile}: comando vacío")
+
+    #: Subcomandos de A4 que NO van en la secuencia publicada, y por qué. Vive
+    #: aquí y no en el registro porque es una afirmación sobre lo que se audita,
+    #: no sobre cómo se ejecuta la etapa.
+    A4_FUERA_DE_SECUENCIA = {
+        "check-cube": (
+            "paso de arranque: reescribe el documento ENTERO y desde 2026-08-24 se "
+            "niega a borrar métricas medidas sin --force, así que en la secuencia "
+            "haría abortar toda re-medida en el primer paso"
+        ),
+    }
+
+    def test_every_a4_subcommand_that_writes_the_qc_is_published(self):
+        """El fallo que costó un mes de M4/M5 ausentes, convertido en test.
+
+        A4 son cinco subcomandos y el registro publicaba uno (`m3-flux`), así que
+        lanzar la etapa desde su notebook no medía M4 ni M5 — y C2, al leer
+        `m5_stat.status = unavailable`, se quedaba con la STAT nativa y un
+        `stat_factor_box3` de 1.0, con el error declarado a la mitad del real.
+
+        Los subcomandos se sacan por introspección del `argparse` real, no de una
+        lista a mano: añadir mañana un `m6-loquesea` y no publicarlo pone esto en
+        rojo sin que nadie tenga que acordarse de actualizar el test.
+        """
+        from musepipe.qc import cube_qc
+
+        parser = cube_qc.build_parser() if hasattr(cube_qc, "build_parser") else None
+        self.assertIsNotNone(
+            parser, "cube_qc no expone build_parser(): la introspección no es posible"
+        )
+        subcomandos = set()
+        for action in parser._subparsers._group_actions:  # noqa: SLF001 - argparse no da API
+            subcomandos.update(action.choices)
+        self.assertTrue(subcomandos, "no se encontró ningún subcomando en cube_qc")
+
+        publicados = " ".join(reg.by_id("A4").launch["*"])
+        for nombre in sorted(subcomandos - set(self.A4_FUERA_DE_SECUENCIA)):
+            self.assertIn(
+                f"cube_qc {nombre} ", publicados + " ",
+                f"A4 no publica el subcomando {nombre!r}: lanzarla desde el notebook "
+                f"no lo ejecutaría. Si es deliberado, decláralo en "
+                f"A4_FUERA_DE_SECUENCIA con su razón.",
+            )
+
     def test_a1_declares_both_reduction_profiles(self):
         """A1 emite QC distinto según la vía de reducción (problema P2)."""
         a1 = reg.by_id("A1")

@@ -238,15 +238,43 @@ def _stat_metadata(paths, cfg):
     return stat_factor, covariance_factor, str(stat_status), qc00, qc01
 
 
-def _wavelength_frame(cfg, qc00, open_issues):
-    frame = cfg.get("x01_wframe", "topocentric")
+WFRAME_VALUES = ("topocentric", "barycentric")
+
+
+def _wavelength_frame(cfg, qc00, open_issues, *, knob="x01_wframe"):
+    """El marco de lambda del producto, con el knob DECLARADO por delante.
+
+    Precedencia: knob explicito del config -> A4 (`cube.wavelength_frame`) ->
+    `unavailable`. Antes era la contraria —el QC mandaba siempre y el config
+    solo era el default de `.get`— y eso costo una etiqueta falsa en los
+    espectros definitivos: la cabecera del cubo de ROXs 42B b no trae SPECSYS
+    ni RVCORR, A4 escribio `unknown`, y ese `unknown` descartaba en silencio el
+    `x01_wframe: barycentric` que el run declara para estampar
+    `WFRAME = topocentric` en un cubo barycentrico. vbary = -29.64 km/s son
+    0.65 A en Halpha, comparable a la LSF.
+
+    Es la misma convencion que la unidad de flujo (`io.resolve_flux_unit`): el
+    knob declarado gana a proposito, y cuando no hay ninguno se dice
+    `unavailable` en vez de suponer.
+
+    `knob` es la clave por etapa (`x01_wframe`, `x02_wframe`, `x03_wframe`).
+    Leer siempre `x01_wframe` estaba mal aunque no se notara: C3/C4/C5 llaman a
+    esta misma funcion con su propio config, donde esa clave no existe.
+    """
+
+    declared = str(cfg.get(knob) or cfg.get("wavelength_frame") or "").strip().lower()
+    if declared in WFRAME_VALUES:
+        return declared
+    frame = ""
     if isinstance(qc00, dict):
-        frame = qc00.get("cube", {}).get("wavelength_frame", frame)
-    frame = str(frame or "unknown").lower()
-    if frame not in {"topocentric", "barycentric"}:
-        open_issues.append(f"Wavelength frame {frame!r} unavailable; using topocentric in product header.")
-        frame = "topocentric"
-    return frame
+        frame = str(qc00.get("cube", {}).get("wavelength_frame") or "").strip().lower()
+    if frame in WFRAME_VALUES:
+        return frame
+    open_issues.append(
+        f"Wavelength frame unavailable: A4 says {frame or 'nothing'!r} and no {knob}/wavelength_frame "
+        "is declared in the run config. The product header records 'unavailable' rather than a guessed frame."
+    )
+    return "unavailable"
 
 
 def _load_psf_model(paths, cfg, open_issues):
