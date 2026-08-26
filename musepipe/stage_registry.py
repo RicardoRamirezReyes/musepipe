@@ -182,6 +182,13 @@ STAGES: tuple[Stage, ...] = (
     Stage("C4", "C4_psffit", "C", "stages/spec_psffit_qc.json", exec_kind="script"),
     Stage("C5", "C5_sgf", "C", "stages/spec_sgf_qc.json", qc_optional=True, exec_kind="module_main"),
     Stage("C6", "C6_lpm", "C", "stages/spec_lpm_qc.json", qc_optional=True, exec_kind="module_main"),
+    # C7 extrae en CADA exposicion con su propia PSF y combina las MEDIDAS, en vez
+    # de combinar los cubos y extraer una vez. No entra en `METHOD_ORDER` a
+    # proposito: un metodo nuevo alli se vuelve obligatorio para todos los runs al
+    # instante y arrastra D1, D2, E1, E3, E4, G1 y F1. Opcional por el mismo motivo
+    # que C1b: solo aplica a objetos que declaran exposiciones.
+    Stage("C7", "C7_perexp_combine", "C", "stages/spec_perexp_qc.json",
+          qc_optional=True, exec_kind="module_main"),
     # ===================== BLOQUE D — comparación/calibración =====================
     Stage("D1", "D1_method_compare", "D", "stages/stage_x10_qc.json", exec_kind="script"),
     Stage("D2", "D2_calibrate", "D", "stages/stage_x11_qc.json", exec_kind="script"),

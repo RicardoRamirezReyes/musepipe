@@ -73,6 +73,16 @@ the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) an
   extraction methods**: C3 emits two variants as separate products, so `METHOD_ORDER` is
   `aperture`, `optimal_ls` (background = 04b local surface), `optimal_psfsub` (background =
   C1's primary PSF model), `psffit`, `sgf`, `lpm`
+- **C7** (optional, off the chain) extracts the companion **in each exposure with its own
+  PSF** and combines the **measurements**, instead of combining cubes and extracting once.
+  It is deliberately **not** in `METHOD_ORDER` — a new method there becomes mandatory for
+  every run at once and drags D1, D2, E1, E3, E4, G1 and F1 — so D2 does not calibrate it
+  and it never enters block E: it is a **reference/validation** product. Measured on
+  ROXs 12 b (`docs/2026-08-26_perexp_medido_y_la_noche_mala.md`): S/N **ties** with the
+  combined cube (0.97–1.09×), but the per-exposure `apcorr` removes the **−8.52 %**
+  chromatic drift that C1's V4 measures as +8.2 %. What it really buys is weighting by
+  quality: the cube weights by `exptime` and hands **38.1 %** of the weight to the worst
+  night, where inverse-variance leaves it 2.6 %.
 - **D1–D2** inter-method comparison → spectral calibration. D2 is where the
   **definitive spectra** are delivered: the six companion methods plus the primary
   (`spec_calibrated_psffit_star.fits`), all with `BUNIT` and an error budget, plus
