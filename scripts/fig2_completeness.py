@@ -228,8 +228,8 @@ def procedencia(runs: list[str], project_root: Path) -> dict:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run-a", required=True, help="objeto A (p.ej. ROXs12b_realigned)")
-    ap.add_argument("--run-b", required=True, help="objeto B (p.ej. ROXs42Bb_realigned)")
+    ap.add_argument("--run-a", required=True, help="run del objeto A")
+    ap.add_argument("--run-b", required=True, help="run del objeto B")
     ap.add_argument("--metodos", default=",".join(PAR),
                     help="metodos a medir; el primero es el canonico de la figura")
     ap.add_argument("--exclusion", default="par", choices=EXCLUSIONES,

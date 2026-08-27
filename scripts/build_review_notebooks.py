@@ -4053,6 +4053,53 @@ STAGES: list[dict] = [
         ),
     ),
     dict(
+        id="E4b", slug="E4b_perexp_injection", title="Inyección-recuperación por exposición",
+        block="E · Detección y límites",
+        spec="spec_E4b_codex_perexp_injection.md", run_override=None,
+        what=("Inyecta la fuente sintética en CADA exposición con su propia PSF y combina las "
+              "medidas, en vez de inyectar una vez en el cubo combinado."),
+        inputs=("`psf_model_mixture.json` de forma `mixture` (C1 con `psf_scope=per_observation`), "
+                "`observation_plan.json`, `stage01c_qc.json` y los cubos por exposición"),
+        outputs=("`tables/perexp_injection_by_exposure.csv`, "
+                 "`tables/perexp_injection_combined.csv` y `stages/stage_h04b_qc.json`"),
+        downstream=("Ninguna etapa: E3 sigue leyendo a E4. Es producto de referencia y validación, "
+                    "por el mismo motivo que C7."),
+        exec=dict(kind="module_main", target="musepipe.stages.stage_h04b_perexp_injection",
+                  cost="Pesado: la rejilla de E4 sobre cada una de las 29–30 exposiciones."),
+        qc="stages/stage_h04b_qc.json", qc_optional=True,
+        decisions=[
+            ("**Etapa aparte, no un knob de E4.** E3 consume la tabla de throughput de E4, así que "
+             "un interruptor de sustrato dentro de E4 cambiaría en silencio el límite de Ṁ "
+             "publicado. Es el mismo motivo por el que C7 no entró en `METHOD_ORDER`.",
+             "spec_E4b_codex_perexp_injection.md"),
+            ("**La σ que convierte S/N en flujo es la de cada exposición**, medida en sus propios "
+             "controles. Usar la del combinado haría que «S/N=1» no fuera S/N=1 en una exposición "
+             "de 300 s.", "spec_E4b_codex_perexp_injection.md"),
+            ("**Existe porque el sustrato cambia el error del modelo por un factor de 3 a 6**: "
+             "medido el 2026-08-27, las exposiciones de la noche buena de ROXs 12 b subestiman el "
+             "halo a la separación del compañero en +55 a +107 %, contra el +17 % del combinado.",
+             "2026-08-27_modelo_psf_por_exposicion.md"),
+        ],
+        checks=None,
+        salient=["convention.sigma", "convention.methods", "convention.combine",
+                 "input.n_exposures", "positions_per_point", "rows_per_point"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `convention.sigma` | De dónde sale la σ que convierte S/N inyectada en flujo. | "
+            "Tiene que ser la de los controles **de cada exposición**: inyectar «S/N=1» con la σ "
+            "del combinado en una exposición de 300 s no es S/N=1. |\n"
+            "| `positions_per_point` vs `rows_per_point` | Posiciones de cielo distintas contra "
+            "filas de tabla. | La unidad independiente es la **posición**; confundirlas infla la "
+            "significancia (medido el 2026-08-27: Fisher daba p=0.0010 donde solo había 4 "
+            "posiciones). |\n"
+            "| `convention.methods` | Los extractores medidos por exposición. | `aperture` es el "
+            "control limpio y `psffit` el que tiene el pedestal medido en el combinado (+659 con "
+            "señal nula): son los dos que hacen falta para saber si el pedestal es del sustrato o "
+            "del estimador. |\n"
+        ),
+    ),
+    dict(
         id="C7", slug="C7_perexp_combine", title="Extracción por exposición y combinación",
         block="C · Extracción",
         spec="spec_C7_codex_perexp_combine.md", run_override=None,

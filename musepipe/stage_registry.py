@@ -199,6 +199,14 @@ STAGES: tuple[Stage, ...] = (
     Stage("E2", "E2_artifacts", "E", "stages/stage_h02_qc.json", exec_kind="script"),
     Stage("E3", "E3_upper_limits", "E", "stages/stage_h03_qc.json", exec_kind="script"),
     Stage("E4", "E4_injection", "E", "stages/stage_h04_qc.json", exec_kind="script"),
+    # E4b inyecta en CADA exposicion con su propia PSF, en vez de en el
+    # combinado. No es un knob de E4 a proposito: E3 consume la tabla de
+    # throughput de E4, asi que un interruptor de sustrato ahi dentro cambiaria
+    # en silencio el limite de Mdot publicado -y el fallback silencioso es la
+    # familia de bugs recurrente de este repo-. Opcional por el mismo motivo que
+    # C7: solo aplica a objetos que declaran exposiciones.
+    Stage("E4b", "E4b_perexp_injection", "E", "stages/stage_h04b_qc.json",
+          qc_optional=True, exec_kind="module_main"),
     Stage("E5", "E5_contrast_curves", "E", "stages/stage_h05_qc.json",
           qc_optional=True, exec_kind="module_main"),
     Stage("E6", "E6_roc_curves", "E", "stages/stage_h06_qc.json",
