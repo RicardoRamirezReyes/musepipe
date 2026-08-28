@@ -193,10 +193,7 @@ INLINE_SOURCES = {
             # copia reventaria en cuanto el run use `psf_scope=per_observation`.
             "_mixture_component_key", "_mixture_component_weight",
             "_mixture_image_cached", "_evaluate_mixture",
-            # `evaluate_psf_model` llama a `_apply_halo_correction` desde el
-            # 2026-08-27 (bloque opcional `halo_correction`, que corrige el halo
-            # solo FUERA de `norm_radius`): sin copiarlo, la copia queda coja.
-            "_apply_halo_correction", "evaluate_psf_model",
+            "evaluate_psf_model",
             "psf_roundtrip_error", "radial_hybrid_profile", "evaluate_radial_profile",
         ]),
         ("musepipe/stages/stage_e01_psfao.py", [
@@ -268,7 +265,7 @@ INLINE_SOURCES["PSFHALO"] = INLINE_SOURCES["RESID"] + [
                          "_psfao_grid_npix", "_psfao_params_at", "_evaluate_psfao",
                          "_mixture_component_key", "_mixture_component_weight",
                          "_mixture_image_cached", "_evaluate_mixture",
-                         "_apply_halo_correction", "evaluate_psf_model"]),
+                         "evaluate_psf_model"]),
 ]
 
 INLINE_SOURCES["APCORR"] = INLINE_SOURCES["C4"] + [
@@ -12764,30 +12761,61 @@ def build_psfhalo_cells(mb, target, run_id):
         ),
         code(
             "if not CSV_PEDESTAL.exists():\n"
-            "    print(f'sin {CSV_PEDESTAL.name}: esta sección necesita la tabla precalculada.')\n"
+            "    print('sin', CSV_PEDESTAL.name, ': esta sección necesita la tabla precalculada.')\n"
             "else:\n"
-            "    _p = list(csv.DictReader(open(CSV_PEDESTAL)))\n"
-            "    _mets = sorted({r['method'] for r in _p})\n"
-            "    _vars = sorted({r['variante'] for r in _p})\n"
-            "    fig, ax = plt.subplots(figsize=(7.6, 3.8))\n"
-            "    _x = np.arange(len(_mets)); _w = .8 / max(len(_vars), 1)\n"
-            "    for i, v in enumerate(_vars):\n"
-            "        _med = [np.median([float(r['recovered_flux']) for r in _p\n"
-            "                           if r['method'] == m and r['variante'] == v\n"
-            "                           and r['position_label'] != 'real']) for m in _mets]\n"
-            "        ax.bar(_x + i * _w, _med, _w, label=v)\n"
-            "    ax.axhline(0, color='k', lw=.8)\n"
-            "    ax.set_xticks(_x + _w * (len(_vars) - 1) / 2); ax.set_xticklabels(_mets)\n"
-            "    ax.set_ylabel('flujo recuperado con señal NULA')\n"
-            "    ax.set_title('el pedestal, por método y variante del modelo')\n"
-            "    ax.legend(fontsize=8); ax.grid(alpha=.3, axis='y')\n"
-            "    plt.tight_layout(); plt.show()\n"
-            "    for v in _vars:\n"
-            "        for m in _mets:\n"
-            "            _f = [float(r['recovered_flux']) for r in _p if r['method'] == m\n"
-            "                  and r['variante'] == v and r['position_label'] != 'real']\n"
-            "            print(f'{v:14s} {m:9s} mediana {np.median(_f):9.1f}'\n"
-            "                  f'  ·  positivos {sum(1 for q in _f if q > 0):3d}/{len(_f)}')"
+            "    _p = [x for x in csv.DictReader(open(CSV_PEDESTAL))\n"
+            "          if x['position_label'] != 'real']\n"
+            "    _mets = sorted({x['method'] for x in _p})\n"
+            "    _noches = sorted({x['noche'] for x in _p})\n"
+            "    # El estadístico es la SNR, no el flujo: el flujo lleva dentro la\n"
+            "    # `apcorr`, que difiere mucho entre exposiciones, así que los flujos de\n"
+            "    # dos exposiciones NO son comparables. La SNR es adimensional, y además\n"
+            "    # es lo que define un falso positivo.\n"
+            "    fig, (c1, c2) = plt.subplots(1, 2, figsize=(11.5, 3.8))\n"
+            "    for _m in _mets:\n"
+            "        _s = [float(x['recovered_snr']) for x in _p if x['method'] == _m]\n"
+            "        c1.hist(_s, bins=40, range=(-8, 12), histtype='step', lw=2, label=_m)\n"
+            "    c1.axvline(5, color='crimson', ls='--', label='umbral de detección')\n"
+            "    c1.set_xlabel('SNR recuperada con señal NULA'); c1.set_ylabel('medidas')\n"
+            "    c1.set_title('lo que cae a la derecha del umbral\\nes un falso positivo')\n"
+            "    c1.legend(fontsize=8); c1.grid(alpha=.3)\n"
+            "    _x = np.arange(len(_mets)); _w = .8 / max(len(_noches), 1)\n"
+            "    for _i, _n in enumerate(_noches):\n"
+            "        _tas = []\n"
+            "        for _m in _mets:\n"
+            "            _f = [x for x in _p if x['method'] == _m and x['noche'] == _n]\n"
+            "            _tas.append(100 * sum(1 for x in _f\n"
+            "                                  if float(x['recovered_snr']) >= 5) / len(_f))\n"
+            "        c2.bar(_x + _i * _w, _tas, _w, label=_n)\n"
+            "    c2.set_xticks(_x + _w * (len(_noches) - 1) / 2); c2.set_xticklabels(_mets)\n"
+            "    c2.set_ylabel('falsos positivos [%]')\n"
+            "    c2.set_title('no es del sustrato: es del estimador')\n"
+            "    c2.legend(fontsize=8); c2.grid(alpha=.3, axis='y')\n"
+            "    plt.tight_layout(); plt.show()\n\n"
+            "    print(f\"{'método':10s} {'falsos positivos':>20s} {'tasa':>7s}\"\n"
+            "          f\" {'SNR mediana':>12s}\")\n"
+            "    for _m in _mets:\n"
+            "        _f = [x for x in _p if x['method'] == _m]\n"
+            "        _s = [float(x['recovered_snr']) for x in _f]\n"
+            "        _fp = sum(1 for q in _s if q >= 5)\n"
+            "        print(f'{_m:10s} {_fp:9d} / {len(_f):<8d}'\n"
+            "              f' {100 * _fp / len(_f):6.1f}% {np.median(_s):12.2f}')\n"
+            "    print('\\nel mismo dato, las mismas posiciones, la misma señal nula:'\n"
+            "          ' la diferencia es el estimador.')"
+        ),
+        md(
+            "> **Una comparación que no cuadra con la intuición.** Sobre el cubo **combinado** el "
+            "mismo método da una tasa de falsos positivos **varias veces mayor** que la de aquí. "
+            "O sea: el déficit del modelo es peor **por exposición** (§5), pero el pedestal que "
+            "produce es peor **en el combinado**. Son dos cosas distintas y van en direcciones "
+            "opuestas — conviene no confundirlas.\n\n"
+            "> **Y una advertencia de método, pagada con una medida perdida.** Corregir el halo "
+            "*dentro del modelo de PSF* no funciona: el término es aditivo y no cae con el radio, "
+            "así que aplicado a la plantilla de una fuente puntual la vuelve casi plana. La "
+            "corrección es una propiedad de la **escena** —el halo residual de la primaria, en su "
+            "posición— y no de la **función PSF**, que se evalúa también para el objeto, para la "
+            "inyección y para la corrección de apertura. C1 lo hace bien: suma a la **imagen** del "
+            "modelo por bin, no al evaluador."
         ),
         md(
             "## 10 · Qué NO decide este notebook\n\n"
