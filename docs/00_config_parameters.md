@@ -180,6 +180,20 @@ cambie el crop, el centrado de Stage01 o la estructura de stripes.
 | `kernel_230_value` | `230` | Escala espectral del fake continuum, en canales bajo la convencion actual. | Si el continuo queda sub/sobre suavizado. |
 | `stage03_n_jobs` | `8` | Workers para Stage03 fake continuum. | Ajustar segun CPU/RAM. |
 
+## Extraccion Por Exposicion (musepipe C7)
+
+| clave | por defecto | que hace |
+|---|---|---|
+| `x06_apertures` | las de C2 (`x01_apertures`) | aperturas a extraer; se LEEN del config resuelto de C2 |
+| `x06_annulus_bkg_px` | el de C2 | anillo de fondo `(r_in, r_out, exclusion)` |
+| `x06_n_controls` | 8 | posiciones de control al mismo radio |
+| `x06_group_by` | `none` | `none` o `night`: un producto por noche |
+| `x06_combine` | `invvar` | `invvar` / `exptime` / `equal` / `sum` (ver spec C7) |
+| `x06_weight_band_A` | `[8600, 9000]` | banda donde se miden los pesos; **no** puede ser la que se mide |
+| `x06_max_workers` | 4 | el techo lo pone la memoria (un cubo alineado por worker) |
+| `x06_flux_convention` | la del run | `normrad` o `total` |
+| `x06_wframe` | — | marco de lambda declarado, por delante del QC de A4 |
+
 ## Sustraccion De Halo Espectral (musepipe C5 SGF / C6 LPM)
 
 Claves consumidas por `musepipe.halosub` y las etapas C5 (`stage_x04_sgf`) y

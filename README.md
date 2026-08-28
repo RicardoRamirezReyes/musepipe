@@ -71,6 +71,7 @@ Cadena ROXs 12 (A→G). Los QC viven en `runs/<RUN>/stages/`.
 | C4 | Ajuste de PSF (psffit) | `musepipe/stages/stage_x03_psffit.py` | `scripts/stage_x03_psffit.sh` | `spec_psffit_qc.json` |
 | C5 | Sustracción de halo SGF | `musepipe/stages/stage_x04_sgf.py` (+`halosub_stage.py`) | — | `spec_sgf_qc.json` |
 | C6 | Sustracción de halo LPM | `musepipe/stages/stage_x05_lpm.py` (+`halosub_stage.py`) | — | `spec_lpm_qc.json` |
+| C7 | Extracción por exposición y combinación de las medidas | `musepipe/stages/stage_x06_perexp.py` | — | `spec_perexp_qc.json` |
 | D1 | Comparación inter-método | `musepipe/stages/stage_x10_compare.py` | `scripts/stage_x10_compare.sh` | `stage_x10_qc.json` |
 | D2 | Calibración espectral | `musepipe/stages/stage_x11_calibrate.py` | `scripts/stage_x11_calibrate.sh` | `stage_x11_qc.json` |
 | E1 | Detección Hα | `musepipe/stages/stage_h01_detect.py` | `scripts/stage_h01_detect.sh` | `stage_h01_qc.json` |

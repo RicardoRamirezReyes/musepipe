@@ -4052,6 +4052,122 @@ STAGES: list[dict] = [
             "contrato de etapa con tests sintéticos (2026-07-14)."
         ),
     ),
+    dict(
+        id="E4b", slug="E4b_perexp_injection", title="Inyección-recuperación por exposición",
+        block="E · Detección y límites",
+        spec="spec_E4b_codex_perexp_injection.md", run_override=None,
+        what=("Inyecta la fuente sintética en CADA exposición con su propia PSF y combina las "
+              "medidas, en vez de inyectar una vez en el cubo combinado."),
+        inputs=("`psf_model_mixture.json` de forma `mixture` (C1 con `psf_scope=per_observation`), "
+                "`observation_plan.json`, `stage01c_qc.json` y los cubos por exposición"),
+        outputs=("`tables/perexp_injection_by_exposure.csv`, "
+                 "`tables/perexp_injection_combined.csv` y `stages/stage_h04b_qc.json`"),
+        downstream=("Ninguna etapa: E3 sigue leyendo a E4. Es producto de referencia y validación, "
+                    "por el mismo motivo que C7."),
+        exec=dict(kind="module_main", target="musepipe.stages.stage_h04b_perexp_injection",
+                  cost="Pesado: la rejilla de E4 sobre cada una de las 29–30 exposiciones."),
+        qc="stages/stage_h04b_qc.json", qc_optional=True,
+        decisions=[
+            ("**Etapa aparte, no un knob de E4.** E3 consume la tabla de throughput de E4, así que "
+             "un interruptor de sustrato dentro de E4 cambiaría en silencio el límite de Ṁ "
+             "publicado. Es el mismo motivo por el que C7 no entró en `METHOD_ORDER`.",
+             "spec_E4b_codex_perexp_injection.md"),
+            ("**La σ que convierte S/N en flujo es la de cada exposición**, medida en sus propios "
+             "controles. Usar la del combinado haría que «S/N=1» no fuera S/N=1 en una exposición "
+             "de 300 s.", "spec_E4b_codex_perexp_injection.md"),
+            ("**Existe porque el sustrato cambia el error del modelo por un factor de 3 a 6**: "
+             "medido el 2026-08-27, las exposiciones de la noche buena de ROXs 12 b subestiman el "
+             "halo a la separación del compañero en +55 a +107 %, contra el +17 % del combinado.",
+             "2026-08-27_modelo_psf_por_exposicion.md"),
+        ],
+        checks=None,
+        salient=["convention.sigma", "convention.methods", "convention.combine",
+                 "input.n_exposures", "positions_per_point", "rows_per_point"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `convention.sigma` | De dónde sale la σ que convierte S/N inyectada en flujo. | "
+            "Tiene que ser la de los controles **de cada exposición**: inyectar «S/N=1» con la σ "
+            "del combinado en una exposición de 300 s no es S/N=1. |\n"
+            "| `positions_per_point` vs `rows_per_point` | Posiciones de cielo distintas contra "
+            "filas de tabla. | La unidad independiente es la **posición**; confundirlas infla la "
+            "significancia (medido el 2026-08-27: Fisher daba p=0.0010 donde solo había 4 "
+            "posiciones). |\n"
+            "| `convention.methods` | Los extractores medidos por exposición. | `aperture` es el "
+            "control limpio y `psffit` el que tiene el pedestal medido en el combinado (+659 con "
+            "señal nula): son los dos que hacen falta para saber si el pedestal es del sustrato o "
+            "del estimador. |\n"
+        ),
+    ),
+    dict(
+        id="C7", slug="C7_perexp_combine", title="Extracción por exposición y combinación",
+        block="C · Extracción",
+        spec="spec_C7_codex_perexp_combine.md", run_override=None,
+        what=("Extrae el compañero en CADA exposición con su propia PSF y combina las MEDIDAS, "
+              "en vez de combinar los cubos y extraer una vez."),
+        inputs=("`psf_model_mixture.json` de forma `mixture` (C1 con `psf_scope=per_observation`), "
+                "`observation_plan.json`, `stage01c_qc.json` y los cubos por exposición"),
+        outputs=("`stages/spec_perexp_<grupo>_<apertura>_object.fits` + sus controles `.npz` + "
+                 "`stages/spec_perexp_qc.json`"),
+        downstream=("Ninguna etapa: NO entra en `METHOD_ORDER`. Es producto de referencia y "
+                    "validación contra los seis métodos de C2–C6."),
+        exec=dict(kind="module_main", target="musepipe.stages.stage_x06_perexp",
+                  cost="Pesado: una pasada de lectura sobre las 29–30 exposiciones (~14 min)."),
+        qc="stages/spec_perexp_qc.json", qc_optional=True,
+        salient=["convention.combine", "convention.group_by", "convention.weight_band_A",
+                 "input.n_exposures", "weight_share_by_night"],
+        checks_md=(
+            "## Los términos de este QC, en físico\n\n"
+            "| Término | Qué es | Por qué importa |\n|---|---|---|\n"
+            "| `convention.combine` | La ley de pesos con la que se combinaron las medidas. | Es "
+            "lo que decide el resultado: medido en ROXs 12 b, `invvar` da S/N 19.33 en el continuo "
+            "y `exptime` —la ley del cubo combinado— da **0.11**. |\n"
+            "| `convention.weight_band_A` | La banda donde se miden los pesos. | Tiene que ser "
+            "**distinta** de la banda que se mide: pesar con la σ de la propia banda infla la S/N "
+            "un 40–60 % por auto-selección. |\n"
+            "| `groups[].apertures[].n_eff` | Exposiciones efectivas tras pesar. | 16 de 29 en "
+            "ROXs 12 b: la mitad del tiempo de telescopio pesa poco, y eso es un hecho del dato. |\n"
+            "| `weight_share_by_night` | Cuánto peso se lleva cada noche con cada ley. | El "
+            "combinado canónico da **38.1 %** a la peor noche de ROXs 12 b porque pesa por "
+            "segundos; `invvar` le da **2.6 %**. |\n"
+        ),
+        narrative_md=(
+            "## Qué hace C7 y por qué\n\n"
+            "La corrección de apertura que consumen C2–C6 sale del modelo de PSF de C1, y ese "
+            "modelo es una **mezcla** de las N exposiciones. Su error está medido y es cromático: "
+            "la V4 de la spec C1 falla con +6.77 %, repartido en +0.34 % en el azul y **+8.55 % en "
+            "el rojo**.\n\n"
+            "C7 extrae en cada exposición con **su** PSF —donde el modelo vale— y combina las "
+            "medidas. Lo medido el 2026-08-26: la S/N **empata** con el cubo combinado "
+            "(0.97–1.09×), pero la razón `apcorr_perexp/apcorr_mezcla` deriva **−8.52 %** del azul "
+            "al rojo, justo lo contrario que la V4 de la mezcla (+8.2 %).\n\n"
+            "**Lo que se gana no es S/N, es poder pesar por calidad.** El combinado pesa por "
+            "`exptime`, y por eso le da el 38.1 % del peso a una noche con σ 4.2× peor.\n\n"
+            "**Rol en la cadena:** ninguno. No entra en `METHOD_ORDER` —un método nuevo allí se "
+            "vuelve obligatorio para todos los runs al instante— así que D2 no la calibra y no "
+            "entra en el bloque E. Es referencia y validación."
+        ),
+        evidence_md=(
+            "## Resultados que llevaron a la conclusión\n\n"
+            "Dos vías se cerraron **con medida** antes de llegar aquí: el término híbrido de C1 "
+            "(arregla el anillo y lleva la V4 de +6.04 % a **+35.08 %**) y cambiar la ley de "
+            "combinación de la mezcla (media +4.28 %, `sigclip` +4.72 %, mediana −12.38 %).\n\n"
+            "Y agrupar por noche no es comodidad: con solo las 22 buenas la S/N sube a "
+            "20.60 / 9.24 / 401.36 (continuo/Hα/rojo) frente a 19.33 / 8.35 / 388.75 con las 29."
+        ),
+        decisions=[
+            ("No entra en `METHOD_ORDER`: sería obligatoria para todos los runs al instante y "
+             "arrastraría D1, D2, E1, E3, E4, G1 y F1.",
+             "spec_C7_codex_perexp_combine.md"),
+            ("La σ sale de los controles COMBINADOS con los mismos pesos, no de `STAT` ni de "
+             "σᵢ/√n —esta última trata como ruido la estructura del halo, que no promedia.",
+             "noise_model.md"),
+            ("Los pesos de `invvar` se miden en una banda declarada, nunca en la que se mide: "
+             "eso último infla la S/N por auto-selección.", "2026-08-26_perexp_medido_y_la_noche_mala.md"),
+            ("`sum` está declarada y da la MISMA S/N que `equal` (difieren en el factor N): sirve "
+             "para conservar flujo, no para el mejor límite.", "spec_C7_codex_perexp_combine.md"),
+        ],
+    ),
     # ===================== BLOQUE D — método + calibración =====================
     dict(
         id="D1", slug="D1_method_compare", title="Comparación inter-método (v4, por observable)", block="D · Método",

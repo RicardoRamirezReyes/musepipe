@@ -182,6 +182,13 @@ STAGES: tuple[Stage, ...] = (
     Stage("C4", "C4_psffit", "C", "stages/spec_psffit_qc.json", exec_kind="script"),
     Stage("C5", "C5_sgf", "C", "stages/spec_sgf_qc.json", qc_optional=True, exec_kind="module_main"),
     Stage("C6", "C6_lpm", "C", "stages/spec_lpm_qc.json", qc_optional=True, exec_kind="module_main"),
+    # C7 extrae en CADA exposicion con su propia PSF y combina las MEDIDAS, en vez
+    # de combinar los cubos y extraer una vez. No entra en `METHOD_ORDER` a
+    # proposito: un metodo nuevo alli se vuelve obligatorio para todos los runs al
+    # instante y arrastra D1, D2, E1, E3, E4, G1 y F1. Opcional por el mismo motivo
+    # que C1b: solo aplica a objetos que declaran exposiciones.
+    Stage("C7", "C7_perexp_combine", "C", "stages/spec_perexp_qc.json",
+          qc_optional=True, exec_kind="module_main"),
     # ===================== BLOQUE D — comparación/calibración =====================
     Stage("D1", "D1_method_compare", "D", "stages/stage_x10_qc.json", exec_kind="script"),
     Stage("D2", "D2_calibrate", "D", "stages/stage_x11_qc.json", exec_kind="script"),
@@ -192,6 +199,14 @@ STAGES: tuple[Stage, ...] = (
     Stage("E2", "E2_artifacts", "E", "stages/stage_h02_qc.json", exec_kind="script"),
     Stage("E3", "E3_upper_limits", "E", "stages/stage_h03_qc.json", exec_kind="script"),
     Stage("E4", "E4_injection", "E", "stages/stage_h04_qc.json", exec_kind="script"),
+    # E4b inyecta en CADA exposicion con su propia PSF, en vez de en el
+    # combinado. No es un knob de E4 a proposito: E3 consume la tabla de
+    # throughput de E4, asi que un interruptor de sustrato ahi dentro cambiaria
+    # en silencio el limite de Mdot publicado -y el fallback silencioso es la
+    # familia de bugs recurrente de este repo-. Opcional por el mismo motivo que
+    # C7: solo aplica a objetos que declaran exposiciones.
+    Stage("E4b", "E4b_perexp_injection", "E", "stages/stage_h04b_qc.json",
+          qc_optional=True, exec_kind="module_main"),
     Stage("E5", "E5_contrast_curves", "E", "stages/stage_h05_qc.json",
           qc_optional=True, exec_kind="module_main"),
     Stage("E6", "E6_roc_curves", "E", "stages/stage_h06_qc.json",
