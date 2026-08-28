@@ -114,6 +114,21 @@ def stage_x02_config_from_run(
     # es mejor depende del objeto — medido, va en direcciones opuestas en los
     # dos del proyecto (reports/20260727/sesgo_anillo_y_ventana_2026-07-27.md).
     cfg.setdefault("x02_background_mode", "annulus")
+    # `psfsub` resta el modelo de PSF de la primaria Y ADEMAS aplica el anillo
+    # local encima: DOS tratamientos de fondo apilados sobre el mismo cubo. Es el
+    # patron que a `optimal_ls` le producia el 93 % de su continuo negativo
+    # (mediana en banda roja -2045 con el, -140 sin el) y que se corrigio el
+    # 2026-07-26 con `x02_wings_intact_ls`.
+    #
+    # La simetria NO es literal: LS puede soltar la PRIMERA resta y quedarse con
+    # el anillo, pero psfsub no -restar el modelo ES la variante-, asi que lo que
+    # se suelta aqui es el ANILLO.
+    #
+    # APAGADO por defecto, y a proposito: a LS se le encendio CON la medida
+    # delante y para psfsub esa medida todavia no existe. Encenderlo cambia un
+    # metodo de METHOD_ORDER y arrastra D1, D2 y el bloque E, asi que se enciende
+    # con un numero delante o no se enciende.
+    cfg.setdefault("x02_wings_intact_psfsub", False)
     cfg.setdefault("x02_azimuthal_width_px", 3.0)
     cfg.setdefault("x02_azimuthal_exclude_px", 10.0)
     # `local_plane`: el mismo ajuste que 04b y C4, evaluado EN el compañero.
@@ -336,6 +351,10 @@ def _qc_payload(extractions, cfg, paths, stat_state, psf_model_path, psfsub_mode
         "continuum_bias_vs_aperture_pct": continuum_bias,
         "psf_sensitivity": psf_sensitivity,
         "psfsub_model": psfsub_model_meta,
+        # Cual de los dos tratamientos de fondo llevo `psfsub`: restar el modelo
+        # Y el anillo (historico, False) o solo el modelo (True). Un cambio de
+        # fondo que no se declara es un fallback silencioso.
+        "wings_intact_psfsub": bool(cfg.get("x02_wings_intact_psfsub", False)),
         "checks": {
             "v1_snr_gain_ok": None if snr_gain["median"] is None else bool(snr_gain["median"] >= 1.0),
             "v2_error_ratio_ok": None if ratio is None else bool(0.7 <= ratio <= 1.4),
@@ -481,6 +500,16 @@ def compute_stage_x02_products(config, paths=None):
             )
     psfsub_common = dict(common)
     psfsub_common["bunit"] = bunit or stage02_bunit
+    wings_intact_psfsub = bool(cfg.get("x02_wings_intact_psfsub", False))
+    if wings_intact_psfsub and psfsub_common.get("local_bkg_annulus_px") is not None:
+        psfsub_common["local_bkg_annulus_px"] = None
+        open_issues.append(
+            "PSFSUB extracts from the PSF-subtracted cube WITHOUT the local annulus on "
+            "top (x02_wings_intact_psfsub=true): subtracting both removed the background "
+            "twice, which is the pattern that produced ~93% of the negative continuum in "
+            "optimal_ls before 2026-07-26. Set x02_wings_intact_psfsub=false for the "
+            "historical behaviour."
+        )
     psfsub = make_optimal_product(
         psfsub_cube,
         stage02_wave,

@@ -310,6 +310,17 @@ def compute_stage_h04b_products(config, paths=None) -> StageH04bProduct:
     line_center = float(cfg.get("h04_line_center_A", cfg.get("h01_line_center_A", 6562.8)))
     lsf_fwhm = float(cfg.get("h01_lsf_fwhm_A", 2.383))
 
+    # La agrupacion se resuelve ANTES del trabajo caro. `group_exposures` devuelve
+    # {grupo: [INDICES]}, no objetos, y consumirla mal costo 34 min de calculo
+    # tirado porque el fallo estaba DESPUES del bucle. Aqui cuesta segundos.
+    grupos = {nombre: [obs.exposures[i] for i in idx]
+              for nombre, idx in group_exposures(obs.exposures,
+                                                 str(cfg["x06b_group_by"])).items()}
+    vistos = {e.exposure_id for v in grupos.values() for e in v}
+    if vistos != {e.exposure_id for e in obs.exposures}:
+        raise PerExpInjectionError(
+            "la agrupacion no cubre exactamente las exposiciones del plan.")
+
     n_jobs = max(1, int(cfg["x06b_max_workers"]))
     with ThreadPoolExecutor(max_workers=n_jobs) as pool:
         trozos = list(pool.map(
@@ -320,7 +331,6 @@ def compute_stage_h04b_products(config, paths=None) -> StageH04bProduct:
         ))
     filas = [f for t in trozos for f in t]
 
-    grupos = group_exposures(obs.exposures, str(cfg["x06b_group_by"]))
     ley = str(cfg["x06b_combine"])
     combinado = []
     for nombre, exps in grupos.items():

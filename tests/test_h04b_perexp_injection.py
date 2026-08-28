@@ -83,3 +83,26 @@ class TestVentanaEspectral(unittest.TestCase):
     def test_la_banda_viaja_al_qc(self):
         import inspect
         self.assertIn('"band_A"', inspect.getsource(H4B.compute_stage_h04b_products))
+
+
+class TestAgrupacion(unittest.TestCase):
+    """`group_exposures` devuelve {grupo: [INDICES]}, no objetos.
+
+    Consumirla como si fueran exposiciones costo 34 min de calculo tirado, porque
+    el fallo estaba DESPUES del bucle caro. Ahora se resuelve antes.
+    """
+
+    def _src(self):
+        import inspect
+        return inspect.getsource(H4B.compute_stage_h04b_products)
+
+    def test_se_resuelve_antes_del_trabajo_caro(self):
+        src = self._src()
+        self.assertLess(src.index("grupos = {"), src.index("ThreadPoolExecutor"),
+                        "agrupar despues del bucle hace que un fallo cueste la corrida entera")
+
+    def test_traduce_indices_a_exposiciones(self):
+        self.assertIn("obs.exposures[i] for i in idx", self._src())
+
+    def test_exige_que_la_union_sea_el_plan(self):
+        self.assertIn("no cubre exactamente las exposiciones del plan", self._src())
