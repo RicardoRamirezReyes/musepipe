@@ -345,10 +345,14 @@ def compute_stage_h04b_products(config, paths=None) -> StageH04bProduct:
             val = np.asarray([g["recovered_flux"] for g in grupo], dtype=np.float64)
             sig = np.asarray([g["recovered_sigma"] for g in grupo], dtype=np.float64)
             pes = np.asarray([pesos_plan[g["exposure_id"]] for g in grupo], dtype=np.float64)
-            comb = combine_measurements(val, pes, sig, ley)
-            comb = float(np.atleast_1d(comb)[0]) if not np.isscalar(comb) else float(comb)
-            sigma_comb = float(np.sqrt(1.0 / np.nansum(1.0 / np.clip(sig, 1e-30, None) ** 2))) \
-                if ley == "invvar" else float(np.nanmedian(sig) / np.sqrt(len(sig)))
+            # `combine_measurements` devuelve (pesos, escala), no un valor: el
+            # combinado es `escala * sum(w_i * x_i)`. Asumirlo en vez de leerlo
+            # costo una corrida entera.
+            pesos, escala = combine_measurements(val, pes, sig, ley)
+            comb = float(escala * np.nansum(pesos * val))
+            # La sigma se combina con LOS MISMOS pesos: si no, el cociente deja
+            # de ser una S/N y pasa a mezclar dos estimadores.
+            sigma_comb = float(escala * np.sqrt(np.nansum((pesos * sig) ** 2)))
             combinado.append({
                 "grupo": nombre, "method": k[0], "position_label": k[1],
                 "input_snr": k[2], "template_width": k[3],

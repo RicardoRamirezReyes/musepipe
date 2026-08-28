@@ -106,3 +106,56 @@ class TestAgrupacion(unittest.TestCase):
 
     def test_exige_que_la_union_sea_el_plan(self):
         self.assertIn("no cubre exactamente las exposiciones del plan", self._src())
+
+
+class EndToEndSinteticoTests(unittest.TestCase):
+    """La etapa ENTERA contra un run sintetico, en segundos.
+
+    Tres bugs de esta etapa -la firma de `RunPaths`, `robust_sigma` sin `axis`,
+    `group_exposures` devolviendo indices y `combine_measurements` devolviendo
+    una tupla- solo aparecian al ejecutarla, y los tres estaban DESPUES o DENTRO
+    del bucle caro: cada uno costo una corrida de 34 min para descubrirse. Este
+    test recorre el mismo camino sobre tres exposiciones sinteticas.
+    """
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from tests.test_x06_perexp import _run_sintetico
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.run, self.obs, _ = _run_sintetico(self.root)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _corre(self, **ov):
+        base = {"h04_snr_grid": [0.0, 5.0], "h04_n_control_positions": 3,
+                "h04_template_width_factors": [1.0], "h04_continuum_modes": ["none"],
+                "x06b_methods": ["aperture"], "x06b_max_workers": 1,
+                "x06b_band_A": None, "h01_lsf_fwhm_A": 2.0,
+                "h04_line_center_A": 6215.0}
+        base.update(ov)
+        cfg = H4B.stage_h04b_config_from_run("obj", project_root=self.root, overrides=base)
+        paths = H4B.stage_h04b_paths("obj", project_root=self.root)
+        return H4B.compute_stage_h04b_products(cfg, paths), cfg, paths
+
+    def test_recorre_la_etapa_entera_y_escribe(self):
+        prod, cfg, paths = self._corre()
+        self.assertTrue(prod.filas, "no midio ninguna inyeccion")
+        self.assertTrue(prod.combinado, "no combino nada")
+        self.assertEqual(prod.qc["input"]["n_exposures"], len(self.obs.exposures))
+        H4B.write_stage_h04b_products(prod, cfg, paths)
+        self.assertTrue(paths["qc_json"].exists())
+        self.assertTrue(paths["por_exposicion_csv"].exists())
+
+    def test_la_combinacion_usa_pesos_y_escala_no_la_tupla(self):
+        prod, _, _ = self._corre()
+        for fila in prod.combinado:
+            self.assertIsInstance(fila["recovered_flux"], float)
+            self.assertTrue(np.isfinite(fila["recovered_sigma"]))
+
+    def test_agrupar_por_noche_cubre_el_plan(self):
+        prod, _, _ = self._corre(x06b_group_by="night")
+        vistas = {e for v in prod.qc["grupos"].values() for e in v}
+        self.assertEqual(vistas, {e.exposure_id for e in self.obs.exposures})
