@@ -58,3 +58,28 @@ class TestContratoE4b(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVentanaEspectral(unittest.TestCase):
+    """La ventana no es una optimizacion cosmetica: sin ella la etapa no corre.
+
+    Medido el 2026-08-27: `psffit` cuesta 24 s por ajuste sobre los 3681 canales
+    y 1.6 s sobre la banda, o sea 37 h contra 2.5 h para la rejilla real.
+    """
+
+    def test_el_default_cubre_la_linea_y_su_continuo(self):
+        cfg = H4B.stage_h04b_config_from_run("ROXs12b_realigned")
+        lo, hi = cfg["x06b_band_A"]
+        linea = float(cfg.get("h04_line_center_A", cfg.get("h01_line_center_A", 6562.8)))
+        ventana = float(cfg["x06b_continuum_window_A"])
+        self.assertLess(lo, linea - ventana, "la banda no cubre el continuo por el azul")
+        self.assertGreater(hi, linea + ventana, "la banda no cubre el continuo por el rojo")
+
+    def test_se_puede_pedir_el_cubo_entero(self):
+        cfg = H4B.stage_h04b_config_from_run("ROXs12b_realigned",
+                                             overrides={"x06b_band_A": None})
+        self.assertIsNone(cfg["x06b_band_A"])
+
+    def test_la_banda_viaja_al_qc(self):
+        import inspect
+        self.assertIn('"band_A"', inspect.getsource(H4B.compute_stage_h04b_products))

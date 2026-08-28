@@ -44,7 +44,7 @@ from ..io import read_json, write_json
 from ..observations import resolve_observation_plan
 from ..paths import RunPaths
 from ..qc.cube_qc import sha256_file
-from ..stats import robust_sigma
+from ..stats import robust_sigma, robust_sigma_axis0
 from .stage_e01_perobs import load_aligned_exposure
 from .stage_e01b_perobs_subtract import models_by_exposure
 from .stage_h04_injection import (
@@ -77,7 +77,8 @@ class StageH04bProduct:
 
 
 def stage_h04b_paths(run_id, project_root=None) -> dict:
-    paths = RunPaths(run_id, project_root=project_root)
+    root = Path(project_root or Path.cwd()).resolve()
+    paths = RunPaths.from_project_root(run_id, root)
     return {
         "paths": paths,
         "psf_model_mixture_json": paths.stage_dir / "psf_model_mixture.json",
@@ -122,6 +123,15 @@ def stage_h04b_config_from_run(run_id=None, *, project_root=None, overrides=None
     cfg.setdefault("x06b_psffit_star_radius_px", 20.0)
     cfg.setdefault("x06b_psffit_comp_radius_px", 12.0)
     cfg.setdefault("x06b_continuum_window_A", 80.0)
+    # Ventana espectral de la medida. El filtro adaptado solo mira la linea y su
+    # ventana de continuo, asi que leer los 3681 canales es tirar tiempo: medido,
+    # `psffit` cuesta 24 s por ajuste sobre el cubo entero y 1.6 s sobre la banda,
+    # o sea 37 h contra 2.5 h para una rejilla de 192 inyecciones x 29 exposiciones.
+    # `None` lee el cubo entero, y esta declarado por si alguna vez hace falta.
+    if "x06b_band_A" not in cfg:
+        _linea = float(cfg.get("h04_line_center_A", cfg.get("h01_line_center_A", 6562.8)))
+        _media = 1.5 * float(cfg["x06b_continuum_window_A"]) + 50.0
+        cfg["x06b_band_A"] = [_linea - _media, _linea + _media]
     if not cfg.get("x06b_apertures"):
         raise PerExpInjectionError(
             "el run no declara `x01_apertures` y no se ha pasado `x06b_apertures`.")
@@ -186,6 +196,16 @@ def _una_exposicion(exposure, plan, cfg, model_doc, star_yx, controles, casos,
                     growth_curve, line_center, lsf_fwhm, apertura, etiqueta_ap):
     """Todas las inyecciones de UNA exposicion, en su propio cubo."""
     cube, stat, wave = load_aligned_exposure(exposure, plan)
+    banda = cfg.get("x06b_band_A")
+    if banda:
+        _sel = np.where((wave >= float(banda[0])) & (wave <= float(banda[1])))[0]
+        if _sel.size < 20:
+            raise PerExpInjectionError(
+                f"`x06b_band_A`={list(banda)} selecciona {_sel.size} canales: sin banda "
+                "no hay continuo que restar ni filtro que aplicar.")
+        cube = cube[_sel[0]:_sel[-1] + 1]
+        stat = stat[_sel[0]:_sel[-1] + 1]
+        wave = wave[_sel[0]:_sel[-1] + 1]
     ventana = float(cfg["x06b_continuum_window_A"])
     metodos = [str(m) for m in cfg["x06b_methods"]]
     filas = []
@@ -195,8 +215,9 @@ def _una_exposicion(exposure, plan, cfg, model_doc, star_yx, controles, casos,
     ctrl_flux = np.asarray(
         [_extrae("aperture", cube, stat, wave, c, star_yx, apertura, model_doc, growth_curve, cfg)[0]
          for c in controles], dtype=np.float64)
-    err_ch = np.asarray(robust_sigma(ctrl_flux, axis=0) if ctrl_flux.ndim == 2 else None,
-                        dtype=np.float64)
+    # `robust_sigma_axis0` y no `robust_sigma`: la segunda devuelve un escalar y
+    # aqui hace falta la dispersion CANAL A CANAL entre controles.
+    err_ch = np.asarray(robust_sigma_axis0(ctrl_flux), dtype=np.float64)
     err_ch = np.where(np.isfinite(err_ch) & (err_ch > 0), err_ch, np.nan)
     sigma_exp, _ = _sigma_de_la_exposicion(ctrl_flux, wave, line_center, lsf_fwhm, err_ch, ventana)
 
@@ -347,6 +368,7 @@ def compute_stage_h04b_products(config, paths=None) -> StageH04bProduct:
             "combine": ley,
             "group_by": str(cfg["x06b_group_by"]),
             "line_center_A": line_center,
+            "band_A": list(cfg["x06b_band_A"]) if cfg.get("x06b_band_A") else None,
             "lsf_fwhm_A": lsf_fwhm,
         },
         "wavelength_frame": _wavelength_frame(cfg, qc00, open_issues, knob="x06b_wframe"),
@@ -402,6 +424,8 @@ def main(argv=None):
     ap.add_argument("--combine", choices=["invvar", "exptime", "equal", "sum"], default=None)
     ap.add_argument("--methods", default=None, help="lista separada por comas")
     ap.add_argument("--jobs", type=int, default=None)
+    ap.add_argument("--band-A", nargs=2, type=float, default=None,
+                    metavar=("LO", "HI"), help="ventana espectral de la medida")
     args = ap.parse_args(argv)
     overrides = {}
     if args.group_by:
@@ -412,6 +436,8 @@ def main(argv=None):
         overrides["x06b_methods"] = [m.strip() for m in args.methods.split(",") if m.strip()]
     if args.jobs:
         overrides["x06b_max_workers"] = int(args.jobs)
+    if args.band_A:
+        overrides["x06b_band_A"] = list(args.band_A)
     print(run_stage_h04b(args.run_id, project_root=args.project_root, overrides=overrides,
                          allow_run_id_mismatch=args.allow_run_id_mismatch))
     return 0
