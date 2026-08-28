@@ -104,6 +104,12 @@ class InlinedSourceTests(unittest.TestCase):
         # la función que este notebook usa de lupa.
         "RESID": (["import numpy as np", "from scipy.ndimage import gaussian_filter1d",
                    "from musepipe.stats import finite_percentile"], []),
+        # PSFHALO copia lo de RESID mas la evaluacion del modelo, que arrastra
+        # `math`/`functools` (psfao) y las constantes de la forma Moffat.
+        "PSFHALO": (["import numpy as np", "import functools", "import math",
+                     "from scipy.ndimage import gaussian_filter1d",
+                     "from musepipe.stats import finite_percentile"],
+                    ["PSF_SHAPE_PARAMS", "MOFFAT_BETA_FLOOR", "MIXTURE_FORM"]),
     }
 
     def test_the_copy_carries_the_imports_and_constants_it_uses(self):
@@ -271,7 +277,15 @@ class GeneratedNotebookTests(unittest.TestCase):
                      # que salir idéntico es el producto que la cadena saca de ese
                      # mismo residuo — la mediana azimutal de la rama híbrida.
                      "RESID": ["psf_hybrid_residual.fits",
-                               "stage_e01_psfao_params.csv", "psf_model.json"]}
+                               "stage_e01_psfao_params.csv", "psf_model.json"],
+                     # PSFHALO no rehace una etapa: cuenta la investigacion del
+                     # halo. Se ancla igual que los demas -el cociente
+                     # nucleo/total del modelo contra el QC, y el perfil radial
+                     # contra el producto de la rama hibrida-, porque sin ancla
+                     # seria prosa y no analisis.
+                     "PSFHALO": ["stage_e01_qc.json", "psf_hybrid_residual.fits",
+                                 "stage_e01_psfao_params.csv",
+                                 "stage02_xcorr_cube_stack.fits"]}
         for stage_id, cells in self.cells.items():
             text = "\n".join("".join(c["source"]) for c in cells)
             with self.subTest(etapa=stage_id):
@@ -357,6 +371,9 @@ class ReproducesTheChainTests(unittest.TestCase):
         "residuos_debug": ["psf_hybrid_residual.fits", "psf_model.json",
                            "stage_e01_qc.json", "stage01c_qc.json",
                            "stage02_xcorr_cube_stack.fits"],
+        "psf_halo_cromatico_debug": ["psf_hybrid_residual.fits", "psf_model.json",
+                                     "stage_e01_qc.json", "stage01c_qc.json",
+                                     "stage02_xcorr_cube_stack.fits"],
     }
     #: (objeto, run) de cada cadena. Estaba fijado a ROXs 12 b, asi que los cinco
     #: notebooks de ROXs 42B b **no los ejecutaba nadie**: se generaban y nadie

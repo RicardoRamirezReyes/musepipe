@@ -922,10 +922,39 @@ def scaled_psf_model(model_doc, fwhm_scale):
     return model
 
 
+def _apply_halo_correction(model, model_doc, dy, dx):
+    """Suma el termino radial de halo, SOLO fuera de `norm_radius_px`.
+
+    El bloque opcional `halo_correction` = {"radii_px": [...], "profile": [...]}
+    corrige el halo que la forma analitica no reproduce. Se aplica **solo** fuera
+    del radio de normalizacion, y eso no es un detalle de implementacion: dentro
+    de `norm_radius` esta `F(<=norm_radius)`, cuyo cociente con `F(box3)` ES la
+    correccion de apertura que aplican C2/C3. Sumar ahi mueve el flujo publicado
+    -medido el 2026-08-27: el termino sin restringir lleva la V4 de +6 % a +35 %,
+    y a 7367 A hasta +168 %-. Restringido, `F(<=norm_radius)` no se toca y la V4
+    queda intacta por geometria, no por suerte.
+
+    Sin el bloque no hace nada: los documentos existentes se evaluan igual.
+    """
+
+    block = model_doc.get("halo_correction")
+    if not block:
+        return model
+    radii = np.asarray(block["radii_px"], dtype=np.float64)
+    profile = np.asarray(block["profile"], dtype=np.float64)
+    if radii.size != profile.size or radii.size < 2:
+        raise ValueError("`halo_correction` needs radii_px and profile of the same length (>=2).")
+    norm_radius = float(block.get("norm_radius_px", model_doc.get("norm_radius_px", 25.0)))
+    rr = np.hypot(np.asarray(dy, dtype=np.float64), np.asarray(dx, dtype=np.float64))
+    extra = np.interp(rr.ravel(), radii, profile, left=profile[0], right=profile[-1]).reshape(rr.shape)
+    return model + np.where(rr > norm_radius, extra, 0.0)
+
+
 def evaluate_psf_model(model_doc, wavelength_A, dy, dx):
     form = str(model_doc.get("form", "moffat")).lower()
     if form == "psfao":
-        return _evaluate_psfao(model_doc, wavelength_A, dy, dx)
+        return _apply_halo_correction(
+            _evaluate_psfao(model_doc, wavelength_A, dy, dx), model_doc, dy, dx)
     if form == MIXTURE_FORM:
         return _evaluate_mixture(model_doc, wavelength_A, dy, dx)
     if form != "moffat":
@@ -936,11 +965,14 @@ def evaluate_psf_model(model_doc, wavelength_A, dy, dx):
         key: eval_smoothed_parameter(model_doc["coefficients"][key], wavelength_A)
         for key in PSF_SHAPE_PARAMS
     }
-    return normalized_moffat_psf(
-        dy,
-        dx,
-        params,
-        norm_radius_px=float(model_doc.get("norm_radius_px", 25.0)),
+    return _apply_halo_correction(
+        normalized_moffat_psf(
+            dy,
+            dx,
+            params,
+            norm_radius_px=float(model_doc.get("norm_radius_px", 25.0)),
+        ),
+        model_doc, dy, dx,
     )
 
 

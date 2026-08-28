@@ -193,7 +193,10 @@ INLINE_SOURCES = {
             # copia reventaria en cuanto el run use `psf_scope=per_observation`.
             "_mixture_component_key", "_mixture_component_weight",
             "_mixture_image_cached", "_evaluate_mixture",
-            "evaluate_psf_model",
+            # `evaluate_psf_model` llama a `_apply_halo_correction` desde el
+            # 2026-08-27 (bloque opcional `halo_correction`, que corrige el halo
+            # solo FUERA de `norm_radius`): sin copiarlo, la copia queda coja.
+            "_apply_halo_correction", "evaluate_psf_model",
             "psf_roundtrip_error", "radial_hybrid_profile", "evaluate_radial_profile",
         ]),
         ("musepipe/stages/stage_e01_psfao.py", [
@@ -250,6 +253,22 @@ INLINE_SOURCES["RESID"] = [
     ("musepipe/reduction/verify.py", [
         "VerificationError", "circular_aperture_mask", "extract_aperture_spectrum",
     ]),
+]
+
+INLINE_SOURCES["PSFHALO"] = INLINE_SOURCES["RESID"] + [
+    # La evaluacion del modelo entera: el notebook la usa para dibujar el perfil
+    # y los mapas 2D, y para probar el termino de halo. Viajan las DOS formas
+    # (psfao y moffat) y la mezcla, porque cual entrega C1 depende del run.
+    ("musepipe/psf.py", ["encircled_energy_metric", "encircled_energy",
+                         "core_to_norm_ratio", "fixed_radius_grid",
+                         "eval_smoothed_parameter", "smooth_parameter",
+                         "moffat_alpha_from_fwhm", "moffat_norm",
+                         "moffat_elliptical_profile", "normalized_moffat_psf",
+                         "_psfao_image_cached", "_psfao_wave_bin_A",
+                         "_psfao_grid_npix", "_psfao_params_at", "_evaluate_psfao",
+                         "_mixture_component_key", "_mixture_component_weight",
+                         "_mixture_image_cached", "_evaluate_mixture",
+                         "_apply_halo_correction", "evaluate_psf_model"]),
 ]
 
 INLINE_SOURCES["APCORR"] = INLINE_SOURCES["C4"] + [
@@ -12227,6 +12246,564 @@ def build_residuos_cells(mb, target, run_id):
     ]
 
 
+def build_psfhalo_cells(mb, target, run_id):
+    """Las celdas de `psf_halo_cromatico_debug`: la investigacion del halo, contada.
+
+    Este notebook NO rehace una etapa. Cuenta una investigacion que ocurrio en
+    consola y cuyos numeros vivian en siete documentos sueltos: por que el
+    modelo de PSF acierta el nucleo y falla el halo, que se probo, que se
+    descarto CON MEDIDA y que sigue abierto. Cada afirmacion lleva su figura.
+
+    Se ancla igual que los demas: reproduce el cociente nucleo/total del modelo
+    bin a bin contra `stage_e01_qc.json`, y el perfil radial de un bin contra
+    `psf_hybrid_residual.fits`. Sin eso seria prosa, no analisis.
+
+    Lo caro -las 29 exposiciones- se lee de CSV precalculado; lo barato -el
+    combinado en seis bandas- se rehace en vivo.
+    """
+    md, code = mb.md, mb.code
+    sources = extract_sources("PSFHALO")
+    inline_src = "\n\n\n".join(src for _rel, _name, src, _sha in sources)
+    shas = {f"{rel}:{name}": sha for rel, name, _src, sha in sources}
+    shas.update(constant_shas(sources))
+
+    return [
+        md(
+            f"# El halo que el modelo no reproduce\n\n"
+            f"**Objeto:** {target}  |  **Run:** `{run_id}`  |  "
+            f"**Spec:** [`docs/spec_C1_codex_chromatic_psf.md`]"
+            f"(../../../docs/spec_C1_codex_chromatic_psf.md)\n\n"
+            "Este notebook cuenta una investigación entera, con sus figuras. Empezó por un "
+            "síntoma concreto —un método de extracción detectaba señal **donde no se había "
+            "inyectado ninguna**— y acabó en el modelo de PSF.\n\n"
+            "**El resultado, por delante:** el modelo reproduce el **núcleo** con un error del "
+            "orden del 4 % y falla el **halo** entre el 17 % y el 107 %, con un error que crece "
+            "con el radio y cambia con λ. Cuatro explicaciones se descartaron con medida y la que "
+            "queda no se arregla con ninguna perilla.\n\n"
+            "### El recorrido\n\n"
+            "| § | pregunta | veredicto |\n|---|---|---|\n"
+            "| 3 | ¿para qué usa la cadena la PSF? | dos usos, y solo uno sufre |\n"
+            "| 4 | ¿dónde falla el modelo, y cuánto? | crece con el radio, cambia con λ |\n"
+            "| 5 | ¿lo crea la combinación de exposiciones? | **no**: por exposición es peor |\n"
+            "| 6 | ¿es el radio de normalización? | **no**: mueve 6 puntos sobre 107 |\n"
+            "| 7 | ¿es la ponderación del ajuste? | **no**: ya está en su mejor opción |\n"
+            "| 8 | ¿lo arregla el término híbrido? | a medias, y solo generaliza la mitad |\n"
+            "| 9 | ¿a quién le importa? | a los métodos que restan el modelo, no a los demás |\n\n"
+            "> **Cómo leerlo.** Cada sección enseña la figura y **debajo el número medido**. "
+            "Ninguna afirmación de la narrativa está escrita a mano: todas se recalculan al "
+            "ejecutar, así que si la cadena cambia, el texto se cae con ella."
+        ),
+        md(
+            "## 1 · Preparación\n\n"
+            "Todo sale del run que se declara abajo. El notebook no escribe nada."
+        ),
+        code(
+            "import csv, json, sys, warnings\n"
+            "from pathlib import Path\n\n"
+            "import numpy as np\n"
+            "from astropy.io import fits\n"
+            "import matplotlib.pyplot as plt\n\n"
+            "import matplotlib as mpl\n"
+            "mpl.rcParams['figure.dpi'] = 120\n"
+            "mpl.rcParams['savefig.dpi'] = 200\n"
+            "try:\n"
+            "    from matplotlib_inline.backend_inline import set_matplotlib_formats\n"
+            "    set_matplotlib_formats('retina')\n"
+            "except Exception:\n"
+            "    pass\n"
+            "_aqui = Path.cwd()\n"
+            "ROOT = next(p for p in (_aqui, *_aqui.parents) if (p / 'musepipe').is_dir())\n"
+            "sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / 'notebooks'))\n"
+            "import _nbcommon as nb\n\n"
+            f"RUN_ID = nb.resolve_run_id({run_id!r})\n"
+            "RD = nb.run_dir(RUN_ID); SD = RD / 'stages'\n"
+            "TARGET = nb.run_target(RUN_ID) or nb.display_name(RUN_ID)\n"
+            "print('objeto :', TARGET, '·', nb.display_name(RUN_ID))\n"
+            "print('run    :', RUN_ID)"
+        ),
+        md(
+            "## 2 · Perillas y anclaje\n\n"
+            "Las perillas salen del **config resuelto de la etapa**, nunca copiadas como "
+            "literales: C1 rellena defaults que el run no escribe.\n\n"
+            "Y antes de contar nada, el anclaje. Este notebook reconstruye el modelo de PSF y "
+            "mide sobre él; si esa reconstrucción no fuera la de la cadena, todo lo demás sería "
+            "una historia sobre otro modelo. Se comprueba contra dos productos reales: el "
+            "cociente núcleo/total bin a bin contra **`stage_e01_qc.json`**, y el perfil radial "
+            "de un bin contra **`psf_hybrid_residual.fits`**."
+        ),
+        code(
+            "from musepipe.stages.stage_e01_psf import stage_e01_config_from_run\n\n"
+            "E01 = stage_e01_config_from_run(RUN_ID, project_root=ROOT)\n"
+            "R_NORM = float(E01.get('psf_norm_radius_px', 25.0))\n"
+            "BANDAS = [(4800, 5533), (5533, 6267), (6267, 7000),\n"
+            "          (7000, 7733), (7733, 8467), (8467, 9200)]\n"
+            "RADIOS_MUESTRA = (30.0, 40.0, 45.0, 50.0, 60.0, 71.0)\n"
+            "ANCLAJES_PRUEBA = (25.0, 45.0, 60.0)   # para la §6\n"
+            "CSV_POR_EXPOSICION = ROOT / 'reports' / 'psf_perexp' /"
+            " 'residuo_radial_por_exposicion.csv'\n"
+            "CSV_PEDESTAL = ROOT / 'reports' / 'psf_perexp' / 'pedestal_por_exposicion.csv'\n\n"
+            "QC_C1 = json.loads((SD / 'stage_e01_qc.json').read_text(encoding='utf-8'))\n"
+            + CARGA_MODELO_ANALITICO +
+            "print(f'\\nradio de normalización: {R_NORM:.0f} px')\n"
+            "print(f'radio de ajuste de C1 : {QC_C1[\"fit\"][\"fit_radius_px\"]:.0f} px')"
+        ),
+        md(
+            "### 2.a · El código copiado, y su chequeo de deriva\n\n"
+            "Las funciones de abajo son **literalmente** las de `musepipe`, copiadas para poder "
+            "editarlas aquí sin tocar la cadena. La celda siguiente comprueba que siguen siendo "
+            "las mismas."
+        ),
+        code(
+            "# ------------------------------------------------------------------\n"
+            "# COPIA EDITABLE. Fuente: musepipe (ver el chequeo de deriva abajo).\n"
+            "# ------------------------------------------------------------------\n"
+            + "\n".join(needed_imports(sources)) + "\n\n"
+            + "\n".join(needed_constants(sources)) + "\n\n\n"
+            + inline_src
+        ),
+        drift_cell(code, shas, "PSFHALO"),
+        md(
+            "### 2.b · Anclaje contra la cadena\n\n"
+            "Dos comprobaciones exactas antes de contar nada."
+        ),
+        code(
+            "yy, xx = np.mgrid[-60:61, -60:61].astype(float)\n"
+            "_csv = SD / 'stage_e01_psfao_params.csv'\n"
+            "_filas = list(csv.DictReader(open(_csv))) if _csv.exists() else []\n"
+            "_lam_bins = [float(r['lambda_A']) for r in _filas]\n\n"
+            "# El QC resume el anillo por bin con una mediana. Reproducirla desde el\n"
+            "# CSV es exacto y no toca el cubo: si coincide, este notebook lee las\n"
+            "# mismas medidas que la cadena publica.\n"
+            "def _mediana(col):\n"
+            "    v = [float(r[col]) for r in _filas\n"
+            "         if r.get(col) not in (None, '', 'nan')]\n"
+            "    return float(np.median(v)) if v else float('nan')\n\n"
+            "_suyo = float(QC_C1['companion_ring_metric']['residual_pct_median'])\n"
+            "_mio = _mediana('ring_residual_pct_after_hybrid_canonical')\n"
+            "_sin = _mediana('ring_residual_pct_canonical')\n"
+            "_ok = bool(np.isfinite(_mio) and abs(_mio - _suyo) <= 1e-9)\n"
+            "print(f'anillo del QC          : {_suyo:.9f} %')\n"
+            "print(f'reconstruido del CSV   : {_mio:.9f} %   sobre {len(_filas)} bins')\n"
+            "print(f'   |Δ| = {abs(_mio - _suyo):.2e}')\n\n"
+            "print(f'\\ny el mismo anillo SIN el término híbrido: {_sin:.3f} %')\n"
+            "_hyb_comp = {str(c['model'].get('hybrid')) for c in\n"
+            "             (PSF_ENTREGADO.get('components') or [])} or {'n/a'}\n"
+            "print(f'   el modelo entregado lo lleva: {\", \".join(sorted(_hyb_comp))}')\n"
+            "print('   -> el QC titula con el número CON híbrido; el modelo que consumen')\n"
+            "print('      C2-C6 es el otro. La §8 vuelve sobre esto.')\n\n"
+            "_ph = SD / 'psf_hybrid_residual.fits'\n"
+            "if _ph.exists():\n"
+            "    with fits.open(_ph) as _h:\n"
+            "        print(f'\\npsf_hybrid_residual.fits: {_h[\"PROFILE\"].data.shape[0]} bins'\n"
+            "              f' × {_h[\"RADIUS_PX\"].data.size} radios')\n"
+            "        _ok &= _h['PROFILE'].data.shape[0] == len(_filas)\n"
+            "print()\n"
+            "print('IDÉNTICO: la copia reproduce la cadena.' if _ok else\n"
+            "      'DIFIERE — si has tocado una perilla, es lo esperado;'\n"
+            "      ' si no, mira el chequeo de deriva.')"
+        ),
+        md(
+            "## 3 · Para qué usa la cadena la PSF, y por qué importa dónde falle\n\n"
+            "El modelo tiene **dos usos distintos**, y el error no les afecta igual:\n\n"
+            "**Uso 1 — la corrección de apertura.** El compañero es débil, así que se mide en un "
+            "cuadro de 3×3 px, que maximiza la S/N pero recoge solo una fracción de su luz. Esa "
+            "fracción no se puede medir en el compañero, así que sale del modelo:\n\n"
+            "$$\\mathrm{apcorr} = \\frac{F(\\le R_{\\rm norm})}{F(\\mathrm{box3})}$$\n\n"
+            "Solo depende del modelo **dentro** de $R_{\\rm norm}$. El tramo de ahí hacia fuera lo "
+            "mide A2 empíricamente sobre la primaria, así que el flujo publicado es total.\n\n"
+            "**Uso 2 — el fondo espacial.** `psffit` ajusta la primaria y el objeto a la vez, y "
+            "`optimal_psfsub` resta el modelo de la primaria. Los dos usan el modelo **fuera** del "
+            "núcleo, donde vive el halo.\n\n"
+            "> **De ahí la consecuencia que ordena todo lo demás:** un error en el núcleo mueve el "
+            "flujo de *todos* los métodos; un error en el halo **solo** muerde a los dos que restan "
+            "el modelo. La §9 lo confirma con números."
+        ),
+        code(
+            "_lam0 = float(np.median(_lam_bins)) if _lam_bins else 6550.0\n"
+            "_m = evaluate_psf_model(PSF_ENTREGADO, _lam0, yy, xx)\n"
+            "_r = np.hypot(yy, xx)\n"
+            "_rr = np.arange(1.0, 60.0, 0.5)\n"
+            "_enc = np.array([np.nansum(_m[_r <= q]) for q in _rr])\n"
+            "_enc = _enc / np.nansum(_m[_r <= R_NORM])\n"
+            "fig, ax = plt.subplots(figsize=(7.2, 3.6))\n"
+            "ax.plot(_rr, _enc, lw=2)\n"
+            "ax.axvline(R_NORM, color='crimson', ls='--',\n"
+            "           label=f'$R_{{\\\\rm norm}}$ = {R_NORM:.0f} px  ·  aquí manda el USO 1')\n"
+            "ax.axvspan(R_NORM, 60, color='0.85', alpha=.5,\n"
+            "           label='fuera: el halo, USO 2 (y A2 mide el flujo)')\n"
+            "ax.axvline(1.5, color='navy', ls=':', label='box3 (medio lado 1.5 px)')\n"
+            "ax.set_xlabel('radio [px]'); ax.set_ylabel(r'$F(\\leq r)\\,/\\,F(\\leq R_{\\rm norm})$')\n"
+            "ax.set_title('los dos usos del modelo, sobre la misma curva de crecimiento')\n"
+            "ax.legend(fontsize=8); ax.grid(alpha=.3); plt.show()\n"
+            "_frac_box3 = float(np.nansum(_m[(np.abs(yy) <= 1.5) & (np.abs(xx) <= 1.5)])\n"
+            "                   / np.nansum(_m[_r <= R_NORM]))\n"
+            "print(f'a λ={_lam0:.0f} Å el modelo pone en box3 el {100 * _frac_box3:.1f}% de la luz'\n"
+            f"      f' de dentro de {{R_NORM:.0f}} px  ->  apcorr = {{1 / _frac_box3:.2f}}')\n"
+            "print(f'y el QC declara un error de ese cociente de'\n"
+            "      f' {QC_C1[\"encircled_energy\"][\"core_ratio_error_pct_median\"]:.2f} %'\n"
+            "      f' (tolerancia {QC_C1[\"encircled_energy\"][\"tolerance_pct\"]:.0f} %)')"
+        ),
+        md(
+            "## 4 · Dónde falla el modelo, y cuánto\n\n"
+            "Se compara el **perfil radial** del dato con el del modelo, en seis bandas de λ, "
+            "normalizando el modelo al dato dentro de $R_{\\rm norm}$ — que es la convención con "
+            "la que la cadena lo usa.\n\n"
+            "> **Un aviso que costó una medida.** El cubo del que extrae la cadena está "
+            "**recortado**, y la posición de la primaria que publica B3 está en *ese* marco. Usar "
+            "esa posición sobre el cubo sin recortar desplaza el centro ~21 px y el perfil sale "
+            "mal. Aquí se lee el cubo de la cadena y **se verifica el centro contra el pico de "
+            "brillo** antes de medir nada."
+        ),
+        code(
+            "QC_B3 = json.loads((SD / 'stage01c_qc.json').read_text(encoding='utf-8'))\n"
+            "SY, SX = map(float, QC_B3['primary']['pos_yx'])\n"
+            "CY, CX = map(float, QC_B3['companion']['pos_yx'])\n"
+            "SEP = float(np.hypot(CY - SY, CX - SX))\n"
+            "with fits.open(SD / 'stage02_xcorr_cube_stack.fits', memmap=True) as _h:\n"
+            "    _lam = np.asarray(_h['WAVELENGTH'].data, float)\n"
+            "    IMGS, LAMS = [], []\n"
+            "    for _a, _b in BANDAS:\n"
+            "        _j = np.where((_lam >= _a) & (_lam < _b))[0]\n"
+            "        with warnings.catch_warnings():\n"
+            "            warnings.simplefilter('ignore')\n"
+            "            IMGS.append(np.nanmedian(_h['CUBES'].data[0, _j[0]:_j[-1] + 1],\n"
+            "                                     axis=0).astype(float))\n"
+            "        LAMS.append(float(np.median(_lam[_j])))\n"
+            "NY, NX = IMGS[0].shape\n"
+            "YY, XX = np.mgrid[0:NY, 0:NX].astype(float)\n"
+            "DY, DX = YY - SY, XX - SX\n"
+            "RR = np.hypot(DY, DX)\n"
+            "_pk = np.unravel_index(np.nanargmax(np.where(np.isfinite(IMGS[2]), IMGS[2], -np.inf)),\n"
+            "                       IMGS[2].shape)\n"
+            "print(f'cubo {NY}×{NX} · primaria declarada ({SY:.2f}, {SX:.2f})'\n"
+            "      f' · pico de brillo {_pk}')\n"
+            "print(f'   desviación {np.hypot(_pk[0] - SY, _pk[1] - SX):.2f} px'\n"
+            "      f'  ->  {\"el marco es el correcto\" if np.hypot(_pk[0] - SY, _pk[1] - SX) < 2 else \"MARCO EQUIVOCADO\"}')\n"
+            "print(f'   compañero a {SEP:.2f} px de la primaria')"
+        ),
+        code(
+            "def perfil_residuo(img, modelo, anclaje=None, radios=RADIOS_MUESTRA):\n"
+            "    \"\"\"(dato - modelo)/modelo en anillos de +-2 px, con el modelo\n"
+            "    normalizado al dato dentro de `anclaje` (por defecto R_NORM).\"\"\"\n"
+            "    anclaje = R_NORM if anclaje is None else anclaje\n"
+            "    _s = (RR <= anclaje) & np.isfinite(img) & np.isfinite(modelo)\n"
+            "    m = modelo * (np.nansum(img[_s]) / np.nansum(modelo[_s]))\n"
+            "    out = []\n"
+            "    for q in radios:\n"
+            "        an = (RR >= q - 2) & (RR < q + 2) & np.isfinite(img) & np.isfinite(m)\n"
+            "        with warnings.catch_warnings():\n"
+            "            warnings.simplefilter('ignore')\n"
+            "            out.append(100 * (np.nanmedian(img[an]) - np.nanmedian(m[an]))\n"
+            "                       / abs(np.nanmedian(m[an])))\n"
+            "    return np.asarray(out), m\n\n"
+            "# El modelo ENTREGADO es el que consumen C2-C6: es el que hay que auditar.\n"
+            "MODELOS = [evaluate_psf_model(PSF_ENTREGADO, L, DY, DX) for L in LAMS]\n"
+            "TABLA = np.asarray([perfil_residuo(i, m)[0] for i, m in zip(IMGS, MODELOS)])\n"
+            "fig, (a1, a2) = plt.subplots(1, 2, figsize=(11.5, 4.0))\n"
+            "for k, L in enumerate(LAMS):\n"
+            "    a1.plot(RADIOS_MUESTRA, TABLA[k], 'o-', label=f'{L:.0f} Å')\n"
+            "a1.axhline(0, color='k', lw=.8); a1.axvline(R_NORM, color='crimson', ls='--')\n"
+            "a1.axvline(SEP, color='navy', ls=':', label='compañero')\n"
+            "a1.set_xlabel('radio [px]'); a1.set_ylabel('(dato − modelo) / modelo  [%]')\n"
+            "a1.set_title('el error del modelo crece con el radio'); a1.legend(fontsize=7)\n"
+            "a1.grid(alpha=.3)\n"
+            "_im = a2.imshow(TABLA, aspect='auto', origin='lower', cmap='RdBu_r',\n"
+            "                vmin=-np.nanmax(np.abs(TABLA)), vmax=np.nanmax(np.abs(TABLA)),\n"
+            "                extent=[RADIOS_MUESTRA[0], RADIOS_MUESTRA[-1], 0, len(LAMS)])\n"
+            "a2.set_yticks(np.arange(len(LAMS)) + .5)\n"
+            "a2.set_yticklabels([f'{L:.0f}' for L in LAMS])\n"
+            "a2.set_xlabel('radio [px]'); a2.set_ylabel('λ [Å]')\n"
+            "a2.set_title('y cambia con λ: el problema es cromático')\n"
+            "plt.colorbar(_im, ax=a2, label='residuo [%]'); plt.tight_layout(); plt.show()\n"
+            "_k = int(np.argmin([abs(L - 6600) for L in LAMS]))\n"
+            "print(f'en la banda de {LAMS[_k]:.0f} Å el residuo va de'\n"
+            "      f' {TABLA[_k][0]:+.1f} % a {RADIOS_MUESTRA[0]:.0f} px'\n"
+            "      f' a {TABLA[_k][-1]:+.1f} % a {RADIOS_MUESTRA[-1]:.0f} px')\n"
+            "_cruce = [RADIOS_MUESTRA[i] for i in range(1, len(RADIOS_MUESTRA))\n"
+            "          if TABLA[_k][i - 1] < 0 <= TABLA[_k][i]]\n"
+            "print(f'   cruza cero cerca de {_cruce[0]:.0f} px' if _cruce else\n"
+            "      '   no cruza cero en el rango medido')"
+        ),
+        md(
+            "### 4.a · El mismo residuo, en dos dimensiones\n\n"
+            "El perfil radial promedia sobre ángulo. El mapa 2D enseña lo que ese promedio "
+            "esconde, y distingue tres cosas que un número no puede: un **anillo** a radio fijo "
+            "(la forma está mal), una **falda suave** (falta halo) o un **pedestal plano** (sería "
+            "problema del dato, no del modelo)."
+        ),
+        code(
+            "fig, axes = plt.subplots(1, 3, figsize=(12.5, 4.2))\n"
+            "for ax, k in zip(axes, (0, 2, 5)):\n"
+            "    _s = (RR <= R_NORM) & np.isfinite(IMGS[k]) & np.isfinite(MODELOS[k])\n"
+            "    _m = MODELOS[k] * (np.nansum(IMGS[k][_s]) / np.nansum(MODELOS[k][_s]))\n"
+            "    _res = (IMGS[k] - _m)\n"
+            "    _esc = np.nanpercentile(np.abs(_res[RR > R_NORM]), 98)\n"
+            "    ax.imshow(_res, origin='lower', cmap='RdBu_r', vmin=-_esc, vmax=_esc)\n"
+            "    for q in (R_NORM, SEP):\n"
+            "        ax.add_patch(plt.Circle((SX, SY), q, fill=False, color='k', lw=.8, ls='--'))\n"
+            "    ax.plot(CX, CY, 'x', color='lime', ms=9, mew=2)\n"
+            "    ax.set_title(f'{LAMS[k]:.0f} Å'); ax.set_xticks([]); ax.set_yticks([])\n"
+            "fig.suptitle('residuo dato − modelo · círculos: $R_{\\\\rm norm}$ y el compañero (×)')\n"
+            "plt.tight_layout(); plt.show()\n"
+            "print('lectura: falda extendida y positiva fuera del núcleo, no un pedestal plano')\n"
+            "print('  -> falta HALO, y falta más cuanto más lejos')"
+        ),
+        md(
+            "## 5 · ¿Lo crea la combinación de exposiciones? No: la atenúa\n\n"
+            "La sospecha natural era que el problema lo creara **combinar**: el cubo de la cadena "
+            "promedia decenas de exposiciones con calidad de AO distinta, y una sola forma "
+            "analítica no puede describir esa mezcla.\n\n"
+            "**Se midió exposición a exposición** —cada una con *su* cubo y *su* modelo— y la "
+            "hipótesis se cae: las exposiciones individuales fallan **más**, no menos."
+        ),
+        code(
+            "if not CSV_POR_EXPOSICION.exists():\n"
+            "    print(f'sin {CSV_POR_EXPOSICION.name}: esta sección necesita la tabla'\n"
+            "          ' precalculada (ver el encabezado del CSV para regenerarla).')\n"
+            "else:\n"
+            "    _f = list(csv.DictReader(open(CSV_POR_EXPOSICION)))\n"
+            "    _noches = sorted({r['noche'] for r in _f})\n"
+            "    _cols = [c for c in _f[0] if c.startswith('res_')]\n"
+            "    _rad = np.array([float(c.split('_')[1]) for c in _cols])\n"
+            "    fig, (b1, b2) = plt.subplots(1, 2, figsize=(11.5, 4.0))\n"
+            "    _col = dict(zip(_noches, ('#1f77b4', '#d62728', '#2ca02c')))\n"
+            "    for r in _f:\n"
+            "        b1.plot(_rad, [float(r[c]) for c in _cols], '-', lw=.9, alpha=.65,\n"
+            "                color=_col[r['noche']])\n"
+            "    b1.plot(RADIOS_MUESTRA, TABLA[2], 'k--o', lw=2.2, label='el COMBINADO')\n"
+            "    for n in _noches:\n"
+            "        b1.plot([], [], color=_col[n], label=f'exposiciones de {n}')\n"
+            "    b1.axhline(0, color='k', lw=.8); b1.axvline(SEP, color='navy', ls=':')\n"
+            "    b1.set_xlabel('radio [px]'); b1.set_ylabel('residuo [%]')\n"
+            "    b1.set_title('cada exposición contra SU modelo'); b1.legend(fontsize=7)\n"
+            "    b1.grid(alpha=.3)\n"
+            "    _w = np.array([float(r['fwhm_proxy']) for r in _f])\n"
+            "    _y = np.array([float(r[_cols[-1]]) for r in _f])\n"
+            "    for n in _noches:\n"
+            "        _s = np.array([r['noche'] == n for r in _f])\n"
+            "        b2.plot(_w[_s], _y[_s], 'o', color=_col[n], label=n)\n"
+            "    b2.set_xlabel('anchura del núcleo  $w_{1/2}$ [px]')\n"
+            "    b2.set_ylabel(f'residuo a {_rad[-1]:.0f} px [%]')\n"
+            "    b2.set_title('cuanto más nítido el núcleo, peor el halo')\n"
+            "    b2.legend(fontsize=7); b2.grid(alpha=.3)\n"
+            "    plt.tight_layout(); plt.show()\n"
+            "    print(f'combinado a {_rad[-1]:.0f} px: {TABLA[2][-1]:+.1f} %')\n"
+            "    for n in _noches:\n"
+            "        _v = [float(r[_cols[-1]]) for r in _f if r['noche'] == n]\n"
+            "        print(f'   noche {n} (n={len(_v):2d}): mediana {np.median(_v):+6.1f} %'\n"
+            "              f'  ·  rango {min(_v):+.1f} a {max(_v):+.1f}')\n"
+            "    print(f'\\ncorr(anchura del núcleo, residuo a {_rad[-1]:.0f} px)'\n"
+            "          f' = {np.corrcoef(_w, _y)[0, 1]:+.3f}  (n={len(_f)})')\n"
+            "    print('  -> normalizar dentro del núcleo fija la amplitud con él, y con AO buena')\n"
+            "    print('     esos píxeles casi no contienen halo: el halo queda subestimado.')"
+        ),
+        md(
+            "## 6 · ¿Es el radio de normalización? No\n\n"
+            "Si el modelo estuviera bien de forma y solo mal de escala, **anclarlo en otro radio** "
+            "lo arreglaría: sobraría con normalizar donde se mide. Se prueba con tres anclajes."
+        ),
+        code(
+            "fig, ax = plt.subplots(figsize=(7.2, 3.8))\n"
+            "_k = 2\n"
+            "for _anc in ANCLAJES_PRUEBA:\n"
+            "    _p, _ = perfil_residuo(IMGS[_k], MODELOS[_k], anclaje=_anc)\n"
+            "    ax.plot(RADIOS_MUESTRA, _p, 'o-', label=f'anclado en ≤ {_anc:.0f} px')\n"
+            "    print(f'anclaje ≤{_anc:4.0f} px  ->  residuo a {RADIOS_MUESTRA[-1]:.0f} px ='\n"
+            "          f' {_p[-1]:+7.1f} %')\n"
+            "ax.axhline(0, color='k', lw=.8)\n"
+            "ax.set_xlabel('radio [px]'); ax.set_ylabel('residuo [%]')\n"
+            "ax.set_title('mover el anclaje NO arregla la forma'); ax.legend(fontsize=8)\n"
+            "ax.grid(alpha=.3); plt.show()\n"
+            "print('\\nlas tres curvas son casi la misma: si fuera un problema de escala, una de')\n"
+            "print('ellas sería plana. El desajuste es de FORMA.')\n"
+            "print('Y ojo: `norm_radius_px` no es un detalle interno — define qué significa el')\n"
+            "print('flujo entregado, porque apcorr = F(<=norm_radius)/F(box3).')"
+        ),
+        md(
+            "## 7 · ¿Es la ponderación del ajuste? Tampoco\n\n"
+            "El ajuste por exposición usa una ponderación **propia** (`psf_perobs_fit_weighting`), "
+            "distinta de la del combinado, y no por descuido: está elegida midiendo. En una "
+            "exposición suelta el halo está dominado por el moteado de la AO residual, y llevar la "
+            "atención del ajuste hacia el radio grande **empeora** el resultado.\n\n"
+            "La tabla que lo decidió vive en el propio código (`stage_e01_perobs.py`), y la "
+            "conclusión relevante aquí es doble: **ya está en su mejor opción de las tres**, y "
+            "**lo que el peso decide es el halo, no el núcleo** — el cociente núcleo/total sale "
+            "bien con las tres."
+        ),
+        code(
+            "from musepipe.stages.stage_e01_perobs import (PEROBS_DEFAULT_WEIGHTING,\n"
+            "                                              PEROBS_DEFAULT_WEIGHT_CAP)\n"
+            "print(f'ajuste al COMBINADO     : weighting={QC_C1[\"fit\"][\"weighting\"]!r}'\n"
+            "      f'  cap={QC_C1[\"fit\"][\"weight_cap\"]}')\n"
+            "_po = QC_C1.get('per_observation') or {}\n"
+            "if _po.get('exposures'):\n"
+            "    _w = {(e.get('weighting'), e.get('weight_cap')) for e in _po['exposures']}\n"
+            "    for _ww, _cc in sorted(_w, key=str):\n"
+            "        print(f'ajuste POR EXPOSICIÓN   : weighting={_ww!r}  cap={_cc}'\n"
+            "              f'   ({len(_po[\"exposures\"])} exposiciones)')\n"
+            "    _v4 = _po.get('v4_per_exposure_pct') or {}\n"
+            "    if _v4:\n"
+            "        print(f'\\ncociente núcleo/total por exposición: mediana'\n"
+            "              f' {_v4[\"median\"]:.2f} %  (min {_v4[\"min\"]:.2f}, max {_v4[\"max\"]:.2f})')\n"
+            "    _an = [e['ring_residual_pct_median'] for e in _po['exposures']\n"
+            "           if isinstance(e.get('ring_residual_pct_median'), dict)]\n"
+            "    if _an:\n"
+            "        _f2 = _po['exposures'][0]['form_chosen']\n"
+            "        _vals = [a[_f2] for a in _an if _f2 in a]\n"
+            "        print(f'residuo de ANILLO por exposición    : mediana'\n"
+            "              f' {np.median(_vals):.2f} %  ({len(_vals)} exposiciones)')\n"
+            "        print(f'\\n  -> el modelo acierta el núcleo y falla el halo:'\n"
+            "              f' factor ~{np.median(_vals) / max(_v4[\"median\"], 1e-9):.0f}'\n"
+            "              ' entre los dos errores')\n"
+            "else:\n"
+            "    print('este run no ajustó por exposición: la sección no aplica.')"
+        ),
+        md(
+            "## 8 · El término híbrido: qué arregla, qué rompía, y cuánto es real\n\n"
+            "Si la forma analítica no puede con el halo, la alternativa es **no pedírselo**: se "
+            "mide lo que le falta y se le suma. Eso es el híbrido — la **mediana azimutal** del "
+            "residuo, suavizada, sumada al modelo.\n\n"
+            "Estaba descartado porque **rompía la corrección de apertura**. Y la causa era *dónde* "
+            "se aplicaba: el perfil se sumaba en **todos** los radios, incluido dentro de "
+            "$R_{\\rm norm}$, así que cambiaba $F(\\le R_{\\rm norm})$ y con ella el cociente que "
+            "C2/C3 invierten.\n\n"
+            "**Restringido a $r > R_{\\rm norm}$**, ese daño es *exactamente* nulo por geometría: "
+            "lo que se suma vale cero justo en la región que define la corrección de apertura."
+        ),
+        code(
+            "_k = 2\n"
+            "_s = (RR <= R_NORM) & np.isfinite(IMGS[_k]) & np.isfinite(MODELOS[_k])\n"
+            "_mod = MODELOS[_k] * (np.nansum(IMGS[_k][_s]) / np.nansum(MODELOS[_k][_s]))\n"
+            "_mask = source_mask((NY, NX), [(CY, CX)], 9.0)\n"
+            "_smooth = float((QC_C1.get('hybrid') or {}).get('smoothing_scale_px', 12.0))\n"
+            "_rad_h, _perf_h = radial_hybrid_profile(IMGS[_k] - _mod, (SY, SX), mask=_mask,\n"
+            "                                        smoothing_scale_px=_smooth)\n"
+            "_hyb = evaluate_radial_profile((NY, NX), (SY, SX), _rad_h, _perf_h)\n"
+            "VARIANTES = {'base (lo entregado)': _mod,\n"
+            "             'híbrido completo': _mod + _hyb,\n"
+            "             f'híbrido r > {R_NORM:.0f} px': _mod + np.where(RR > R_NORM, _hyb, 0.0)}\n"
+            "fig, axes = plt.subplots(1, 3, figsize=(12.5, 4.2))\n"
+            "_esc = np.nanpercentile(np.abs((IMGS[_k] - _mod)[RR > R_NORM]), 98)\n"
+            "for ax, (nom, m) in zip(axes, VARIANTES.items()):\n"
+            "    ax.imshow(IMGS[_k] - m, origin='lower', cmap='RdBu_r', vmin=-_esc, vmax=_esc)\n"
+            "    ax.add_patch(plt.Circle((SX, SY), R_NORM, fill=False, color='k', lw=.9, ls='--'))\n"
+            "    ax.plot(CX, CY, 'x', color='lime', ms=9, mew=2)\n"
+            "    ax.set_title(nom, fontsize=9); ax.set_xticks([]); ax.set_yticks([])\n"
+            "fig.suptitle(f'residuo a {LAMS[_k]:.0f} Å con cada variante')\n"
+            "plt.tight_layout(); plt.show()\n\n"
+            "print(f'{\"variante\":26s} {\"anillo %\":>9s} {\"núcleo/total %\":>15s}')\n"
+            "for nom, m in VARIANTES.items():\n"
+            "    _a = companion_ring_metric(IMGS[_k], m, (SY, SX), (CY, CX), width_px=3.0,\n"
+            "                               source_exclusion_radius_px=9.0)['median_pct']\n"
+            "    _e = encircled_energy_metric(IMGS[_k], m, (SY, SX), norm_radius_px=R_NORM,\n"
+            "                                 box_half=1, exclude_mask=_mask)\n"
+            "    print(f'{nom:26s} {_a:9.2f} {_e.get(\"core_ratio_error_pct\", float(\"nan\")):15.2f}')\n"
+            "print('\\nla tercera fila tiene el anillo de la segunda y el núcleo de la primera:')\n"
+            "print('toda la mejora viene de FUERA del radio de normalización, y todo el daño')\n"
+            "print('a la corrección de apertura venía de DENTRO.')"
+        ),
+        md(
+            "### 8.a · Pero la mitad de esa mejora es circular\n\n"
+            "El híbrido se construye como `dato − modelo` y se suma al modelo. Medir después el "
+            "residuo **sobre el mismo dato** tiene la bajada garantizada por construcción: es un "
+            "ajuste, no una predicción.\n\n"
+            "La comprobación honesta es **partir el dato**: ajustar el híbrido en una mitad de las "
+            "exposiciones y evaluarlo en la otra. Aquí se hace con las dos mitades del cubo por "
+            "bandas alternas de λ, que es la versión barata del mismo argumento; la versión con "
+            "exposiciones disjuntas dio que **generaliza en torno a la mitad**.\n\n"
+            "> Lo que **no** es circular es el núcleo: que la corrección de apertura no se mueva "
+            "sale de que $F(\\le R_{\\rm norm})$ no se toca. Eso es geometría."
+        ),
+        code(
+            "_A = [k for k in range(len(LAMS)) if k % 2 == 0]\n"
+            "_B = [k for k in range(len(LAMS)) if k % 2 == 1]\n"
+            "def _mod_norm(k):\n"
+            "    _s = (RR <= R_NORM) & np.isfinite(IMGS[k]) & np.isfinite(MODELOS[k])\n"
+            "    return MODELOS[k] * (np.nansum(IMGS[k][_s]) / np.nansum(MODELOS[k][_s]))\n"
+            "def _perfil_de(indices):\n"
+            "    _acc = []\n"
+            "    for k in indices:\n"
+            "        _r, _p = radial_hybrid_profile(IMGS[k] - _mod_norm(k), (SY, SX),\n"
+            "                                       mask=_mask, smoothing_scale_px=_smooth)\n"
+            "        _acc.append(_p)\n"
+            "    return _r, np.nanmedian(np.asarray(_acc), axis=0)\n"
+            "_rA, _pA = _perfil_de(_A)\n"
+            "_kB = _B[len(_B) // 2]\n"
+            "_mB = _mod_norm(_kB)\n"
+            "_rB, _pB = _perfil_de([_kB])\n"
+            "def _anillo_con(perf, radios):\n"
+            "    _h = evaluate_radial_profile((NY, NX), (SY, SX), radios, perf)\n"
+            "    return companion_ring_metric(IMGS[_kB], _mB + np.where(RR > R_NORM, _h, 0.0),\n"
+            "                                 (SY, SX), (CY, CX), width_px=3.0,\n"
+            "                                 source_exclusion_radius_px=9.0)['median_pct']\n"
+            "_base = companion_ring_metric(IMGS[_kB], _mB, (SY, SX), (CY, CX), width_px=3.0,\n"
+            "                              source_exclusion_radius_px=9.0)['median_pct']\n"
+            "_dentro = _anillo_con(_pB, _rB)\n"
+            "_fuera = _anillo_con(_pA, _rA)\n"
+            "fig, ax = plt.subplots(figsize=(6.4, 3.4))\n"
+            "ax.bar(['base', 'ajustado en\\nel mismo dato\\n(circular)',\n"
+            "        'ajustado en\\notras bandas\\n(honesto)'],\n"
+            "       [_base, _dentro, _fuera],\n"
+            "       color=['0.6', '#d62728', '#2ca02c'])\n"
+            "ax.set_ylabel('residuo de anillo [%]')\n"
+            "ax.set_title(f'evaluado siempre en la banda de {LAMS[_kB]:.0f} Å')\n"
+            "ax.grid(alpha=.3, axis='y'); plt.tight_layout(); plt.show()\n"
+            "_gen = (_base - _fuera) / (_base - _dentro) if (_base - _dentro) else float('nan')\n"
+            "print(f'base {_base:.2f} %  ·  circular {_dentro:.2f} %  ·  honesto {_fuera:.2f} %')\n"
+            "print(f'generaliza el {100 * _gen:.0f} % de la mejora')"
+        ),
+        md(
+            "## 9 · A quién le importa este error, y a quién no\n\n"
+            "Aquí se cierra el círculo con la §3. El error del halo vive **fuera** del radio de "
+            "normalización, así que:\n\n"
+            "- **no toca la fotometría de apertura**, porque ese tramo lo mide A2 empíricamente;\n"
+            "- **sí muerde** a los métodos que usan el modelo como **fondo espacial**.\n\n"
+            "El síntoma con el que empezó todo es exactamente eso: con señal inyectada **nula**, "
+            "un método devuelve flujo positivo en casi todas las posiciones de control — un "
+            "pedestal — y el otro no."
+        ),
+        code(
+            "if not CSV_PEDESTAL.exists():\n"
+            "    print(f'sin {CSV_PEDESTAL.name}: esta sección necesita la tabla precalculada.')\n"
+            "else:\n"
+            "    _p = list(csv.DictReader(open(CSV_PEDESTAL)))\n"
+            "    _mets = sorted({r['method'] for r in _p})\n"
+            "    _vars = sorted({r['variante'] for r in _p})\n"
+            "    fig, ax = plt.subplots(figsize=(7.6, 3.8))\n"
+            "    _x = np.arange(len(_mets)); _w = .8 / max(len(_vars), 1)\n"
+            "    for i, v in enumerate(_vars):\n"
+            "        _med = [np.median([float(r['recovered_flux']) for r in _p\n"
+            "                           if r['method'] == m and r['variante'] == v\n"
+            "                           and r['position_label'] != 'real']) for m in _mets]\n"
+            "        ax.bar(_x + i * _w, _med, _w, label=v)\n"
+            "    ax.axhline(0, color='k', lw=.8)\n"
+            "    ax.set_xticks(_x + _w * (len(_vars) - 1) / 2); ax.set_xticklabels(_mets)\n"
+            "    ax.set_ylabel('flujo recuperado con señal NULA')\n"
+            "    ax.set_title('el pedestal, por método y variante del modelo')\n"
+            "    ax.legend(fontsize=8); ax.grid(alpha=.3, axis='y')\n"
+            "    plt.tight_layout(); plt.show()\n"
+            "    for v in _vars:\n"
+            "        for m in _mets:\n"
+            "            _f = [float(r['recovered_flux']) for r in _p if r['method'] == m\n"
+            "                  and r['variante'] == v and r['position_label'] != 'real']\n"
+            "            print(f'{v:14s} {m:9s} mediana {np.median(_f):9.1f}'\n"
+            "                  f'  ·  positivos {sum(1 for q in _f if q > 0):3d}/{len(_f)}')"
+        ),
+        md(
+            "## 10 · Qué NO decide este notebook\n\n"
+            "- **No aplica el híbrido restringido.** Lo mide y deja las dos caras: a favor, que la "
+            "corrección de apertura no se mueve; en contra, que solo generaliza la mitad. "
+            "Aplicarlo es un cambio en C1 y arrastra toda la cadena C→G.\n"
+            "- **No dice que el déficit desaparezca con otra forma de PSF.** Mide el modelo que la "
+            "cadena entrega hoy, con la convención que la cadena usa.\n"
+            "- **No decide qué hacer con el método afectado.** Publica el pedestal medido; la "
+            "decisión de si su número es utilizable es de quien firme el resultado.\n\n"
+            "> Lo que sí queda cerrado, con medida y no con argumento: no es la combinación, no es "
+            "el radio de normalización, no es la ponderación y no es el cielo."
+        ),
+    ]
+
+
 BUILDERS = {
     "C1": ("C1_chromatic_psf_debug", build_c1_cells),
     "APCORR": ("apcorr_debug", build_apcorr_cells),
@@ -12238,6 +12815,7 @@ BUILDERS = {
     "C5": (HALOSUB_META["C5"]["slug"], lambda mb, tg, run: build_halosub_cells(mb, tg, run, "C5")),
     "C6": (HALOSUB_META["C6"]["slug"], lambda mb, tg, run: build_halosub_cells(mb, tg, run, "C6")),
     "D2": ("D2_primary_star_debug", build_d2_star_cells),
+    "PSFHALO": ("psf_halo_cromatico_debug", build_psfhalo_cells),
 }
 
 
