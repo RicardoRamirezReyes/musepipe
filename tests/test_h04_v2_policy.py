@@ -13,6 +13,12 @@ from musepipe.stages.stage_h04_injection import (
 from tests.test_compare_verdicts import make_product
 
 
+#: Estas pruebas fijan la REGLA DE AGREGACION de E4 v3 -la unidad es la posicion,
+#: su resumen es la mediana- y para eso construyen su propia referencia de
+#: produccion. Por eso pasan `reference_mode="production_controls"` explicito: el
+#: default cambio a `injection_nulls` en E4 v5 y estas pruebas no van de eso.
+#: La referencia emparejada tiene las suyas en `test_h04_snr_standardization.py`.
+
 #: Los seis metodos de la cadena, para poder probar la mediana por posicion.
 METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 
@@ -59,7 +65,8 @@ class H04V2NullPolicyTests(unittest.TestCase):
         rows = [null_row(0, recovered_flux=1000.0, recovered_snr=100.0, position="real")]
         rows.extend(null_row(i + 1, recovered_flux=10.0) for i in range(10))
 
-        result = _v2_nulls_clean(rows, empirical_reference())
+        result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
 
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["n_rows"], 10)
@@ -68,7 +75,8 @@ class H04V2NullPolicyTests(unittest.TestCase):
     def test_gate_uses_empirical_flux_rank_not_formal_snr(self):
         rows = [null_row(i, recovered_flux=10.0, recovered_snr=999.0) for i in range(10)]
 
-        result = _v2_nulls_clean(rows, empirical_reference())
+        result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
 
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["n_extreme"], 0)
@@ -81,7 +89,8 @@ class H04V2NullPolicyTests(unittest.TestCase):
         rows.extend(position_rows("control2", 0, start=100))
         rows.extend(position_rows("control3", 0, start=200))
 
-        result = _v2_nulls_clean(rows, empirical_reference())
+        result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
 
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["n_extreme"], 1, "una posicion extrema, no veinticuatro")
@@ -92,7 +101,8 @@ class H04V2NullPolicyTests(unittest.TestCase):
         rows.extend(position_rows("control2", len(METHODS), start=100))
         rows.extend(position_rows("control3", 0, start=200))
 
-        result = _v2_nulls_clean(rows, empirical_reference())
+        result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
 
         self.assertEqual(result["status"], "fail")
         self.assertEqual(result["n_extreme"], 2)
@@ -103,14 +113,16 @@ class H04V2NullPolicyTests(unittest.TestCase):
         for n_extreme_methods, expected in ((1, False), (3, False), (4, True)):
             with self.subTest(methods=n_extreme_methods):
                 rows = position_rows("control1", n_extreme_methods)
-                result = _v2_nulls_clean(rows, empirical_reference())
+                result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
                 self.assertEqual(result["positions"][0]["extreme"], expected)
 
     def test_qc_separates_positions_from_rows(self):
         rows = position_rows("control1", len(METHODS))
         rows.extend(position_rows("control2", 0, start=100))
 
-        result = _v2_nulls_clean(rows, empirical_reference())
+        result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
 
         self.assertEqual(result["unit"], "control_position")
         self.assertEqual(result["n_extreme"], 1)
@@ -124,7 +136,8 @@ class H04V2NullPolicyTests(unittest.TestCase):
         rows = [null_row(i, position=f"control{i + 1}", method="optimal_ls",
                          recovered_flux=-1000.0) for i in range(3)]
 
-        result = _v2_nulls_clean(rows, empirical_reference())
+        result = _v2_nulls_clean(rows, empirical_reference(),
+                                 reference_mode="production_controls")
 
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["n_extreme"], 0)

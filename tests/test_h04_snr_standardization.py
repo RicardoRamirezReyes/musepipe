@@ -287,7 +287,8 @@ class TestFinalize(unittest.TestCase):
             row.update({"injection_id": f"i{i}", "variant": "nominal", "method": "aperture",
                         "position_label": f"control{i + 1}", "template_factor": "1.0",
                         "continuum_mode": "none", "input_snr": str(snr),
-                        "recovered_snr": str(raw), "complete": "False", "throughput": "0.9"})
+                        "recovered_flux": str(100.0 + i), "recovered_snr": str(raw),
+                        "complete": "False", "throughput": "0.9"})
             if columna_std:
                 row["recovered_snr_std"] = str(std)
             filas.append(row)
@@ -443,3 +444,80 @@ class TestSustratoPsfsub(unittest.TestCase):
         self.assertEqual(d["h04_substrate"], "in_memory_single_model_subtraction")
         self.assertIsNone(d["mismatch"])
         self.assertIsNone(d["perobs_cube_exists"])
+
+
+class TestReferenciaDeV2(unittest.TestCase):
+    """La puerta V2 comparada contra la poblacion emparejada.
+
+    Lo que se prueba no es la regla de agregacion —eso lo fija
+    `test_h04_v2_policy.py` desde E4 v3— sino **contra qué** se compara: que use
+    las otras nulas de su estrato, que se deje fuera a sí misma, y que no cruce
+    estratos. Un fallo aquí no rompe nada visible: la puerta sigue dando un
+    veredicto, sólo que sobre otra población.
+    """
+
+    def fila(self, i, *, method="aperture", position=None, flux=0.0, continuum="none", factor=1.0):
+        return {
+            "injection_id": f"n{i}", "variant": "nominal", "method": method,
+            "position_label": position or f"control{i + 1}", "template_factor": factor,
+            "continuum_mode": continuum, "input_snr": 0.0, "recovered_flux": flux,
+            "recovered_snr": 0.0,
+        }
+
+    def test_una_nula_no_entra_en_su_propia_referencia(self):
+        from musepipe.stages.stage_h04_injection import _v2_nulls_clean
+
+        # La fila 0 es el maximo con diferencia: sin leave-one-out su FAP seria
+        # 1/n contandose a si misma; con LOO es 1/n sobre las otras, y sale extrema.
+        rows = [self.fila(0, flux=1000.0)] + [self.fila(i, flux=float(i)) for i in range(1, 12)]
+        r = _v2_nulls_clean(rows, {}, reference_mode="injection_nulls")
+        alta = [d for d in r["rows"] if d["injection_id"] == "n0"][0]
+        self.assertAlmostEqual(alta["empirical_fap"], 1 / 12)
+        self.assertEqual(alta["n_controls"], 11)
+
+    def test_no_cruza_estratos(self):
+        from musepipe.stages.stage_h04_injection import _v2_nulls_clean
+
+        # Dos metodos con escalas muy distintas: si se mezclaran, las de `psffit`
+        # saldrian todas extremas por comparar peras con manzanas.
+        rows = [self.fila(i, method="aperture", flux=float(i)) for i in range(6)]
+        rows += [self.fila(i + 10, method="psffit", flux=1000.0 + i) for i in range(6)]
+        r = _v2_nulls_clean(rows, {}, reference_mode="injection_nulls")
+        for d in r["rows"]:
+            self.assertEqual(d["n_controls"], 5, "cada fila se compara con las 5 de SU metodo")
+
+    def test_declara_contra_que_comparo(self):
+        from musepipe.stages.stage_h04_injection import _v2_nulls_clean
+
+        rows = [self.fila(i, flux=float(i)) for i in range(6)]
+        self.assertEqual(_v2_nulls_clean(rows, {}, reference_mode="injection_nulls")["reference"],
+                         "injection_nulls")
+
+    def test_la_posicion_real_sigue_sin_entrar(self):
+        from musepipe.stages.stage_h04_injection import _v2_nulls_clean
+
+        rows = [self.fila(i, flux=float(i)) for i in range(6)]
+        rows.append(self.fila(99, position="real", flux=1e6))
+        r = _v2_nulls_clean(rows, {}, reference_mode="injection_nulls")
+        self.assertNotIn("real", {d["position_label"] for d in r["rows"]})
+
+    def test_modo_desconocido_para(self):
+        from musepipe.stages.stage_h04_injection import _v2_nulls_clean
+
+        with self.assertRaises(ValueError):
+            _v2_nulls_clean([], {}, reference_mode="las_de_al_lado")
+
+    def test_finalize_tambien_escribe_la_declaracion_de_sustrato(self):
+        # Si sólo la escribiera E4, la declaración tardaría una corrida de horas
+        # en existir. Es derivada: sale de la config y del disco.
+        import json as _json
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import finalize_stage_h04
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = TestFinalize()._run(tmp, threshold=3.5)
+            finalize_stage_h04("r", project_root=root)
+            qc = _json.load(open(root / "runs" / "r" / "stages" / "stage_h04_qc.json"))
+            self.assertEqual(qc["psfsub_substrate"]["h04_substrate"],
+                             "in_memory_single_model_subtraction")
