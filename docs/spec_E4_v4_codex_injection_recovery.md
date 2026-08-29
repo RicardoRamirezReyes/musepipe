@@ -135,8 +135,11 @@ Corridas el 2026-08-28 con la rejilla de calibración (54 controles en ROXs 12 b
   `optimal_ls` de −3.70 a −0.19. El caso peor es `optimal_ls` en ROXs 42B b
   (sigma 1.66), que es también el método con el sesgo de flujo más grande.
 - **Al 5σ estandarizado, 0 falsos positivos de 54 y de 35** en los seis métodos
-  de los dos objetos: FPR < 1.9 % y < 2.9 % (límites, no medidas). Con la SNR
-  formal, `psffit` daba **55.6 %** en ROXs 12 b.
+  de los dos objetos. Con la SNR formal, `psffit` daba **55.6 %** en ROXs 12 b.
+  **La cota de FPR que se puede citar depende del método**, porque el `n`
+  independiente lo fija el radio de cada extractor y no el de la rejilla (§7):
+  < 1.9 % / 2.9 % para `aperture`, `sgf` y `lpm`; < 3.8 % / 5.9 % para
+  `optimal_*`; < 5.9 % / 9.1 % para `psffit`.
 - `completeness_at_5sigma` no se mueve: a SNR inyectada 5 los seis métodos están
   al 100 % con las dos escalas, en los dos objetos. **El `throughput` a SNR 5
   tampoco**: cambia entre −0.3 % y +0.1 % en once de las doce parejas
@@ -162,10 +165,22 @@ un estrato sin nulas para la etapa; la columna viaja en `TABLE_FIELDS`.
   el máximo que mantiene **≥ 8 px** (≈ 2 FWHM, la escala de correlación que
   implica `docs/noise_model.md`): **54 en ROXs 12 b y 35 en ROXs 42B b**.
   Comprobado a posteriori sobre las nulas, la correlación a desfase 1 (8.13 px)
-  va de −0.29 a +0.32 en los doce casos, toda compatible con cero: **no hay
-  solape efectivo**. Con esos `n` la resolución en FPR es 1.9 y 2.9 puntos: se
-  puede citar un 5 %, no un 1 %. Bajar de ahí exige controles a **otros radios**,
-  y eso reintroduce el desajuste de poblaciones de la §3.
+  va de −0.29 a +0.32 en los doce casos. **Eso NO demuestra independencia**: con
+  n = 54/35 el test sólo excluye |r| ≳ 0.3.
+- **El `n` independiente lo fija el radio de cada extractor, no el de la rejilla.**
+  Corregido el 2026-08-28 (`docs/2026-08-28_fig2_con_escala_v4.md` §5): el criterio
+  de ≥ 8 px vale para `aperture` (`box3`, necesita 3 px) y para `sgf`/`lpm`
+  (exclusión de 3 px, necesitan 6), pero **se queda corto** para `optimal_*`
+  (`x02_window_radius_px` = 8 → necesitan 16 px) y para `psffit`
+  (`x03_comp_radius_px` = 12 → necesita 24 px). Los máximos por método son 147/96,
+  73/47, 26/17 y 17/11. **La escala no se resiente** —mediana y sigma robusta de
+  muestras correlacionadas pero idénticamente distribuidas siguen siendo válidas,
+  sólo pierden precisión, y la prueba es que la nula estandarizada sale ~(0,1)—;
+  lo que hay que rebajar es la **cota de falsos positivos**, que se cita con el `n`
+  del método (§5). El pre-registro de la Figura 2 se quedó en 15 controles porque
+  es casi el máximo que `psffit` admite, no por prudencia.
+- Bajar de ahí exige controles a **otros radios**, y eso reintroduce el desajuste
+  de poblaciones de la §3.
 - La estandarización arregla la **escala de detección**. **No** arregla el sesgo
   de flujo que la causa —el pedestal de `psffit` es el halo, y sigue ahí en
   `throughput` y en `bias_flux_pct`—. Quien cite completitud con v4 y sesgo de
