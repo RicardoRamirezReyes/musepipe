@@ -253,3 +253,109 @@ class TestEtapaCompleta(unittest.TestCase):
         product = self._corre(h04_detection_threshold_snr=3.0)
         self.assertEqual(product.qc["completeness_threshold_snr"], 3.0)
         self.assertEqual(product.qc["completeness_input_snr"], 5.0)
+
+
+class TestFinalize(unittest.TestCase):
+    """La pasada derivada: cambiar el umbral no puede exigir re-inyectar.
+
+    `complete` es funcion pura de una columna que la tabla ya trae y del umbral.
+    Lo que se prueba aqui es que la pasada recomputa exactamente eso y **nada
+    mas**: las medidas se quedan byte a byte, y un producto sin la columna de la
+    escala declarada para en vez de decidir con la otra.
+    """
+
+    def _run(self, tmp, *, threshold=5.0, mode="injection_nulls", columna_std=True):
+        import csv as _csv
+        import json as _json
+        from pathlib import Path as _Path
+
+        from musepipe.stages.stage_h04_injection import TABLE_FIELDS
+
+        root = _Path(tmp)
+        (root / "runs" / "r" / "config").mkdir(parents=True)
+        (root / "runs" / "r" / "stages").mkdir(parents=True)
+        (root / "runs" / "r" / "tables").mkdir(parents=True)
+        (root / "runs" / "r" / "config" / "config.json").write_text(_json.dumps({
+            "meta": {"run_id": "r"},
+            "config": {"run_id": "r", "h04_detection_threshold_snr": threshold,
+                       "h04_snr_standardization": mode, "h04_methods": ["aperture"]},
+        }))
+        campos = [f for f in TABLE_FIELDS if columna_std or f != "recovered_snr_std"]
+        filas = []
+        for i, (std, raw, snr) in enumerate([(6.0, 1.0, 5.0), (4.0, 9.0, 5.0), (1.0, 1.0, 0.0)]):
+            row = {f: "" for f in campos}
+            row.update({"injection_id": f"i{i}", "variant": "nominal", "method": "aperture",
+                        "position_label": f"control{i + 1}", "template_factor": "1.0",
+                        "continuum_mode": "none", "input_snr": str(snr),
+                        "recovered_snr": str(raw), "complete": "False", "throughput": "0.9"})
+            if columna_std:
+                row["recovered_snr_std"] = str(std)
+            filas.append(row)
+        with open(root / "runs" / "r" / "tables" / "injection_throughput_by_method.csv",
+                  "w", newline="") as fh:
+            w = _csv.DictWriter(fh, fieldnames=campos)
+            w.writeheader()
+            w.writerows(filas)
+        (root / "runs" / "r" / "stages" / "stage_h04_qc.json").write_text(_json.dumps({
+            "stage": "h04_injection_recovery", "completeness_at_5sigma": {},
+            "snr_standardization": {"threshold_snr": 99.0, "column": "x"},
+        }))
+        return root
+
+    def test_decide_sobre_la_columna_de_la_escala_declarada(self):
+        import json as _json
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import finalize_stage_h04
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._run(tmp, threshold=5.0)
+            out = finalize_stage_h04("r", project_root=root)
+            filas = list(__import__("csv").DictReader(
+                open(root / "runs" / "r" / "tables" / "injection_throughput_by_method.csv")))
+            # i0 tiene std 6 (>=5) y raw 1; i1 tiene std 4 y raw 9. Decide la std.
+            self.assertEqual([f["complete"] for f in filas], ["True", "False", "False"])
+            self.assertEqual(out["column"], "recovered_snr_std")
+            qc = _json.load(open(root / "runs" / "r" / "stages" / "stage_h04_qc.json"))
+            self.assertEqual(qc["snr_standardization"]["threshold_snr"], 5.0)
+            self.assertEqual(qc["derived_finalize"]["rows_changed"], 1)
+
+    def test_bajar_el_umbral_solo_cambia_complete(self):
+        import csv as _csv
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import finalize_stage_h04
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._run(tmp, threshold=3.5)
+            tabla = root / "runs" / "r" / "tables" / "injection_throughput_by_method.csv"
+            antes = list(_csv.DictReader(open(tabla)))
+            finalize_stage_h04("r", project_root=root)
+            despues = list(_csv.DictReader(open(tabla)))
+            self.assertEqual([f["complete"] for f in despues], ["True", "True", "False"])
+            for a, d in zip(antes, despues):
+                for k in a:
+                    if k != "complete":
+                        self.assertEqual(a[k], d[k], f"la columna {k} no se puede tocar")
+
+    def test_es_idempotente(self):
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import finalize_stage_h04
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._run(tmp, threshold=3.5)
+            finalize_stage_h04("r", project_root=root)
+            segunda = finalize_stage_h04("r", project_root=root)
+            self.assertEqual(segunda["rows_changed"], 0)
+
+    def test_sin_la_columna_de_la_escala_para(self):
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import finalize_stage_h04
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._run(tmp, columna_std=False)
+            with self.assertRaises(RuntimeError) as ctx:
+                finalize_stage_h04("r", project_root=root)
+            self.assertIn("recovered_snr_std", str(ctx.exception))
