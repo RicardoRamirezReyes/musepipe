@@ -19,7 +19,7 @@ from ..injection import InjectionSource, create_run_clone, inject, tree_sha256
 from ..io import read_json, read_wavelength_axis, write_csv, write_json
 from ..paths import RunPaths
 from ..spectral import continuum_running_median as _CONTINUUM_RUNMED
-from ..stats import robust_sigma_axis0
+from ..stats import empirical_z, finite_values, robust_sigma, robust_sigma_axis0
 from .stage08c_look_elsewhere import empirical_fap
 from .stage_h01_detect import BAD_DETECTION_FLAGS, HALPHA_REST_A, matched_filter_point
 from .stage_x10_compare import METHOD_ORDER
@@ -37,6 +37,43 @@ CONTINUUM_METHODS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit")
 DEFAULT_CONTINUUM_SIDEBANDS_A = ((6500.0, 6540.0), (6585.0, 6625.0))
 DEFAULT_NULL_P = 0.0455
 DEFAULT_NULL_GATE_ALPHA = 0.01
+
+#: Como se pone en escala la SNR de una inyeccion antes de decidir `complete`.
+#:
+#: `none` es la SNR formal del filtro adaptado, que es lo que E4 ha usado
+#: siempre. Medido el 2026-08-28
+#: (`docs/2026-08-28_umbral_por_metodo_medido.md`): con senal nula esa SNR no
+#: tiene media 0 ni sigma 1 en ningun metodo, y falla de dos formas distintas
+#: —pedestal en el cubo combinado (`psffit` +5.55 en ROXs 12 b, `optimal_ls`
+#: -3.66), cola por exposicion (`psffit` con sigma 4.86)— que un umbral unico no
+#: puede corregir en ninguna de las dos direcciones.
+#:
+#: `injection_nulls` la estandariza contra las propias inyecciones nulas: las
+#: filas con `input_snr = 0` en posiciones de control, del mismo metodo, ancho de
+#: plantilla y modo de continuo.
+#:
+#: **La referencia tiene que ser esa y no la de la puerta V2.** V2 compara contra
+#: `empirical_null_reference`, que son 33 controles de PRODUCCION repartidos por
+#: el campo; las inyecciones nulas estan al radio del companero y pasan por la
+#: maquinaria de inyeccion. Son dos poblaciones distintas, medido: en ROXs 12 b
+#: `aperture` da 175.0 +- 20.4 en produccion y 60.3 +- 162.8 en inyeccion —un
+#: factor 8 en la escala—, y estandarizar contra la de produccion deja la nula en
+#: -6.55 +- 6.98 en vez de arreglarla. Contra la propia, los doce casos (seis
+#: metodos, dos objetos) caen en media -0.44..+0.31 y sigma 0.95..2.21.
+SNR_STANDARDIZATION_MODES = ("none", "injection_nulls")
+
+#: Con cualquier modo distinto de `none` el QC declara E4 v4: cambia COMO se
+#: decide `complete`, que es una regla y no un parametro. La version lo dice
+#: para que un producto no se pueda confundir con otro calculado de la otra
+#: forma.
+SPEC_VERSION_STANDARDIZED_SNR = "E4_v4"
+
+#: La SNR **inyectada** a la que se reporta la completitud. Era el mismo numero
+#: que `h04_detection_threshold_snr` porque `_completeness` usaba el umbral para
+#: las dos cosas: el corte de deteccion y el nivel al que se mide. Son dos
+#: conceptos y ahora son dos perillas; el valor por defecto conserva el 5.0 que
+#: producia el acoplamiento, asi que nada se mueve mientras no se declare.
+DEFAULT_COMPLETENESS_INPUT_SNR = 5.0
 
 
 TABLE_FIELDS = [
@@ -58,6 +95,11 @@ TABLE_FIELDS = [
     "recovered_flux_net",
     "recovered_sigma",
     "recovered_snr",
+    # La SNR estandarizada contra la nula empirica. Se emite SIEMPRE, tambien
+    # con `h04_snr_standardization="none"`: es el diagnostico que dice si la
+    # SNR formal esta en escala, y medirlo no puede depender de haber decidido
+    # ya que no lo esta.
+    "recovered_snr_std",
     "throughput",
     "throughput_err",
     "complete",
@@ -156,6 +198,8 @@ def stage_h04_config_from_run(
     cfg.setdefault("h04_expected_seconds_per_case_method", DEFAULT_SECONDS_PER_CASE_METHOD)
     cfg.setdefault("h04_allow_long_run", False)
     cfg.setdefault("h04_detection_threshold_snr", 5.0)
+    cfg.setdefault("h04_snr_standardization", "none")
+    cfg.setdefault("h04_completeness_input_snr", DEFAULT_COMPLETENESS_INPUT_SNR)
     cfg.setdefault("h04_continuum_sidebands_A", [list(band) for band in DEFAULT_CONTINUUM_SIDEBANDS_A])
     cfg.setdefault("h04_null_p", DEFAULT_NULL_P)
     cfg.setdefault("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)
@@ -361,6 +405,198 @@ def build_empirical_null_reference(config, paths, methods, *, lsf_fwhm_A):
             "by_factor": by_factor,
         }
     return reference
+
+
+def null_scale(reference_values):
+    """El centro y la escala de la nula empirica, en las unidades del flujo.
+
+    Es la pareja que usa `empirical_z` (mediana y sigma robusta), publicada
+    aparte porque el QC tiene que poder decir **contra que** se estandarizo. Con
+    33 controles la sigma robusta trae ~12 % de error relativo: el numero sirve
+    para poner en escala, no para citarlo con tres cifras.
+    """
+
+    values = finite_values(reference_values)
+    if values.size < 2:
+        return {"center": np.nan, "sigma": np.nan, "n": int(values.size)}
+    sigma = robust_sigma(values)
+    return {
+        "center": float(np.median(values)),
+        "sigma": float(sigma) if np.isfinite(sigma) and sigma > 0 else np.nan,
+        "n": int(values.size),
+    }
+
+
+def injection_null_reference(rows):
+    """Las inyecciones nulas, agrupadas por el estrato en el que son comparables.
+
+    Estrato = metodo x ancho de plantilla x modo de continuo. Cruzar estratos
+    seria comparar cantidades de escalas distintas: el ancho cambia la escala del
+    filtro adaptado y el modo de continuo cambia lo que se resta antes.
+
+    Solo posiciones de **control**: la real puede llevar senal del companero, y
+    meterla en la referencia es lo que convierte una deteccion en el cero.
+    """
+
+    reference = {}
+    for row in rows:
+        if row["variant"] != "nominal" or float(row["input_snr"]) != 0.0:
+            continue
+        if not str(row["position_label"]).startswith("control"):
+            continue
+        key = _standardization_key(row)
+        reference.setdefault(key, []).append(
+            (str(row["injection_id"]), float(row["recovered_flux"]))
+        )
+    return reference
+
+
+def _standardization_key(row):
+    return (
+        str(row["method"]),
+        f"{float(row['template_factor']):g}",
+        str(row["continuum_mode"]),
+    )
+
+
+def apply_snr_standardization(rows, *, mode, threshold_snr):
+    """Anade `recovered_snr_std` y, con `injection_nulls`, redecide `complete`.
+
+    Corre como pasada posterior sobre las filas, no dentro del calculo de cada
+    caso, por dos razones: la referencia son las propias filas nulas, que solo
+    existen cuando estan todas, y el calculo por caso lo comparten los tres
+    backends de ejecucion (serie, hilos y fork) a traves de un `ctx` de solo
+    lectura, donde meter esto seria una fuente nueva de divergencia.
+
+    Se estandariza `recovered_flux` —no `recovered_flux_net`— porque es la
+    cantidad que la referencia mide: las filas nulas tambien traen su flujo sin
+    restar baseline.
+
+    **Una fila nula se estandariza dejandose fuera** (leave-one-out). Si no, cada
+    nula entra en su propio centro y su propia escala: medido sobre los 15
+    controles de ROXs 12 b, no hacerlo encoge el |z| de la nula un 13 % en la
+    mediana (los deciles van de +2 % a -29 %), asi que la tasa de falsos
+    positivos que se midiera con ellas saldria optimista por construccion.
+    """
+
+    if mode not in SNR_STANDARDIZATION_MODES:
+        raise ValueError(
+            f"`h04_snr_standardization` solo entiende {SNR_STANDARDIZATION_MODES}, no {mode!r}."
+        )
+    reference = injection_null_reference(rows)
+    if mode == "injection_nulls":
+        faltan = sorted(
+            {
+                _standardization_key(row)
+                for row in rows
+                if len(reference.get(_standardization_key(row), ())) < 2
+            }
+        )
+        if faltan:
+            # Sin referencia no hay escala, y heredar la SNR formal seria volver
+            # justo a la escala que se ha declarado mala. Se para en vez de
+            # publicar filas medidas de dos maneras distintas.
+            raise ValueError(
+                "`h04_snr_standardization=injection_nulls` necesita al menos dos inyecciones "
+                f"nulas en posiciones de control por estrato; faltan en: {faltan}. "
+                "Incluye 0.0 en `h04_snr_grid` para cada ancho y modo de continuo de la rejilla."
+            )
+    out = []
+    for row in rows:
+        pares = reference.get(_standardization_key(row), [])
+        es_nula = (
+            row["variant"] == "nominal"
+            and float(row["input_snr"]) == 0.0
+            and str(row["position_label"]).startswith("control")
+        )
+        valores = [
+            flux
+            for injection_id, flux in pares
+            if not (es_nula and injection_id == str(row["injection_id"]))
+        ]
+        standardized = (
+            empirical_z(float(row["recovered_flux"]), valores) if len(valores) >= 2 else np.nan
+        )
+        updated = dict(row)
+        updated["recovered_snr_std"] = float(standardized)
+        if mode == "injection_nulls":
+            updated["complete"] = bool(
+                np.isfinite(standardized) and standardized >= float(threshold_snr)
+            )
+        out.append(updated)
+    return out
+
+
+def _reference_population_check(rows, null_reference):
+    """Compara la nula de inyeccion con la de produccion, metodo a metodo.
+
+    Deberian describir lo mismo —una medida sin senal— y no lo hacen: las
+    inyecciones nulas estan al radio del companero y pasan por la maquinaria de
+    inyeccion, mientras los 33 controles de produccion estan repartidos por el
+    campo. Medido el 2026-08-28 en ROXs 12 b, `aperture`: 175.0 +- 20.4 en
+    produccion contra 60.3 +- 162.8 en inyeccion.
+
+    No vota. Es un diagnostico, y su destinatario real es la puerta V2, que
+    compara las filas de la primera contra la distribucion de la segunda.
+    """
+
+    out = {}
+    injection = injection_null_reference(rows)
+    for (method, factor, _continuum), pairs in sorted(injection.items()):
+        production = ((null_reference or {}).get(method) or {}).get("by_factor", {}).get(factor)
+        if production is None:
+            continue
+        mine = null_scale([flux for _id, flux in pairs])
+        theirs = null_scale(production)
+        offset = np.nan
+        if np.isfinite(theirs["sigma"]) and theirs["sigma"] > 0:
+            offset = (mine["center"] - theirs["center"]) / theirs["sigma"]
+        ratio = np.nan
+        if np.isfinite(theirs["sigma"]) and theirs["sigma"] > 0 and np.isfinite(mine["sigma"]):
+            ratio = mine["sigma"] / theirs["sigma"]
+        out[f"{method}|{factor}"] = {
+            "injection": {k: _finite_or_none(v) if k != "n" else v for k, v in mine.items()},
+            "production": {k: _finite_or_none(v) if k != "n" else v for k, v in theirs.items()},
+            "center_offset_in_production_sigma": _finite_or_none(offset),
+            "sigma_ratio_injection_over_production": _finite_or_none(ratio),
+        }
+    return out
+
+
+def null_distribution_diagnostics(rows, methods):
+    """Media y sigma de la SNR con senal nula, cruda y estandarizada.
+
+    Si la SNR estuviera en escala, con senal nula tendria media 0 y sigma 1.
+    Publicarlo en el QC es lo que convierte "el umbral no cuadra" en un numero
+    que se puede mirar sin re-correr la etapa. Solo posiciones de control: la
+    real puede llevar senal, y contarla como nula es lo que convierte una
+    deteccion en un falso positivo.
+    """
+
+    out = {}
+    for method in methods:
+        nulls = [
+            row
+            for row in rows
+            if row["method"] == method
+            and row["variant"] == "nominal"
+            and float(row["input_snr"]) == 0.0
+            and str(row["position_label"]).startswith("control")
+        ]
+        if not nulls:
+            continue
+        entry = {"n": len(nulls)}
+        for key, column in (("raw", "recovered_snr"), ("standardized", "recovered_snr_std")):
+            values = finite_values([row.get(column, np.nan) for row in nulls])
+            entry[key] = {
+                "mean": _finite_or_none(float(np.mean(values)) if values.size else np.nan),
+                "sigma": _finite_or_none(
+                    float(np.std(values)) if values.size > 1 else np.nan
+                ),
+                "n_finite": int(values.size),
+            }
+        out[method] = entry
+    return out
 
 
 def _source_pos_yx(qc, *keys):
@@ -789,6 +1025,9 @@ def _row_for_method(case, method, injected_flux, measurement, threshold_snr):
         "recovered_flux_net": recovered,
         "recovered_sigma": sigma,
         "recovered_snr": snr,
+        # La rellena `apply_snr_standardization`, que corre despues: la
+        # referencia nula se construye cuando ya estan todas las filas.
+        "recovered_snr_std": np.nan,
         "throughput": throughput,
         "throughput_err": 0.0,
         "complete": bool(np.isfinite(snr) and snr >= float(threshold_snr)),
@@ -988,7 +1227,18 @@ def _centroid_bias_placeholder(rows, methods):
     return {method: None for method in methods if any(row["method"] == method for row in rows)}
 
 
-def _completeness(rows, methods, threshold_snr):
+def _completeness(rows, methods, input_snr):
+    """Fraccion de inyecciones detectadas, al nivel de SNR **inyectada** dado.
+
+    El nivel era `h04_detection_threshold_snr`, que ya decidia `complete`: la
+    misma perilla hacia de corte de deteccion y de selector del nivel al que se
+    reporta. Son dos conceptos —uno es sobre la SNR recuperada, el otro sobre la
+    inyectada— y confundirlos tiene una consecuencia concreta: en cuanto el
+    umbral deje de ser el mismo para todos, cada metodo reportaria su
+    completitud a un nivel de senal distinto y `completeness_at_5sigma` dejaria
+    de ser comparable entre metodos sin que nada lo delatara.
+    """
+
     out = {}
     for method in methods:
         subset = [
@@ -998,7 +1248,7 @@ def _completeness(rows, methods, threshold_snr):
             and row["variant"] == "nominal"
             and np.isclose(float(row["template_factor"]), 1.0)
             and row["continuum_mode"] == "none"
-            and np.isclose(float(row["input_snr"]), float(threshold_snr))
+            and np.isclose(float(row["input_snr"]), float(input_snr))
         ]
         if subset:
             out[method] = float(np.mean([bool(row["complete"]) for row in subset]))
@@ -1246,6 +1496,10 @@ def _v5_continuum(rows, methods, continuum_info):
 
 def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, continuum_info, null_reference):
     threshold = float(config.get("h04_detection_threshold_snr", 5.0))
+    standardization = str(config.get("h04_snr_standardization", "none"))
+    completeness_input_snr = float(
+        config.get("h04_completeness_input_snr", DEFAULT_COMPLETENESS_INPUT_SNR)
+    )
     psf_pct = _psf_perturbation_pct(rows, methods)
     checks = {
         "v1_regression": {"status": regression["verdict"], **regression},
@@ -1278,7 +1532,9 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
             open_issues.append(f"{key} failed.")
     return {
         "stage": "h04_injection_recovery",
-        "spec_version": SPEC_VERSION,
+        "spec_version": (
+            SPEC_VERSION_STANDARDIZED_SNR if standardization != "none" else SPEC_VERSION
+        ),
         "run_id_base": str(config["run_id"]),
         "status": "complete",
         "clones_created": [],
@@ -1317,7 +1573,37 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
             "centroid_A": _centroid_bias_placeholder(rows, methods),
             "fwhm_pct": {method: None for method in methods},
         },
-        "completeness_at_5sigma": _completeness(rows, methods, threshold),
+        # La escala en la que se decide `complete`, y la prueba de si hacia
+        # falta: `null_distribution` dice, con senal nula, si la SNR de cada
+        # metodo tiene media 0 y sigma 1 como supone un umbral unico.
+        "snr_standardization": {
+            "mode": standardization,
+            "column": (
+                "recovered_snr_std" if standardization == "injection_nulls" else "recovered_snr"
+            ),
+            "threshold_snr": threshold,
+            "reference": "injection_nulls_control_positions",
+            "leave_one_out": True,
+            "scale_by_stratum": {
+                "|".join(key): {
+                    field: _finite_or_none(value) if field != "n" else value
+                    for field, value in null_scale([flux for _id, flux in pairs]).items()
+                }
+                for key, pairs in sorted(injection_null_reference(rows).items())
+            },
+            # Las dos nulas que E4 tiene a mano NO son la misma poblacion, y la
+            # diferencia importa mas alla de aqui: la puerta V2 compara estas
+            # mismas filas nulas contra la de PRODUCCION. Publicar el cociente de
+            # escalas es lo que delata el desajuste sin tener que ir a buscarlo.
+            "reference_population_check": _reference_population_check(rows, null_reference),
+            "null_distribution": null_distribution_diagnostics(rows, methods),
+        },
+        # El nombre del campo es historico: el `5sigma` era el umbral, y el nivel
+        # al que se mide es `completeness_input_snr`. Se declaran los dos porque
+        # hasta hoy eran el mismo numero por accidente.
+        "completeness_at_5sigma": _completeness(rows, methods, completeness_input_snr),
+        "completeness_input_snr": completeness_input_snr,
+        "completeness_threshold_snr": threshold,
         "checks": checks,
         "open_issues": open_issues,
     }
@@ -1574,6 +1860,11 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
             }
             for method, reference in configured_null.items()
         }
+    rows = apply_snr_standardization(
+        rows,
+        mode=str(cfg.get("h04_snr_standardization", "none")),
+        threshold_snr=float(cfg.get("h04_detection_threshold_snr", 5.0)),
+    )
     qc = _qc_from_rows(
         cfg,
         paths,
@@ -1880,13 +2171,19 @@ __all__ = [
     "DEFAULT_METHODS",
     "DEFAULT_SNR_GRID",
     "SPEC_VERSION",
+    "SPEC_VERSION_STANDARDIZED_SNR",
+    "SNR_STANDARDIZATION_MODES",
     "H01_MATCHED_FILTER_POINT",
     "H04Case",
     "StageH04Product",
     "build_h04_cases",
     "clone_run_for_case",
     "compute_stage_h04_products",
+    "apply_snr_standardization",
     "build_empirical_null_reference",
+    "injection_null_reference",
+    "null_distribution_diagnostics",
+    "null_scale",
     "close_runtime_budget",
     "estimate_runtime_budget",
     "historic_regression_check",
