@@ -528,6 +528,56 @@ def apply_snr_standardization(rows, *, mode, threshold_snr):
     return out
 
 
+def psfsub_substrate_check(config, paths):
+    """De qué cubo sale `optimal_psfsub` aquí, y de cuál en C3.
+
+    E4 **no** consume el cubo de C1b: construye su psfsub en memoria restando UN
+    modelo al cubo inyectado (`stage_h04_extractors.optimal_psfsub_extractor`),
+    mientras C3 entrega el espectro del cubo de C1b en cuanto ese cubo existe
+    (`stage_x02_optimal`). Desde que C1b corre, el espectro y el throughput de ese
+    método salen de dos sustratos distintos, y E3 los multiplica.
+
+    Medido el 2026-08-29 (`docs/2026-08-29_psfsub_dos_sustratos.md`): la mediana
+    del cociente entre los dos espectros es 1.006 en ROXs 12 b y 0.984 en
+    ROXs 42B b —o sea el sesgo es del orden del 1 %, pequeño frente al 10 % de
+    `throughput_err`—, pero la dispersión canal a canal es de ±10 % y en la
+    ventana de Hα de ROXs 42B b el cociente baja a 0.945.
+
+    **No vota**: se declara para que el desajuste sea visible sin tener que ir a
+    leer dos módulos.
+    """
+
+    declarado = config.get("x02_psfsub_cube_fits")
+    if paths is None and not declarado:
+        # Sin `paths` no hay run del que leer: se declara lo unico que se sabe
+        # con certeza -de que sustrato tira E4- y se dice que lo demas no se
+        # pudo mirar, en vez de inventarlo o de reventar.
+        return {
+            "h04_substrate": "in_memory_single_model_subtraction",
+            "c3_substrate": None,
+            "perobs_cube_exists": None,
+            "mismatch": None,
+            "note": "Sin `paths`: no se pudo comprobar el sustrato de C3.",
+        }
+    perobs_cube = Path(
+        declarado or paths["paths"].stage_dir / "cube_psfsub_perobs.fits"
+    )
+    c3_qc = {}
+    if paths is not None:
+        c3_qc = _read_optional_json(paths["paths"].stage_dir / "spec_optimal_qc.json") or {}
+    c3_source = str((c3_qc.get("psfsub_model") or {}).get("source") or "")
+    out = {
+        "h04_substrate": "in_memory_single_model_subtraction",
+        "c3_substrate": c3_source or None,
+        "perobs_cube_exists": perobs_cube.exists(),
+        "note": ("E4 resta UN modelo al cubo inyectado; C3 usa el cubo de C1b si existe. "
+                 "El throughput de `optimal_psfsub` se mide sobre el primero y se aplica "
+                 "al espectro del segundo."),
+    }
+    out["mismatch"] = bool(out["perobs_cube_exists"] and c3_source and c3_source != "combined_cube")
+    return out
+
+
 def _reference_population_check(rows, null_reference):
     """Compara la nula de inyeccion con la de produccion, metodo a metodo.
 
@@ -1599,6 +1649,9 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
             "reference_population_check": _reference_population_check(rows, null_reference),
             "null_distribution": null_distribution_diagnostics(rows, methods),
         },
+        # De qué cubo sale psfsub aquí y de cuál en C3: desde que C1b corre no son
+        # el mismo, y sin declararlo hay que leer dos módulos para saberlo.
+        "psfsub_substrate": psfsub_substrate_check(config, paths),
         # El nombre del campo es historico: el `5sigma` era el umbral, y el nivel
         # al que se mide es `completeness_input_snr`. Se declaran los dos porque
         # hasta hoy eran el mismo numero por accidente.
@@ -2309,6 +2362,7 @@ __all__ = [
     "injection_null_reference",
     "null_distribution_diagnostics",
     "null_scale",
+    "psfsub_substrate_check",
     "close_runtime_budget",
     "decision_column",
     "estimate_runtime_budget",
