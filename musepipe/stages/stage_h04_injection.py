@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import asdict, dataclass
+import datetime as _dt
 import math
 import os
 from pathlib import Path
@@ -1998,6 +1999,114 @@ def _plot_completeness(rows, path):
     return path
 
 
+def decision_column(config):
+    """La columna sobre la que se decide `complete`, segun la escala declarada."""
+
+    mode = str(config.get("h04_snr_standardization", "none"))
+    if mode not in SNR_STANDARDIZATION_MODES:
+        raise ValueError(
+            f"`h04_snr_standardization` solo entiende {SNR_STANDARDIZATION_MODES}, no {mode!r}."
+        )
+    return "recovered_snr" if mode == "none" else "recovered_snr_std"
+
+
+def finalize_stage_h04(run_id=None, *, project_root=None, overrides=None,
+                       allow_run_id_mismatch=False):
+    """Recalcula lo **derivado** de la tabla que ya esta en disco, sin re-inyectar.
+
+    `complete` y `completeness_at_5sigma` son funciones puras de una columna de
+    SNR —que la tabla ya trae— y del umbral. Cambiar el umbral no necesita
+    repetir la rejilla de inyecciones, que cuesta horas: es el mismo caso que el
+    `finalize` de A4, una pasada producto->producto que recomputa lo derivado y
+    deja lo medido intacto.
+
+    Reescribe **solo** la columna `complete`: las demas se copian tal cual desde
+    el CSV, sin reformatear, para que un `diff` muestre exactamente lo que
+    cambio y nada mas.
+    """
+
+    run_config = load_run_config(
+        run_id, project_root=project_root, allow_run_id_mismatch=allow_run_id_mismatch
+    )
+    cfg = stage_h04_config_from_run(
+        run_config.run_id,
+        project_root=run_config.paths.project_root,
+        overrides=overrides,
+        allow_run_id_mismatch=allow_run_id_mismatch,
+    )
+    paths = stage_h04_paths(run_config.run_id, cfg["project_root"])
+    table_path = paths["throughput_csv"]
+    qc_path = paths["stage_h04_qc_json"]
+    if not table_path.exists() or not qc_path.exists():
+        raise FileNotFoundError(
+            f"`finalize` recomputa lo derivado de productos existentes; faltan {table_path} o {qc_path}."
+        )
+
+    threshold = float(cfg.get("h04_detection_threshold_snr", 5.0))
+    column = decision_column(cfg)
+    with open(table_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if column not in fieldnames:
+        # Un producto anterior a E4 v4 no trae la columna estandarizada. Parar es
+        # lo correcto: decidir con la otra seria cambiar la escala en silencio.
+        raise RuntimeError(
+            f"La tabla no trae `{column}`, asi que es anterior a la escala declarada "
+            f"(`h04_snr_standardization={cfg.get('h04_snr_standardization')}`). Re-corre E4."
+        )
+
+    changed = 0
+    for row in rows:
+        try:
+            value = float(row[column])
+        except (TypeError, ValueError):
+            value = float("nan")
+        decision = "True" if math.isfinite(value) and value >= threshold else "False"
+        if row["complete"] != decision:
+            changed += 1
+        row["complete"] = decision
+    with open(table_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    typed = [
+        {
+            **row,
+            "input_snr": float(row["input_snr"]),
+            "template_factor": float(row["template_factor"]),
+            "complete": row["complete"] == "True",
+        }
+        for row in rows
+    ]
+    methods = [str(m) for m in cfg.get("h04_methods", DEFAULT_METHODS)]
+    completeness_input_snr = float(
+        cfg.get("h04_completeness_input_snr", DEFAULT_COMPLETENESS_INPUT_SNR)
+    )
+    qc = read_json(qc_path)
+    qc["completeness_at_5sigma"] = _completeness(typed, methods, completeness_input_snr)
+    qc["completeness_input_snr"] = completeness_input_snr
+    qc["completeness_threshold_snr"] = threshold
+    if isinstance(qc.get("snr_standardization"), dict):
+        qc["snr_standardization"]["threshold_snr"] = threshold
+        qc["snr_standardization"]["column"] = column
+    # Procedencia: un producto que ya no sale de una sola corrida tiene que decir
+    # que parte se recomputo despues y con que umbral.
+    qc["derived_finalize"] = {
+        "recomputed_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        "threshold_snr": threshold,
+        "column": column,
+        "rows_changed": changed,
+        "n_rows": len(rows),
+        "note": ("`complete` y `completeness_at_5sigma` se recomputaron de la tabla existente; "
+                 "las medidas (flujo, sigma, SNR, throughput) no se tocaron."),
+    }
+    write_json(qc_path, _json_ready(qc))
+    return {"table": table_path, "qc_json": qc_path, "rows_changed": changed,
+            "threshold_snr": threshold, "column": column}
+
+
 def write_stage_h04_products(product: StageH04Product, config, paths):
     paths["paths"].ensure_base_dirs()
     paths["plot_dir"].mkdir(parents=True, exist_ok=True)
@@ -2145,6 +2254,13 @@ def main(argv=None):
     parser.add_argument("--allow-run-id-mismatch", action="store_true")
     parser.add_argument("--allow-long-run", action="store_true")
     parser.add_argument(
+        "--finalize", action="store_true",
+        help=("No inyecta nada: recomputa lo DERIVADO (`complete` y `completeness_at_5sigma`) "
+              "de la tabla que ya esta en disco, con el umbral que declare la config. Es lo que "
+              "hay que correr tras cambiar `h04_detection_threshold_snr`, en vez de repetir la "
+              "rejilla entera."),
+    )
+    parser.add_argument(
         "--injection-psf-model-json", default=None,
         help=("PSF con la que INYECTAR, distinta de la que extrae. Por defecto la misma, "
               "y entonces el throughput mide lo que pierde cada metodo. Fijando aqui una "
@@ -2152,6 +2268,15 @@ def main(argv=None):
               "comparable entre dos modelos."),
     )
     args = parser.parse_args(argv)
+    if args.finalize:
+        result = finalize_stage_h04(
+            args.run_id,
+            project_root=args.project_root,
+            allow_run_id_mismatch=args.allow_run_id_mismatch,
+        )
+        print(f"{result['qc_json']}  ({result['rows_changed']} filas cambiadas, "
+              f"umbral {result['threshold_snr']:g} sobre {result['column']})")
+        return 0
     overrides = {}
     if args.allow_long_run:
         overrides["h04_allow_long_run"] = True
@@ -2185,7 +2310,9 @@ __all__ = [
     "null_distribution_diagnostics",
     "null_scale",
     "close_runtime_budget",
+    "decision_column",
     "estimate_runtime_budget",
+    "finalize_stage_h04",
     "historic_regression_check",
     "measure_recovery_with_h01_estimator",
     "resolve_h04_positions",
