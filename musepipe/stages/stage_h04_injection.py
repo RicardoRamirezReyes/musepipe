@@ -63,6 +63,21 @@ DEFAULT_NULL_GATE_ALPHA = 0.01
 #: metodos, dos objetos) caen en media -0.44..+0.31 y sigma 0.95..2.21.
 SNR_STANDARDIZATION_MODES = ("none", "injection_nulls")
 
+#: Contra que poblacion compara la puerta V2 sus filas nulas.
+#:
+#: `production_controls` es lo historico: los 33 controles de PRODUCCION que
+#: construye `build_empirical_null_reference`. `injection_nulls` compara cada
+#: nula contra las OTRAS nulas de su estrato, dejandose fuera (leave-one-out).
+#:
+#: Medido el 2026-08-29 (`docs/2026-08-29_v2_poblacion_emparejada.md`): la
+#: referencia historica es **otra poblacion** —los controles de produccion estan
+#: repartidos por el campo y las inyecciones nulas estan al radio del companero—,
+#: y la mitad de las filas caen por DEBAJO de los 33 controles: 162 de 324 en
+#: ROXs 12 b y 107 de 210 en ROXs 42B b. Una puerta unilateral cuyas filas viven
+#: enteras en la otra cola no puede disparar. Con la poblacion emparejada la FAP
+#: se distribuye centrada en ~0.5, que es la firma de un test bien planteado.
+NULL_GATE_REFERENCES = ("production_controls", "injection_nulls")
+
 #: Con cualquier modo distinto de `none` el QC declara E4 v4: cambia COMO se
 #: decide `complete`, que es una regla y no un parametro. La version lo dice
 #: para que un producto no se pueda confundir con otro calculado de la otra
@@ -204,6 +219,7 @@ def stage_h04_config_from_run(
     cfg.setdefault("h04_continuum_sidebands_A", [list(band) for band in DEFAULT_CONTINUUM_SIDEBANDS_A])
     cfg.setdefault("h04_null_p", DEFAULT_NULL_P)
     cfg.setdefault("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)
+    cfg.setdefault("h04_null_gate_reference", "injection_nulls")
     cfg.setdefault("h04_baseline_subtract_throughput", True)
     # La convencion en la que se expresa `injected_flux`. Con `norm_radius`
     # coincide con la que devuelven los extractores (NORMRAD), y el throughput
@@ -445,9 +461,17 @@ def injection_null_reference(rows):
             continue
         if not str(row["position_label"]).startswith("control"):
             continue
-        key = _standardization_key(row)
-        reference.setdefault(key, []).append(
-            (str(row["injection_id"]), float(row["recovered_flux"]))
+        try:
+            flux = float(row["recovered_flux"])
+        except (TypeError, ValueError):
+            # Una nula sin flujo no aporta nada a la referencia. Se salta en vez
+            # de reventar: `finalize` lee CSV, y una celda vacia de un producto
+            # viejo no es motivo para tumbar la etapa.
+            continue
+        if not np.isfinite(flux):
+            continue
+        reference.setdefault(_standardization_key(row), []).append(
+            (str(row["injection_id"]), flux)
         )
     return reference
 
@@ -1306,7 +1330,14 @@ def _completeness(rows, methods, input_snr):
     return out
 
 
-def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_alpha=DEFAULT_NULL_GATE_ALPHA):
+def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P,
+                    gate_alpha=DEFAULT_NULL_GATE_ALPHA,
+                    reference_mode="injection_nulls"):
+    if reference_mode not in NULL_GATE_REFERENCES:
+        raise ValueError(
+            f"`h04_null_gate_reference` solo entiende {NULL_GATE_REFERENCES}, no {reference_mode!r}."
+        )
+    pools = injection_null_reference(rows) if reference_mode == "injection_nulls" else {}
     nulls = [
         row
         for row in rows
@@ -1317,10 +1348,19 @@ def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_al
     diagnostics = []
     for row in nulls:
         factor_key = f"{float(row['template_factor']):g}"
-        reference = np.asarray(
-            empirical_reference[row["method"]]["by_factor"][factor_key],
-            dtype=np.float64,
-        )
+        if reference_mode == "injection_nulls":
+            # Las OTRAS nulas del mismo estrato. El leave-one-out es lo que
+            # impide que la fila entre en su propia referencia y se rebaje sola.
+            reference = np.asarray(
+                [flux for injection_id, flux in pools.get(_standardization_key(row), ())
+                 if injection_id != str(row["injection_id"])],
+                dtype=np.float64,
+            )
+        else:
+            reference = np.asarray(
+                empirical_reference[row["method"]]["by_factor"][factor_key],
+                dtype=np.float64,
+            )
         observed = float(row["recovered_flux"])
         fap = empirical_fap(observed, reference)
         # La misma FAP de rango, por abajo. La puerta es unilateral por diseno
@@ -1427,6 +1467,10 @@ def _v2_nulls_clean(rows, empirical_reference, *, p_null=DEFAULT_NULL_P, gate_al
     return {
         "status": "pass" if passed else "fail",
         "population": "control_positions_only",
+        # Contra QUE se comparan estas filas. Hasta E4 v4 era siempre la
+        # referencia de produccion y no se decia; que fueran otra poblacion es
+        # justo lo que impedia que la puerta pudiera disparar.
+        "reference": reference_mode,
         # `n_extreme` cuenta lo que cuenta la puerta. Hasta E4 v2 eran filas y
         # el nombre no lo decia; ahora `unit` lo declara y `n_extreme_rows`
         # conserva el numero viejo, que sigue siendo el detalle util.
@@ -1559,6 +1603,7 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
             null_reference,
             p_null=float(config.get("h04_null_p", DEFAULT_NULL_P)),
             gate_alpha=float(config.get("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)),
+            reference_mode=str(config.get("h04_null_gate_reference", "injection_nulls")),
         ),
         "v3_monotonic": _v3_monotonic(rows, methods),
         "v4_hierarchy": _v4_hierarchy(rows),
@@ -2138,7 +2183,31 @@ def finalize_stage_h04(run_id=None, *, project_root=None, overrides=None,
         cfg.get("h04_completeness_input_snr", DEFAULT_COMPLETENESS_INPUT_SNR)
     )
     qc = read_json(qc_path)
+    # V2 tambien es derivada: sus filas son las nulas de la tabla y su referencia
+    # se reconstruye. Recomputarla aqui evita que un cambio de referencia obligue
+    # a repetir la rejilla, igual que con el umbral.
+    reference_mode = str(cfg.get("h04_null_gate_reference", "injection_nulls"))
+    v2_before = ((qc.get("checks") or {}).get("v2_nulls_clean") or {}).get("status")
+    null_reference = {}
+    if reference_mode == "production_controls":
+        lsf_fwhm, _src = _lsf_fwhm_from_config_or_qc(cfg, paths)
+        null_reference = build_empirical_null_reference(cfg, paths, methods, lsf_fwhm_A=lsf_fwhm)
+    v2 = _v2_nulls_clean(
+        typed,
+        null_reference,
+        p_null=float(cfg.get("h04_null_p", DEFAULT_NULL_P)),
+        gate_alpha=float(cfg.get("h04_null_gate_alpha", DEFAULT_NULL_GATE_ALPHA)),
+        reference_mode=reference_mode,
+    )
+    qc.setdefault("checks", {})["v2_nulls_clean"] = v2
     qc["completeness_at_5sigma"] = _completeness(typed, methods, completeness_input_snr)
+    issues = [i for i in (qc.get("open_issues") or []) if not i.startswith("v2_nulls_clean failed")]
+    if v2.get("status") == "fail":
+        issues.append("v2_nulls_clean failed.")
+    qc["open_issues"] = issues
+    # Tambien es derivada: sale de la config y de que ficheros hay en disco, asi
+    # que no tiene por que esperar a la siguiente corrida de E4 para existir.
+    qc["psfsub_substrate"] = psfsub_substrate_check(cfg, paths)
     qc["completeness_input_snr"] = completeness_input_snr
     qc["completeness_threshold_snr"] = threshold
     if isinstance(qc.get("snr_standardization"), dict):
@@ -2152,12 +2221,15 @@ def finalize_stage_h04(run_id=None, *, project_root=None, overrides=None,
         "column": column,
         "rows_changed": changed,
         "n_rows": len(rows),
-        "note": ("`complete` y `completeness_at_5sigma` se recomputaron de la tabla existente; "
-                 "las medidas (flujo, sigma, SNR, throughput) no se tocaron."),
+        "v2_reference": reference_mode,
+        "v2_status": f"{v2_before} -> {v2.get('status')}",
+        "note": ("`complete`, `completeness_at_5sigma` y la puerta V2 se recomputaron de la tabla "
+                 "existente; las medidas (flujo, sigma, SNR, throughput) no se tocaron."),
     }
     write_json(qc_path, _json_ready(qc))
     return {"table": table_path, "qc_json": qc_path, "rows_changed": changed,
-            "threshold_snr": threshold, "column": column}
+            "threshold_snr": threshold, "column": column,
+            "v2_reference": reference_mode, "v2_status": v2.get("status")}
 
 
 def write_stage_h04_products(product: StageH04Product, config, paths):
@@ -2350,6 +2422,7 @@ __all__ = [
     "DEFAULT_SNR_GRID",
     "SPEC_VERSION",
     "SPEC_VERSION_STANDARDIZED_SNR",
+    "NULL_GATE_REFERENCES",
     "SNR_STANDARDIZATION_MODES",
     "H01_MATCHED_FILTER_POINT",
     "H04Case",
