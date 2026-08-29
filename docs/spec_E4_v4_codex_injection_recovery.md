@@ -42,7 +42,9 @@ Solo esto:
 - Con `h04_snr_standardization="injection_nulls"`, `complete` se decide sobre
   `recovered_snr_std` en vez de sobre `recovered_snr`. El umbral no cambia:
   sigue siendo `h04_detection_threshold_snr`, y con la escala arreglada vuelve a
-  significar «sigmas de la distribución que este método tiene sin señal».
+  significar «sigmas de la distribución que este método tiene sin señal». Su
+  **valor** es una decisión aparte, y desde el 2026-08-28 es **3.5**: cambiarlo no
+  pide re-inyectar, porque `complete` es derivada — ver §4 y `--finalize`.
 - `h04_completeness_input_snr` deja de ser el umbral. Hasta v3 `_completeness`
   usaba `h04_detection_threshold_snr` para **dos cosas**: el corte de detección
   —sobre la SNR recuperada— y el nivel de SNR **inyectada** al que se reporta.
@@ -120,7 +122,10 @@ Bloque nuevo `snr_standardization`:
   Es la verificación de §5 publicada en el propio producto.
 
 Y, fuera del bloque, `completeness_input_snr` y `completeness_threshold_snr`
-declarados por separado. `completeness_at_5sigma` conserva el nombre —lo leen
+declarados por separado, más `derived_finalize` cuando lo derivado se ha
+recomputado después de la corrida: cuándo, con qué umbral, sobre qué columna y
+cuántas filas cambiaron. Un producto que ya no sale de una sola corrida tiene que
+decirlo. `completeness_at_5sigma` conserva el nombre —lo leen
 otros— aunque el `5sigma` fuera el umbral y no el nivel.
 
 ## 5. Verificaciones
@@ -134,8 +139,10 @@ Corridas el 2026-08-28 con la rejilla de calibración (54 controles en ROXs 12 b
   El pedestal de `psffit` pasa de +5.16 ± 1.58 a **+0.04 ± 0.81**, y el de
   `optimal_ls` de −3.70 a −0.19. El caso peor es `optimal_ls` en ROXs 42B b
   (sigma 1.66), que es también el método con el sesgo de flujo más grande.
-- **Al 5σ estandarizado, 0 falsos positivos de 54 y de 35** en los seis métodos
-  de los dos objetos. Con la SNR formal, `psffit` daba **55.6 %** en ROXs 12 b.
+- **0 falsos positivos de 54 y de 35** en los seis métodos de los dos objetos, al
+  5σ con el que se corrió y al **3.5σ** que se declaró después
+  (`docs/2026-08-28_umbral_bajado_a_3p5.md`): el máximo de las 534 nulas es 2.84.
+  Con la SNR formal, `psffit` daba **55.6 %** en ROXs 12 b.
   **La cota de FPR que se puede citar depende del método**, porque el `n`
   independiente lo fija el radio de cada extractor y no el de la rejilla (§7):
   < 1.9 % / 2.9 % para `aperture`, `sgf` y `lpm`; < 3.8 % / 5.9 % para
