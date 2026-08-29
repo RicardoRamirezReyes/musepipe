@@ -555,8 +555,18 @@ def aggregate_open_issues(stage_rows, qc_payloads):
                 elif stage_id.startswith(("E", "D", "C")):
                     priority = "major"
             out.append({"stage": stage_id, "priority": priority, "issue": _issue_text(issue)})
+    # El `summary` de una etapa roja CONTIENE ya el texto de sus `open_issues`
+    # concatenado (`_stage_status` los une), asi que anadirlo cuando la etapa ya
+    # ha contribuido sus issues los cuenta dos veces. Medido el 2026-08-29: los
+    # dos objetos declaraban 8 `blocking` de los que 2 eran ese resumen, o sea 6
+    # problemas distintos. El veredicto no cambia -sigue rojo con uno solo- pero
+    # el numero es el que se cita.
+    #
+    # El resumen SI hace falta cuando la etapa esta roja y no declaro ningun
+    # issue: entonces es el unico registro de por que lo esta.
+    con_issues = {item["stage"] for item in out}
     for row in stage_rows:
-        if row["status"] == "red":
+        if row["status"] == "red" and row["stage"] not in con_issues:
             out.append({"stage": row["stage"], "priority": "blocking", "issue": row["summary"]})
     return sorted(out, key=lambda item: ({"blocking": 0, "major": 1, "minor": 2}.get(item["priority"], 3), item["stage"], item["issue"]))
 
