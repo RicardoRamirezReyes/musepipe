@@ -359,3 +359,87 @@ class TestFinalize(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 finalize_stage_h04("r", project_root=root)
             self.assertIn("recovered_snr_std", str(ctx.exception))
+
+
+class TestSustratoPsfsub(unittest.TestCase):
+    """De qué cubo sale `optimal_psfsub` en E4 y de cuál en C3.
+
+    No es una puerta: es una declaración. El defecto que cubre es de los que no
+    fallan —todo da rc=0 y los números salen— y sólo se ve leyendo dos módulos a
+    la vez, que es exactamente lo que un QC debería ahorrarte.
+    """
+
+    def _paths(self, tmp, *, perobs, c3_source):
+        import json as _json
+        from pathlib import Path as _Path
+
+        from musepipe.stages.stage_h04_injection import stage_h04_paths
+
+        root = _Path(tmp)
+        paths = stage_h04_paths("r", project_root=root)
+        paths["paths"].ensure_base_dirs()
+        stage_dir = paths["paths"].stage_dir
+        if perobs:
+            (stage_dir / "cube_psfsub_perobs.fits").write_bytes(b"")
+        if c3_source is not None:
+            (stage_dir / "spec_optimal_qc.json").write_text(
+                _json.dumps({"psfsub_model": {"source": c3_source}})
+            )
+        return paths
+
+    def test_declara_el_desajuste_cuando_c3_usa_el_cubo_de_c1b(self):
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import psfsub_substrate_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp, perobs=True, c3_source="C1b_perobs_subtract")
+            d = psfsub_substrate_check({}, paths)
+            self.assertTrue(d["mismatch"])
+            self.assertEqual(d["h04_substrate"], "in_memory_single_model_subtraction")
+            self.assertEqual(d["c3_substrate"], "C1b_perobs_subtract")
+
+    def test_sin_cubo_de_c1b_no_hay_desajuste(self):
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import psfsub_substrate_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp, perobs=False, c3_source="combined_cube")
+            d = psfsub_substrate_check({}, paths)
+            self.assertFalse(d["mismatch"])
+            self.assertFalse(d["perobs_cube_exists"])
+
+    def test_el_cubo_puede_existir_sin_que_c3_lo_use(self):
+        # `x02_psfsub_per_observation=false` deja el cubo en disco y a C3 sobre el
+        # combinado: entonces los dos sustratos coinciden y no hay que avisar.
+        import tempfile
+
+        from musepipe.stages.stage_h04_injection import psfsub_substrate_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp, perobs=True, c3_source="combined_cube")
+            self.assertFalse(psfsub_substrate_check({}, paths)["mismatch"])
+
+    def test_respeta_el_knob_que_declara_otro_cubo(self):
+        import tempfile
+        from pathlib import Path as _Path
+
+        from musepipe.stages.stage_h04_injection import psfsub_substrate_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp, perobs=False, c3_source="C1b_perobs_subtract")
+            otro = _Path(tmp) / "otro.fits"
+            otro.write_bytes(b"")
+            d = psfsub_substrate_check({"x02_psfsub_cube_fits": str(otro)}, paths)
+            self.assertTrue(d["perobs_cube_exists"])
+
+    def test_sin_paths_declara_lo_que_sabe_en_vez_de_reventar(self):
+        # `_qc_from_rows` se llama con paths=None en algunas pruebas de contrato:
+        # la declaracion no puede ser la que rompa la etapa.
+        from musepipe.stages.stage_h04_injection import psfsub_substrate_check
+
+        d = psfsub_substrate_check({}, None)
+        self.assertEqual(d["h04_substrate"], "in_memory_single_model_subtraction")
+        self.assertIsNone(d["mismatch"])
+        self.assertIsNone(d["perobs_cube_exists"])
