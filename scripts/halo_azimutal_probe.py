@@ -35,6 +35,7 @@ cielo.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 from pathlib import Path
 
@@ -94,6 +95,85 @@ def _armonicos(img, py, px, rc, ancho, excluir):
         "amp2": 200.0 * float(np.hypot(c[3], c[4])),
         "n": int(m.sum()),
     }
+
+
+def cmd_perexp(run, args):
+    """El m=1 exposicion a exposicion: ¿direccion fija o moteado que promedia?
+
+    La pregunta que contesta: si el dipolo fuera moteado residual de la AO, su
+    FASE seria distinta en cada exposicion y el combinado lo promediaria a cero.
+    Si es una estructura real, la fase se repite — y entre NOCHES tambien.
+
+    El estadistico es el vector medio de las fases (|R|): 0 = al azar, 1 = todas
+    apuntando igual. El critico al 5 % es ~sqrt(-ln(0.05)/n).
+    """
+    if not args.perexp:
+        raise SystemExit("`--que perexp` necesita `--perexp <patron de DATACUBE_FINAL.fits>`")
+    from scipy.ndimage import median_filter
+
+    qc = json.loads((ROOT / f"runs/{run}/stages/stage01c_qc.json").read_text())
+    (py0, px0), (cy0, cx0), _ = _posiciones(qc)
+    r_comp = float(np.hypot(cy0 - py0, cx0 - px0))
+    az_comp = float(azimut_deg(cy0 - py0, cx0 - px0))
+
+    print(f"\n=== {run} · m=1 por exposicion en r={r_comp:.1f} px ===")
+    print(f"{'noche':>11} {'hora':>6} {'seeing':>7} {'tau0':>7} {'airm':>6} {'parang':>7} "
+          f"{'m1 amp':>7} {'m1 fase':>8}")
+    filas = []
+    for ruta in sorted(glob.glob(args.perexp)):
+        try:
+            with fits.open(ruta, memmap=True) as h:
+                hd0, hd1 = h[0].header, h[1].header
+                see = 0.5 * (hd0.get("ESO TEL AMBI FWHM START", np.nan)
+                             + hd0.get("ESO TEL AMBI FWHM END", np.nan))
+                tau = hd0.get("ESO TEL AMBI TAU0", np.nan)
+                air = 0.5 * (hd0.get("ESO TEL AIRM START", np.nan)
+                             + hd0.get("ESO TEL AIRM END", np.nan))
+                par = 0.5 * (hd0.get("ESO TEL PARANG START", np.nan)
+                             + hd0.get("ESO TEL PARANG END", np.nan))
+                fecha = str(hd0.get("DATE-OBS", ""))
+                wave = hd1["CRVAL3"] + hd1["CD3_3"] * np.arange(hd1["NAXIS3"])
+                sel = (wave >= args.banda[0]) & (wave <= args.banda[1])
+                img = np.nanmedian(np.asarray(h[1].data[sel], dtype=np.float64), axis=0)
+        except Exception as exc:
+            print(f"  {ruta.split('/')[-2][:24]}: {type(exc).__name__}")
+            continue
+        # Cada exposicion trae su propio encuadre: la primaria se relocaliza.
+        suave = median_filter(np.nan_to_num(img), 5)
+        py, px = np.unravel_index(np.nanargmax(suave), suave.shape)
+        ny, nx = img.shape
+        if min(py, px, ny - 1 - py, nx - 1 - px) < r_comp + 6:
+            continue
+        # El companero esta al MISMO offset en todas: los cubos son norte-arriba.
+        cy = py + r_comp * np.sin(np.radians(az_comp))
+        cx = px + r_comp * np.cos(np.radians(az_comp))
+        h1 = _armonicos(img, py, px, r_comp, args.ancho, [(cy, cx, args.excluir)])
+        if h1 is None:
+            continue
+        noche = fecha[:10]
+        print(f"{noche:>11} {fecha[11:16]:>6} {see:7.2f} {tau:7.4f} {air:6.3f} {par:7.1f} "
+              f"{h1['amp1']:6.1f}% {h1['fase1']:+8.1f}")
+        filas.append((noche, see, tau, air, par, h1["amp1"], h1["fase1"]))
+
+    if not filas:
+        return
+    print("\n  --- por noche ---")
+    for noche in sorted({f[0] for f in filas}):
+        sub = [f for f in filas if f[0] == noche]
+        v = np.exp(1j * np.radians([f[6] for f in sub])).mean()
+        print(f"  {noche}: n={len(sub):2d}  amp mediana={np.median([f[5] for f in sub]):5.1f}%  "
+              f"|R|={abs(v):.2f}  direccion={np.degrees(np.angle(v)):+7.1f} deg  "
+              f"seeing={np.median([f[1] for f in sub]):.2f}")
+    v = np.exp(1j * np.radians([f[6] for f in filas])).mean()
+    n = len(filas)
+    print(f"\n  TODAS: n={n}  |R|={abs(v):.2f}  direccion={np.degrees(np.angle(v)):+.1f} deg"
+          f"  (|R| critico al 5 % ~ {np.sqrt(-np.log(0.05) / n):.2f})")
+    a = np.array([[f[1], f[2], f[3], f[4], f[5]] for f in filas], dtype=np.float64)
+    print("  correlacion de la AMPLITUD con las condiciones:")
+    for i, nom in enumerate(("seeing", "tau0", "airmass", "parang")):
+        ok = np.isfinite(a[:, i]) & np.isfinite(a[:, 4])
+        if ok.sum() >= 4:
+            print(f"    {nom:>8}: r = {np.corrcoef(a[ok, i], a[ok, 4])[0, 1]:+.2f} (n={ok.sum()})")
 
 
 def _posiciones(qc):
@@ -173,7 +253,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", required=True, help="lista separada por comas")
-    ap.add_argument("--que", default="fase,radio,picos", help="fase, radio y/o picos")
+    ap.add_argument("--que", default="fase,radio,picos", help="fase, radio, picos y/o perexp")
+    ap.add_argument("--perexp", default=None,
+                    help="patron glob de los DATACUBE_FINAL.fits por exposicion")
+    ap.add_argument("--banda", type=float, nargs=2, default=[8900, 9300],
+                    help="banda de lambda para el modo perexp")
     ap.add_argument("--ancho", type=float, default=4.5, help="medio ancho del anillo, px")
     ap.add_argument("--excluir", type=float, default=9.0, help="radio de exclusion del companero")
     ap.add_argument("--radios", type=float, nargs="*",
@@ -191,6 +275,8 @@ def main(argv=None):
             cmd_radio(run, args)
         if "picos" in quiere:
             cmd_picos(run, args)
+        if "perexp" in quiere:
+            cmd_perexp(run, args)
     return 0
 
 
