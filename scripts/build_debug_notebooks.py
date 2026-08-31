@@ -184,7 +184,8 @@ INLINE_SOURCES = {
             "MoffatFit", "moffat_alpha_from_fwhm", "moffat_elliptical_profile",
             "moffat_image", "fixed_radius_grid", "moffat_norm", "normalized_moffat_psf",
             "source_mask", "corner_background", "_initial_fit_params", "_pack_params",
-            "fit_moffat_image", "evaluate_moffat_fit", "companion_ring_metric",
+            "fit_moffat_image", "evaluate_moffat_fit", "evaluate_moffat_scene",
+            "companion_ring_metric",
             "smooth_parameter", "eval_smoothed_parameter", "build_psf_model_document",
             "_psfao_image_cached", "_psfao_wave_bin_A", "_psfao_grid_npix",
             "_psfao_params_at", "_evaluate_psfao",
@@ -199,13 +200,16 @@ INLINE_SOURCES = {
         ("musepipe/stages/stage_e01_psfao.py", [
             "_bad_windows", "make_bins", "_ring_residual", "_box3_apcorr",
             "psfao_fit_weights", "fit_bin",
+            # La segunda componente ligada de la primaria (binaria no resuelta):
+            # `fit_psfao_bins` la llama, asi que sin esto la copia queda coja.
+            "fit_bin_binary", "_errores_de_jacobiano",
             "_psfao_param_errors", "_psfao_fit_status", "fit_psfao_bins",
             "_norm_roundtrip", "build_psfao_model_document",
         ]),
         ("musepipe/stages/stage_e01_psf.py", [
             "_good_wave_mask", "make_psf_bins", "_median_image", "_positions_from_qc",
-            "_fit_source_mask", "_detect_core_mask", "_row_from_fit", "_moffat_fit_rows",
-            "_apply_hybrid",
+            "_fit_source_mask", "_detect_core_mask", "_row_from_fit", "binary_offset_px",
+            "_moffat_fit_rows", "_apply_hybrid",
         ]),
     ],
 }

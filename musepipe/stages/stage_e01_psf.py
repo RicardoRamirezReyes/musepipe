@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from ..psf import (
     encircled_energy,
     encircled_energy_metric,
     evaluate_moffat_fit,
+    evaluate_moffat_scene,
     evaluate_radial_profile,
     fit_moffat_image,
     psf_roundtrip_error,
@@ -219,6 +221,41 @@ def _positions_from_qc(qc):
     return primary, companion, field
 
 
+def binary_offset_px(cfg, positions_qc):
+    """La segunda componente de la primaria, en pixeles, o `None`.
+
+    ROXs 42B es una **binaria cercana no resuelta** y C1 ajustaba UNA PSF a DOS
+    estrellas, midiendola mas ancha de lo que es y sesgando la `apcorr` un +6.9 %
+    de forma cromatica (`docs/2026-08-30_binaria_42b_sesga_la_apcorr.md`).
+
+    **La geometria se declara, no se ajusta.** Viene de la astrometria publicada
+    —Keck/NIRC2 2022.621, rho = 51 +- 2 mas, PA = 148 +- 3 deg, la misma epoca
+    que estos datos— asi que el ajuste gana **un solo** grado de libertad: la
+    razon de flujos. Con la clave ausente se devuelve `None` y todo el camino es
+    el de siempre, bit a bit; por eso ningun otro run se entera.
+
+    Convencion: `PA` se mide del Norte hacia el Este; el cubo es norte-arriba con
+    el este a la IZQUIERDA (`CD1_1 < 0`), asi que Norte es +y y Este es -x. La
+    misma conversion, aplicada al compañero de ROXs 42B b, devuelve PA 270.4 deg
+    contra los 271 publicados, y a la fuente de campo cc1 237 contra 241.4: por
+    eso se sabe que el signo es el bueno.
+    """
+
+    decl = cfg.get("e01_binary_companion")
+    if not decl:
+        return None
+    escala = positions_qc.get("pixel_scale_arcsec")
+    if escala is None:
+        raise RuntimeError(
+            "`e01_binary_companion` necesita `pixel_scale_arcsec` en stage01c_qc.json "
+            "para pasar de milisegundos de arco a pixeles; no hay valor por defecto."
+        )
+    sep_px = float(decl["sep_mas"]) / (float(escala) * 1000.0)
+    pa = math.radians(float(decl["pa_deg"]))
+    # Norte = +y, Este = -x.
+    return (sep_px * math.cos(pa), -sep_px * math.sin(pa))
+
+
 def _b3_chromatic_track(path):
     path = Path(path)
     if not path.exists():
@@ -320,6 +357,8 @@ def _row_from_fit(bin_index, bin_info, fit, metric, metric_hybrid=None):
         "ring_residual_pct": float(metric["median_pct"]),
         "ring_residual_p90_pct": float(metric["p90_pct"]),
     }
+    if fit.flux_ratio is not None:
+        row["flux_ratio"] = float(fit.flux_ratio)
     for key, value in fit.errors.items():
         row[f"{key}_err"] = None if not np.isfinite(value) else float(value)
     if metric_hybrid is not None:
@@ -330,11 +369,18 @@ def _row_from_fit(bin_index, bin_info, fit, metric, metric_hybrid=None):
 
 def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
     primary_yx, companion_yx, field_yx = _positions_from_qc(positions_qc)
+    binary_offset = binary_offset_px(cfg, positions_qc)
     fwhm_prelim = float(positions_qc.get("psf", {}).get("fwhm_px", cfg.get("psf_prelim_fwhm_px", 4.0)))
     mask_radius = float(cfg.get("psf_companion_mask_radius_px", cfg.get("psf_mask_radius_factor", 3.0) * fwhm_prelim))
     rows = []
     images = []
-    models = []
+    # Se devuelven las ESCENAS, no las PSF. Sus dos unicos consumidores -la
+    # energia encerrada V4 y el hibrido de la §3.5- comparan modelo contra DATO,
+    # y el dato de una binaria tiene dos estrellas: darles la PSF sola haria que
+    # V4 viera un deficit igual a la razon de flujos (~11 % en ROXs 42B b) y
+    # denunciara como fallo del modelo lo que es la secundaria que falta. Sin
+    # binaria declarada escena y PSF son la MISMA imagen.
+    scenes = []
     masks = []
     core_masks = []
     for i, bin_info in enumerate(bins):
@@ -351,11 +397,18 @@ def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
             core_mask_px=core_mask_px,
             sigma_clip=cfg.get("psf_sigma_clip", 3.0),
             max_iter=int(cfg.get("psf_max_clip_iter", 3)),
+            companion_offset_yx=binary_offset,
         )
-        model = evaluate_moffat_fit(image.shape, fit)
+        # Los residuos se miden contra la ESCENA, porque es lo que el dato
+        # contiene. La PSF de una fuente puntual -lo que se publica- no se
+        # construye aqui: sale de `build_psf_model_document` a partir de las
+        # FILAS, que describen una sola fuente. Medir el residuo contra ella
+        # dejaria la secundaria entera dentro y el anillo empeoraria justo al
+        # mejorar el modelo.
+        scene = evaluate_moffat_scene(image.shape, fit)
         metric = companion_ring_metric(
             image,
-            model,
+            scene,
             primary_yx,
             companion_yx,
             width_px=float(cfg.get("psf_companion_ring_width_px", 3.0)),
@@ -366,10 +419,11 @@ def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
         row["saturation_detected"] = bool(saturation)
         rows.append(row)
         images.append(image)
-        models.append(model)
+        scenes.append(scene)
         masks.append(mask)
         core_masks.append(core_mask_px)
-    return rows, images, models, masks, {
+    return rows, images, scenes, masks, {
+        "binary_offset_yx": None if binary_offset is None else list(binary_offset),
         "mask_radius_px": mask_radius,
         "core_mask_px_max": float(np.nanmax(core_masks)) if core_masks else 0.0,
         "saturation_detected": bool(any(row["saturation_detected"] for row in rows)),
@@ -478,7 +532,57 @@ def _apply_hybrid(ring_pcts, images, models, masks, primary_yx, companion_yx, fw
     return models_hybrid, np.asarray(profiles, dtype=np.float32), radii_ref.astype(np.float32), True, after_pcts, after_p90s
 
 
-def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None):
+def _binary_companion_qc(cfg, positions_qc, moffat_rows, psfao):
+    """Que se declaro, con que procedencia, y que salio — o `None` si no aplica.
+
+    Sin esto el cambio no seria auditable desde el QC: se sabria que la `apcorr`
+    cambio y no por que. Es el mismo agujero que ya tiene la mascara de la fuente
+    de campo, que se aplica y no se declara.
+    """
+
+    decl = cfg.get("e01_binary_companion")
+    if not decl:
+        return None
+    offset = binary_offset_px(cfg, positions_qc)
+
+    def _resumen(filas):
+        vals = [float(r["flux_ratio"]) for r in (filas or [])
+                if r.get("flux_ratio") is not None and np.isfinite(r.get("flux_ratio", np.nan))]
+        if not vals:
+            return None
+        waves = [float(r.get("wave_center_A", r.get("lambda_A", np.nan))) for r in filas
+                 if r.get("flux_ratio") is not None and np.isfinite(r.get("flux_ratio", np.nan))]
+        azul = [v for w, v in zip(waves, vals) if np.isfinite(w) and w < 6000.0]
+        rojo = [v for w, v in zip(waves, vals) if np.isfinite(w) and w > 8000.0]
+        return {
+            "n_bins": len(vals),
+            "median": float(np.median(vals)),
+            "std": float(np.std(vals)),
+            "median_blue_lt6000A": float(np.median(azul)) if azul else None,
+            "median_red_gt8000A": float(np.median(rojo)) if rojo else None,
+        }
+
+    return {
+        "declared": {"sep_mas": float(decl["sep_mas"]), "pa_deg": float(decl["pa_deg"])},
+        "source": cfg.get("e01_binary_companion_source"),
+        "pixel_scale_arcsec": float(positions_qc.get("pixel_scale_arcsec")),
+        "offset_yx_px": list(offset) if offset else None,
+        "separation_px": float(np.hypot(*offset)) if offset else None,
+        "flux_ratio_moffat": _resumen(moffat_rows),
+        "flux_ratio_psfao": _resumen(psfao.get("rows") if isinstance(psfao, dict) else None),
+        "note": (
+            "Segunda componente LIGADA de la primaria: misma forma de PSF y "
+            "separacion fija por astrometria publicada, asi que el ajuste gana UN "
+            "grado de libertad (la razon de flujos). `psf_model.json` sigue siendo "
+            "la PSF de UNA fuente puntual -sin la secundaria dentro-, que es lo que "
+            "necesitan la inyeccion de E4, la `apcorr` y el throughput. La "
+            "sustraccion de la primaria en psffit/C1b NO usa esto todavia."
+        ),
+    }
+
+
+def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None,
+                      binary_offset_yx=None):
     """Fit the physical AO (Psfao) model per bin and score each reconstruction
     with the SAME canonical companion-ring metric used for Moffat, so §3.4 is an
     apples-to-apples comparison. Returns a dict with status and, on success, the
@@ -510,6 +614,9 @@ def _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx=None):
         # historico y no cambia ningun run que no lo declare.
         weighting=str(cfg.get("psf_fit_weighting", PSFAO_DEFAULT_WEIGHTING)),
         weight_cap=cfg.get("psf_fit_weight_cap", PSFAO_DEFAULT_WEIGHT_CAP),
+        # La segunda componente ligada de la primaria. `None` -> `fit_bin` de
+        # siempre, sin tocar `maoppy.psffit`.
+        companion_offset_yx=binary_offset_yx,
     )
     if not recons:
         return {"status": "unavailable:no_valid_fits", "rows": rows}
@@ -809,7 +916,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
 
     # --- Moffat fit (always run: it is the tie-break form and the FWHM source
     # for the hybrid smoothing scale). -----------------------------------------
-    rows, images, models, masks, mask_meta = _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg)
+    rows, images, scenes, masks, mask_meta = _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg)
     fwhm_med = float(np.nanmedian([row["fwhm_maj"] for row in rows]))
     moffat_ring = np.asarray([row["ring_residual_pct"] for row in rows], dtype=np.float64)
     moffat_p90 = np.asarray([row["ring_residual_p90_pct"] for row in rows], dtype=np.float64)
@@ -827,7 +934,8 @@ def compute_stage_e01_products(config) -> StageE01Product:
     comparar = bool(cfg.get("e01_psf_compare_forms", True))
     psfao = {"status": "skipped"}
     if form_cfg in ("auto", "psfao") or comparar:
-        psfao = _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx)
+        psfao = _run_psfao_branch(cfg, stage_dir, primary_yx, companion_yx, field_yx,
+                                  binary_offset_yx=binary_offset_px(cfg, positions_qc))
     psfao_ok = psfao.get("status") == "ok"
     psfao_ring = (
         np.asarray([r["ring_residual_pct"] for r in psfao["ring_rows"]], dtype=np.float64)
@@ -843,7 +951,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
         excl_radius = max(excl_radius, float(psfao["inp"]["mask_radius"]))
     ee_mask = source_mask(images[0].shape, [companion_yx, field_yx], excl_radius)
     ee_moffat = _encircled_energy_summary(
-        images, models, [row["background"] for row in rows], primary_yx, ee_mask, cfg)
+        images, scenes, [row["background"] for row in rows], primary_yx, ee_mask, cfg)
     ee_psfao = None
     if psfao_ok:
         mids_ee = sorted(psfao["recons"])
@@ -881,7 +989,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
 
     if chosen == "moffat":
         chosen_models, hybrid_profiles, hybrid_radii, hybrid_applied, after_pcts, after_p90s = _apply_hybrid(
-            [row["ring_residual_pct"] for row in rows], images, models, masks,
+            [row["ring_residual_pct"] for row in rows], images, scenes, masks,
             primary_yx, companion_yx, fwhm_med, cfg,
         )
         if hybrid_applied:
@@ -1116,6 +1224,7 @@ def compute_stage_e01_products(config) -> StageE01Product:
         "run_id": cfg["run_id"],
         "input": {"cube": str(cube_path), "sha256": _sha256(cube_path), "positions_from": str(positions_path)},
         "binning": binning,
+        "binary_companion": _binary_companion_qc(cfg, positions_qc, rows, psfao),
         "masks": masks_qc,
         "fit": fit_qc,
         "smoothing": smoothing_qc,

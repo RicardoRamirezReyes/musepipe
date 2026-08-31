@@ -22,6 +22,7 @@ de 100 A: en ROXs 42B b f = 0.108 +- 0.033 y **se dobla del azul (0.056) al rojo
 (0.115)**, con un sesgo de la `apcorr` del **+6.9 %**; en el control f = 0.023 +-
 0.020 sin esa tendencia y el sesgo es +1.5 %, que es el suelo del metodo.
 """
+import argparse
 import json, numpy as np
 from astropy.io import fits
 from scipy.optimize import least_squares
@@ -59,8 +60,17 @@ def apcorr_de(al,be,q,th, n=401, R=25.0):
     Fbox=(P[caja]).sum()*da
     return F25/Fbox
 
-for run,etiq in (("ROXs42Bb_realigned","ROXs 42B b — BINARIA"),
-                 ("ROXs12b_realigned","ROXs 12 b — CONTROL")):
+ap = argparse.ArgumentParser(description=__doc__,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--run", required=True, help="run con la binaria declarada")
+ap.add_argument("--control", required=True,
+                help="run de una estrella SOLA. No es opcional: un ajuste con un "
+                     "parametro mas siempre mejora el chi2, asi que sin el control "
+                     "el resultado no se puede defender.")
+_args = ap.parse_args()
+
+for run, etiq in ((_args.run, f"{_args.run} — BINARIA"),
+                  (_args.control, f"{_args.control} — CONTROL")):
     qc=json.load(open(f"runs/{run}/stages/stage01c_qc.json")); py,px=qc["primary"]["pos_yx"]
     with fits.open(f"runs/{run}/stages/stage02_xcorr_cube_stack.fits",memmap=True) as h:
         wave=np.asarray(h["WAVELENGTH"].data,float); cubo=h["CUBES"].data

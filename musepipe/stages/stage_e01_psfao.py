@@ -167,6 +167,130 @@ def fit_bin(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
             ring, recon, optimizer, errors)
 
 
+def fit_bin_binary(image, var, samp, system, companion_yx, mask_radius, fit_radius, x0,
+                   companion_offset_yx, field_yx=None,
+                   weighting=PSFAO_DEFAULT_WEIGHTING,
+                   weight_cap=PSFAO_DEFAULT_WEIGHT_CAP, ratio0=0.1):
+    """Como `fit_bin`, pero con DOS componentes ligadas.
+
+    Existe porque ROXs 42B es una binaria cercana no resuelta (rho = 51 mas,
+    PA = 148 deg, Keck/NIRC2 2022.621 -> 2.006 px) y ajustar UNA PSF a DOS
+    estrellas la mide mas ancha de lo que es, sesgando la `apcorr` un +6.9 %
+    (`docs/2026-08-30_binaria_42b_sesga_la_apcorr.md`).
+
+    **No son dos fuentes libres.** Comparten los siete parametros de la PSF
+    —misma atmosfera, mismo instrumento— y su separacion la fija la astrometria
+    publicada, asi que el ajuste gana **exactamente uno**: la razon de flujos.
+
+    **Reproduce la funcion de coste de `maoppy.psffit` con una linea cambiada.**
+    Su coste es `sqrt(w) * (amp*mm + bck - psf)` con `mm = model(x, dx, dy)` y
+    `amp, bck` resueltos linealmente por `lsq_flux_bck`; aqui `mm` pasa a ser
+    `model(...) + f*model(...desplazado...)` y se reutilizan `lsq_flux_bck`, las
+    cotas de `model.bounds` y el mismo `least_squares`. No se reimplanta el
+    ajuste: mismo modelo, mismos pesos, mismo solve lineal, mismas cotas.
+
+    Con `f` forzado a 0 esto es, termino a termino, `maoppy.psffit` — y de eso
+    hay test.
+
+    **La convencion de ejes de maoppy esta invertida respecto a la del repo**:
+    `dx` mueve el eje 1 (columnas, la `x` de `[y, x]`) y `dy` el eje 0 (filas,
+    la `y`). `companion_offset_yx` llega como `(dy, dx)` en la convencion del
+    repo, asi que se cruza al pasarlo. Equivocarlo pondria la secundaria en el
+    sitio equivocado sin que nada fallara.
+    """
+
+    from maoppy.psffit import lsq_flux_bck
+    from maoppy.psfmodel import Psfao
+    from scipy.optimize import least_squares
+
+    ny, nx = image.shape
+    cy, cx = ny // 2, nx // 2
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    r = np.hypot(yy - cy, xx - cx)
+    comp = np.hypot(yy - companion_yx[0], xx - companion_yx[1])
+    mask = np.isfinite(image) & (comp > mask_radius) & (r < fit_radius)
+    if field_yx is not None:
+        mask &= np.hypot(yy - float(field_yx[0]), xx - float(field_yx[1])) > mask_radius
+    weights = np.where(mask, psfao_fit_weights(image, var, r, weighting, cap=weight_cap), 0.0)
+    imgf = np.where(np.isfinite(image), image, 0.0)
+    model = Psfao((ny, nx), system=system, samp=float(samp))
+
+    off_y, off_x = (float(companion_offset_yx[0]), float(companion_offset_yx[1]))
+    n_psd = len(x0)
+    sqw = np.sqrt(weights)
+
+    def _escena(y):
+        """La imagen que el DATO contiene: las dos componentes."""
+        x, dx, dy, f = y[:n_psd], float(y[n_psd]), float(y[n_psd + 1]), float(y[n_psd + 2])
+        mm = model(x, dx=dx, dy=dy)
+        if f > 0:
+            # off_x al eje 1 y off_y al eje 0: ver el docstring.
+            mm = mm + f * model(x, dx=dx + off_x, dy=dy + off_y)
+        return x, (dx, dy), f, mm
+
+    def _coste(y):
+        _x, _dxdy, _f, mm = _escena(y)
+        amp, bck = lsq_flux_bck(mm, imgf, weights, background=True)
+        return 0.5 * np.reshape(sqw * (amp * mm + bck - imgf), imgf.size)
+
+    b_low = np.concatenate((np.asarray(model.bounds[0], dtype=float), [-np.inf, -np.inf, 0.0]))
+    b_up = np.concatenate((np.asarray(model.bounds[1], dtype=float), [np.inf, np.inf, 1.0]))
+    y0 = np.concatenate((np.asarray(x0, dtype=float), [0.0, 0.0, float(ratio0)]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = least_squares(_coste, y0, bounds=(b_low, b_up), max_nfev=400)
+
+    x, dxdy, ratio, mm = _escena(res.x)
+    amp, bck = lsq_flux_bck(mm, imgf, weights, background=True)
+    # `recon` es la ESCENA -las dos estrellas-, que es contra lo que se mide el
+    # residuo del anillo, porque es lo que el dato tiene. La PSF de una fuente
+    # puntual -lo que se publica- se reconstruye aparte, sin la segunda.
+    recon = amp * mm + bck
+    recon_psf = amp * model(x, dx=dxdy[0], dy=dxdy[1]) + bck
+    ring = _ring_residual(image, recon, companion_yx, mask_radius)
+
+    unchanged = bool(
+        np.allclose(np.asarray(x, dtype=float), np.asarray(x0, dtype=float), rtol=0.0, atol=1e-8)
+        and np.allclose(np.asarray(dxdy, dtype=float), 0.0, rtol=0.0, atol=1e-8)
+    )
+    optimizer = {
+        "success": bool(res.success),
+        "status": int(res.status),
+        "message": str(res.message),
+        "nfev": int(res.nfev),
+        "cost": float(res.cost),
+        "stalled_at_initial": bool(unchanged and int(res.nfev) <= 2),
+    }
+    return (list(map(float, x)), float(amp), float(bck), tuple(map(float, dxdy)),
+            ring, recon, optimizer, _errores_de_jacobiano(res, n_psd), float(ratio), recon_psf)
+
+
+def _errores_de_jacobiano(res, n_psd):
+    """`1/sqrt(diag(JtJ))`, la misma convencion que usa `maoppy.psffit`.
+
+    Se recalcula aqui porque el ajuste de dos componentes no pasa por `psffit`,
+    que es quien rellena `res.x_std`. Un parametro pegado a su cota tiene
+    gradiente nulo y sale infinito: eso no es incertidumbre infinita, es «no
+    medido», y se devuelve NaN igual que en `_psfao_param_errors`.
+    """
+
+    nombres = [f"{n}_err" for n in PSFAO_PARAM_NAMES] + ["dx_err", "dy_err", "flux_ratio_err"]
+    salida = {name: float("nan") for name in nombres}
+    jac = getattr(res, "jac", None)
+    if jac is None or not np.size(jac):
+        return salida
+    try:
+        diag = np.diag(np.asarray(jac, dtype=float).T @ np.asarray(jac, dtype=float))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            std = 1.0 / np.sqrt(diag)
+    except Exception:  # pragma: no cover - defensive
+        return salida
+    for i, name in enumerate(nombres):
+        if i < std.size and np.isfinite(std[i]) and std[i] > 0:
+            salida[name] = float(std[i])
+    return salida
+
+
 def _psfao_param_errors(res):
     """Las incertidumbres formales del ajuste, `{param: sigma}`.
 
@@ -309,7 +433,8 @@ def _psfao_fit_status(optimizer):
 def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_radius, *,
                    x0=None, field_yx=None, warm_start=True,
                    weighting=PSFAO_DEFAULT_WEIGHTING,
-                   weight_cap=PSFAO_DEFAULT_WEIGHT_CAP):
+                   weight_cap=PSFAO_DEFAULT_WEIGHT_CAP,
+                   companion_offset_yx=None):
     """Fit the Psfao model per wavelength bin (companion masked).
 
     Returns ``(rows, recons)`` where ``rows`` is the per-bin parameter table
@@ -346,10 +471,19 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
         """Un ajuste del bin, con su veredicto. Propaga lo que reviente."""
 
         img, var, samp, mid = datos
-        params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
-            img, var, samp, system, companion, mask_radius, fit_radius,
-            list(arranque), field_yx=field_yx, weighting=weighting,
-            weight_cap=weight_cap)
+        if companion_offset_yx is None:
+            # Camino de siempre: `fit_bin` -> `maoppy.psffit`, sin tocar.
+            params, amp, bck, dxdy, ring, recon, optimizer, errors = fit_bin(
+                img, var, samp, system, companion, mask_radius, fit_radius,
+                list(arranque), field_yx=field_yx, weighting=weighting,
+                weight_cap=weight_cap)
+            ratio, recon_psf = None, recon
+        else:
+            (params, amp, bck, dxdy, ring, recon, optimizer, errors,
+             ratio, recon_psf) = fit_bin_binary(
+                img, var, samp, system, companion, mask_radius, fit_radius,
+                list(arranque), companion_offset_yx, field_yx=field_yx,
+                weighting=weighting, weight_cap=weight_cap)
         estado = _psfao_fit_status(optimizer)
         row = {"lambda_A": float(mid), "samp": samp, "amp": amp, "bck": bck,
                "dy": dxdy[1], "dx": dxdy[0], "ring_residual_pct": ring,
@@ -361,11 +495,16 @@ def fit_psfao_bins(cube, stat, wave, bins, system, companion, mask_radius, fit_r
                "optimizer_stalled_at_initial": optimizer["stalled_at_initial"],
                "start_vector": etiqueta,
                "status": estado}
+        if ratio is not None:
+            row["flux_ratio"] = float(ratio)
         row.update({name: params[i] for i, name in enumerate(PSFAO_PARAM_NAMES)})
         # Las incertidumbres formales del intento que se queda. NaN donde el
         # parametro esta pegado a su limite fisico.
         row.update(errors)
+        # `recon` es la ESCENA (lo que el dato tiene) y `recon_psf` la PSF de una
+        # fuente puntual (lo que se publica). Sin binaria son la misma imagen.
         return {"row": row, "params": list(params), "recon": recon,
+                "recon_psf": recon_psf,
                 "ok": estado == "ok", "cost": float(optimizer["cost"])}
 
     def _intento_suave(datos, arranque, etiqueta):
