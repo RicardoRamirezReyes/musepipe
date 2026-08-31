@@ -423,7 +423,6 @@ def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
         masks.append(mask)
         core_masks.append(core_mask_px)
     return rows, images, scenes, masks, {
-        "binary_offset_yx": None if binary_offset is None else list(binary_offset),
         "mask_radius_px": mask_radius,
         "core_mask_px_max": float(np.nanmax(core_masks)) if core_masks else 0.0,
         "saturation_detected": bool(any(row["saturation_detected"] for row in rows)),

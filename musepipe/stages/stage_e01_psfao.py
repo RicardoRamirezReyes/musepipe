@@ -235,7 +235,19 @@ def fit_bin_binary(image, var, samp, system, companion_yx, mask_radius, fit_radi
 
     b_low = np.concatenate((np.asarray(model.bounds[0], dtype=float), [-np.inf, -np.inf, 0.0]))
     b_up = np.concatenate((np.asarray(model.bounds[1], dtype=float), [np.inf, np.inf, 1.0]))
-    y0 = np.concatenate((np.asarray(x0, dtype=float), [0.0, 0.0, float(ratio0)]))
+    # `dx`/`dy` NO arrancan en cero: **el modelo de maoppy es discontinuo ahi**.
+    # Con dx exactamente 0 se salta el desplazamiento por FFT, y con dx=1e-10 ya
+    # lo aplica: medido, la imagen cambia un 4.6 % del pico entre los dos. El
+    # jacobiano numerico del primer paso mide ESA DISCONTINUIDAD -derivada
+    # aparente ~1e10, siete ordenes por encima de la de los parametros de la
+    # PSD-, la region de confianza se colapsa y el ajuste termina en nfev=2 sin
+    # moverse. `maoppy.psffit` sobrevive porque su primer paso la saca de cero;
+    # con un parametro mas no. Arrancando ya en la rama continua, el problema
+    # desaparece y el ajuste es liso desde la primera evaluacion.
+    ARRANQUE_DESPLAZAMIENTO = 1e-6
+    y0 = np.concatenate((np.asarray(x0, dtype=float),
+                         [ARRANQUE_DESPLAZAMIENTO, ARRANQUE_DESPLAZAMIENTO,
+                          float(ratio0)]))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = least_squares(_coste, y0, bounds=(b_low, b_up), max_nfev=400)

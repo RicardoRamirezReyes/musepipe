@@ -308,15 +308,22 @@ def fit_moffat_image(
     sigma = robust_sigma(resid)
     dof = max(1, int(np.count_nonzero(good)) - (7 if offset is None else 8))
     chi2r = float(np.nansum((resid / sigma) ** 2) / dof) if np.isfinite(sigma) and sigma > 0 else np.nan
-    errors = {key: np.nan for key in ("amplitude",) + PSF_SHAPE_PARAMS + ("flux_ratio",)}
+    # `flux_ratio` SOLO cuando hay segunda componente: `_row_from_fit` vuelca este
+    # diccionario a columnas `*_err` del CSV, asi que anadirlo siempre le meteria
+    # una columna espuria a todo run sin binaria y romperia la garantia de que
+    # sin el knob no cambia nada.
+    claves_err = ("amplitude",) + PSF_SHAPE_PARAMS
+    if offset is not None:
+        claves_err = claves_err + ("flux_ratio",)
+    errors = {key: np.nan for key in claves_err}
     if fit.jac is not None and fit.jac.size and np.isfinite(sigma) and sigma > 0:
         try:
             cov = np.linalg.pinv(fit.jac.T @ fit.jac) * sigma**2
             err_values = np.sqrt(np.clip(np.diag(cov), 0.0, np.inf))
-            claves = ("amplitude", "y0", "x0", "fwhm_maj", "fwhm_min", "theta_deg", "beta")
+            orden = ("amplitude", "y0", "x0", "fwhm_maj", "fwhm_min", "theta_deg", "beta")
             if offset is not None:
-                claves = claves + ("flux_ratio",)
-            for key, err in zip(claves, err_values):
+                orden = orden + ("flux_ratio",)
+            for key, err in zip(orden, err_values):
                 errors[key] = float(err)
         except Exception:
             pass

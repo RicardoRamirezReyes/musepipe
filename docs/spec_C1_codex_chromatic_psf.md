@@ -386,6 +386,36 @@ Dos avisos de método que costaron una vuelta cada uno:
   recortes distintos no son comparables por su residuo. El barrido lo desactiva
   en todas.
 
+**Dos trampas del camino psfao, encontradas revisando el diff y corregidas.**
+Las dos pasaban los tests sintéticos y fallaban sobre el cubo real:
+
+1. **El modelo de `maoppy` es DISCONTINUO en desplazamiento cero.** Con `dx`
+   exactamente 0 salta el desplazamiento por FFT; con `dx = 1e-10` ya lo aplica, y
+   **la imagen cambia un 4.6 % del pico**. El jacobiano numérico del primer paso
+   mide esa discontinuidad —derivada aparente ~1e10, siete órdenes por encima de
+   la de los parámetros de la PSD—, la región de confianza se colapsa y el ajuste
+   **termina en `nfev = 2` sin moverse**, con un coste 16× peor que el de una
+   componente. `maoppy.psffit` sobrevive porque su primer paso la saca de cero;
+   con un parámetro más, no. El arranque del desplazamiento va en la rama
+   continua.
+
+2. **Una columna espuria en el CSV de todos los runs.** El diccionario de errores
+   incluía `flux_ratio` siempre, y `_row_from_fit` lo vuelca a columnas `*_err`:
+   un run **sin** binaria ganaba una columna vacía. Rompía la garantía de que sin
+   el knob no cambia nada, y en silencio.
+
+Con la primera corregida, sobre el cubo real el ajuste de dos componentes mejora
+el coste un **6–8 %** en todas las bandas y **`f` no depende de su valor inicial**
+(arrancar en 0 o en 0.4 da el mismo resultado), que es la señal de un mínimo bien
+planteado. `f ≈ 0.12` en 5300 y 7200 Å y **0.24 en 8800 Å**, coherente con la
+sonda Moffat.
+
+**El QC de TODOS los runs gana una clave `binary_companion`**, `null` donde no
+aplica. Es deliberado —declarar «esto se consideró y no aplica» es mejor que
+omitirlo, que es el agujero que ya tiene la máscara de la fuente de campo— pero
+significa que re-correr C1 en otro objeto produce un QC distinto, aunque ningún
+número cambie.
+
 **Protocolo de parada** (§9) para este camino:
 
 - `f` inestable bin a bin y sin admitir suavizado → es ruido, no una secundaria.

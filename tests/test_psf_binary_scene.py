@@ -253,6 +253,31 @@ class RamaPsfao(unittest.TestCase):
         cruzado = self._ajusta(img, offset=(OFFSET[1], OFFSET[0]))
         self.assertLess(bueno[6]["cost"], cruzado[6]["cost"])
 
+    def test_no_arranca_en_la_discontinuidad_de_maoppy(self):
+        """El modelo de maoppy es DISCONTINUO en desplazamiento cero.
+
+        Con `dx` exactamente 0 se salta el desplazamiento por FFT y con 1e-10 ya
+        lo aplica: la imagen cambia un 4.6 % del pico entre los dos. El jacobiano
+        numerico del primer paso mide esa discontinuidad -derivada aparente
+        ~1e10- y el ajuste se muere en `nfev=2` sin moverse. Este test fija que
+        el arranque esta en la rama continua, comprobando que el ajuste **se
+        mueve de verdad**.
+        """
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        dos = self._ajusta(img, offset=OFFSET)
+        self.assertGreater(dos[6]["nfev"], 5)
+        self.assertFalse(dos[6]["stalled_at_initial"])
+
+    def test_el_resultado_no_depende_del_arranque_de_f(self):
+        # Si dependiera, el minimo no estaria bien planteado y `f` seria lo que
+        # le hubieramos sugerido.
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        desde_cero = self._ajusta(img, offset=OFFSET, ratio0=0.0)
+        desde_alto = self._ajusta(img, offset=OFFSET, ratio0=0.4)
+        self.assertAlmostEqual(desde_cero[8], desde_alto[8], delta=0.02)
+
     def test_devuelve_la_escena_y_la_psf_por_separado(self):
         img = (1000.0 * (self.base + self.ratio * self.modelo(
             self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
@@ -293,3 +318,36 @@ class LasMetricasVenLaEscena(unittest.TestCase):
         for i, r in enumerate(radios):
             with self.subTest(radio=r):
                 self.assertGreater(float(ee_esc[i]), float(ee_psf[i]))
+
+
+class NingunaColumnaEspuria(unittest.TestCase):
+    """Sin binaria declarada, el producto no puede ganar ni una columna.
+
+    `_row_from_fit` vuelca `fit.errors` a columnas `*_err` del CSV de C1, asi que
+    una clave de mas en ese diccionario le cambia el ESQUEMA a todos los runs sin
+    binaria. Es la garantia que sostiene todo el cambio -"sin el knob no cambia
+    nada"- y se rompe en silencio: nada falla, solo aparece una columna vacia.
+    """
+
+    def test_los_errores_no_llevan_flux_ratio_sin_binaria(self):
+        img = escena((70, 70), (35.0, 35.0))
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        self.assertNotIn("flux_ratio", fit.errors)
+
+    def test_y_si_lo_llevan_cuando_la_hay(self):
+        img = escena((70, 70), (35.0, 35.0), ratio=0.12)
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        self.assertIn("flux_ratio", fit.errors)
+
+    def test_las_filas_de_C1_tampoco_ganan_columnas(self):
+        from musepipe.stages.stage_e01_psf import _row_from_fit
+
+        img = escena((70, 70), (35.0, 35.0))
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        bin_info = {"wave_min_A": 5000.0, "wave_max_A": 5100.0,
+                    "wave_center_A": 5050.0, "indices": [0, 1, 2]}
+        metric = {"median_pct": 1.0, "p90_pct": 2.0}
+        fila = _row_from_fit(0, bin_info, fit, metric)
+        espurias = [k for k in fila if "flux_ratio" in k]
+        self.assertEqual(espurias, [])
