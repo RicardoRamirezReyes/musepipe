@@ -250,17 +250,16 @@ def fit_moffat_image(
         """Separa los 7 de forma de la razon de flujos, que va al final."""
         return (values[:7], float(values[7]) if offset is not None else None)
 
-    # El recorte sigma existe para tirar rayos cosmicos y pixeles malos, no
-    # senal. Con dos componentes la secundaria cae a ~2 px del centro y en la
-    # PRIMERA iteracion su residuo es grande, asi que el clip se la lleva y las
-    # iteraciones siguientes ya no la ven: medido el 2026-08-30, eso inventaba
-    # f=0.073 en una estrella SOLA (contra 0.004 sin recorte) y desplazaba el
-    # minimo del barrido de PA 48 grados. Los pixeles donde viven las dos
-    # componentes quedan exentos del recorte; fuera de esa zona sigue igual.
-    protegido = None
-    if offset is not None:
-        radio_protegido = 2.0 * float(np.hypot(*offset))
-        protegido = np.hypot(ypix - cy, xpix - cx) <= radio_protegido
+    # NO se toca el recorte sigma. Hubo una version que eximia del recorte a los
+    # pixeles del nucleo -donde vive la secundaria-, razonando que es senal y no
+    # un valor atipico. Sobre la sonda de verificacion (radio 9 px) funcionaba;
+    # sobre la configuracion REAL de C1 (radio 78 px) rompio el ajuste: ahi el
+    # recorte quita legitimamente el nucleo dominante para que la Moffat pueda
+    # describir el HALO, y forzarlo dentro colapsa el ajuste al nucleo. Medido el
+    # 2026-08-31 en ROXs 42B b: fwhm 9.87 -> 2.78, chi2r 1.25 -> 2246, residuo de
+    # anillo 6.88 % -> 813 %. Y ese `fwhm` roto alimenta la escala del hibrido,
+    # asi que la averia llegaba hasta un numero publicado.
+    # Quien necesite el ajuste sin recorte que lo pida: `sigma_clip=None`.
 
     def _scene(values, ypix_sel, xpix_sel):
         """La ESCENA: una componente, o dos ligadas. Es contra esto que se ajusta,
@@ -293,8 +292,6 @@ def fit_moffat_image(
         if sigma_clip is None or not np.isfinite(sigma) or sigma <= 0:
             break
         new_good = np.abs(residual_all) <= float(sigma_clip) * sigma
-        if protegido is not None:
-            new_good |= protegido
         if np.array_equal(new_good, good):
             break
         good = new_good

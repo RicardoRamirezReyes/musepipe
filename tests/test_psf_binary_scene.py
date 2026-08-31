@@ -391,3 +391,41 @@ class ElAjustePorExposicionTambienLaVe(unittest.TestCase):
 
         fuente = inspect.getsource(stage_e01_perobs._psfao_branch)
         self.assertIn("companion_offset_yx=cfg.get(\"e01_binary_offset_yx_px\")", fuente)
+
+
+class SoloDondeSePuedeMedir(unittest.TestCase):
+    """La segunda componente se ajusta en psfao, NO en Moffat, y por que.
+
+    La rama Moffat de C1 ajusta a `psf_fit_radius_px` (78 px en ROXs 42B b) con
+    recorte sigma, que quita el nucleo dominante para que la Moffat describa el
+    HALO. Sin nucleo la razon de flujos no esta constrenida: medido sobre el cubo
+    real el 2026-08-31, `f` se pega a su cota (1.0000 a 5300 A) o se colapsa a 0
+    (8800 A). Y forzar el nucleo dentro rompe el ajuste entero (chi2r 1.25 ->
+    2246) y contamina la escala del hibrido, que llega a un numero publicado.
+
+    Esto NO dice que la escena de dos componentes este mal -en psfao mide
+    f = 0.130 estable en 43 bins-: dice donde se puede medir y donde no.
+    """
+
+    def test_por_defecto_la_binaria_solo_va_en_psfao(self):
+        from musepipe.stages.stage_e01_psf import BINARY_FORMS_DEFAULT
+
+        self.assertEqual(tuple(BINARY_FORMS_DEFAULT), ("psfao",))
+
+    def test_la_rama_moffat_no_recibe_offset_por_defecto(self):
+        import inspect
+
+        from musepipe.stages import stage_e01_psf
+
+        fuente = inspect.getsource(stage_e01_psf._moffat_fit_rows)
+        self.assertIn('if "moffat" in formas else None', fuente)
+
+    def test_el_recorte_sigma_no_esta_modificado(self):
+        # La version que eximia el nucleo del recorte rompio la produccion. Que
+        # no vuelva sin que alguien lo vea.
+        import inspect
+
+        from musepipe import psf
+
+        fuente = inspect.getsource(psf.fit_moffat_image)
+        self.assertNotIn("protegido", fuente)

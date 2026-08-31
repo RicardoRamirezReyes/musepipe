@@ -416,6 +416,28 @@ omitirlo, que es el agujero que ya tiene la máscara de la fuente de campo— pe
 significa que re-correr C1 en otro objeto produce un QC distinto, aunque ningún
 número cambie.
 
+**La segunda componente se ajusta SOLO en psfao** (`e01_binary_forms`), y no por
+gusto. Medido el 2026-08-31 sobre el cubo real: la rama Moffat ajusta a
+`psf_fit_radius_px` = 78 px **con recorte sigma**, que quita el núcleo dominante
+para que la Moffat pueda describir el **halo**. Sin núcleo, la razón de flujos no
+está constreñida — `f` se pega a su cota (1.0000 a 5300 Å, 0.8605 a 7200) o se
+colapsa a 0 (8800). Y forzar el núcleo dentro del ajuste **tampoco vale**: se
+probó eximiéndolo del recorte y la Moffat colapsa al núcleo (`fwhm` 9.87 → 2.78,
+`chi2r` 1.25 → **2246**, residuo de anillo 6.88 % → **813 %**).
+
+Esa avería **llegó hasta un número publicado**, y conviene saber por dónde: el
+`fwhm` mediano de Moffat fija la escala de suavizado del híbrido (§3.5); con el
+`fwhm` roto la escala pasó de 19.7 a 5.55 px, el guarda de seguridad del híbrido
+—«solo aplícalo si mejora el anillo»— pasó a cumplirse, el híbrido **se activó**
+y `companion_ring_metric` bajó de 10.00 a 7.98 %. Ese número es el que D2 propaga
+como `sys_psf`. **El anillo de psfao no había mejorado: 10.049 → 9.999.**
+
+**Consecuencia que hay que declarar**: en un objeto con binaria,
+`model_comparison` **deja de comparar peras con peras** — psfao ve la segunda
+componente y Moffat no. En ROXs 42B b no elige nada, porque la forma viene
+forzada por `e01_psf_form`; en un run que la eligiera por el residuo de anillo,
+hay que mirarlo antes. El QC lo declara en `binary_companion.fitted_in_forms`.
+
 **Protocolo de parada** (§9) para este camino:
 
 - `f` inestable bin a bin y sin admitir suavizado → es ruido, no una secundaria.

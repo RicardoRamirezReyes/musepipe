@@ -377,9 +377,27 @@ def _row_from_fit(bin_index, bin_info, fit, metric, metric_hybrid=None):
     return row
 
 
+#: En que formas se ajusta la segunda componente de la primaria. **Solo psfao**,
+#: y no por gusto: la rama Moffat de C1 ajusta a `psf_fit_radius_px` (78 px en
+#: ROXs 42B b) con recorte sigma, que quita el nucleo dominante para que la
+#: Moffat pueda describir el HALO. Sin nucleo, la razon de flujos no esta
+#: constrenida: medido el 2026-08-31, `f` se pega a su cota (1.0000 a 5300 A,
+#: 0.8605 a 7200) o se colapsa a 0 (8800). Forzar el nucleo dentro del ajuste
+#: tampoco vale -se probo-: colapsa la Moffat al nucleo y dispara el chi2r de
+#: 1.25 a 2246, y ese `fwhm` roto alimenta la escala del hibrido, asi que la
+#: averia llega hasta un numero publicado.
+#:
+#: **Consecuencia que hay que declarar**: `model_comparison` deja de comparar
+#: peras con peras en un objeto con binaria -psfao la ve y Moffat no-. Aqui no
+#: elige nada, porque la forma viene forzada por `e01_psf_form`; en un run que
+#: la eligiera por el anillo, habria que mirarlo antes.
+BINARY_FORMS_DEFAULT = ("psfao",)
+
+
 def _moffat_fit_rows(cubes, wavelengths, bins, positions_qc, cfg):
     primary_yx, companion_yx, field_yx = _positions_from_qc(positions_qc)
-    binary_offset = binary_offset_px(cfg, positions_qc)
+    formas = tuple(cfg.get("e01_binary_forms", BINARY_FORMS_DEFAULT))
+    binary_offset = binary_offset_px(cfg, positions_qc) if "moffat" in formas else None
     fwhm_prelim = float(positions_qc.get("psf", {}).get("fwhm_px", cfg.get("psf_prelim_fwhm_px", 4.0)))
     mask_radius = float(cfg.get("psf_companion_mask_radius_px", cfg.get("psf_mask_radius_factor", 3.0) * fwhm_prelim))
     rows = []
@@ -573,6 +591,7 @@ def _binary_companion_qc(cfg, positions_qc, moffat_rows, psfao):
 
     return {
         "declared": {"sep_mas": float(decl["sep_mas"]), "pa_deg": float(decl["pa_deg"])},
+        "fitted_in_forms": list(cfg.get("e01_binary_forms", BINARY_FORMS_DEFAULT)),
         "source": cfg.get("e01_binary_companion_source"),
         "pixel_scale_arcsec": float(positions_qc.get("pixel_scale_arcsec")),
         "offset_yx_px": list(offset) if offset else None,
@@ -585,7 +604,11 @@ def _binary_companion_qc(cfg, positions_qc, moffat_rows, psfao):
             "grado de libertad (la razon de flujos). `psf_model.json` sigue siendo "
             "la PSF de UNA fuente puntual -sin la secundaria dentro-, que es lo que "
             "necesitan la inyeccion de E4, la `apcorr` y el throughput. La "
-            "sustraccion de la primaria en psffit/C1b NO usa esto todavia."
+            "sustraccion de la primaria en psffit/C1b NO usa esto todavia. "
+            "`fitted_in_forms` dice en que formas se ajusta: en la rama Moffat, a "
+            "radio 78 px y con recorte, la razon de flujos no esta constrenida "
+            "-se pega a su cota o se colapsa-, asi que `model_comparison` NO "
+            "compara peras con peras en un objeto con binaria."
         ),
     }
 
