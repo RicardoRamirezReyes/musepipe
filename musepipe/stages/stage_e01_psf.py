@@ -241,6 +241,16 @@ def binary_offset_px(cfg, positions_qc):
     eso se sabe que el signo es el bueno.
     """
 
+    # Valor ya resuelto: lo deja `compute_stage_e01_products` una sola vez, con
+    # el mismo patron que E4 usa para `h04_injection_flux_sigma`. Hace falta
+    # porque el ajuste POR EXPOSICION arma un `positions_qc` sintetico que no
+    # lleva `pixel_scale_arcsec` -es de una exposicion, no del QC de B3-, asi
+    # que alli no se puede recalcular. Y el offset es el MISMO en todas: es
+    # relativo, y los cubos son norte-arriba.
+    ya = cfg.get("e01_binary_offset_yx_px")
+    if ya is not None:
+        return (float(ya[0]), float(ya[1]))
+
     decl = cfg.get("e01_binary_companion")
     if not decl:
         return None
@@ -909,6 +919,11 @@ def compute_stage_e01_products(config) -> StageE01Product:
         min_channels=int(cfg.get("psf_min_channels_per_bin", 3)),
     )
     primary_yx, companion_yx, field_yx = _positions_from_qc(positions_qc)
+    # Se resuelve UNA vez y viaja en el config: el ajuste por exposicion lo
+    # necesita y alli no hay `pixel_scale_arcsec` con el que recalcularlo.
+    _off = binary_offset_px(cfg, positions_qc)
+    if _off is not None:
+        cfg["e01_binary_offset_yx_px"] = [float(_off[0]), float(_off[1])]
     track_path = positions_path.parent.parent / "tables" / "stage01c_chromatic_centroids.csv"
     b3_track, b3_track_status = _b3_chromatic_track(track_path)
     sep_px = float(np.hypot(companion_yx[0] - primary_yx[0], companion_yx[1] - primary_yx[1]))

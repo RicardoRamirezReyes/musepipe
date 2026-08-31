@@ -351,3 +351,43 @@ class NingunaColumnaEspuria(unittest.TestCase):
         fila = _row_from_fit(0, bin_info, fit, metric)
         espurias = [k for k in fila if "flux_ratio" in k]
         self.assertEqual(espurias, [])
+
+
+class ElAjustePorExposicionTambienLaVe(unittest.TestCase):
+    """Con `psf_scope=per_observation` el modelo publicado es la MEZCLA.
+
+    Si los ajustes por exposicion no vieran la segunda componente, el cambio
+    seria **inerte en el unico objeto al que va dirigido**: el ajuste al
+    combinado no llega a ningun consumidor, porque lo que se publica sale de la
+    mezcla. Y ademas el `positions_qc` que arma la rama por exposicion es
+    sintetico y **no lleva `pixel_scale_arcsec`**, asi que alli el offset no se
+    puede recalcular: tiene que viajar ya resuelto en el config.
+    """
+
+    def test_el_offset_resuelto_viaja_en_el_config(self):
+        from musepipe.stages.stage_e01_psf import binary_offset_px
+
+        cfg = {"e01_binary_offset_yx_px": [-1.71, -1.07]}
+        self.assertEqual(binary_offset_px(cfg, {}), (-1.71, -1.07))
+
+    def test_sin_escala_y_sin_resolver_falla_ruidosamente(self):
+        from musepipe.stages.stage_e01_psf import binary_offset_px
+
+        # Un `positions_qc` sin escala y una binaria declarada es exactamente el
+        # caso de la rama por exposicion antes del arreglo: reventaba.
+        with self.assertRaises(RuntimeError):
+            binary_offset_px({"e01_binary_companion": {"sep_mas": 51.0, "pa_deg": 148.0}}, {})
+
+    def test_sin_binaria_declarada_sigue_siendo_None(self):
+        from musepipe.stages.stage_e01_psf import binary_offset_px
+
+        self.assertIsNone(binary_offset_px({}, {}))
+
+    def test_la_rama_por_exposicion_pasa_el_offset(self):
+        # Guarda de cableado: que la llamada exista y con el nombre correcto.
+        import inspect
+
+        from musepipe.stages import stage_e01_perobs
+
+        fuente = inspect.getsource(stage_e01_perobs._psfao_branch)
+        self.assertIn("companion_offset_yx=cfg.get(\"e01_binary_offset_yx_px\")", fuente)

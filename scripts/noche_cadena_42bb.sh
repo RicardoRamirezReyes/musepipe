@@ -1,49 +1,80 @@
 #!/bin/bash
-# Cadena completa de ROXs 42B b, desatendida. ESCRITO Y SIN LANZAR.
+# Cadena completa de ROXs 42B b con la binaria en C1. DESATENDIDA.
 #
-# Existe para el dia en que el ajuste de dos componentes de C1 este implementado
-# y revisado (ver docs/2026-08-30_binaria_42b_sesga_la_apcorr.md §4). Lanzarlo
-# HOY solo reproduciria los productos actuales: no hay ningun cambio de codigo
-# que ejercitar.
+# Resistencia a caida de red: se lanza con `setsid nohup ... </dev/null`, asi que
+# el proceso queda huerfano de la terminal y sobrevive a que se caiga la sesion.
+# Ninguna etapa usa red -verificado: no hay requests/urllib/astroquery en
+# musepipe ni en los scripts que corren aqui-, y todos los datos son locales.
+# No hay ningun punto que pida entrada por teclado.
 #
-# Tres guardas, en este orden:
-#   1. foto previa del run -- los productos se sobreescriben y el tag
-#      fondecyt-fig2-v3 depende de la tabla de E4.
-#   2. la suite COMPLETA en verde. No se escriben productos cientificos con el
-#      arbol en rojo.
-#   3. la cadena, abortando en la primera etapa con rc != 0.
+# ORDEN, y por que este:
+#   1. arbol limpio + espacio + foto previa.
+#   2. suite RAPIDA como puerta. La lenta NO puede ir aqui: ejecuta el notebook
+#      debug de C1, que recomputa la etapa con el codigo NUEVO y la compara con
+#      el producto VIEJO -que aun no se ha regenerado-, asi que fallaria por
+#      construccion y se perderia la noche sin motivo.
+#   3. C1 -> C1b -> 04b..G5. C1b va explicito porque NO esta en la cadena de
+#      `rerun_chain.py` y este run es `psf_scope=per_observation`: C3 saca
+#      `optimal_psfsub` de `cube_psfsub_perobs.fits`, que produce C1b. Sin
+#      re-correrlo, C3 extraeria de un cubo hecho con la PSF vieja.
+#   4. suite COMPLETA al final, cuando los productos ya son nuevos: ahi si tiene
+#      sentido que los notebooks debug comparen contra ellos.
 set -u
 
 REPO=/home/ricardo-ramirez/Offline_MUSE/MusePipeline/MUSE-accretion-pipeline
 RUN=ROXs42Bb_realigned
-SELLO=$(date +%Y%m%d)
+SELLO=$(date +%Y%m%dT%H%M%S)
 FOTO=/mnt/2TB/MUSE_work/${RUN}_pre_binaria_${SELLO}
 LOG=/mnt/2TB/MUSE_work/cadena_42bb_${SELLO}
+PY=$(command -v python)
 mkdir -p "$LOG"
 cd "$REPO" || exit 1
 
-echo "=== inicio $(date -Is) · commit $(git rev-parse --short HEAD) ===" | tee -a "$LOG/noche.log"
+registra() { echo "$*" | tee -a "$LOG/noche.log"; }
 
-# 1 · foto previa
-if [ ! -d "$FOTO" ]; then
-    cp -a "/mnt/2TB/MUSE_work/$RUN" "$FOTO" || exit 1
-    echo "foto previa en $FOTO" | tee -a "$LOG/noche.log"
-fi
+registra "=== inicio $(date -Is) ==="
+registra "commit: $(git rev-parse HEAD)"
+registra "logs:   $LOG"
 
-# 2 · la suite entera, con los notebooks lentos
-python -m pytest tests/ -q > "$LOG/suite.log" 2>&1
-RC=$?
-tail -3 "$LOG/suite.log" | tee -a "$LOG/noche.log"
-if [ $RC -ne 0 ]; then
-    echo "SUITE EN ROJO (rc=$RC): la cadena NO se lanza." | tee -a "$LOG/noche.log"
+# --- 1 · guardas de arranque ------------------------------------------------
+if [ -n "$(git status --porcelain)" ]; then
+    registra "ABORTADO: el arbol tiene cambios sin commitear. Los productos de una"
+    registra "          corrida tienen que ser trazables a un commit."
     exit 1
 fi
+LIBRE=$(df --output=avail -BG /mnt/2TB | tail -1 | tr -dc '0-9')
+if [ "$LIBRE" -lt 40 ]; then
+    registra "ABORTADO: solo ${LIBRE}G libres en /mnt/2TB; la foto previa son ~12G."
+    exit 1
+fi
+cp -a "/mnt/2TB/MUSE_work/$RUN" "$FOTO" || { registra "ABORTADO: fallo la foto previa"; exit 1; }
+registra "foto previa: $FOTO ($(du -sh "$FOTO" | cut -f1))"
 
-# 3 · la cadena. C1 y C1b van primero: todo lo demas cuelga del modelo de PSF.
-python -u scripts/rerun_chain.py --run-id "$RUN" --desde C1 > "$LOG/cadena.log" 2>&1
-echo "cadena rc=$? $(date -Is)" | tee -a "$LOG/noche.log"
-tail -25 "$LOG/cadena.log" | tee -a "$LOG/noche.log"
+# --- 2 · puerta: suite rapida ----------------------------------------------
+"$PY" -u -m pytest tests/ -q -m "not slow" > "$LOG/suite_rapida.log" 2>&1
+RC=$?
+registra "suite rapida rc=$RC · $(tail -2 "$LOG/suite_rapida.log" | head -1)"
+[ $RC -ne 0 ] && { registra "ABORTADO: suite en rojo, no se escriben productos."; exit 1; }
 
-echo "--- git status ---" | tee -a "$LOG/noche.log"
+# --- 3 · la cadena ----------------------------------------------------------
+etapa() {  # etapa <nombre> <comando...>
+    local nombre="$1"; shift
+    registra "--- $nombre  $(date -Is)"
+    "$@" >> "$LOG/cadena.log" 2>&1
+    local rc=$?
+    registra "    $nombre rc=$rc"
+    [ $rc -ne 0 ] && { registra "ABORTADO en $nombre. Foto previa intacta en $FOTO"; exit 1; }
+    return 0
+}
+
+etapa C1  "$PY" -u -m musepipe.stages.stage_e01_psf --run-id "$RUN"
+etapa C1b "$PY" -u -m musepipe.stages.stage_e01b_perobs_subtract --run-id "$RUN"
+etapa "04b..G5" "$PY" -u scripts/rerun_chain.py --run-id "$RUN" --desde 04b
+
+# --- 4 · suite completa, ya contra los productos nuevos ---------------------
+"$PY" -u -m pytest tests/ -q > "$LOG/suite_completa.log" 2>&1
+registra "suite completa rc=$? · $(tail -2 "$LOG/suite_completa.log" | head -1)"
+
+registra "--- git status (los notebooks se commitean SIN salidas) ---"
 git status --short | tee -a "$LOG/noche.log"
-echo "=== fin $(date -Is) ===" | tee -a "$LOG/noche.log"
+registra "=== fin $(date -Is) ==="
