@@ -233,6 +233,13 @@ def _psfao_branch(cube, stat, wave, cfg, center, moved, mask_radius, fit_radius,
         warm_start=bool(cfg.get("psf_warm_start", True)),
         weighting=perobs_weighting(cfg),
         weight_cap=perobs_weight_cap(cfg),
+        # La segunda componente ligada de la primaria, ya resuelta en pixeles por
+        # C1. **Sin esto el cambio de la binaria seria inerte en este run**: con
+        # `psf_scope=per_observation` el modelo que se publica es la MEZCLA de
+        # los ajustes por exposicion, asi que si estos no la ven, el ajuste al
+        # combinado no llega a ningun consumidor. El offset es el mismo en todas
+        # las exposiciones: es relativo, y los cubos son norte-arriba.
+        companion_offset_yx=cfg.get("e01_binary_offset_yx_px"),
     )
     width = float(cfg.get("psf_companion_ring_width_px", 3.0))
     ring = []

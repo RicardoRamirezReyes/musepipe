@@ -28,6 +28,11 @@ class MoffatFit:
     clip_frac: float
     n_fit: int
     message: str
+    #: Razon de flujos de una segunda componente LIGADA (misma forma, posicion
+    #: fija). `None` = ajuste de una sola fuente, que es el caso por defecto y el
+    #: de todos los objetos menos ROXs 42B b. Ver `fit_moffat_image`.
+    flux_ratio: float | None = None
+    companion_offset_yx: tuple[float, float] | None = None
 
 
 MOFFAT_BETA_FLOOR = 1.05  # Moffat is only a normalizable PSF for beta > 1.
@@ -178,8 +183,29 @@ def fit_moffat_image(
     sigma_clip=3.0,
     max_iter=3,
     min_pixels=40,
+    companion_offset_yx=None,
 ):
-    """Fit a fixed-background elliptical Moffat image model."""
+    """Fit a fixed-background elliptical Moffat image model.
+
+    Con `companion_offset_yx` el modelo pasa a tener **dos componentes ligadas**:
+    la misma Moffat en `(y0, x0)` y en `(y0+dy, x0+dx)`, con **los mismos**
+    parametros de forma y una unica incognita nueva, la razon de flujos `f`.
+
+    Existe porque ROXs 42B es una **binaria cercana no resuelta** (rho = 51 mas,
+    PA = 148 deg segun Keck/NIRC2 2022.621, la misma epoca que estos datos; a
+    25.42 mas/px son 2.006 px) y ajustar UNA PSF a DOS estrellas la mide **mas
+    ancha de lo que es**: medido el 2026-08-30, eso sesga la `apcorr` un +6.9 %
+    contra un +1.5 % de suelo en ROXs 12 b, que es una estrella sola.
+
+    **No son dos fuentes libres**: comparten forma y su separacion la fija la
+    astrometria publicada, asi que el ajuste gana **exactamente un** grado de
+    libertad. Con el argumento a `None` el camino es identico al de siempre.
+
+    Lo que devuelve `params` sigue describiendo **una fuente puntual** — la
+    segunda componente viaja aparte, en `flux_ratio`. Esa separacion es
+    deliberada: la PSF publicada la consumen la inyeccion de E4, la `apcorr` y el
+    throughput, que necesitan un punto y no la imagen de la primaria.
+    """
 
     img = np.asarray(image, dtype=np.float64)
     if img.ndim != 2:
@@ -212,6 +238,45 @@ def fit_moffat_image(
         90.0,
         12.0,
     ]
+    # La segunda componente añade UN parametro y ninguno mas: la forma se comparte
+    # y la posicion la fija la astrometria declarada.
+    offset = None if companion_offset_yx is None else tuple(map(float, companion_offset_yx))
+    if offset is not None:
+        x0 = np.concatenate([x0, [0.1]])
+        lower = lower + [0.0]
+        upper = upper + [1.0]
+
+    def _shape_values(values):
+        """Separa los 7 de forma de la razon de flujos, que va al final."""
+        return (values[:7], float(values[7]) if offset is not None else None)
+
+    # NO se toca el recorte sigma. Hubo una version que eximia del recorte a los
+    # pixeles del nucleo -donde vive la secundaria-, razonando que es senal y no
+    # un valor atipico. Sobre la sonda de verificacion (radio 9 px) funcionaba;
+    # sobre la configuracion REAL de C1 (radio 78 px) rompio el ajuste: ahi el
+    # recorte quita legitimamente el nucleo dominante para que la Moffat pueda
+    # describir el HALO, y forzarlo dentro colapsa el ajuste al nucleo. Medido el
+    # 2026-08-31 en ROXs 42B b: fwhm 9.87 -> 2.78, chi2r 1.25 -> 2246, residuo de
+    # anillo 6.88 % -> 813 %. Y ese `fwhm` roto alimenta la escala del hibrido,
+    # asi que la averia llegaba hasta un numero publicado.
+    # Quien necesite el ajuste sin recorte que lo pida: `sigma_clip=None`.
+
+    def _scene(values, ypix_sel, xpix_sel):
+        """La ESCENA: una componente, o dos ligadas. Es contra esto que se ajusta,
+        porque es lo que el dato tiene."""
+        head, ratio = _shape_values(values)
+        params = _pack_params(head)
+        model = moffat_elliptical_profile(
+            ypix_sel - params["y0"], xpix_sel - params["x0"],
+            params["fwhm_maj"], params["fwhm_min"], params["theta_deg"], params["beta"],
+        )
+        if offset is not None:
+            model = model + float(ratio) * moffat_elliptical_profile(
+                ypix_sel - (params["y0"] + offset[0]),
+                xpix_sel - (params["x0"] + offset[1]),
+                params["fwhm_maj"], params["fwhm_min"], params["theta_deg"], params["beta"],
+            )
+        return params["amplitude"] * model
 
     fit = None
     for _ in range(int(max_iter)):
@@ -219,28 +284,10 @@ def fit_moffat_image(
             break
 
         def resid(values):
-            params = _pack_params(values)
-            model = params["amplitude"] * moffat_elliptical_profile(
-                ypix[good] - params["y0"],
-                xpix[good] - params["x0"],
-                params["fwhm_maj"],
-                params["fwhm_min"],
-                params["theta_deg"],
-                params["beta"],
-            )
-            return model - y[good]
+            return _scene(values, ypix[good], xpix[good]) - y[good]
 
         fit = least_squares(resid, x0=x0, bounds=(lower, upper), max_nfev=500)
-        full_params = _pack_params(fit.x)
-        model_all = full_params["amplitude"] * moffat_elliptical_profile(
-            ypix - full_params["y0"],
-            xpix - full_params["x0"],
-            full_params["fwhm_maj"],
-            full_params["fwhm_min"],
-            full_params["theta_deg"],
-            full_params["beta"],
-        )
-        residual_all = model_all - y
+        residual_all = _scene(fit.x, ypix, xpix) - y
         sigma = robust_sigma(residual_all[good])
         if sigma_clip is None or not np.isfinite(sigma) or sigma <= 0:
             break
@@ -252,25 +299,28 @@ def fit_moffat_image(
 
     if fit is None:
         raise RuntimeError("Moffat fit did not run.")
-    params = _pack_params(fit.x)
-    model = params["amplitude"] * moffat_elliptical_profile(
-        ypix[good] - params["y0"],
-        xpix[good] - params["x0"],
-        params["fwhm_maj"],
-        params["fwhm_min"],
-        params["theta_deg"],
-        params["beta"],
-    )
-    resid = model - y[good]
+    head, flux_ratio = _shape_values(fit.x)
+    params = _pack_params(head)
+    resid = _scene(fit.x, ypix[good], xpix[good]) - y[good]
     sigma = robust_sigma(resid)
-    dof = max(1, int(np.count_nonzero(good)) - 7)
+    dof = max(1, int(np.count_nonzero(good)) - (7 if offset is None else 8))
     chi2r = float(np.nansum((resid / sigma) ** 2) / dof) if np.isfinite(sigma) and sigma > 0 else np.nan
-    errors = {key: np.nan for key in ("amplitude",) + PSF_SHAPE_PARAMS}
+    # `flux_ratio` SOLO cuando hay segunda componente: `_row_from_fit` vuelca este
+    # diccionario a columnas `*_err` del CSV, asi que anadirlo siempre le meteria
+    # una columna espuria a todo run sin binaria y romperia la garantia de que
+    # sin el knob no cambia nada.
+    claves_err = ("amplitude",) + PSF_SHAPE_PARAMS
+    if offset is not None:
+        claves_err = claves_err + ("flux_ratio",)
+    errors = {key: np.nan for key in claves_err}
     if fit.jac is not None and fit.jac.size and np.isfinite(sigma) and sigma > 0:
         try:
             cov = np.linalg.pinv(fit.jac.T @ fit.jac) * sigma**2
             err_values = np.sqrt(np.clip(np.diag(cov), 0.0, np.inf))
-            for key, err in zip(("amplitude", "y0", "x0", "fwhm_maj", "fwhm_min", "theta_deg", "beta"), err_values):
+            orden = ("amplitude", "y0", "x0", "fwhm_maj", "fwhm_min", "theta_deg", "beta")
+            if offset is not None:
+                orden = orden + ("flux_ratio",)
+            for key, err in zip(orden, err_values):
                 errors[key] = float(err)
         except Exception:
             pass
@@ -284,6 +334,8 @@ def fit_moffat_image(
         clip_frac=float(1.0 - np.count_nonzero(good) / y.size),
         n_fit=int(np.count_nonzero(good)),
         message=str(fit.message),
+        flux_ratio=None if flux_ratio is None else float(flux_ratio),
+        companion_offset_yx=offset,
     )
 
 
@@ -300,6 +352,44 @@ def evaluate_moffat_fit(shape, fit: MoffatFit):
         amplitude=p["amplitude"],
         background=fit.background,
     )
+
+
+def evaluate_moffat_scene(shape, fit: MoffatFit):
+    """La ESCENA que el dato contiene: la PSF y, si la hay, la secundaria ligada.
+
+    **No confundir con `evaluate_moffat_fit`**, que devuelve la PSF de UNA fuente
+    puntual y es lo que se publica. La distincion es la que sostiene todo el
+    cambio de la binaria:
+
+      * `evaluate_moffat_fit`  -> lo que se publica, y lo que usan la `apcorr`, la
+        energia encerrada y el documento del modelo. Un punto.
+      * `evaluate_moffat_scene` -> contra lo que se miden los RESIDUOS, porque el
+        dato de ROXs 42B b tiene dos estrellas.
+
+    Restar la escena de una imagen con dos estrellas deja el residuo real; restar
+    la PSF dejaria la secundaria entera dentro y la metrica del anillo empeoraria
+    justo al mejorar el modelo.
+
+    Sin segunda componente las dos funciones devuelven lo mismo.
+    """
+
+    base = evaluate_moffat_fit(shape, fit)
+    if fit.flux_ratio is None or fit.companion_offset_yx is None:
+        return base
+    p = fit.params
+    dy, dx = fit.companion_offset_yx
+    secundaria = moffat_image(
+        shape,
+        p["y0"] + float(dy),
+        p["x0"] + float(dx),
+        p["fwhm_maj"],
+        p["fwhm_min"],
+        p["theta_deg"],
+        p["beta"],
+        amplitude=p["amplitude"] * float(fit.flux_ratio),
+        background=0.0,
+    )
+    return base + secundaria
 
 
 def companion_ring_metric(image, model, primary_yx, companion_yx, *, width_px=3.0, source_exclusion_radius_px=0.0):

@@ -233,6 +233,22 @@ def build_halosub_extractors(
     return {"sgf": sgf_extractor, "lpm": lpm_extractor}
 
 
+def _x03_with_overrides(x03_cfg, config):
+    """Los knobs de C4 que una sonda puede barrer sin tocar el config del run.
+
+    Existe para medir configuraciones del extractor —los radios del ajuste de
+    `psffit`— sin escribir en `runs/<run>/config/config.json`: la unica forma
+    anterior de cambiarlos era editar ese fichero, que es justo lo que no puede
+    hacer una medida que no debe mover los productos publicados. Vacio por
+    defecto, asi que la cadena resuelve exactamente igual que antes.
+    """
+
+    overrides = config.get("h04_x03_overrides") or {}
+    if not overrides:
+        return x03_cfg
+    return {**x03_cfg, **dict(overrides)}
+
+
 def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=None):
     """Return {method: callable} adapting C2/C3/C4/C5/C6 to the H04 extractor contract."""
 
@@ -245,6 +261,7 @@ def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=N
     x03_cfg = stage_x03_config_from_run(run_id, project_root=root)
     x04_cfg = stage_x04_config_from_run(run_id, project_root=root)
     x05_cfg = stage_x05_config_from_run(run_id, project_root=root)
+    x03_cfg = _x03_with_overrides(x03_cfg, config)
 
     # Star position (companion position comes from each case; the REAL
     # companion position is excluded from the halosub reference spectrum).

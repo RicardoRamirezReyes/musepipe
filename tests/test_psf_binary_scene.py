@@ -1,0 +1,593 @@
+"""La escena de dos componentes ligadas de C1, y lo que NO puede cambiar.
+
+ROXs 42B es una binaria cercana no resuelta (rho=51 mas, PA=148 deg segun
+Keck/NIRC2 2022.621 -> 2.006 px). C1 ajustaba UNA PSF a DOS estrellas y la media
+mas ancha de lo que es, sesgando la `apcorr` un +6.9 % contra un +1.5 % de suelo
+en ROXs 12 b, que es una estrella sola
+(`docs/2026-08-30_binaria_42b_sesga_la_apcorr.md`).
+
+Lo que estos tests protegen, por orden de importancia:
+
+  1. **Sin el knob, nada cambia.** Es lo que impide que este cambio toque a los
+     demas objetos y a los productos ya congelados.
+  2. **La PSF publicada y la escena son cosas distintas.** `evaluate_moffat_fit`
+     devuelve UN punto —lo que consumen la inyeccion de E4, la `apcorr` y el
+     throughput— y `evaluate_moffat_scene` las dos estrellas, que es contra lo
+     que se miden los residuos. Confundirlas haria que el anillo empeorase justo
+     al mejorar el modelo.
+  3. **El objetivo real no es medir `f`, es recuperar la PSF verdadera.** Con una
+     binaria sintetica el ajuste de una componente sale ensanchado y el de dos
+     vuelve al valor verdadero.
+"""
+
+import contextlib
+import io
+import unittest
+import warnings
+
+import numpy as np
+
+from musepipe.psf import (
+    evaluate_moffat_fit,
+    evaluate_moffat_scene,
+    fit_moffat_image,
+    moffat_image,
+)
+
+FORMA = dict(fwhm_maj=4.2, fwhm_min=3.6, theta_deg=20.0, beta=2.6)
+#: Keck/NIRC2 2022.621 llevado a pixeles: la misma geometria que usa el run.
+OFFSET = (-1.701, -1.063)
+
+
+#: Radio de ajuste. 9 px como la sonda `binaria_42b_probe.py`: es donde vive la
+#: separacion de 2 px, asi que es donde el sesgo de ignorarla se ve.
+R_FIT = 9.0
+
+
+def escena(shape, centro, *, ratio=0.0, offset=OFFSET, amplitude=1000.0, fondo=5.0,
+           ruido=0.0, semilla=0):
+    """Una o dos Moffat, con ruido opcional.
+
+    **El ruido no es decoracion.** Sin el, el residuo del ajuste de dos
+    componentes es exactamente cero, su sigma robusta tiende a cero y el `chi2r`
+    —que divide por ella— se dispara: comparar ajustes por `chi2r` sobre datos
+    sin ruido no mide nada. Con ruido, la comparacion vuelve a significar algo.
+    """
+    img = moffat_image(shape, centro[0], centro[1], amplitude=amplitude,
+                       background=fondo, **FORMA)
+    if ratio:
+        img = img + moffat_image(shape, centro[0] + offset[0], centro[1] + offset[1],
+                                 amplitude=amplitude * ratio, background=0.0, **FORMA)
+    if ruido:
+        img = img + np.random.default_rng(semilla).normal(0.0, ruido, size=shape)
+    return img
+
+
+class SinKnobNadaCambia(unittest.TestCase):
+    def test_una_sola_fuente_da_el_mismo_ajuste_que_siempre(self):
+        img = escena((70, 70), (35.0, 35.0))
+        viejo = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        self.assertIsNone(viejo.flux_ratio)
+        self.assertIsNone(viejo.companion_offset_yx)
+
+    def test_la_escena_sin_segunda_componente_es_la_psf(self):
+        img = escena((70, 70), (35.0, 35.0))
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        np.testing.assert_array_equal(
+            evaluate_moffat_fit((70, 70), fit), evaluate_moffat_scene((70, 70), fit)
+        )
+
+
+class RazonDeFlujosNula(unittest.TestCase):
+    def test_f_tiende_a_cero_sobre_una_estrella_sola(self):
+        # El control de ROXs 12 b, en sintetico: pedirle una binaria a una
+        # estrella sola no puede inventarla.
+        img = escena((70, 70), (35.0, 35.0))
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        self.assertLess(fit.flux_ratio, 0.05)
+
+    def test_con_f_nulo_la_forma_es_la_de_una_componente(self):
+        img = escena((70, 70), (35.0, 35.0))
+        una = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        dos = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        for clave in ("fwhm_maj", "fwhm_min", "beta"):
+            with self.subTest(clave=clave):
+                self.assertAlmostEqual(una.params[clave], dos.params[clave], delta=0.15)
+
+
+class RecuperaLaPsfVerdadera(unittest.TestCase):
+    """El objetivo del cambio: la PSF, no la razon de flujos."""
+
+    def setUp(self):
+        self.shape = (70, 70)
+        self.centro = (35.0, 35.0)
+        self.ratio = 0.12
+        self.img = escena(self.shape, self.centro, ratio=self.ratio, ruido=0.5, semilla=7)
+
+    def test_una_componente_mide_la_psf_mas_ancha_de_lo_que_es(self):
+        una = fit_moffat_image(self.img, center_yx=self.centro, fit_radius_px=R_FIT)
+        self.assertGreater(una.params["fwhm_maj"], FORMA["fwhm_maj"] + 0.05)
+
+    def test_dos_componentes_devuelven_la_forma_verdadera(self):
+        dos = fit_moffat_image(self.img, center_yx=self.centro, fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        self.assertAlmostEqual(dos.params["fwhm_maj"], FORMA["fwhm_maj"], delta=0.10)
+        self.assertAlmostEqual(dos.params["fwhm_min"], FORMA["fwhm_min"], delta=0.10)
+        self.assertAlmostEqual(dos.params["beta"], FORMA["beta"], delta=0.20)
+
+    def test_y_de_paso_recupera_la_razon_de_flujos(self):
+        dos = fit_moffat_image(self.img, center_yx=self.centro, fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        self.assertAlmostEqual(dos.flux_ratio, self.ratio, delta=0.03)
+
+    def test_la_recuperacion_no_depende_del_radio_de_ajuste(self):
+        # El ajuste de UNA componente sesga de forma erratica con el radio -en
+        # sintetico limpio hay radios donde acierta por casualidad-, asi que un
+        # test a un solo radio podria pasar por suerte. El de dos tiene que
+        # acertar en TODOS.
+        img = escena(self.shape, self.centro, ratio=self.ratio)
+        for radio in (6.0, 9.0, 12.0, 20.0, 30.0):
+            with self.subTest(radio=radio):
+                dos = fit_moffat_image(img, center_yx=self.centro, fit_radius_px=radio,
+                                       companion_offset_yx=OFFSET)
+                self.assertAlmostEqual(dos.params["fwhm_maj"], FORMA["fwhm_maj"], delta=0.05)
+                self.assertAlmostEqual(dos.flux_ratio, self.ratio, delta=0.02)
+
+    def test_el_ajuste_de_dos_deja_menos_residuo_sobre_una_binaria(self):
+        # Con ruido, y comparando el residuo directamente: `chi2r` normaliza por
+        # la sigma del propio residuo, asi que no compara dos ajustes entre si.
+        yy, xx = np.indices(self.shape, dtype=float)
+        dentro = np.hypot(yy - self.centro[0], xx - self.centro[1]) <= R_FIT
+        una = fit_moffat_image(self.img, center_yx=self.centro, fit_radius_px=R_FIT)
+        dos = fit_moffat_image(self.img, center_yx=self.centro, fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        r_una = np.nansum(np.abs(self.img - evaluate_moffat_scene(self.shape, una))[dentro])
+        r_dos = np.nansum(np.abs(self.img - evaluate_moffat_scene(self.shape, dos))[dentro])
+        self.assertLess(float(r_dos), float(r_una))
+
+
+class LaPsfYLaEscenaNoSeConfunden(unittest.TestCase):
+    def setUp(self):
+        self.shape = (70, 70)
+        self.centro = (35.0, 35.0)
+        self.img = escena(self.shape, self.centro, ratio=0.12, ruido=0.5, semilla=7)
+        self.fit = fit_moffat_image(self.img, center_yx=self.centro, fit_radius_px=R_FIT,
+                                    companion_offset_yx=OFFSET)
+
+    def test_la_publicada_no_lleva_la_secundaria_y_la_escena_si(self):
+        psf = evaluate_moffat_fit(self.shape, self.fit)
+        esc = evaluate_moffat_scene(self.shape, self.fit)
+        self.assertGreater(float(np.nansum(esc - psf)), 0.0)
+        # El exceso esta DONDE dice la astrometria, no en cualquier sitio.
+        dif = esc - psf
+        iy, ix = np.unravel_index(int(np.nanargmax(dif)), dif.shape)
+        self.assertAlmostEqual(iy - self.centro[0], OFFSET[0], delta=1.0)
+        self.assertAlmostEqual(ix - self.centro[1], OFFSET[1], delta=1.0)
+
+    def test_la_escena_deja_menos_residuo_sobre_el_dato_que_la_psf(self):
+        # Es la razon de que las metricas usen la escena: el dato tiene DOS.
+        psf = evaluate_moffat_fit(self.shape, self.fit)
+        esc = evaluate_moffat_scene(self.shape, self.fit)
+        yy, xx = np.indices(self.shape, dtype=float)
+        cerca = np.hypot(yy - self.centro[0], xx - self.centro[1]) <= 12.0
+        self.assertLess(float(np.nansum(np.abs(self.img - esc)[cerca])),
+                        float(np.nansum(np.abs(self.img - psf)[cerca])))
+
+
+class RamaPsfao(unittest.TestCase):
+    """La rama que usa ROXs 42B b, y cuyo ajuste lo hace `maoppy`.
+
+    **Las afirmaciones son sobre el COSTE y sobre `f`, no sobre los siete
+    parametros de psfao ni sobre la imagen.** Ese espacio es degenerado —`r0` y
+    `C` se compensan— y dos vectores muy distintos alcanzan el mismo coste; es
+    una propiedad conocida de psfao, no de este cambio. Afirmar sobre los
+    parametros daria un test que falla por el motivo equivocado.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from maoppy.instrument import muse_nfm
+        from maoppy.psfmodel import Psfao
+
+        cls.ny = cls.nx = 64
+        cls.samp = 2.0
+        cls.system = muse_nfm
+        cls.verdad = [0.55, 2e-2, 1.2, 2e-2, 1.1, 0.2, 1.6]
+        cls.modelo = Psfao((cls.ny, cls.nx), system=muse_nfm, samp=cls.samp)
+        cls.base = cls.modelo(cls.verdad, dx=0, dy=0)
+        cls.comp = (58.0, 58.0)          # companero lejos: no entra en el ajuste
+        cls.var = np.full((cls.ny, cls.nx), 0.16)
+        rng = np.random.default_rng(3)
+        cls.ruido_a = rng.normal(0, 0.4, (cls.ny, cls.nx))
+        cls.ruido_b = rng.normal(0, 0.4, (cls.ny, cls.nx))
+        cls.ratio = 0.12
+
+    def _ajusta(self, img, *, offset=None, ratio0=0.1):
+        from musepipe.stages.stage_e01_psfao import fit_bin, fit_bin_binary
+
+        # maoppy imprime su progreso por stdout en cada iteracion.
+        with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if offset is None:
+                return fit_bin(img, self.var, self.samp, self.system, self.comp,
+                               4.0, 25.0, self.verdad)
+            return fit_bin_binary(img, self.var, self.samp, self.system, self.comp,
+                                  4.0, 25.0, self.verdad, offset, ratio0=ratio0)
+
+    def test_con_f_cero_alcanza_el_mismo_coste_que_maoppy(self):
+        # El test de regresion que el diseno regala: con la segunda componente
+        # apagada, esto ES la funcion de coste de `maoppy.psffit`.
+        img = 1000.0 * self.base + 3.0 + self.ruido_a
+        maoppy = self._ajusta(img)
+        nuestro = self._ajusta(img, offset=OFFSET, ratio0=0.0)
+        self.assertAlmostEqual(nuestro[6]["cost"], maoppy[6]["cost"],
+                               delta=1e-3 * maoppy[6]["cost"])
+        self.assertAlmostEqual(nuestro[8], 0.0, places=4)
+
+    def test_recupera_la_razon_de_flujos_de_una_binaria_sintetica(self):
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        dos = self._ajusta(img, offset=OFFSET)
+        self.assertAlmostEqual(dos[8], self.ratio, delta=0.02)
+
+    def test_dos_componentes_ajustan_mejor_una_binaria(self):
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        una = self._ajusta(img)
+        dos = self._ajusta(img, offset=OFFSET)
+        self.assertLess(dos[6]["cost"], una[6]["cost"])
+
+    def test_los_ejes_no_estan_cruzados(self):
+        """La trampa silenciosa: en maoppy `dx` mueve el eje 1 y `dy` el eje 0.
+
+        Cruzarlos pondria la secundaria en una posicion equivocada y NADA
+        fallaria: el ajuste convergeria igual, solo que peor. Se comprueba
+        pidiendo el mismo ajuste con el offset invertido y exigiendo que el
+        correcto gane.
+        """
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        bueno = self._ajusta(img, offset=OFFSET)
+        cruzado = self._ajusta(img, offset=(OFFSET[1], OFFSET[0]))
+        self.assertLess(bueno[6]["cost"], cruzado[6]["cost"])
+
+    def test_no_arranca_en_la_discontinuidad_de_maoppy(self):
+        """El modelo de maoppy es DISCONTINUO en desplazamiento cero.
+
+        Con `dx` exactamente 0 se salta el desplazamiento por FFT y con 1e-10 ya
+        lo aplica: la imagen cambia un 4.6 % del pico entre los dos. El jacobiano
+        numerico del primer paso mide esa discontinuidad -derivada aparente
+        ~1e10- y el ajuste se muere en `nfev=2` sin moverse. Este test fija que
+        el arranque esta en la rama continua, comprobando que el ajuste **se
+        mueve de verdad**.
+        """
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        dos = self._ajusta(img, offset=OFFSET)
+        self.assertGreater(dos[6]["nfev"], 5)
+        self.assertFalse(dos[6]["stalled_at_initial"])
+
+    def test_el_resultado_no_depende_del_arranque_de_f(self):
+        # Si dependiera, el minimo no estaria bien planteado y `f` seria lo que
+        # le hubieramos sugerido.
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        desde_cero = self._ajusta(img, offset=OFFSET, ratio0=0.0)
+        desde_alto = self._ajusta(img, offset=OFFSET, ratio0=0.4)
+        self.assertAlmostEqual(desde_cero[8], desde_alto[8], delta=0.02)
+
+    def test_devuelve_la_escena_y_la_psf_por_separado(self):
+        img = (1000.0 * (self.base + self.ratio * self.modelo(
+            self.verdad, dx=OFFSET[1], dy=OFFSET[0])) + 3.0 + self.ruido_b)
+        dos = self._ajusta(img, offset=OFFSET)
+        escena_img, psf_img = dos[5], dos[9]
+        self.assertGreater(float(np.nansum(escena_img - psf_img)), 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class LasMetricasVenLaEscena(unittest.TestCase):
+    """V4 y el anillo comparan MODELO contra DATO, asi que necesitan la escena.
+
+    El error que esto impide es sutil y va en la direccion equivocada: si la
+    energia encerrada comparase la PSF sola contra un dato que tiene DOS
+    estrellas, veria un deficit del tamano de la razon de flujos (~11 % en
+    ROXs 42B b) y lo denunciaria como fallo del modelo — es decir, el V4
+    **empeoraria justo al mejorar la PSF**, y encima por la cantidad exacta que
+    el cambio acaba de arreglar.
+    """
+
+    def test_la_escena_encierra_mas_energia_que_la_psf(self):
+        from musepipe.psf import encircled_energy
+
+        shape = (70, 70)
+        centro = (35.0, 35.0)
+        img = escena(shape, centro, ratio=0.12, ruido=0.5, semilla=7)
+        fit = fit_moffat_image(img, center_yx=centro, fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        radios = np.array([3.0, 6.0, 12.0])
+        ee_psf = encircled_energy(evaluate_moffat_fit(shape, fit), centro, radios,
+                                  background=fit.background)
+        ee_esc = encircled_energy(evaluate_moffat_scene(shape, fit), centro, radios,
+                                  background=fit.background)
+        # La secundaria esta a 2 px, asi que ya entra en el radio mas pequeno.
+        for i, r in enumerate(radios):
+            with self.subTest(radio=r):
+                self.assertGreater(float(ee_esc[i]), float(ee_psf[i]))
+
+
+class NingunaColumnaEspuria(unittest.TestCase):
+    """Sin binaria declarada, el producto no puede ganar ni una columna.
+
+    `_row_from_fit` vuelca `fit.errors` a columnas `*_err` del CSV de C1, asi que
+    una clave de mas en ese diccionario le cambia el ESQUEMA a todos los runs sin
+    binaria. Es la garantia que sostiene todo el cambio -"sin el knob no cambia
+    nada"- y se rompe en silencio: nada falla, solo aparece una columna vacia.
+    """
+
+    def test_los_errores_no_llevan_flux_ratio_sin_binaria(self):
+        img = escena((70, 70), (35.0, 35.0))
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        self.assertNotIn("flux_ratio", fit.errors)
+
+    def test_y_si_lo_llevan_cuando_la_hay(self):
+        img = escena((70, 70), (35.0, 35.0), ratio=0.12)
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT,
+                               companion_offset_yx=OFFSET)
+        self.assertIn("flux_ratio", fit.errors)
+
+    def test_las_filas_de_C1_tampoco_ganan_columnas(self):
+        from musepipe.stages.stage_e01_psf import _row_from_fit
+
+        img = escena((70, 70), (35.0, 35.0))
+        fit = fit_moffat_image(img, center_yx=(35.0, 35.0), fit_radius_px=R_FIT)
+        bin_info = {"wave_min_A": 5000.0, "wave_max_A": 5100.0,
+                    "wave_center_A": 5050.0, "indices": [0, 1, 2]}
+        metric = {"median_pct": 1.0, "p90_pct": 2.0}
+        fila = _row_from_fit(0, bin_info, fit, metric)
+        espurias = [k for k in fila if "flux_ratio" in k]
+        self.assertEqual(espurias, [])
+
+
+class ElAjustePorExposicionTambienLaVe(unittest.TestCase):
+    """Con `psf_scope=per_observation` el modelo publicado es la MEZCLA.
+
+    Si los ajustes por exposicion no vieran la segunda componente, el cambio
+    seria **inerte en el unico objeto al que va dirigido**: el ajuste al
+    combinado no llega a ningun consumidor, porque lo que se publica sale de la
+    mezcla. Y ademas el `positions_qc` que arma la rama por exposicion es
+    sintetico y **no lleva `pixel_scale_arcsec`**, asi que alli el offset no se
+    puede recalcular: tiene que viajar ya resuelto en el config.
+    """
+
+    def test_el_offset_resuelto_viaja_en_el_config(self):
+        from musepipe.stages.stage_e01_psf import binary_offset_px
+
+        cfg = {"e01_binary_offset_yx_px": [-1.71, -1.07]}
+        self.assertEqual(binary_offset_px(cfg, {}), (-1.71, -1.07))
+
+    def test_sin_escala_y_sin_resolver_falla_ruidosamente(self):
+        from musepipe.stages.stage_e01_psf import binary_offset_px
+
+        # Un `positions_qc` sin escala y una binaria declarada es exactamente el
+        # caso de la rama por exposicion antes del arreglo: reventaba.
+        with self.assertRaises(RuntimeError):
+            binary_offset_px({"e01_binary_companion": {"sep_mas": 51.0, "pa_deg": 148.0}}, {})
+
+    def test_sin_binaria_declarada_sigue_siendo_None(self):
+        from musepipe.stages.stage_e01_psf import binary_offset_px
+
+        self.assertIsNone(binary_offset_px({}, {}))
+
+    def test_la_rama_por_exposicion_pasa_el_offset(self):
+        # Guarda de cableado: que la llamada exista y con el nombre correcto.
+        import inspect
+
+        from musepipe.stages import stage_e01_perobs
+
+        fuente = inspect.getsource(stage_e01_perobs._psfao_branch)
+        self.assertIn("companion_offset_yx=cfg.get(\"e01_binary_offset_yx_px\")", fuente)
+
+
+class SoloDondeSePuedeMedir(unittest.TestCase):
+    """La segunda componente se ajusta en psfao, NO en Moffat, y por que.
+
+    La rama Moffat de C1 ajusta a `psf_fit_radius_px` (78 px en ROXs 42B b) con
+    recorte sigma, que quita el nucleo dominante para que la Moffat describa el
+    HALO. Sin nucleo la razon de flujos no esta constrenida: medido sobre el cubo
+    real el 2026-08-31, `f` se pega a su cota (1.0000 a 5300 A) o se colapsa a 0
+    (8800 A). Y forzar el nucleo dentro rompe el ajuste entero (chi2r 1.25 ->
+    2246) y contamina la escala del hibrido, que llega a un numero publicado.
+
+    Esto NO dice que la escena de dos componentes este mal -en psfao mide
+    f = 0.130 estable en 43 bins-: dice donde se puede medir y donde no.
+    """
+
+    def test_por_defecto_la_binaria_solo_va_en_psfao(self):
+        from musepipe.stages.stage_e01_psf import BINARY_FORMS_DEFAULT
+
+        self.assertEqual(tuple(BINARY_FORMS_DEFAULT), ("psfao",))
+
+    def test_la_rama_moffat_no_recibe_offset_por_defecto(self):
+        import inspect
+
+        from musepipe.stages import stage_e01_psf
+
+        fuente = inspect.getsource(stage_e01_psf._moffat_fit_rows)
+        self.assertIn('if "moffat" in formas else None', fuente)
+
+    def test_el_recorte_sigma_no_esta_modificado(self):
+        # La version que eximia el nucleo del recorte rompio la produccion. Que
+        # no vuelva sin que alguien lo vea.
+        import inspect
+
+        from musepipe import psf
+
+        fuente = inspect.getsource(psf.fit_moffat_image)
+        self.assertNotIn("protegido", fuente)
+
+
+class ElCentroideComparaFotocentros(unittest.TestCase):
+    """B3 traquea el FOTOCENTRO del par; C1 ajusta la PRIMARIA.
+
+    Sin corregir, la comprobacion `centroid_vs_b3` dispara una issue BLOQUEANTE
+    sobre un modelo correcto: los dos puntos difieren por `f/(1+f) x separacion`
+    por construccion. Medido el 2026-09-01 en ROXs 42B b comparando las dos
+    corridas: desplazamiento 0.2187 px con la perpendicular en 0.003 -o sea
+    enteramente sobre el eje de la binaria- contra 0.2313 px predichos; y la
+    metrica pasa de 0.3233 a 0.2836 px al reconstruir el fotocentro.
+
+    Una puerta que salta cuando no debe acaba ignorada, que es justo el modo de
+    fallo que este repo lleva documentando.
+    """
+
+    SEP = float(np.hypot(*OFFSET))
+
+    def _track(self, y, x):
+        # El track de B3: el fotocentro, constante en lambda para el test.
+        return np.array([[4000.0, y, x], [10000.0, y, x]], dtype=float)
+
+    def _filas(self, cy, cx, f):
+        # Filas psfao: `dy`/`dx` son offsets respecto al centro de la imagen.
+        return [{"lambda_A": 6000.0, "dy": 0.0, "dx": 0.0, "status": "ok",
+                 "flux_ratio": f}], (2 * cy, 2 * cx)
+
+    def test_sin_corregir_el_desfase_es_el_del_fotocentro(self):
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        f = 0.13
+        peso = f / (1 + f)
+        cy = cx = 50
+        filas, shape = self._filas(cy, cx, f)
+        # B3 ve el fotocentro: la primaria mas su parte del desplazamiento.
+        track = self._track(cy + peso * OFFSET[0], cx + peso * OFFSET[1])
+        d = _centroid_vs_b3(filas, "psfao", track, image_shape=shape)
+        self.assertAlmostEqual(d, peso * self.SEP, places=6)
+
+    def test_reconstruyendo_el_fotocentro_el_desfase_desaparece(self):
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        f = 0.13
+        peso = f / (1 + f)
+        cy = cx = 50
+        filas, shape = self._filas(cy, cx, f)
+        track = self._track(cy + peso * OFFSET[0], cx + peso * OFFSET[1])
+        d = _centroid_vs_b3(filas, "psfao", track, image_shape=shape,
+                            binary_offset_yx=OFFSET)
+        self.assertAlmostEqual(d, 0.0, places=6)
+
+    def test_sin_binaria_declarada_no_se_toca_nada(self):
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        cy = cx = 50
+        filas = [{"lambda_A": 6000.0, "dy": 0.4, "dx": 0.0, "status": "ok"}]
+        track = self._track(cy, cx)
+        self.assertAlmostEqual(
+            _centroid_vs_b3(filas, "psfao", track, image_shape=(2 * cy, 2 * cx)), 0.4, places=6
+        )
+
+    def test_una_fila_sin_razon_de_flujos_no_se_corrige(self):
+        # Robustez: filas viejas, o bins donde `f` no se midio.
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        cy = cx = 50
+        for valor in (None, "", float("nan"), 0.0):
+            with self.subTest(valor=valor):
+                filas = [{"lambda_A": 6000.0, "dy": 0.4, "dx": 0.0, "status": "ok",
+                          "flux_ratio": valor}]
+                d = _centroid_vs_b3(filas, "psfao", self._track(cy, cx),
+                                    image_shape=(2 * cy, 2 * cx), binary_offset_yx=OFFSET)
+                self.assertAlmostEqual(d, 0.4, places=6)
+
+
+class LaRazonDeFlujosLlegaAlCSV(unittest.TestCase):
+    """Se calculaba y se tiraba al escribir: `_write_psfao_csv` fija columnas."""
+
+    def test_el_csv_de_psfao_lleva_la_columna(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        from musepipe.stages.stage_e01_psf import _write_psfao_csv
+
+        with tempfile.TemporaryDirectory() as d:
+            p = _P(d) / "psfao.csv"
+            _write_psfao_csv(p, [{"lambda_A": 6000.0, "flux_ratio": 0.1296,
+                                  "flux_ratio_err": 0.004}])
+            cabecera, fila = p.read_text().splitlines()[:2]
+            self.assertIn("flux_ratio", cabecera.split(","))
+            i = cabecera.split(",").index("flux_ratio")
+            self.assertEqual(fila.split(",")[i], "0.1296")
+
+    def test_sin_binaria_la_columna_queda_vacia_y_no_rompe(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        from musepipe.stages.stage_e01_psf import _write_psfao_csv
+
+        with tempfile.TemporaryDirectory() as d:
+            p = _P(d) / "psfao.csv"
+            _write_psfao_csv(p, [{"lambda_A": 6000.0}])
+            cabecera, fila = p.read_text().splitlines()[:2]
+            i = cabecera.split(",").index("flux_ratio")
+            self.assertEqual(fila.split(",")[i], "")
+
+
+class ElHibridoNoDejaProductoObsoleto(unittest.TestCase):
+    """Cuando el hibrido deja de aplicarse, su residuo NO puede sobrevivir.
+
+    Paso el 2026-08-31 en ROXs 42B b: una corrida rota activo el hibrido y
+    escribio `psf_hybrid_residual.fits`; la corrida siguiente, ya corregida, NO
+    lo aplico -- y el fichero de la corrida DESCARTADA se quedo, fechado a las
+    04:41 mientras el resto del run era de las 20:35. Dos notebooks debug que se
+    anclan contra el fallaron por comparar contra otra cosecha.
+
+    Es el agujero que `stage_vintage` vigila ENTRE etapas, ocurriendo dentro de
+    una sola.
+    """
+
+    def _producto(self, con_hibrido):
+        from musepipe.stages.stage_e01_psf import StageE01Product
+
+        return StageE01Product(
+            fit_rows=[], psf_model={"form": "moffat"}, qc={},
+            hybrid_profiles=(np.zeros((2, 3), dtype=np.float32) if con_hibrido else None),
+            hybrid_radii=(np.arange(3, dtype=np.float32) if con_hibrido else None),
+        )
+
+    def _escribe(self, tmp, producto):
+        from musepipe.stages.stage_e01_psf import write_stage_e01_products
+
+        import types
+
+        paths = {
+            "paths": types.SimpleNamespace(ensure_base_dirs=lambda: None, stage_dir=tmp),
+            "plot_dir": tmp / "plots",
+            "stage_e01_params_csv": tmp / "params.csv",
+            "psf_model_json": tmp / "psf_model.json",
+            "psf_hybrid_residual_fits": tmp / "psf_hybrid_residual.fits",
+            "stage_e01_qc_json": tmp / "qc.json",
+        }
+        write_stage_e01_products(producto, {"run_id": "T"}, paths)
+        return paths["psf_hybrid_residual_fits"]
+
+    def test_se_borra_el_residuo_de_una_corrida_anterior(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as d:
+            tmp = _P(d)
+            obsoleto = self._escribe(tmp, self._producto(True))
+            self.assertTrue(obsoleto.exists(), "la corrida CON hibrido debe escribirlo")
+            # Segunda corrida, ya sin hibrido: el fichero anterior no puede quedarse.
+            self.assertFalse(self._escribe(tmp, self._producto(False)).exists())
+
+    def test_sin_fichero_previo_no_revienta(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(self._escribe(_P(d), self._producto(False)).exists())

@@ -281,6 +281,196 @@ la forma por haberle dado a psfao una báscula distinta **no se materializa en e
 **Consecuencia operativa:** `psf_fit_weighting` se declara **por run, con la sonda hecha
 antes**, nunca en bloque. Para ROXs 42B b la respuesta medida es *no tocarlo*.
 
+### 5.4 · `e01_binary_companion` — cuando la primaria son DOS estrellas
+
+**Decisión aprobada el 2026-08-30.** La §1.4 obliga a preguntar antes de
+introducir cualquier forma distinta de las dos permitidas. **Esto no es una forma
+nueva** —siguen siendo Moffat elíptica y el perfil de `maoppy`— sino una **escena**
+nueva: la misma PSF aparece **dos veces** en la imagen.
+
+**Por qué.** ROXs 42B es una binaria cercana no resuelta: ρ = 51 ± 2 mas,
+PA = 148 ± 3° (Keck/NIRC2 **2022.621**, la misma época que estos datos; Inglis
+et al. 2026 da Ω = 150.0 ± 0.6° con i = 91.0 ± 0.4°), y Gaia DR3 le da
+RUWE = 2.063. A 25.42 mas/px son **2.006 px** — dentro del núcleo, así que
+**enmascararla no es una opción**: la máscara de la §1.3 se llevaría el núcleo
+por delante.
+
+Ajustar UNA PSF a DOS estrellas la mide **más ancha de lo que es**. Medido el
+2026-08-30 con control (`docs/2026-08-30_binaria_42b_sesga_la_apcorr.md`,
+`scripts/binaria_42b_probe.py`), 45 bins de 100 Å:
+
+| | ROXs 42B b | ROXs 12 b (control, estrella sola) |
+|---|---:|---:|
+| razón de flujos `f` | 0.108 ± 0.033 | 0.023 ± 0.020 |
+| azul → rojo | 0.056 → 0.115 | 0.027 → 0.011 |
+| **sesgo de la `apcorr`** | **+6.9 %** | +1.5 % (suelo del método) |
+
+El sesgo neto (~5.4 %) es del tamaño de las dos issues **bloqueantes** de energía
+encerrada de este objeto (+3.7 % y +7.1 % contra el umbral del 5 % de la §3.2), y
+al ser cromático toca el continuo.
+
+**Qué se permite, exactamente.** Una segunda componente **ligada**:
+
+1. **Misma forma.** Comparte los siete parámetros de la PSF — misma atmósfera,
+   mismo instrumento. No es una segunda fuente libre.
+2. **Posición fija**, de la astrometría publicada declarada en el config. No se
+   ajusta.
+3. **Un solo grado de libertad nuevo**: la razón de flujos `f`, acotada a [0, 1],
+   ajustada por bin y suavizada en λ como el resto (§3.3).
+
+Esto **no** relaja la §1.5: la secuencia sigue siendo fija y no hay iteración
+guiada por la métrica final.
+
+**Qué NO cambia, y es lo que hace el cambio contenido.** `psf_model.json` sigue
+siendo **la PSF de una fuente puntual**, ahora medida sin la secundaria dentro.
+Ningún consumidor cambia de semántica. Es deliberado: de los 20 módulos que lo
+consumen, la inyección de E4, la `apcorr` y el throughput necesitan **un punto**,
+no la imagen de la primaria; `psffit`, C1b y `optimal_psfsub` querrían la imagen
+de la primaria y **la siguen modelando como una sola estrella** — igual de mal que
+antes, ni peor. Ese es un segundo paso, con su propia medida y su propia decisión.
+
+**Dos imágenes de modelo, y no son intercambiables:**
+
+| | qué es | quién la usa |
+|---|---|---|
+| `evaluate_moffat_fit` / `recon_psf` | **una** componente | lo que se publica, la `apcorr`, la energía encerrada (V4) |
+| `evaluate_moffat_scene` / `recon` | **dos** componentes | contra lo que se miden los **residuos** (§3.4), porque es lo que el dato contiene |
+
+Confundirlas haría que el residuo de anillo **empeorase justo al mejorar el
+modelo**, porque dejaría la secundaria entera dentro del residuo.
+
+**Declaración en el config del run** (ausente = comportamiento anterior, bit a
+bit; ningún otro objeto se entera):
+
+```json
+"e01_binary_companion": {"sep_mas": 51.0, "pa_deg": 148.0},
+"e01_binary_companion_source": "Keck/NIRC2 2022.621; rho=51+-2 mas, PA=148+-3 deg; ..."
+```
+
+La conversión a píxeles usa `pixel_scale_arcsec` de `stage01c_qc.json` y **no
+tiene valor por defecto**: sin escala, para. El signo está verificado — la misma
+conversión da PA 270.4° para el compañero (271° publicado) y 237° para la fuente
+de campo cc1 (241.4°).
+
+**Verificado el 2026-08-30 antes de correr nada** (`scripts/binaria_verifica.py`,
+banda 7300–7800 Å, radio 9 px). Las tres comprobaciones, con el **mismo conjunto
+de píxeles** en todas las configuraciones:
+
+| comprobación | resultado |
+|---|---|
+| **control** (ROXs 12 b, estrella sola, misma geometría impuesta) | **f = 0.0043** contra 0.12 del objeto → **27.7×**. Pasa. |
+| **barrido de PA** (ρ fijo, posición no ajustada) | mínimo en **140°**, a **8°** del declarado — el punto contiguo de la rejilla de 20°. Fuera de 100–160° el ajuste manda `f` **a cero**. Pasa, y **respalda** la astrometría. |
+| **barrido de ρ** (PA fijo) | el coste **baja monótonamente** con la separación. **No concluyente.** |
+
+Sobre el tercero: el grueso de la mejora está en **tener** una segunda componente
+(−12 % de coste frente a no tenerla); pasar de 51 a 120 mas gana solo un 3 % más y
+`f` cae de 0.12 a 0.05. Es la degeneración clásica —una secundaria lejana y débil
+imita un halo algo distinto— y **es exactamente la razón de que la geometría se
+declare en vez de ajustarse**. El barrido tenía que comprobar que los datos no
+**contradicen** la astrometría; no lo hacen, y en PA la respaldan.
+
+**Y una trampa que la verificación destapó, corregida en el código.** El recorte
+sigma **se comía la secundaria**: en la primera iteración su residuo es grande, se
+descartaba, y las siguientes ya no la veían. Medido: eso inventaba **f = 0.073 en
+una estrella sola** (contra 0.004 sin recorte) y desplazaba el mínimo del barrido
+**48°**. La secundaria es **señal, no un valor atípico**, así que los píxeles donde
+viven las dos componentes quedan **exentos del recorte** (`fit_moffat_image`, radio
+2×separación). Sin binaria declarada el recorte es el de siempre.
+
+Dos avisos de método que costaron una vuelta cada uno:
+
+- **`chi2r` no compara dos ajustes**: normaliza por la σ robusta de su propio
+  residuo, así que sube cuando el ajuste mejora. Usarlo en el barrido daba el
+  mínimo **32° fuera**.
+- **El recorte cambia qué píxeles entran**, así que dos configuraciones con
+  recortes distintos no son comparables por su residuo. El barrido lo desactiva
+  en todas.
+
+**Dos trampas del camino psfao, encontradas revisando el diff y corregidas.**
+Las dos pasaban los tests sintéticos y fallaban sobre el cubo real:
+
+1. **El modelo de `maoppy` es DISCONTINUO en desplazamiento cero.** Con `dx`
+   exactamente 0 salta el desplazamiento por FFT; con `dx = 1e-10` ya lo aplica, y
+   **la imagen cambia un 4.6 % del pico**. El jacobiano numérico del primer paso
+   mide esa discontinuidad —derivada aparente ~1e10, siete órdenes por encima de
+   la de los parámetros de la PSD—, la región de confianza se colapsa y el ajuste
+   **termina en `nfev = 2` sin moverse**, con un coste 16× peor que el de una
+   componente. `maoppy.psffit` sobrevive porque su primer paso la saca de cero;
+   con un parámetro más, no. El arranque del desplazamiento va en la rama
+   continua.
+
+2. **Una columna espuria en el CSV de todos los runs.** El diccionario de errores
+   incluía `flux_ratio` siempre, y `_row_from_fit` lo vuelca a columnas `*_err`:
+   un run **sin** binaria ganaba una columna vacía. Rompía la garantía de que sin
+   el knob no cambia nada, y en silencio.
+
+Con la primera corregida, sobre el cubo real el ajuste de dos componentes mejora
+el coste un **6–8 %** en todas las bandas y **`f` no depende de su valor inicial**
+(arrancar en 0 o en 0.4 da el mismo resultado), que es la señal de un mínimo bien
+planteado. `f ≈ 0.12` en 5300 y 7200 Å y **0.24 en 8800 Å**, coherente con la
+sonda Moffat.
+
+**El QC de TODOS los runs gana una clave `binary_companion`**, `null` donde no
+aplica. Es deliberado —declarar «esto se consideró y no aplica» es mejor que
+omitirlo, que es el agujero que ya tiene la máscara de la fuente de campo— pero
+significa que re-correr C1 en otro objeto produce un QC distinto, aunque ningún
+número cambie.
+
+**La segunda componente se ajusta SOLO en psfao** (`e01_binary_forms`), y no por
+gusto. Medido el 2026-08-31 sobre el cubo real: la rama Moffat ajusta a
+`psf_fit_radius_px` = 78 px **con recorte sigma**, que quita el núcleo dominante
+para que la Moffat pueda describir el **halo**. Sin núcleo, la razón de flujos no
+está constreñida — `f` se pega a su cota (1.0000 a 5300 Å, 0.8605 a 7200) o se
+colapsa a 0 (8800). Y forzar el núcleo dentro del ajuste **tampoco vale**: se
+probó eximiéndolo del recorte y la Moffat colapsa al núcleo (`fwhm` 9.87 → 2.78,
+`chi2r` 1.25 → **2246**, residuo de anillo 6.88 % → **813 %**).
+
+Esa avería **llegó hasta un número publicado**, y conviene saber por dónde: el
+`fwhm` mediano de Moffat fija la escala de suavizado del híbrido (§3.5); con el
+`fwhm` roto la escala pasó de 19.7 a 5.55 px, el guarda de seguridad del híbrido
+—«solo aplícalo si mejora el anillo»— pasó a cumplirse, el híbrido **se activó**
+y `companion_ring_metric` bajó de 10.00 a 7.98 %. Ese número es el que D2 propaga
+como `sys_psf`. **El anillo de psfao no había mejorado: 10.049 → 9.999.**
+
+**Consecuencia que hay que declarar**: en un objeto con binaria,
+`model_comparison` **deja de comparar peras con peras** — psfao ve la segunda
+componente y Moffat no. En ROXs 42B b no elige nada, porque la forma viene
+forzada por `e01_psf_form`; en un run que la eligiera por el residuo de anillo,
+hay que mirarlo antes. El QC lo declara en `binary_companion.fitted_in_forms`.
+
+**El centroide compara FOTOCENTROS, no la primaria.** `centroid_vs_b3` enfrenta
+la posición ajustada por bin contra el track cromático de B3. Con binaria, C1
+ajusta la **primaria** y B3 traquea el **fotocentro del par sin resolver**: los
+dos difieren por `f/(1+f) × separación` **por construcción**, y compararlos sin
+corregir dispara una issue **bloqueante sobre un modelo correcto**. Medido el
+2026-09-01 comparando las dos corridas: el centro se desplazó **0.2187 px** con
+la componente perpendicular en **0.003 px** —o sea enteramente sobre el eje de la
+binaria— contra los 0.2313 px que predice la fórmula; y la métrica pasa de
+**0.3233 a 0.2836 px**, bajo el límite de 0.3, al reconstruir el fotocentro con
+la `f` de cada bin. Una puerta que salta cuando no debe acaba ignorada.
+
+**Y el residuo del híbrido se borra cuando el híbrido no aplica.** El 2026-08-31
+una corrida lo activó y escribió `psf_hybrid_residual.fits`; la siguiente, ya
+corregida, no lo aplicó — y el fichero de la corrida **descartada** se quedó,
+fechado a las 04:41 mientras el resto del run era de las 20:35. Dos notebooks
+debug que se anclan contra él fallaron por comparar contra otra cosecha. Es el
+agujero que `stage_vintage` vigila **entre** etapas, ocurriendo **dentro** de una.
+
+**`flux_ratio` viaja al CSV de psfao.** Se calculaba, iba en las filas y se
+tiraba al escribir —`_write_psfao_csv` fija columnas—, así que solo sobrevivía el
+resumen del QC. La cantidad de la que depende todo el cambio tiene que ser
+auditable bin a bin, y la corrección del centroide la necesita.
+
+**Protocolo de parada** (§9) para este camino:
+
+- `f` inestable bin a bin y sin admitir suavizado → es ruido, no una secundaria.
+- El barrido de ρ y PA (fijos en cada punto, **no** ajustados) no pone el mínimo
+  de χ² cerca del valor publicado → nuestros datos no sostienen la binaria ahí.
+- El control de ROXs 12 b da `f` muy por encima de su suelo de 0.02 → el método
+  está inventando secundarias.
+
+---
+
 ## 6. Esquema de `stage_e01_qc.json`
 
 ```json
@@ -290,6 +480,7 @@ antes**, nunca en bloque. Para ROXs 42B b la respuesta medida es *no tocarlo*.
   "input": {"cube": "...", "sha256": "...", "positions_from": "stage01c_qc.json"},
   "binning": {"bin_A": 100, "n_bins": 0, "excluded_windows_A": [[5780, 6050]],
                "bins_interpolated": []},
+  "binary_companion": null,
   "masks": {"companion_radius_px": 0, "chromatic_tracking": false,
              "core_mask_px": 0, "saturation_detected": false},
   "fit": {"form_chosen": "moffat|maoppy", "background_mode": "fixed_external",
