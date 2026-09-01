@@ -438,6 +438,29 @@ componente y Moffat no. En ROXs 42B b no elige nada, porque la forma viene
 forzada por `e01_psf_form`; en un run que la eligiera por el residuo de anillo,
 hay que mirarlo antes. El QC lo declara en `binary_companion.fitted_in_forms`.
 
+**El centroide compara FOTOCENTROS, no la primaria.** `centroid_vs_b3` enfrenta
+la posición ajustada por bin contra el track cromático de B3. Con binaria, C1
+ajusta la **primaria** y B3 traquea el **fotocentro del par sin resolver**: los
+dos difieren por `f/(1+f) × separación` **por construcción**, y compararlos sin
+corregir dispara una issue **bloqueante sobre un modelo correcto**. Medido el
+2026-09-01 comparando las dos corridas: el centro se desplazó **0.2187 px** con
+la componente perpendicular en **0.003 px** —o sea enteramente sobre el eje de la
+binaria— contra los 0.2313 px que predice la fórmula; y la métrica pasa de
+**0.3233 a 0.2836 px**, bajo el límite de 0.3, al reconstruir el fotocentro con
+la `f` de cada bin. Una puerta que salta cuando no debe acaba ignorada.
+
+**Y el residuo del híbrido se borra cuando el híbrido no aplica.** El 2026-08-31
+una corrida lo activó y escribió `psf_hybrid_residual.fits`; la siguiente, ya
+corregida, no lo aplicó — y el fichero de la corrida **descartada** se quedó,
+fechado a las 04:41 mientras el resto del run era de las 20:35. Dos notebooks
+debug que se anclan contra él fallaron por comparar contra otra cosecha. Es el
+agujero que `stage_vintage` vigila **entre** etapas, ocurriendo **dentro** de una.
+
+**`flux_ratio` viaja al CSV de psfao.** Se calculaba, iba en las filas y se
+tiraba al escribir —`_write_psfao_csv` fija columnas—, así que solo sobrevivía el
+resumen del QC. La cantidad de la que depende todo el cambio tiene que ser
+auditable bin a bin, y la corrección del centroide la necesita.
+
 **Protocolo de parada** (§9) para este camino:
 
 - `f` inestable bin a bin y sin admitir suavizado → es ruido, no una secundaria.

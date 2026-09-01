@@ -429,3 +429,165 @@ class SoloDondeSePuedeMedir(unittest.TestCase):
 
         fuente = inspect.getsource(psf.fit_moffat_image)
         self.assertNotIn("protegido", fuente)
+
+
+class ElCentroideComparaFotocentros(unittest.TestCase):
+    """B3 traquea el FOTOCENTRO del par; C1 ajusta la PRIMARIA.
+
+    Sin corregir, la comprobacion `centroid_vs_b3` dispara una issue BLOQUEANTE
+    sobre un modelo correcto: los dos puntos difieren por `f/(1+f) x separacion`
+    por construccion. Medido el 2026-09-01 en ROXs 42B b comparando las dos
+    corridas: desplazamiento 0.2187 px con la perpendicular en 0.003 -o sea
+    enteramente sobre el eje de la binaria- contra 0.2313 px predichos; y la
+    metrica pasa de 0.3233 a 0.2836 px al reconstruir el fotocentro.
+
+    Una puerta que salta cuando no debe acaba ignorada, que es justo el modo de
+    fallo que este repo lleva documentando.
+    """
+
+    SEP = float(np.hypot(*OFFSET))
+
+    def _track(self, y, x):
+        # El track de B3: el fotocentro, constante en lambda para el test.
+        return np.array([[4000.0, y, x], [10000.0, y, x]], dtype=float)
+
+    def _filas(self, cy, cx, f):
+        # Filas psfao: `dy`/`dx` son offsets respecto al centro de la imagen.
+        return [{"lambda_A": 6000.0, "dy": 0.0, "dx": 0.0, "status": "ok",
+                 "flux_ratio": f}], (2 * cy, 2 * cx)
+
+    def test_sin_corregir_el_desfase_es_el_del_fotocentro(self):
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        f = 0.13
+        peso = f / (1 + f)
+        cy = cx = 50
+        filas, shape = self._filas(cy, cx, f)
+        # B3 ve el fotocentro: la primaria mas su parte del desplazamiento.
+        track = self._track(cy + peso * OFFSET[0], cx + peso * OFFSET[1])
+        d = _centroid_vs_b3(filas, "psfao", track, image_shape=shape)
+        self.assertAlmostEqual(d, peso * self.SEP, places=6)
+
+    def test_reconstruyendo_el_fotocentro_el_desfase_desaparece(self):
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        f = 0.13
+        peso = f / (1 + f)
+        cy = cx = 50
+        filas, shape = self._filas(cy, cx, f)
+        track = self._track(cy + peso * OFFSET[0], cx + peso * OFFSET[1])
+        d = _centroid_vs_b3(filas, "psfao", track, image_shape=shape,
+                            binary_offset_yx=OFFSET)
+        self.assertAlmostEqual(d, 0.0, places=6)
+
+    def test_sin_binaria_declarada_no_se_toca_nada(self):
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        cy = cx = 50
+        filas = [{"lambda_A": 6000.0, "dy": 0.4, "dx": 0.0, "status": "ok"}]
+        track = self._track(cy, cx)
+        self.assertAlmostEqual(
+            _centroid_vs_b3(filas, "psfao", track, image_shape=(2 * cy, 2 * cx)), 0.4, places=6
+        )
+
+    def test_una_fila_sin_razon_de_flujos_no_se_corrige(self):
+        # Robustez: filas viejas, o bins donde `f` no se midio.
+        from musepipe.stages.stage_e01_psf import _centroid_vs_b3
+
+        cy = cx = 50
+        for valor in (None, "", float("nan"), 0.0):
+            with self.subTest(valor=valor):
+                filas = [{"lambda_A": 6000.0, "dy": 0.4, "dx": 0.0, "status": "ok",
+                          "flux_ratio": valor}]
+                d = _centroid_vs_b3(filas, "psfao", self._track(cy, cx),
+                                    image_shape=(2 * cy, 2 * cx), binary_offset_yx=OFFSET)
+                self.assertAlmostEqual(d, 0.4, places=6)
+
+
+class LaRazonDeFlujosLlegaAlCSV(unittest.TestCase):
+    """Se calculaba y se tiraba al escribir: `_write_psfao_csv` fija columnas."""
+
+    def test_el_csv_de_psfao_lleva_la_columna(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        from musepipe.stages.stage_e01_psf import _write_psfao_csv
+
+        with tempfile.TemporaryDirectory() as d:
+            p = _P(d) / "psfao.csv"
+            _write_psfao_csv(p, [{"lambda_A": 6000.0, "flux_ratio": 0.1296,
+                                  "flux_ratio_err": 0.004}])
+            cabecera, fila = p.read_text().splitlines()[:2]
+            self.assertIn("flux_ratio", cabecera.split(","))
+            i = cabecera.split(",").index("flux_ratio")
+            self.assertEqual(fila.split(",")[i], "0.1296")
+
+    def test_sin_binaria_la_columna_queda_vacia_y_no_rompe(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        from musepipe.stages.stage_e01_psf import _write_psfao_csv
+
+        with tempfile.TemporaryDirectory() as d:
+            p = _P(d) / "psfao.csv"
+            _write_psfao_csv(p, [{"lambda_A": 6000.0}])
+            cabecera, fila = p.read_text().splitlines()[:2]
+            i = cabecera.split(",").index("flux_ratio")
+            self.assertEqual(fila.split(",")[i], "")
+
+
+class ElHibridoNoDejaProductoObsoleto(unittest.TestCase):
+    """Cuando el hibrido deja de aplicarse, su residuo NO puede sobrevivir.
+
+    Paso el 2026-08-31 en ROXs 42B b: una corrida rota activo el hibrido y
+    escribio `psf_hybrid_residual.fits`; la corrida siguiente, ya corregida, NO
+    lo aplico -- y el fichero de la corrida DESCARTADA se quedo, fechado a las
+    04:41 mientras el resto del run era de las 20:35. Dos notebooks debug que se
+    anclan contra el fallaron por comparar contra otra cosecha.
+
+    Es el agujero que `stage_vintage` vigila ENTRE etapas, ocurriendo dentro de
+    una sola.
+    """
+
+    def _producto(self, con_hibrido):
+        from musepipe.stages.stage_e01_psf import StageE01Product
+
+        return StageE01Product(
+            fit_rows=[], psf_model={"form": "moffat"}, qc={},
+            hybrid_profiles=(np.zeros((2, 3), dtype=np.float32) if con_hibrido else None),
+            hybrid_radii=(np.arange(3, dtype=np.float32) if con_hibrido else None),
+        )
+
+    def _escribe(self, tmp, producto):
+        from musepipe.stages.stage_e01_psf import write_stage_e01_products
+
+        import types
+
+        paths = {
+            "paths": types.SimpleNamespace(ensure_base_dirs=lambda: None, stage_dir=tmp),
+            "plot_dir": tmp / "plots",
+            "stage_e01_params_csv": tmp / "params.csv",
+            "psf_model_json": tmp / "psf_model.json",
+            "psf_hybrid_residual_fits": tmp / "psf_hybrid_residual.fits",
+            "stage_e01_qc_json": tmp / "qc.json",
+        }
+        write_stage_e01_products(producto, {"run_id": "T"}, paths)
+        return paths["psf_hybrid_residual_fits"]
+
+    def test_se_borra_el_residuo_de_una_corrida_anterior(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as d:
+            tmp = _P(d)
+            obsoleto = self._escribe(tmp, self._producto(True))
+            self.assertTrue(obsoleto.exists(), "la corrida CON hibrido debe escribirlo")
+            # Segunda corrida, ya sin hibrido: el fichero anterior no puede quedarse.
+            self.assertFalse(self._escribe(tmp, self._producto(False)).exists())
+
+    def test_sin_fichero_previo_no_revienta(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(self._escribe(_P(d), self._producto(False)).exists())

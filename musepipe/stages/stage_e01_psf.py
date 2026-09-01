@@ -287,7 +287,36 @@ def _b3_chromatic_track(path):
     return np.asarray(rows, dtype=np.float64), "used"
 
 
-def _centroid_vs_b3(rows, form, track, image_shape=None):
+def _fotocentro(y, x, row, binary_offset_yx):
+    """Del centro AJUSTADO al fotocentro, que es lo que traquea B3.
+
+    Con una segunda componente ligada, C1 ajusta la posicion de la **primaria**;
+    el track cromatico de B3 mide el **fotocentro del par sin resolver**. Los dos
+    difieren por `f/(1+f) x separacion`, hacia la secundaria, y compararlos sin
+    corregir hace saltar una issue bloqueante sobre un modelo correcto.
+
+    Medido el 2026-09-01 en ROXs 42B b comparando las dos corridas: el centro
+    ajustado se desplazo **0.2187 px** con la componente perpendicular en
+    **0.003 px** -o sea enteramente a lo largo del eje de la binaria- contra los
+    0.2313 px que predice la formula. Y la metrica pasa de **0.3233 a 0.2836 px**
+    -por debajo del limite de 0.3- al reconstruir el fotocentro.
+
+    Sin segunda componente devuelve la posicion tal cual.
+    """
+
+    if binary_offset_yx is None:
+        return y, x
+    try:
+        f = float(row.get("flux_ratio"))
+    except (TypeError, ValueError):
+        return y, x
+    if not np.isfinite(f) or f <= 0:
+        return y, x
+    peso = f / (1.0 + f)
+    return y + peso * float(binary_offset_yx[0]), x + peso * float(binary_offset_yx[1])
+
+
+def _centroid_vs_b3(rows, form, track, image_shape=None, binary_offset_yx=None):
     if track is None:
         return None
     wave_ref, y_ref, x_ref = track.T
@@ -296,12 +325,15 @@ def _centroid_vs_b3(rows, form, track, image_shape=None):
             raise ValueError("image_shape is required for Psfao absolute centroids.")
         center_y, center_x = image_shape[0] // 2, image_shape[1] // 2
         values = [
-            (float(row["lambda_A"]), center_y + float(row["dy"]), center_x + float(row["dx"]))
+            (float(row["lambda_A"]),
+             *_fotocentro(center_y + float(row["dy"]), center_x + float(row["dx"]),
+                          row, binary_offset_yx))
             for row in rows if row.get("status") == "ok"
         ]
     else:
         values = [
-            (float(row["wave_center_A"]), float(row["y0"]), float(row["x0"]))
+            (float(row["wave_center_A"]),
+             *_fotocentro(float(row["y0"]), float(row["x0"]), row, binary_offset_yx))
             for row in rows if row.get("success", True)
         ]
     if not values:
@@ -1040,7 +1072,8 @@ def compute_stage_e01_products(config) -> StageE01Product:
         waves_rt = np.linspace(rows[0]["wave_center_A"], rows[-1]["wave_center_A"], min(10, len(rows)))
         ring_after = np.asarray(after_pcts, dtype=np.float64) if hybrid_applied else moffat_ring
         p90_values = np.asarray(after_p90s, dtype=np.float64) if hybrid_applied else moffat_p90
-        centroid_diff = _centroid_vs_b3(rows, "moffat", b3_track)
+        centroid_diff = _centroid_vs_b3(rows, "moffat", b3_track,
+                                        binary_offset_yx=cfg.get("e01_binary_offset_yx_px"))
         bins_interpolated = []
         for lo, hi in excluded:
             if float(hi) >= rows[0]["wave_center_A"] and float(lo) <= rows[-1]["wave_center_A"]:
@@ -1112,7 +1145,8 @@ def compute_stage_e01_products(config) -> StageE01Product:
             dtype=np.float64,
         )
         ok_rows = [r for r in psfao_rows if r.get("status") == "ok"]
-        centroid_diff = _centroid_vs_b3(ok_rows, "psfao", b3_track, image_shape=p_images[0].shape)
+        centroid_diff = _centroid_vs_b3(ok_rows, "psfao", b3_track, image_shape=p_images[0].shape,
+                                        binary_offset_yx=cfg.get("e01_binary_offset_yx_px"))
         bins_interpolated = [[float(lo), float(hi)] for lo, hi in inp["bad"]]
         binning = {
             "bin_A": float(inp["bin_A"]),
@@ -1341,6 +1375,15 @@ def write_stage_e01_products(product: StageE01Product, config, paths):
                 fits.ImageHDU(product.hybrid_radii.astype(np.float32), name="RADIUS_PX"),
             ]
         ).writeto(paths["psf_hybrid_residual_fits"], overwrite=True)
+    else:
+        # Si el hibrido NO se aplica, el residuo de una corrida ANTERIOR no puede
+        # quedarse: describe un modelo que ya no existe y quien lo lea estara
+        # mirando otra cosecha. Paso el 2026-08-31 en ROXs 42B b -el fichero
+        # quedo fechado a las 04:41, de una corrida descartada, mientras el resto
+        # del run era de las 20:35- y tumbo dos notebooks debug que se anclan
+        # contra el. Es el agujero que `stage_vintage` vigila ENTRE etapas,
+        # dentro de una sola.
+        paths["psf_hybrid_residual_fits"].unlink(missing_ok=True)
     if bool(config.get("psf_save_plots", config.get("save_intermediate_plots", False))):
         _write_summary_plot(product, paths)
         product.qc["figures"] = {"summary": str(Path("plots") / "stage_e01" / paths["summary_plot"].name)}
@@ -1403,7 +1446,15 @@ def _write_psfao_csv(path, rows):
     cols = ["lambda_A", "samp", "amp", "bck", "dy", "dx", "ring_residual_pct",
             "ring_residual_pct_canonical", "ring_residual_p90_pct_canonical",
             *PSFAO_PARAM_NAMES, *(f"{name}_err" for name in PSFAO_PARAM_NAMES),
-            "dy_err", "dx_err", "ring_residual_pct_after_hybrid_canonical",
+            "dy_err", "dx_err",
+            # La razon de flujos de la segunda componente ligada. Se calculaba,
+            # viajaba en las filas y **se tiraba al escribir**: solo sobrevivia
+            # el resumen del QC. La cantidad de la que depende todo el cambio de
+            # la binaria no puede ser inauditable por bin -y `_centroid_vs_b3` la
+            # necesita para reconstruir el fotocentro-. Vacia donde no aplique,
+            # igual que las `*_err`.
+            "flux_ratio", "flux_ratio_err",
+            "ring_residual_pct_after_hybrid_canonical",
             "ring_residual_p90_pct_after_hybrid_canonical", "optimizer_success",
             "optimizer_status", "optimizer_message", "optimizer_nfev", "optimizer_cost",
             "optimizer_stalled_at_initial", "start_vector", "status"]
