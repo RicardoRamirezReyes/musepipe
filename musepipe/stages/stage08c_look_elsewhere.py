@@ -60,6 +60,96 @@ def empirical_fap(observed, null_values):
     return float((exceedances + 1) / (values.size + 1))
 
 
+#: familias de cola admitidas para `parametric_fap`. Gumbel es la de dos
+#: parametros: con n~33 la forma del GEV no esta constrenida y su extremo
+#: superior finito devuelve p=0 exacto, que no es evidencia sino exceso de
+#: confianza del ajuste (medido 2026-09-01, docs/2026-09-02_criterio_fap_opciones.md).
+PARAMETRIC_FAP_FAMILIES = ("gumbel",)
+
+
+def _finite_or_none_local(value):
+    v = float(value)
+    return v if np.isfinite(v) else None
+
+
+def parametric_fap(observed, null_values, *, family="gumbel", n_boot=0, seed=None):
+    """FAP por ajuste de una cola a la nula, en vez de contar excedencias.
+
+    `empirical_fap` no puede bajar de `1/(n+1)`: con 33 controles su suelo es
+    0.029, por encima del criterio de deteccion de 0.01, asi que el criterio es
+    inalcanzable por construccion y ningun dato lo puede pasar. Anadir controles
+    no lo arregla —a la separacion de la companera no caben 100 posiciones
+    independientes— asi que la salida es modelar la cola.
+
+    Devuelve siempre el diagnostico junto al numero, porque el numero solo vale
+    con el: `ks_p` dice si la familia describe la nula, y `extrapolation_sd`
+    cuanto se extrapola mas alla del mayor control. Una FAP de 1e-8 obtenida
+    extrapolando 12 sigma sobre 33 puntos es un orden de magnitud, no una medida.
+    """
+
+    from scipy import stats
+
+    if str(family) not in PARAMETRIC_FAP_FAMILIES:
+        raise ValueError(
+            f"familia de cola desconocida: {family!r}. Admitidas: "
+            f"{PARAMETRIC_FAP_FAMILIES}. Anadir una exige declararla en la spec "
+            "de E1 y medir su bondad de ajuste, no solo nombrarla."
+        )
+    values = np.asarray(null_values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    obs = float(observed)
+    if values.size < 8 or not np.isfinite(obs):
+        # Con menos de 8 puntos el ajuste de dos parametros no significa nada.
+        return {"fap": float("nan"), "family": str(family), "n_null": int(values.size),
+                "loc": None, "scale": None, "ks_p": None, "extrapolation_sd": None,
+                "ci95": None, "reason": "insufficient_null_sample"}
+
+    sd = float(np.std(values, ddof=1))
+    if not np.isfinite(sd) or sd <= 0:
+        # Una nula sin dispersion no sostiene ningun ajuste de cola: no es un
+        # caso raro que haya que rodear, es que no hay nada que ajustar. Pasa en
+        # los tests con controles de ruido cero y pasaria en real si los
+        # controles salieran identicos, que ya seria el problema.
+        return {"fap": float("nan"), "family": str(family), "n_null": int(values.size),
+                "loc": None, "scale": None, "ks_p": None, "extrapolation_sd": None,
+                "ci95": None, "reason": "degenerate_null_zero_spread"}
+
+    try:
+        loc, scale = stats.gumbel_r.fit(values)
+        fap = float(stats.gumbel_r.sf(obs, loc, scale))
+        ks_p = float(stats.kstest(values, "gumbel_r", args=(loc, scale)).pvalue)
+    except (ValueError, TypeError, FloatingPointError) as exc:
+        return {"fap": float("nan"), "family": str(family), "n_null": int(values.size),
+                "loc": None, "scale": None, "ks_p": None, "extrapolation_sd": None,
+                "ci95": None, "reason": f"fit_failed: {type(exc).__name__}"}
+    if not np.isfinite(fap) or not np.isfinite(scale) or scale <= 0:
+        return {"fap": float("nan"), "family": str(family), "n_null": int(values.size),
+                "loc": float(loc), "scale": _finite_or_none_local(scale), "ks_p": ks_p,
+                "extrapolation_sd": None, "ci95": None, "reason": "degenerate_fit"}
+    extrap = float((obs - float(np.max(values))) / sd) if sd > 0 else None
+
+    ci = None
+    if int(n_boot) > 0:
+        rng = np.random.default_rng(seed)
+        muestras = []
+        for _ in range(int(n_boot)):
+            resample = rng.choice(values, size=values.size, replace=True)
+            try:
+                l2, s2 = stats.gumbel_r.fit(resample)
+            except Exception:
+                continue
+            v = float(stats.gumbel_r.sf(obs, l2, s2))
+            if np.isfinite(v):
+                muestras.append(v)
+        if muestras:
+            lo, hi = np.percentile(muestras, [2.5, 97.5])
+            ci = [float(lo), float(hi)]
+
+    return {"fap": fap, "family": str(family), "n_null": int(values.size),
+            "loc": float(loc), "scale": float(scale), "ks_p": ks_p,
+            "extrapolation_sd": extrap, "ci95": ci, "reason": None}
+
+
 def empirical_threshold_rows(null_values, fap_levels):
     """Return order-statistic thresholds when the requested FAP is resolvable."""
 
