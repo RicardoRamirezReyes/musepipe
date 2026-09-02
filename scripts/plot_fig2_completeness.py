@@ -72,6 +72,13 @@ def main(argv=None) -> int:
     filas = leer_curvas(in_dir / "fig2_curvas.csv")
     proc = json.loads((in_dir / "fig2_procedencia.json").read_text(encoding="utf-8"))
     comp = proc["comparacion"]
+    # El p que se cita sale de las posiciones DISJUNTAS. E4 reparte las posiciones
+    # uniformemente en el anillo y con `h04_n_control_positions` alto quedan mas
+    # juntas que el radio de su ventana: 55 posiciones a 8.1 px con ventanas de
+    # r=14 comparten casi todos sus pixeles, asi que permutar 55 unidades cuando
+    # hay 13 deja el p sin calibrar (1.0e-4 nominal contra 1.05e-2 real).
+    ind_json = in_dir / "fig2_independientes.json"
+    ind = json.loads(ind_json.read_text(encoding="utf-8")) if ind_json.exists() else None
     metodos = [m.strip() for m in args.metodos.split(",") if m.strip()]
     # los runs salen de los propios productos, en su orden de aparicion
     runs = list(dict.fromkeys(r["run"] for r in filas))
@@ -99,16 +106,20 @@ def main(argv=None) -> int:
                     label=f"{etiqueta[run]} ({n_pos} positions)")
 
         c = comp[metodo][args.exclusion]
-        # SNR50: el estadistico de la figura, marcado en cada curva.
+        cita = (ind["comparacion"][metodo]["independientes"]
+                if ind and metodo in ind.get("comparacion", {}) else c)
+        # Las verticales salen del MISMO conjunto que el titulo: si el numero
+        # citado es el de las disjuntas, la marca tiene que estar donde el numero.
         for run, key in zip(runs, ("snr50_a", "snr50_b")):
-            ax.axvline(c[key], color=color[run], linestyle=":", linewidth=1.2)
+            ax.axvline(cita[key], color=color[run], linestyle=":", linewidth=1.2)
         ax.axhline(0.5, color="0.55", linestyle="--", linewidth=0.9)
-
-        p = c["p"]
-        p_txt = "$p < 10^{-4}$" if p <= 1e-4 else f"$p = {p:.2f}$"
+        p = cita["p"]
+        p_txt = "$p < 10^{-4}$" if p <= 1e-4 else f"$p = {p:.3f}$"
+        n_ind = cita.get("n_posiciones")
+        sufijo = (f"\nfrom {n_ind[0]}+{n_ind[1]} non-overlapping positions" if n_ind else "")
         ax.set_title(f"{metodo}\n"
-                     f"SNR$_{{50}}$: {c['snr50_a']:.2f} vs {c['snr50_b']:.2f}  "
-                     f"($\\times${c['razon']:.2f}, {p_txt})", fontsize=10)
+                     f"SNR$_{{50}}$: {cita['snr50_a']:.2f} vs {cita['snr50_b']:.2f}  "
+                     f"($\\times${cita['razon']:.2f}, {p_txt}){sufijo}", fontsize=10)
         ax.set_xlabel("Injected S/N")
         ax.set_xlim(0, 3.1)
         ax.set_ylim(-0.03, 1.03)
@@ -120,11 +131,19 @@ def main(argv=None) -> int:
     tag = proc["procedencia"].get("tag") or proc["procedencia"]["commit_corto"]
     fig.suptitle("Injection\u2013recovery completeness: both companions, "
                  "identical configuration", fontsize=12)
-    fig.text(0.99, 0.01,
-             f"{tag} · seed {proc['semilla']} · "
-             f"{proc['n_boot']} bootstrap / {proc['n_perm']} permutations · "
-             f"exclusion rule: {EXCL_EN[args.exclusion]}",
-             ha="right", va="bottom", fontsize=6.5, color="0.35")
+    pie = (f"{tag} · seed {proc['semilla']} · "
+           f"{proc['n_boot']} bootstrap / {proc['n_perm']} permutations · "
+           f"exclusion rule: {EXCL_EN[args.exclusion]}")
+    if ind:
+        # El p nominal se publica tambien: es trazabilidad, no el numero a citar.
+        nom = {m: ind["comparacion"][m]["todas"] for m in ind["comparacion"]}
+        pie += ("\ncurves use all positions; p and SNR$_{50}$ in the titles use only "
+                f"positions $\\geq${ind['separacion_minima_px']:.0f} px apart "
+                "(non-overlapping windows). Over all "
+                f"{'+'.join(str(v['n_posiciones'][i]) for i, v in enumerate(list(nom.values())[:1] * 2))}"
+                " nominal positions the same test gives "
+                + ", ".join(f"{m}: p={v['p']:.4f}" for m, v in nom.items()) + ".")
+    fig.text(0.99, 0.005, pie, ha="right", va="bottom", fontsize=6.2, color="0.35")
     fig.tight_layout(rect=(0, 0.03, 1, 0.94))
 
     out = Path(args.out) if args.out else in_dir / "fig2_completitud.pdf"
