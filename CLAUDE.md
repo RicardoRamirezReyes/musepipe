@@ -73,6 +73,22 @@ the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) an
   extraction methods**: C3 emits two variants as separate products, so `METHOD_ORDER` is
   `aperture`, `optimal_ls` (background = 04b local surface), `optimal_psfsub` (background =
   C1's primary PSF model), `psffit`, `sgf`, `lpm`
+- **C1 fits two bound components when the primary is an unresolved binary**
+  (declared by `e01_binary_companion`, `e01_binary_forms` says in which PSF forms it is
+  fitted). ROXs 42B is binary at 51 ± 2 mas, PA 148 ± 3° (Keck/NIRC2
+  2022.621, the same epoch as these data; Gaia DR3 RUWE 2.063) = **2.02 px, inside the
+  core**, so the spec's masking does not apply — it would take the core with it. Both
+  components share the PSF shape and the separation is fixed by the published astrometry,
+  so the fit gains **one** degree of freedom, the flux ratio (`f` = 0.130 ± 0.047 over 43
+  bins, chromatic: 0.084 blue → 0.169 red; on a genuinely single star the same fit returns
+  0.004 — that control is what gives the number meaning). **Two model images, not
+  interchangeable**: `psf_model.json` stays the PSF of a **single point source** (what
+  `apcorr`, E4's injection and the throughput need), while residuals are measured against
+  the two-component **scene** (what the data contain). Fitted **only in psfao**: in the
+  Moffat branch, at radius 78 px and with sigma-clipping, `f` is unconstrained (pins at its
+  bound or collapses to 0), so in a binary host `model_comparison` **stops comparing like
+  with like**. Deliberately out of scope: primary subtraction in `psffit`, C1b and
+  `optimal_psfsub` still model the primary as one star.
 - **C7** (optional, off the chain) extracts the companion **in each exposure with its own
   PSF** and combines the **measurements**, instead of combining cubes and extracting once.
   It is deliberately **not** in `METHOD_ORDER` — a new method there becomes mandatory for
@@ -94,6 +110,14 @@ the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) an
 - **G0–G5** real-cube execution → extraction validation → line measurement → physical
   inference → source classification → synthesis
 - **S0/S1** wavelength-solution and Hα maps (side diagnostics)
+
+**F1's gate stops at E3.** `STAGE_DEFINITIONS` in `musepipe/report.py` lists A1→E3 and
+nothing from block G, so a `blocking` open issue raised by a G stage never reaches
+`report/run_summary.json`. Two are live in **both** runs as of 2026-09-01: G2's
+`halpha_reconciliation_v3` reports `consistent: false` (G2 says `detected`/`marginal`, E1
+says `non_detection`), and E1's FAP criterion (< 0.01) is unreachable with 33 controls,
+whose resolution floor is 1/34 = 0.029. Neither is a code bug to fix silently — both are
+frozen scientific decisions.
 
 `musepipe/stage_registry.py` is the machine-readable source of truth for this chain: for
 each stage, its QC path (plus `qc_aliases` for the other names that QC has had: B2 wrote

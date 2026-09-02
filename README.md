@@ -1,9 +1,24 @@
 # MUSE accretion pipeline
 
-> **Ultima modificacion: 2026-08-01.** Objetos con cadena completa: **ROXs 12 b**
-> (A1→G4, con F1 y el bloque G pendientes de re-correr tras el cambio de convencion
-> de flujo) y **ROXs 42B b** (A1→G4 al dia; A2, B2, E1b, S0, S1 y G5 sin ejecutar).
-> Estado detallado y pendiente vigente: `docs/2026-08-01_handoff.md`.
+> **Ultima modificacion: 2026-09-01.** Los dos objetos tienen la cadena A1→G4
+> corrida y con F1 fresco: **ROXs 12 b** (run `ROXs12b_realigned`, F1 del
+> 2026-08-29) y **ROXs 42B b** (run `ROXs42Bb_realigned`, F1 del 2026-08-31).
+> Ambos runs cierran en **rojo** en la puerta F1, con las bloqueantes conocidas
+> en C1 (anillo y energia encerrada) y C2 (STAT de A4/M5 y la `apcorr`
+> *wings-intact*). La primaria de ROXs 42B es una **binaria no resuelta** a
+> 51 mas y C1 la ajusta como segunda componente ligada desde el 2026-09-01.
+>
+> **Dos cosas abiertas y bloqueantes que la puerta F1 NO ve**, porque
+> `STAGE_DEFINITIONS` de `musepipe/report.py` termina en E3 y no audita el
+> bloque G:
+> 1. E1 y G2 se contradicen en **los dos** objetos (`halpha_reconciliation_v3`
+>    dice `consistent: false`): G2 da `detected` en ROXs 12 b y `marginal` en
+>    ROXs 42B b, mientras E1 da `non_detection` en ambos.
+> 2. El criterio de deteccion pide FAP global < 0.01, pero con 33 controles la
+>    minima FAP resoluble es 1/34 = 0.029, asi que **el criterio es inalcanzable
+>    por construccion**, por fuerte que sea la señal.
+>
+> Estado detallado y pendiente vigente: `docs/2026-09-01_handoff.md`.
 
 Pipeline por etapas para reduccion, diagnostico y extraccion espectral de
 cubos MUSE. Los productos de cada ejecucion viven en
