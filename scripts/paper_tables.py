@@ -174,8 +174,14 @@ def tabla_accretion(objetos) -> str:
             c["kind"] = "\\emph{detection}"
             c["F"] = f"\\({con_error(f, fe)}\\)\\tablefootmark{{c}}"
             c["EW"] = f"\\({float(ha['ew_A']):.1f}\\pm{float(ha['ew_err_A']):.1f}\\)"
-            fwhm_kms = float(ha["fwhm_intrinsic_A"]) / 6562.8 * 299792.458
-            c["FWHM"] = f"\\({fwhm_kms:.0f}\\)"
+            # La anchura INTRINSECA: `_fit_profile` ajusta una gaussiana ya
+            # convolucionada con la LSF, asi que sale deconvuelta y con error.
+            # `fwhm_obs_A` es el segundo momento sobre la ventana, inflado por
+            # el ruido de las alas, y no es una anchura de linea.
+            kms = 299792.458 / 6562.8
+            fw = float(ha["fwhm_intrinsic_A"]) * kms
+            fwe = float(ha["fwhm_intrinsic_err_A"]) * kms
+            c["FWHM"] = f"\\({fw:.0f}\\pm{fwe:.0f}\\)"
             c["vpeak"] = (f"\\({float(ha['rv_kms']):.0f}\\pm"
                           f"{float(ha['rv_err_kms']):.0f}\\)")
             c["Lacc"] = f"\\({potencia(g3['combined_accretion']['l_acc_lsun'], 1)}\\)"
