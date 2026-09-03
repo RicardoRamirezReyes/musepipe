@@ -13,5 +13,11 @@
     "membership": "rho Oph"
   },
   "note": "Primer objeto de la cadena. display_name se usa en la prosa de los informes. `primary_display_name` es la estrella que domina el cubo; `display_name` es el compañero, que es de quien va el run.",
-  "primary_display_name": "ROXs 12 A"
+  "primary_display_name": "ROXs 12 A",
+  "paper": {
+    "run": "ROXs12b_OB3445598",
+    "order": 1,
+    "note": "noche 1 sola: en el combinado los 33 controles tienen +2.7 sigma de modo comun -halo de Halpha de la primaria- que no se separa de la companera (docs/2026-09-03_handoff.md §2)",
+    "display": "ROXs 12 b"
+  }
 }

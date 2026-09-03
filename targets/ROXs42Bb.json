@@ -22,5 +22,11 @@
       "impact": "Contamina toda medida azimutal: fondo de anillo de C2, perfil radial de C3 y la curva de crecimiento de la primaria. Puede explicar por que C1 elige moffat sobre psfao en este objeto (8.38% vs 9.80% de residuo de anillo, empate a favor de moffat).",
       "handled_by": "scripts/target_overrides/ROXs42Bb.py (censo de fuentes + mascara opcional)"
     }
+  },
+  "paper": {
+    "run": "ROXs42Bb_realigned",
+    "order": 2,
+    "note": "cubo combinado; sus limites de E3 del 08-31 se verificaron validos el 09-03 (verifica_e3.json)",
+    "display": "ROXs 42B b"
   }
 }
