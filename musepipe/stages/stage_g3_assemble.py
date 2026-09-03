@@ -384,6 +384,27 @@ def run_stage_g3(run_id, *, project_root=None, make_figures=True):
     return run_stage_g3_all(run_id, project_root=project_root, make_figures=make_figures)
 
 
+def _sella_ajuste_atmosferico(atmo_qc_path, stops):
+    """Deja escrito en el QC del ajuste si sus productos se pueden consumir.
+
+    `stops` son las condiciones de parada del spec (§8.2): chi2_red > 3, un borde
+    de rejilla no declarado, etc. Cuando hay alguna, la masa y el radio derivados
+    NO son medidas, y quien los lea tiene que poder enterarse sin depender de
+    `stage_g3_qc.json`, que la rodaja de acrecion reescribe.
+
+    Escribe dos campos y no toca nada mas, para no romper a los lectores que ya
+    existen: `stops` y `usable_for_downstream`.
+    """
+    path = Path(atmo_qc_path)
+    if not path.exists():
+        return None
+    qc = json.loads(path.read_text())
+    qc["stops"] = list(stops)
+    qc["usable_for_downstream"] = not stops
+    path.write_text(json.dumps(qc, indent=1, default=str))
+    return qc["usable_for_downstream"]
+
+
 def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
     rc = load_run_config(run_id, project_root=project_root)
     cfg = dict(rc.config)
@@ -464,6 +485,13 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
         "consistency_pairs": consistency,
         "stops": stops, "open_issues": [],
     }
+    # El veredicto se ESTAMPA en el QC del ajuste atmosferico, que es un fichero
+    # aparte y que la rodaja de acrecion no sobrescribe. Sin esto, un G3 real que
+    # falla sus gates deja `g3_rows_derived.json` en `stages/` y la rodaja lo
+    # consume como bueno: en ROXs 12 b eso movia el Mdot de cabecera un 31 % y
+    # cambiaba el veredicto de G4, con las tres etapas en rc=0 y sin un aviso.
+    _sella_ajuste_atmosferico(paths["atmo_qc"], stops)
+
     if not stops:
         qc["open_issues"] = []  # pending_libraries removed: both fits produced results
     else:
