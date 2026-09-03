@@ -248,8 +248,13 @@ def tabla_accretion(objetos) -> str:
             c["Lacc"] = f"\\(<{potencia(float(lim['l_acc_lsun']), 1)}\\)\\tablefootmark{{b}}"
             c["Mdot"] = f"\\(<{potencia(float(lim['mdot_msun_yr']), 1)}\\)"
             c["Mdot_pl"] = f"\\(<{potencia(float(lim['mdot_aoyama21_msun_yr']), 1)}\\)"
-        thr = obj.qc("stage_h04_qc.json")["throughput"]["per_method_at_snr5"][canonico]
-        c["thr"] = f"\\({thr['throughput']:.2f}\\pm{thr['err']:.2f}\\)"
+        # El error del throughput es el de E3, no el de E4: E4 publica solo el
+        # estadistico de las inyecciones (0.017) y E3 le suma el sistematico de
+        # la perturbacion de PSF (0.087), que es el que propaga al limite.
+        fila_thr = next(r for r in obj.filas("halpha_upper_limits.csv")
+                        if r["row_kind"] == "method" and r["method"] == canonico)
+        c["thr"] = (f"\\({float(fila_thr['throughput']):.2f}\\pm"
+                    f"{float(fila_thr['throughput_err']):.2f}\\)")
         col[obj.slug] = c
 
     filas = [
