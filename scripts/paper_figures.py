@@ -453,9 +453,11 @@ def _mdot_de_este_trabajo(obj: Objeto) -> dict:
 def mdot_mass_plane(objetos, out: Path, literatura: Path | None = None):
     """Las dos restricciones homogeneas, sobre la compilacion de literatura.
 
-    La literatura NO se inventa: se lee de un CSV con columnas
-    `name,mass_mjup,mdot_msun_yr,is_limit,reference`. Si no existe, la figura
-    sale con las dos restricciones solas y el script lo avisa por stderr.
+    La literatura NO se inventa: la genera `scripts/build_literature_mdot.py`
+    desde CASPAR (Betti+23), y aqui solo se dibuja. Se separan las
+    determinaciones hechas con la MISMA relacion que este trabajo (Alcala+17)
+    de las demas: es la unica comparacion homogenea, y la dispersion vertical
+    de un mismo objeto entre relaciones es lo que el pie afirma.
     """
     fig, ax = plt.subplots(figsize=(ANCHO_COL_IN, 2.9))
 
@@ -463,19 +465,33 @@ def mdot_mass_plane(objetos, out: Path, literatura: Path | None = None):
         with open(literatura, newline="") as fh:
             # el CSV lleva la procedencia de cada cifra en cabecera comentada
             lit = list(csv.DictReader(l for l in fh if not l.lstrip().startswith("#")))
-        med = [(float(r["mass_mjup"]), float(r["mdot_msun_yr"])) for r in lit
-               if str(r.get("is_limit", "")).strip().lower() not in ("1", "true", "yes")]
-        lim = [(float(r["mass_mjup"]), float(r["mdot_msun_yr"])) for r in lit
-               if str(r.get("is_limit", "")).strip().lower() in ("1", "true", "yes")]
-        if med:
-            ax.plot(*zip(*med), ls="none", marker="o", ms=3.0, mfc="0.75",
-                    mec="0.45", mew=0.5, label="literature")
-        if lim:
-            xs, ys = zip(*lim)
-            ax.errorbar(xs, ys, yerr=[np.array(ys) * 0.55, np.zeros(len(ys))],
-                        ls="none", marker="v", ms=3.0, color="0.6",
-                        elinewidth=0.5, capsize=0, uplims=True,
-                        label="literature (upper limits)")
+
+        def _es_limite(r):
+            return str(r.get("is_limit", "")).strip().lower() in ("1", "true", "yes")
+
+        def _misma_relacion(r):
+            # el CSV trae el nombre con acento grave, tal cual lo escribe CASPAR
+            return "alcal" in str(r.get("relation", "")).lower()
+
+        grupos = [
+            ("same relation (Alcal\u00e1+17)", _misma_relacion, "#4c72b0", 0.85),
+            ("other relations", lambda r: not _misma_relacion(r), "0.62", 0.8),
+        ]
+        for etiqueta, prueba, color, alfa in grupos:
+            med = [(float(r["mass_mjup"]), float(r["mdot_msun_yr"]))
+                   for r in lit if prueba(r) and not _es_limite(r)]
+            lim = [(float(r["mass_mjup"]), float(r["mdot_msun_yr"]))
+                   for r in lit if prueba(r) and _es_limite(r)]
+            if med:
+                ax.plot(*zip(*med), ls="none", marker="o", ms=3.2, mfc=color,
+                        mec="0.25", mew=0.4, alpha=alfa, label=f"lit., {etiqueta}")
+            if lim:
+                xs, ys = zip(*lim)
+                ax.errorbar(xs, ys, yerr=[np.array(ys) * 0.5, np.zeros(len(ys))],
+                            ls="none", marker="v", ms=3.2, color=color,
+                            mec="0.25", mew=0.4, elinewidth=0.5, capsize=0,
+                            uplims=True, alpha=alfa,
+                            label=f"lit. upper lim., {etiqueta}")
     else:
         print(f"AVISO: sin compilacion de literatura ({literatura}); la figura "
               "sale solo con las dos restricciones de este trabajo.", file=sys.stderr)
@@ -510,7 +526,8 @@ def mdot_mass_plane(objetos, out: Path, literatura: Path | None = None):
     ax.minorticks_off()
     ax.set_xlabel(r"companion mass ($M_{\rm Jup}$)")
     ax.set_ylabel(r"$\dot{M}$ ($M_\odot$ yr$^{-1}$)")
-    ax.legend(loc="upper left", handlelength=1.2)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.19), ncol=2,
+              handlelength=1.2, columnspacing=1.0, fontsize=5.8)
     fig.savefig(out)
     plt.close(fig)
 
