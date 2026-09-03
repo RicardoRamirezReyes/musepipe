@@ -128,6 +128,49 @@ def _limites(obj: Objeto):
     return salida, avisos
 
 
+def _terminos_error(obj: Objeto):
+    """Los tres terminos del presupuesto de error de `tab:lines`, medidos.
+
+    Tal como los define el paper (Sect. calibration): (i) ruido de pixel con la
+    correccion de covarianza, (ii) dispersion inter-metodo, (iii) incertidumbre
+    de calibracion de la referencia.
+
+    - (i) es POR METODO: la sigma del filtro adaptado medida sobre los controles,
+      que es empirica y por tanto ya lleva la covarianza dentro (el STAT del cubo
+      no vale, A4/M5 en rojo). En fraccion del flujo es 1/z.
+    - (ii) es del conjunto, no de un metodo: `std(ddof=1)/mediana` de los seis
+      flujos de linea, la MISMA definicion que `_intermethod_scatter_pct` usa en
+      E3, para que las dos cifras se puedan comparar. Ojo: la de E3 es la de los
+      LIMITES, dominada por el continuo; esta es la de la LINEA, y son distintas.
+    - (iii) es del cubo: `sys_fluxcal_declared` de D2, que M3 mide contra Gaia
+      DR3 y que D2 declara aparte a proposito. Si A4/M3 no lo midio en ESTE cubo
+      no hay tercer termino, y se dice: el knob `m3_flux_factor` del config puede
+      venir de otra cosecha y no es una medida de este cubo.
+    """
+    import numpy as np
+
+    det, _ = _e1(obj)
+    flujos = np.array([float(r["matched_flux"]) for r in det.values()])
+    inter = 100.0 * np.std(flujos, ddof=1) / np.median(flujos)
+
+    m3 = obj.qc("stage00q_qc.json").get("m3_flux") or {}
+    if str(m3.get("status")) == "green":
+        from astropy.io import fits
+        canonico = obj.qc("stage_x11_qc.json")["canonical_method"]
+        with fits.open(obj.etapa(f"spec_calibrated_{canonico}_object.fits")) as h:
+            d = h["SPECTRUM"].data
+            dec = np.asarray(d["sys_fluxcal_declared"], float)
+            flu = np.asarray(d["flux"], float)
+        ok = np.isfinite(dec) & np.isfinite(flu) & (flu != 0)
+        calib = f"{100.0 * np.nanmedian(np.abs(dec[ok] / flu[ok])):.1f}"
+    else:
+        calib = None  # no medido en este cubo
+
+    por_metodo = {m: 100.0 * float(r["matched_sigma"]) / float(r["matched_flux"])
+                  for m, r in det.items()}
+    return por_metodo, inter, calib
+
+
 def tabla_lines(objetos) -> str:
     """Filas de `tab:lines`: z, las dos FAP, y flujo medido o limite."""
     out = []
@@ -135,6 +178,11 @@ def tabla_lines(objetos) -> str:
         det, par = _e1(obj)
         lims, avisos = _limites(obj)
         AVISOS.extend(avisos)
+        pixel, inter, calib = _terminos_error(obj)
+        if calib is None:
+            AVISOS.append(f"{obj.nombre}: A4/M3 no midio la escala absoluta en este "
+                          "cubo, asi que el tercer termino del presupuesto de error "
+                          "no existe; la tabla pone `n.m.`.")
         for m in ORDEN:
             if m not in det:
                 continue
@@ -147,7 +195,11 @@ def tabla_lines(objetos) -> str:
             else:
                 flujo = "\\(" + con_error(float(r["matched_flux"]) * ESCALA_CUBO,
                                           float(r["matched_sigma"]) * ESCALA_CUBO) + "\\)"
-            err = "[XXX]" if not lims else "\\ldots"
+            # Los limites no llevan descomposicion: el ruido ya esta dentro del
+            # propio limite. Solo la lleva el objeto con flujo medido.
+            err = ("\\ldots" if lims else
+                   f"\\({pixel[m]:.1f}/{inter:.1f}/" +
+                   (f"{calib}\\)" if calib else "\\mathrm{n.m.}\\)"))
             out.append(f"{tex_nombre(obj):<11}& \\ha & {METODO_TEX[m]:<25}"
                        f"& \\({z:.2f}\\) & \\({fap_e:.3f}\\) & \\({potencia(fap_p, 1)}\\) "
                        f"& {flujo} & {err} \\\\")

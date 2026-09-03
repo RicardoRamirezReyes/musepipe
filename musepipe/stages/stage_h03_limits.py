@@ -1118,14 +1118,29 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     # de 1.0 daba L/Mdot 1e20 veces altos sin avisar.
     flux_unit_cgs = resolve_flux_unit_cgs(cfg, paths, canonical_method)
     if flux_unit_cgs != 1.0:
+        # El knob `m3_flux_factor` puede venir de otra cosecha: solo se puede
+        # decir "A4/M3 lo comprobo" si M3 corrio EN ESTE cubo (status green en
+        # el QC de A4). Decirlo sin mirar es afirmar una comprobacion que no se
+        # hizo -- paso en la noche buena de ROXs 12 b, cuyo M3 es `unavailable`
+        # mientras el config arrastraba un 0.973 del cubo combinado.
         m3_factor = cfg.get("m3_flux_factor")
-        if m3_factor is not None:
+        m3_qc = (_read_optional_json(paths.get("stage00q_qc_json")) or {}).get("m3_flux") or {}
+        m3_medido = str(m3_qc.get("status", "")) == "green"
+        if m3_factor is not None and m3_medido:
             open_issues.append(
                 f"Flux unit {flux_unit_cgs:g} erg/s/cm2/A applied to the matched-filter sigma so "
                 "f_lim/L/Mdot are physical (MUSE cube native unit; scipost flux-calibrated). A4/M3 "
-                f"cross-checked the absolute scale against Gaia DR3 RP: factor {float(m3_factor):.3f} "
-                "(consistent with 1 to ~3% after growth-curve + tail correction), so no large absolute "
-                "systematic remains."
+                f"cross-checked the absolute scale against Gaia DR3 RP on this cube: factor "
+                f"{float(m3_qc.get('flux_factor', m3_factor)):.3f} (consistent with 1 to ~3% after "
+                "growth-curve + tail correction), so no large absolute systematic remains."
+            )
+        elif m3_factor is not None:
+            open_issues.append(
+                f"Flux unit {flux_unit_cgs:g} erg/s/cm2/A applied to the matched-filter sigma so "
+                "f_lim/L/Mdot are physical. A4/M3 did NOT measure the absolute scale on this cube "
+                f"(m3_flux.status={m3_qc.get('status', 'missing')!r}); config declares "
+                f"m3_flux_factor={float(m3_factor):.3f}, which comes from another product and is not "
+                "a measurement of this cube. The absolute-calibration term is UNMEASURED here."
             )
         else:
             open_issues.append(
