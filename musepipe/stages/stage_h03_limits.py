@@ -47,6 +47,8 @@ TABLE_FIELDS = [
     "q99_resolvable",
     "z_99_empirical",
     "z_99_gumbel",
+    "tail_estimator",
+    "z_threshold",
     "z_5sigma_extrap",
     "tail_extrapolated_5sigma",
     "matched_sigma",
@@ -262,13 +264,45 @@ def _e4_v1_status(qc):
     return "unknown"
 
 
-def validate_prerequisites(h01_qc, h02_qc, h04_qc, *, allow_unvalidated_throughput=False):
+def validate_prerequisites(h01_qc, h02_qc, h04_qc, *, allow_unvalidated_throughput=False,
+                           allow_detection=False):
+    """Puerta de H03, por veredicto de E1.
+
+    - `non_detection`: el caso para el que existe la etapa.
+    - `candidate`: **se permite**, con aviso. Es lo que el paper reporta de un
+      candidato cuyo intervalo cruza el umbral (decision congelada), y negarse
+      dejaba al objeto sin limite Y sin medida, con el producto viejo como unica
+      cifra citable.
+    - `detection`: se niega salvo `allow_detection`. Un "limite superior al 99 %"
+      sobre una linea detectada no es una cantidad publicable; con la bandera
+      sale igualmente, pero el QC lo marca como SENSIBILIDAD y no como limite.
+    """
     e1 = _e1_verdict(h01_qc)
     e2 = str((h02_qc or {}).get("overall", "unknown")).lower()
     e4 = _e4_v1_status(h04_qc)
-    prereq = {"e1_verdict": e1, "e2_overall": e2, "e4_v1": e4, "issues": []}
-    if e1 != "non_detection":
-        raise RuntimeError(f"H03 refuses to run: E1 verdict must be non_detection, got {e1!r}.")
+    prereq = {"e1_verdict": e1, "e2_overall": e2, "e4_v1": e4,
+              "product_kind": "upper_limit", "issues": []}
+    if e1 == "candidate":
+        prereq["issues"].append(
+            "E1 calls this a candidate, not a non-detection: the limit is reported "
+            "because the candidate's interval crosses the detection criterion."
+        )
+    elif e1 == "detection":
+        if not allow_detection:
+            raise RuntimeError(
+                "H03 refuses to run: E1 verdict is 'detection'; a 99% upper limit on a "
+                "detected line is not a publishable quantity. Pass allow_detection=True "
+                "(h03_allow_detection) to get the threshold as a SENSITIVITY instead."
+            )
+        prereq["product_kind"] = "sensitivity"
+        prereq["issues"].append(
+            "E1 says 'detection': these numbers are the detection SENSITIVITY of each "
+            "scheme, NOT an upper limit on the companion. Do not cite them as limits."
+        )
+    elif e1 != "non_detection":
+        raise RuntimeError(
+            f"H03 refuses to run: E1 verdict must be non_detection, candidate or "
+            f"detection, got {e1!r}.")
     if e2 != "survives":
         raise RuntimeError(f"H03 refuses to run: E2 overall must be survives, got {e2!r}.")
     if e4 != "pass":
@@ -314,6 +348,48 @@ def gumbel_isf(fap, loc, beta):
         raise ValueError("FAP must lie between zero and one.")
     cdf = 1.0 - tail
     return float(loc - float(beta) * math.log(-math.log(cdf)))
+
+
+#: los dos modelos de cola con los que se puede fijar el umbral del 99 %.
+TAIL_ESTIMATORS = ("empirical", "parametric")
+
+
+def resolve_tail_estimator(cfg, h01_qc):
+    """Con que cola se fija el umbral del 99 %, y de donde sale esa decision.
+
+    Mismo orden que el resto de knobs con procedencia (ver `_wavelength_frame`):
+
+    1. el knob explicito de config (`h03_tail_estimator`);
+    2. el estimador con el que E1 decide (`criterion.fap_estimator` de su QC) —
+       si E1 declara la deteccion con la cola parametrica, un limite fijado con
+       el cuantil empirico no es el mismo umbral, y el paper acabaria citando
+       una deteccion y un limite calibrados de forma distinta;
+    3. error explicito, nunca un default silencioso.
+
+    Lo que costaba no tenerlo: E3 usaba `z_99_empirical` incrustado, asi que al
+    pasar E1 a la cola parametrica los limites publicados quedaron un 32 % mas
+    apretados de lo que da el metodo declarado (metodo canonico de ROXs 42B b).
+    """
+    declarado = cfg.get("h03_tail_estimator")
+    if declarado is not None:
+        fuente = "config.h03_tail_estimator"
+    else:
+        declarado = ((h01_qc or {}).get("criterion") or {}).get("fap_estimator")
+        fuente = "h01_qc.criterion.fap_estimator"
+    if declarado not in TAIL_ESTIMATORS:
+        raise RuntimeError(
+            "H03 needs the tail estimator for the 99% threshold: declare "
+            f"h03_tail_estimator ({' or '.join(TAIL_ESTIMATORS)}) or run E1 so its "
+            f"QC carries criterion.fap_estimator; got {declarado!r} from {fuente}."
+        )
+    return str(declarado), fuente
+
+
+def z_threshold_for(tail, estimator):
+    """El umbral del 99 % segun la cola elegida; `parametric` = Gumbel."""
+    if estimator == "parametric":
+        return float(tail["z_99_gumbel"])
+    return float(tail["z_99_empirical"])
 
 
 def tail_limit_summary(null_values, *, fap_99=0.01, fap_5sigma=ONE_SIDED_5SIGMA_FAP):
@@ -950,11 +1026,13 @@ def _row_from_limits(
     sigma_payload,
     throughput_payload,
     physical,
+    tail_estimator,
     row_kind="method",
     scatter_pct=None,
 ):
+    z_threshold = z_threshold_for(tail, tail_estimator)
     chain = limit_conversion_chain(
-        z_threshold=tail["z_99_empirical"],
+        z_threshold=z_threshold,
         z_5sigma_extrap=tail["z_5sigma_extrap"],
         matched_sigma=sigma_payload["matched_sigma"],
         throughput=throughput_payload["throughput"],
@@ -985,6 +1063,8 @@ def _row_from_limits(
         "q99_resolvable": tail["q99_resolvable"],
         "z_99_empirical": tail["z_99_empirical"],
         "z_99_gumbel": tail["z_99_gumbel"],
+        "tail_estimator": tail_estimator,
+        "z_threshold": z_threshold,
         "z_5sigma_extrap": tail["z_5sigma_extrap"],
         "tail_extrapolated_5sigma": tail["tail_extrapolated_5sigma"],
         "matched_sigma": sigma_payload["matched_sigma"],
@@ -1017,6 +1097,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     prerequisites = validate_prerequisites(
         h01_qc, h02_qc, h04_qc,
         allow_unvalidated_throughput=bool(cfg.get("h03_allow_unvalidated_throughput", False)),
+        allow_detection=bool(cfg.get("h03_allow_detection", False)),
     )
     physical = physical_inputs_from_config(cfg)
     canonical_method, canonical_source = _canonical_method(cfg, paths)
@@ -1029,6 +1110,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     factors = [float(value) for value in cfg.get("h03_template_width_factors", [1.0, 2.0])]
     fap_99 = float(cfg.get("h03_tail_fap_99", 0.01))
     fap_5sigma = float(cfg.get("h03_tail_fap_5sigma", ONE_SIDED_5SIGMA_FAP))
+    tail_estimator, tail_estimator_source = resolve_tail_estimator(cfg, h01_qc)
     rows = []
     open_issues = list(prerequisites.get("issues", []))
     # La escala fisica sale del knob si esta declarado y, si no, del BUNIT del
@@ -1056,10 +1138,17 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     for method in methods:
         tail = tail_limit_summary(null_by_method[method], fap_99=fap_99, fap_5sigma=fap_5sigma)
         if not tail["q99_resolvable"]:
-            open_issues.append(
-                f"{method}: 99% empirical FAP is below the finite-control resolution "
-                f"({tail['minimum_resolvable_fap']:.4g})."
-            )
+            if tail_estimator == "parametric":
+                open_issues.append(
+                    f"{method}: the 99% quantile is below the finite-control resolution "
+                    f"({tail['minimum_resolvable_fap']:.4g}), so the threshold is the "
+                    "fitted Gumbel tail and not a counted exceedance."
+                )
+            else:
+                open_issues.append(
+                    f"{method}: 99% empirical FAP is below the finite-control resolution "
+                    f"({tail['minimum_resolvable_fap']:.4g})."
+                )
         for factor in factors:
             sigma_payload = matched_sigma_for_method_factor(paths, cfg, h01_qc, h01_rows, method, factor)
             if flux_unit_cgs != 1.0:
@@ -1070,7 +1159,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                 throughput_rows,
                 method,
                 factor,
-                tail["z_99_empirical"],
+                z_threshold_for(tail, tail_estimator),
                 h04_qc=h04_qc,
             )
             rows.append(
@@ -1082,6 +1171,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                     sigma_payload=sigma_payload,
                     throughput_payload=throughput_payload,
                     physical=physical,
+                    tail_estimator=tail_estimator,
                 )
             )
     scatter_pct = _intermethod_scatter_pct(rows)
@@ -1133,6 +1223,17 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
         },
         "canonical_method": canonical_method,
         "canonical_source": canonical_source,
+        "product_kind": prerequisites["product_kind"],
+        "tail": {
+            "estimator": tail_estimator,
+            "estimator_source": tail_estimator_source,
+            "fap_99": fap_99,
+            "z_threshold_by_method": {
+                row["method"]: row["z_threshold"]
+                for row in rows if row["row_kind"] == "method"
+                and np.isclose(float(row["template_factor"]), 1.0)
+            },
+        },
         "limits": [
             {
                 "method": row["method"],
@@ -1294,6 +1395,8 @@ def main(argv=None):
 
 
 __all__ = [
+    "resolve_tail_estimator",
+    "z_threshold_for",
     "ONE_SIDED_5SIGMA_FAP",
     "PC_CM",
     "L_SUN_ERG_S",
