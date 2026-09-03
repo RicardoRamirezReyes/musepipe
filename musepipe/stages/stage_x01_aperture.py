@@ -337,6 +337,15 @@ def _apcorr_consistency(extractions, cfg):
     fraction = float(np.mean((np.abs(f3 - f5) <= combined)[good]))
     med3 = float(np.nanmedian(f3[good]))
     ratio = _finite_or_none(float(np.nanmedian(f5[good]) / med3) if med3 != 0 else np.nan)
+    # `fraction_channels_agree` mide el sistematico RELATIVO al ruido, asi que
+    # PREMIA al dato ruidoso: medido el 2026-09-02, los tres runs tienen el mismo
+    # deficit de box5 (~9-10 %) y sin embargo ROXs 42B b concuerda en el 81 % de
+    # los canales y la noche buena de ROXs 12 b solo en el 12 %, porque su sigma
+    # es la mitad. Comparar la fraccion entre objetos lleva a la conclusion
+    # contraria, asi que el desvio en sigmas se publica al lado.
+    med_dif = float(np.nanmedian(np.abs(f3 - f5)[good]))
+    med_sig = float(np.nanmedian(combined[good]))
+    offset_sigma = _finite_or_none(med_dif / med_sig if med_sig > 0 else np.nan)
     return {
         "ok": bool(fraction >= threshold),
         "band_A": band,
@@ -344,6 +353,9 @@ def _apcorr_consistency(extractions, cfg):
         "fraction_channels_agree": fraction,
         "threshold": threshold,
         "box5_over_box3_median": ratio,
+        "offset_sigma": offset_sigma,
+        "median_abs_difference": med_dif,
+        "median_combined_sigma": med_sig,
         "apcorr_median": {
             "box3": _finite_or_none(np.nanmedian(a.product.apcorr)),
             "box5": _finite_or_none(np.nanmedian(b.product.apcorr)),
@@ -352,7 +364,11 @@ def _apcorr_consistency(extractions, cfg):
             "Spec C2 V4(b): el espectro corregido de box3 y box5 debe coincidir dentro de "
             "errores; es la prueba de que la curva de crecimiento de C1 funciona. Si falla, "
             "el sospechoso es el modelo de PSF en el core (spec §7: retroalimentar a C1), "
-            "no la fotometria."
+            "no la fotometria. `fraction_channels_agree` es relativa al ruido y por "
+            "tanto premia al dato ruidoso: para comparar runs entre si usa "
+            "`offset_sigma` (la separacion mediana box3-box5 en unidades de su sigma "
+            "combinada) y `box5_over_box3_median` (el tamano del sistematico), que no "
+            "dependen de la precision del run."
         ),
     }
 
