@@ -130,6 +130,10 @@ class Objeto:
         # y NUNCA de un literal aqui (`tests/test_no_hardcoded_target.py`).
         self.run_2a_epoca = bloque.get("second_epoch_run")
         self.spt_source_dir = bloque.get("spt_source_dir")
+        # La primaria se nombra DECLARADA, no derivada del nombre del companero:
+        # recortar el ultimo token daba «ROXs 42B A», y la primaria de ese
+        # sistema no es una estrella A sino la binaria sin resolver ROXs 42B.
+        self.nombre_primaria = ficha.get("primary_display_name")
         self.run_dir = ROOT / "runs" / self.run_id
         if not self.run_dir.is_dir():
             raise SystemExit(f"no existe runs/{self.run_id} (objeto {slug})")
@@ -366,40 +370,56 @@ def full_spectra(objetos, out: Path, metodo="psffit", suavizado=41):
     La curva gruesa es una mediana movil; la fina, el dato canal a canal. La
     primaria y el compañero van en paneles distintos porque se llevan tres
     ordenes de magnitud.
+
+    Una **columna por objeto**: dibujar solo `objetos[0]` dejaba fuera del paper
+    el espectro completo del segundo compañero, que existe y tiene S/N (~8.7 en
+    la mediana del continuo de 8000-9300 A, la misma que el primero).
     """
     from musepipe.paper_spectrum import AO_LASER_WINDOW_A, accretion_lines
     from musepipe.telluric_lines import TELLURIC_BANDS
 
-    obj = objetos[0]
-    fig, axes = plt.subplots(2, 1, figsize=(ANCHO_DOBLE_IN, 4.6), sharex=True)
+    fig, axes = plt.subplots(2, len(objetos), sharex=True, squeeze=False,
+                             figsize=(ANCHO_DOBLE_IN, 4.6))
     lineas = [l for l in accretion_lines() if l["kind"].startswith("accretion")]
+    bordes = []
 
-    for ax, cual, etq in ((axes[0], "star", f"{obj.nombre.rsplit(' ', 1)[0]} A (primary)"),
-                          (axes[1], "object", f"{obj.nombre} (companion)")):
-        wave, flux, err, escala = _espectro(obj, metodo, cual=cual)
-        f = flux * escala * 1e18
-        e = err * escala * 1e18
-        # sin dato en el hueco del laser: alli el flujo vale 0, no NaN
-        hueco = (wave >= AO_LASER_WINDOW_A[0]) & (wave <= AO_LASER_WINDOW_A[1])
-        f = np.where(hueco, np.nan, f); e = np.where(hueco, np.nan, e)
-        for b in TELLURIC_BANDS:
-            gris = {"strong": "0.82", "moderate": "0.90"}.get(b.get("severity"), "0.955")
-            ax.axvspan(b["lo_A"], b["hi_A"], color=gris, lw=0, zorder=0)
-        ax.axvspan(*AO_LASER_WINDOW_A, color="#ffd9d9", lw=0, zorder=0)
-        ax.fill_between(wave, f - e, f + e, color=COLOR_METODO[metodo], alpha=0.20, lw=0, zorder=2)
-        ax.plot(wave, f, color=COLOR_METODO[metodo], lw=0.25, alpha=0.55, zorder=3)
-        ax.plot(wave, _mediana_movil(f, suavizado), color="0.10", lw=0.7, zorder=4)
-        finito = np.isfinite(f)
-        lo, hi = np.nanpercentile(f[finito], [0.5, 99.8])
-        ax.set_ylim(lo - 0.15 * (hi - lo), hi + 0.30 * (hi - lo))
-        for l in lineas:
-            ax.axvline(l["wave_A"], color="0.45", lw=0.4, ls=":", zorder=1)
-        ax.set_title(etq, fontsize=8)
-        ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ cgs)")
+    for j, obj in enumerate(objetos):
+        if not obj.nombre_primaria:
+            raise SystemExit(
+                f"targets/{obj.slug}.json no declara `primary_display_name`: sin "
+                "el no se sabe como se llama la estrella de este panel."
+            )
+        for i, (cual, etq) in enumerate((("star", f"{obj.nombre_primaria} (primary)"),
+                                         ("object", f"{obj.nombre} (companion)"))):
+            ax = axes[i][j]
+            wave, flux, err, escala = _espectro(obj, metodo, cual=cual)
+            f = flux * escala * 1e18
+            e = err * escala * 1e18
+            # sin dato en el hueco del laser: alli el flujo vale 0, no NaN
+            hueco = (wave >= AO_LASER_WINDOW_A[0]) & (wave <= AO_LASER_WINDOW_A[1])
+            f = np.where(hueco, np.nan, f); e = np.where(hueco, np.nan, e)
+            for b in TELLURIC_BANDS:
+                gris = {"strong": "0.82", "moderate": "0.90"}.get(b.get("severity"), "0.955")
+                ax.axvspan(b["lo_A"], b["hi_A"], color=gris, lw=0, zorder=0)
+            ax.axvspan(*AO_LASER_WINDOW_A, color="#ffd9d9", lw=0, zorder=0)
+            ax.fill_between(wave, f - e, f + e, color=COLOR_METODO[metodo], alpha=0.20, lw=0, zorder=2)
+            ax.plot(wave, f, color=COLOR_METODO[metodo], lw=0.25, alpha=0.55, zorder=3)
+            ax.plot(wave, _mediana_movil(f, suavizado), color="0.10", lw=0.7, zorder=4)
+            finito = np.isfinite(f)
+            lo, hi = np.nanpercentile(f[finito], [0.5, 99.8])
+            ax.set_ylim(lo - 0.15 * (hi - lo), hi + 0.30 * (hi - lo))
+            for l in lineas:
+                ax.axvline(l["wave_A"], color="0.45", lw=0.4, ls=":", zorder=1)
+            ax.set_title(etq, fontsize=8)
+            if j == 0:
+                ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ cgs)")
+            bordes.append((float(np.nanmin(wave)), float(np.nanmax(wave))))
 
-    axes[-1].set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
-    axes[-1].set_xlim(float(np.nanmin(wave)), float(np.nanmax(wave)))
-    fig.subplots_adjust(hspace=0.22)
+    for ax in axes[-1]:
+        ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+    # el eje x es comun (sharex): un solo rango, el que cubren los dos cubos
+    axes[-1][0].set_xlim(min(b[0] for b in bordes), max(b[1] for b in bordes))
+    fig.subplots_adjust(hspace=0.22, wspace=0.20)
     fig.savefig(out)
     plt.close(fig)
 
@@ -515,66 +535,79 @@ def companion_type(objetos, out: Path, paso_A=25.0, rango_A=(6000.0, 9100.0)):
     plantillas se dibujan con el A_V de su propio mejor ajuste y reescaladas por
     minimos cuadrados al espectro observado, porque el `scale_best` del ajuste
     vive en las unidades de la libreria y no en las del producto.
+
+    Una **fila por objeto**. El segundo compañero no salia, y su G3 tiene
+    resultado: la clase de gravedad la decide con MAS peso que el primero
+    (dchi2 = 308 sobre el campo), y lo que no acota es el tipo, que se queda
+    por encima de la linea de aceptacion del panel derecho.
     """
     from musepipe.models.extinction import CCMExtinction
     from musepipe.models.prep import prepare_template
 
-    obj = objetos[0]
-    tf, raiz = _g3_template_fit(obj)
-    lsf = float(obj.config["h01_lsf_fwhm_A"])
     ext = CCMExtinction(3.1, citation="Cardelli et al. 1989")
-
-    wave, flux, err, escala = _espectro(obj, "psffit")
-    m = (wave >= rango_A[0]) & (wave <= rango_A[1])
-    wb, fb = _binado(wave[m], flux[m] * escala * 1e18, paso_A)
-
-    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 2.8),
+    fig, axes = plt.subplots(len(objetos), 2, squeeze=False,
+                             figsize=(ANCHO_DOBLE_IN, 2.45 * len(objetos)),
                              gridspec_kw={"width_ratios": [2.0, 1.0]})
-    ax = axes[0]
-    ax.plot(wb, fb, color="0.15", lw=0.9, label=f"{obj.nombre}, {paso_A:.0f} " r"$\mathrm{\AA}$ bins")
 
-    for clase, color, etq in (("young", "#d62728", "young"), ("field", "#1f77b4", "field")):
-        mejor = tf[clase]["ranking"][0]
-        libro = ROOT.parent / "Data" / "external_libraries" / f"templates_{clase}"
-        # las dos librerias nombran distinto: `LM601_M7.5.npz` frente a `M9.npz`
-        ficheros = (sorted(libro.glob(f"*_{mejor['spt']}.npz"))
-                    or sorted(libro.glob(f"{mejor['spt']}.npz")))
-        if not ficheros:
-            continue
-        d = np.load(ficheros[0], allow_pickle=True)
-        meta = json.loads(str(d["meta_json"]))
-        class _T:  # el adaptador minimo que espera prepare_template
-            pass
-        t = _T(); t.wave_A = d["wave_A"]; t.flux = d["flux"]; t.meta = meta
-        modelo = prepare_template(t, wb, lsf_fwhm_A=lsf, extinction=ext,
-                                  av=float(mejor["av_best"]), scale=1.0,
-                                  template_fwhm_A=meta.get("resolution_fwhm_A"))
-        ok = np.isfinite(modelo) & np.isfinite(fb)
-        if ok.sum() < 5:
-            continue
-        k = float(np.nansum(modelo[ok] * fb[ok]) / np.nansum(modelo[ok] ** 2))
-        ax.plot(wb, k * modelo, color=color, lw=1.0, alpha=0.85,
-                label=f"{etq} {mejor['spt']} " r"($\chi^2_\nu=$" f"{mejor['chi2_red']:.1f})")
-    ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
-    ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
-    ax.set_xlim(*rango_A)
-    ax.legend(loc="upper left", handlelength=1.4)
+    for i, obj in enumerate(objetos):
+        tf, raiz = _g3_template_fit(obj)
+        lsf = float(obj.config["h01_lsf_fwhm_A"])
 
-    ax = axes[1]
-    for clase, color, marca in (("young", "#d62728", "o"), ("field", "#1f77b4", "s")):
-        r = [(x["spt_code"], x["chi2_red"]) for x in tf[clase]["ranking"]]
-        r.sort()
-        ax.plot([x[0] for x in r], [x[1] for x in r], marker=marca, ms=3.0, lw=0.8,
-                color=color, label=clase)
-    ax.axhline(3.0, color="0.5", lw=0.6, ls="--")
-    ax.set_yscale("log")
-    # la libreria de campo llega hasta tipos tempranos (codigos negativos); el
-    # panel se queda en el entorno del minimo, que es donde se decide.
-    ax.set_xlim(2.0, 11.0)
-    ax.set_xlabel("spectral type (M0 = 0, L0 = 10)")
-    ax.set_ylabel(r"$\chi^2_\nu$")
-    ax.legend(loc="upper right", handlelength=1.4)
-    fig.savefig(out)
+        wave, flux, err, escala = _espectro(obj, "psffit")
+        m = (wave >= rango_A[0]) & (wave <= rango_A[1])
+        wb, fb = _binado(wave[m], flux[m] * escala * 1e18, paso_A)
+
+        ax = axes[i][0]
+        ax.plot(wb, fb, color="0.15", lw=0.9,
+                label=f"{obj.nombre}, {paso_A:.0f} " r"$\mathrm{\AA}$ bins")
+
+        for clase, color, etq in (("young", "#d62728", "young"), ("field", "#1f77b4", "field")):
+            mejor = tf[clase]["ranking"][0]
+            libro = ROOT.parent / "Data" / "external_libraries" / f"templates_{clase}"
+            # las dos librerias nombran distinto: `LM601_M7.5.npz` frente a `M9.npz`
+            ficheros = (sorted(libro.glob(f"*_{mejor['spt']}.npz"))
+                        or sorted(libro.glob(f"{mejor['spt']}.npz")))
+            if not ficheros:
+                continue
+            d = np.load(ficheros[0], allow_pickle=True)
+            meta = json.loads(str(d["meta_json"]))
+            class _T:  # el adaptador minimo que espera prepare_template
+                pass
+            t = _T(); t.wave_A = d["wave_A"]; t.flux = d["flux"]; t.meta = meta
+            modelo = prepare_template(t, wb, lsf_fwhm_A=lsf, extinction=ext,
+                                      av=float(mejor["av_best"]), scale=1.0,
+                                      template_fwhm_A=meta.get("resolution_fwhm_A"))
+            ok = np.isfinite(modelo) & np.isfinite(fb)
+            if ok.sum() < 5:
+                continue
+            k = float(np.nansum(modelo[ok] * fb[ok]) / np.nansum(modelo[ok] ** 2))
+            ax.plot(wb, k * modelo, color=color, lw=1.0, alpha=0.85,
+                    label=f"{etq} {mejor['spt']} " r"($\chi^2_\nu=$" f"{mejor['chi2_red']:.1f})")
+        ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
+        ax.set_xlim(*rango_A)
+        ax.legend(loc="upper left", handlelength=1.4)
+
+        ax = axes[i][1]
+        for clase, color, marca in (("young", "#d62728", "o"), ("field", "#1f77b4", "s")):
+            r = [(x["spt_code"], x["chi2_red"]) for x in tf[clase]["ranking"]]
+            r.sort()
+            ax.plot([x[0] for x in r], [x[1] for x in r], marker=marca, ms=3.0, lw=0.8,
+                    color=color, label=clase)
+        ax.axhline(3.0, color="0.5", lw=0.6, ls="--")
+        ax.set_yscale("log")
+        # la libreria de campo llega hasta tipos tempranos (codigos negativos); el
+        # panel se queda en el entorno del minimo, que es donde se decide.
+        ax.set_xlim(2.0, 11.0)
+        ax.set_ylabel(r"$\chi^2_\nu$")
+        ax.legend(loc="upper right", handlelength=1.4, title=obj.nombre,
+                  title_fontsize=6.5)
+
+    axes[-1][0].set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+    axes[-1][1].set_xlabel("spectral type (M0 = 0, L0 = 10)")
+    fig.subplots_adjust(hspace=0.30)
+    # el rotulo del panel derecho es mas ancho que su eje y el pad de 0.02 in
+    # del estilo le comia el parentesis final
+    fig.savefig(out, pad_inches=0.06)
     plt.close(fig)
 
 
