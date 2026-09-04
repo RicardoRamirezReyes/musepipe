@@ -346,6 +346,65 @@ def spectra_halpha(objetos, out: Path, metodos=("aperture", "optimal_ls", "psffi
 
 
 # --------------------------------------------------------------------------
+# Fig. full_spectra — los dos espectros de D2, de punta a punta
+# --------------------------------------------------------------------------
+
+def full_spectra(objetos, out: Path, metodo="psffit", suavizado=41):
+    """Primaria y compañero en TODO el rango, con su error y lo que lo estropea.
+
+    Los productos definitivos de D2 son los espectros, antes que el estudio de
+    Halpha, y hasta ahora el paper solo los enseñaba por ventanas de 90 A. Aqui
+    van enteros y canal a canal, con:
+
+    - la banda de \\pm1\\sigma del presupuesto total (la misma de la Fig. de Halpha);
+    - las **bandas telúricas** con su profundidad medida por A3, que es lo que
+      explica los huecos del rojo sin que el lector tenga que adivinarlo;
+    - el **hueco del láser AO** (5780-6050 A), donde no hay dato: sombrearlo es
+      obligatorio, porque ahi el flujo vale 0 y no NaN;
+    - las líneas de acrecion del catalogo de G2, para situar Halpha entre ellas.
+
+    La curva gruesa es una mediana movil; la fina, el dato canal a canal. La
+    primaria y el compañero van en paneles distintos porque se llevan tres
+    ordenes de magnitud.
+    """
+    from musepipe.paper_spectrum import AO_LASER_WINDOW_A, accretion_lines
+    from musepipe.telluric_lines import TELLURIC_BANDS
+
+    obj = objetos[0]
+    fig, axes = plt.subplots(2, 1, figsize=(ANCHO_DOBLE_IN, 4.6), sharex=True)
+    lineas = [l for l in accretion_lines() if l["kind"].startswith("accretion")]
+
+    for ax, cual, etq in ((axes[0], "star", f"{obj.nombre.rsplit(' ', 1)[0]} A (primary)"),
+                          (axes[1], "object", f"{obj.nombre} (companion)")):
+        wave, flux, err, escala = _espectro(obj, metodo, cual=cual)
+        f = flux * escala * 1e18
+        e = err * escala * 1e18
+        # sin dato en el hueco del laser: alli el flujo vale 0, no NaN
+        hueco = (wave >= AO_LASER_WINDOW_A[0]) & (wave <= AO_LASER_WINDOW_A[1])
+        f = np.where(hueco, np.nan, f); e = np.where(hueco, np.nan, e)
+        for b in TELLURIC_BANDS:
+            gris = {"strong": "0.82", "moderate": "0.90"}.get(b.get("severity"), "0.955")
+            ax.axvspan(b["lo_A"], b["hi_A"], color=gris, lw=0, zorder=0)
+        ax.axvspan(*AO_LASER_WINDOW_A, color="#ffd9d9", lw=0, zorder=0)
+        ax.fill_between(wave, f - e, f + e, color=COLOR_METODO[metodo], alpha=0.20, lw=0, zorder=2)
+        ax.plot(wave, f, color=COLOR_METODO[metodo], lw=0.25, alpha=0.55, zorder=3)
+        ax.plot(wave, _mediana_movil(f, suavizado), color="0.10", lw=0.7, zorder=4)
+        finito = np.isfinite(f)
+        lo, hi = np.nanpercentile(f[finito], [0.5, 99.8])
+        ax.set_ylim(lo - 0.15 * (hi - lo), hi + 0.30 * (hi - lo))
+        for l in lineas:
+            ax.axvline(l["wave_A"], color="0.45", lw=0.4, ls=":", zorder=1)
+        ax.set_title(etq, fontsize=8)
+        ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ cgs)")
+
+    axes[-1].set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+    axes[-1].set_xlim(float(np.nanmin(wave)), float(np.nanmax(wave)))
+    fig.subplots_adjust(hspace=0.22)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
 # Fig. primary_variability — la primaria cambia entre noches, la compañera no
 # --------------------------------------------------------------------------
 
@@ -987,6 +1046,7 @@ def psf_chromatic(objetos, out: Path):
 FIGURAS = {
     "fov_redband": fov_redband,
     "spectra_halpha": spectra_halpha,
+    "full_spectra": full_spectra,
     "hbeta_limit": hbeta_limit,
     "primary_variability": primary_variability,
     "companion_type": companion_type,
