@@ -43,6 +43,36 @@ def stage_g3_paths(run_id, project_root=None):
     }
 
 
+def _ajuste_atmosferico_utilizable(stage_dir):
+    """`(utilizable, motivo)` del ajuste de atmosferas que dejo el G3 real.
+
+    Los productos derivados (`g3_rows_derived.json`) salen de ese ajuste. Si el
+    ajuste fallo sus condiciones de parada, su masa y su radio NO son medidas y
+    esta rodaja no puede preferirlos a los del config: en ROXs 12 b eso movia el
+    Mdot publicado un 31 % y le cambiaba el veredicto a G4, con rc=0 y sin aviso.
+
+    El veredicto lo estampa `stage_g3_assemble._sella_ajuste_atmosferico` en
+    `g3_atmo_fit_qc.json`, que es un fichero aparte y que esta etapa no
+    sobrescribe. Un QC viejo sin el sello se trata como NO utilizable: quien no
+    dice que paso sus gates, no los paso que se sepa.
+    """
+    if stage_dir is None:
+        return True, "sin stage_dir; no se puede comprobar"
+    path = Path(stage_dir) / "g3_atmo_fit_qc.json"
+    if not path.exists():
+        return True, "no hay ajuste de atmosferas en este run"
+    try:
+        qc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False, f"{path.name} ilegible"
+    if "usable_for_downstream" not in qc:
+        return False, (f"{path.name} sin el sello `usable_for_downstream` "
+                       "(producto anterior al sello); no consta que pasara sus gates")
+    if qc["usable_for_downstream"]:
+        return True, "el ajuste paso sus condiciones de parada"
+    return False, "el ajuste fallo sus condiciones de parada: " + "; ".join(qc.get("stops") or [])
+
+
 def _own_mr_from_derived(path):
     """Load own (mass_msun, mass_err, radius_rsun, radius_err) from the WP-9
     derived rows (mass in M_Jup, radius in R_Jup), or None if unavailable."""
@@ -81,6 +111,7 @@ def _read_g2(path):
 
 def compute_stage_g3_accretion(cfg, paths):
     rows_g2, f = _read_g2(paths["g2_table"])
+    mr_source, motivo_mr = "config", "no se evaluo (no hay rodaja combinada)"
     distance = float(cfg["h03_distance_pc"])
     av = float(cfg["h03_av"]); av_err = float(cfg.get("h03_av_err", 0.0))
     rv = float(cfg.get("h03_rv_extinction", 3.1))
@@ -145,7 +176,14 @@ def compute_stage_g3_accretion(cfg, paths):
             depends="[lacc_relation, extinction, distance]")
         scatter = float(cfg.get("h03_relation_scatter_dex", 0.30))
         n_mc = int(cfg.get("g3_n_mc", 2000))
-        own = _own_mr_from_derived(paths["rows_derived_json"])
+        utilizable, motivo_mr = _ajuste_atmosferico_utilizable(_stage_dir(paths))
+        own = _own_mr_from_derived(paths["rows_derived_json"]) if utilizable else None
+        if own is None and not utilizable and paths["rows_derived_json"].exists():
+            open_issues.append({
+                "issue": ("Hay `g3_rows_derived.json` de un G3 real, pero NO se usa su "
+                          f"M,R: {motivo_mr}. Se cae a los M,R del config. Los valores "
+                          "descartados no son medidas."),
+                "priority": "major"})
         if own is not None:  # WP-9 derived M,R available -> use the object's own
             m_used, me_used, r_used, re_used = own
             depends = "[atmospheric_model, evolutionary_model, lacc_relation]"
@@ -195,6 +233,9 @@ def compute_stage_g3_accretion(cfg, paths):
         "n_lines_with_relation": len(per_line),
         "combined_accretion": combined,
         "mdot_p50_msun_yr": next((r["value"] for r in rows if r["property"] == "mdot"), None),
+        # De donde salieron la M y la R con las que se calculo ese Mdot. Antes no
+        # se decia, y `g3_derived` frente a `config` da un 31 % de diferencia.
+        "mdot_mr_source": {"source": mr_source, "reason": motivo_mr},
         "halpha_h03_consistency_v5": v5,
         "mc": {"seed": seed, "n": int(cfg.get("g3_n_mc", 2000))},
         "open_issues": open_issues,

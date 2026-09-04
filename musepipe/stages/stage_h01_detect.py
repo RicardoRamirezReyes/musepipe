@@ -15,7 +15,7 @@ from ..extraction.product import SpectrumProduct
 from ..io import load_calibrated_controls, read_json, write_csv, write_json
 from ..paths import RunPaths
 from ..spectral import continuum_running_median
-from .stage08c_look_elsewhere import empirical_fap
+from .stage08c_look_elsewhere import empirical_fap, parametric_fap
 from .stage_x10_compare import METHOD_ORDER
 
 
@@ -23,6 +23,15 @@ C_KMS = 299792.458
 HALPHA_REST_A = 6562.8
 DEFAULT_TEMPLATE_WIDTH_FACTORS = (1.0, 2.0, 4.0)
 DEFAULT_ADMISSIBLE_PAIRS = (("psffit", "aperture"),)
+
+#: de que columna sale la FAP que decide el veredicto. `empirical` cuenta
+#: excedencias y no puede bajar de 1/(n+1); `parametric` ajusta una cola.
+#: La eleccion se DECLARA en el config (`h01_fap_estimator`) y viaja al QC:
+#: no hay defecto silencioso, porque cambia el veredicto.
+FAP_ESTIMATORS = {"empirical": "global_empirical_fap", "parametric": "global_parametric_fap"}
+
+#: por debajo de esto el ajuste no describe la nula y su FAP no vale
+PARAMETRIC_FAP_MIN_KS_P = 0.05
 BAD_DETECTION_FLAGS = FLAG_BAD_WINDOW | FLAG_SKYLINE
 
 
@@ -43,6 +52,9 @@ TABLE_FIELDS = [
     "rv_consistent",
     "n_controls",
     "minimum_resolvable_fap",
+    "global_parametric_fap",
+    "parametric_fap_ks_p",
+    "parametric_fap_extrapolation_sd",
 ]
 
 
@@ -361,6 +373,9 @@ def analyze_halpha_method(
     search_half_width_kms=500.0,
     width_factors=DEFAULT_TEMPLATE_WIDTH_FACTORS,
     continuum_window_A=80.0,
+    parametric_family="gumbel",
+    parametric_n_boot=0,
+    parametric_seed=None,
 ):
     product.validate()
     if str(product.header.get("WFRAME", "")).lower() not in {"barycentric", "topocentric"}:
@@ -388,6 +403,9 @@ def analyze_halpha_method(
     local_null = control_scans[:, maximum["template_index"], maximum["center_index"]]
     local_fap = empirical_fap(maximum["z"], local_null)
     global_fap = empirical_fap(maximum["z"], null_maxima)
+    parametrica = parametric_fap(maximum["z"], null_maxima,
+                                 family=parametric_family, n_boot=int(parametric_n_boot),
+                                 seed=parametric_seed)
     peak_velocity = C_KMS * (maximum["center_A"] / float(rest_A) - 1.0)
     centroid, fwhm = _line_moments(
         wave,
@@ -416,7 +434,11 @@ def analyze_halpha_method(
         "rv_consistent": bool(rv_consistent),
         "n_controls": int(np.asarray(controls).shape[0]),
         "minimum_resolvable_fap": float(1.0 / (np.asarray(controls).shape[0] + 1)),
+        "global_parametric_fap": _finite_or_none(parametrica["fap"]),
+        "parametric_fap_ks_p": _finite_or_none(parametrica["ks_p"]),
+        "parametric_fap_extrapolation_sd": _finite_or_none(parametrica["extrapolation_sd"]),
     }
+    row["_parametric"] = parametrica
     return H01MethodResult(
         method=method,
         row=row,
@@ -428,18 +450,33 @@ def analyze_halpha_method(
     )
 
 
-def classify_h01_verdict(rows, *, detection_fap=0.01, admissible_pairs=DEFAULT_ADMISSIBLE_PAIRS):
+def classify_h01_verdict(rows, *, detection_fap=0.01, admissible_pairs=DEFAULT_ADMISSIBLE_PAIRS,
+                         fap_estimator="empirical"):
+    """El veredicto, leyendo la FAP del estimador DECLARADO.
+
+    `empirical` no puede bajar de `1/(n+1)`; con los 33 controles que caben a la
+    separacion de la companera su suelo es 0.029 y el criterio de 0.01 es
+    inalcanzable con cualquier dato. `parametric` ajusta una cola a la misma
+    nula. Cual manda se declara en el config y viaja al QC: cambia el veredicto,
+    asi que no puede decidirse por defecto.
+    """
+    if str(fap_estimator) not in FAP_ESTIMATORS:
+        raise ValueError(
+            f"`h01_fap_estimator` desconocido: {fap_estimator!r}. "
+            f"Admitidos: {sorted(FAP_ESTIMATORS)}."
+        )
+    campo = FAP_ESTIMATORS[str(fap_estimator)]
     significant = {
         row["method"]
         for row in rows
-        if row["global_empirical_fap"] is not None
-        and float(row["global_empirical_fap"]) < float(detection_fap)
+        if row.get(campo) is not None
+        and float(row[campo]) < float(detection_fap)
         and bool(row["rv_consistent"])
     }
     fap_hits = {
         row["method"]
         for row in rows
-        if row["global_empirical_fap"] is not None and float(row["global_empirical_fap"]) < float(detection_fap)
+        if row.get(campo) is not None and float(row[campo]) < float(detection_fap)
     }
     for left, right in admissible_pairs:
         if left in significant and right in significant:
@@ -447,6 +484,7 @@ def classify_h01_verdict(rows, *, detection_fap=0.01, admissible_pairs=DEFAULT_A
                 "verdict": "detection",
                 "reason": "admissible_independent_pair_passes_fap_and_rv",
                 "significant_methods": sorted(significant),
+                "fap_estimator": str(fap_estimator),
             }
     if fap_hits:
         return {
@@ -454,8 +492,10 @@ def classify_h01_verdict(rows, *, detection_fap=0.01, admissible_pairs=DEFAULT_A
             "reason": "fap_hit_without_two_rv_consistent_admissible_methods",
             "significant_methods": sorted(significant),
             "fap_hit_methods": sorted(fap_hits),
+            "fap_estimator": str(fap_estimator),
         }
-    return {"verdict": "non_detection", "reason": "no_method_passes_global_fap", "significant_methods": []}
+    return {"verdict": "non_detection", "reason": "no_method_passes_global_fap",
+            "significant_methods": [], "fap_estimator": str(fap_estimator)}
 
 
 def _lsf_fwhm_from_qc_or_config(qc00, cfg):
@@ -573,16 +613,46 @@ def compute_stage_h01_products(config, paths=None) -> StageH01Product:
             search_half_width_kms=float(cfg.get("h01_search_half_width_kms", 500.0)),
             width_factors=cfg.get("h01_template_width_factors", DEFAULT_TEMPLATE_WIDTH_FACTORS),
             continuum_window_A=float(cfg.get("h01_continuum_window_A", 80.0)),
+            parametric_family=str(cfg.get("h01_fap_family", "gumbel")),
+            parametric_n_boot=int(cfg.get("h01_fap_n_boot", 2000)),
+            parametric_seed=cfg.get("h01_fap_seed", 20260902),
         )
         method_results[method] = result
         rows.append(result.row)
     admissible_pairs = [tuple(pair) for pair in cfg.get("h01_admissible_pairs", DEFAULT_ADMISSIBLE_PAIRS)]
+    fap_estimator = str(cfg.get("h01_fap_estimator", "empirical"))
     verdict = classify_h01_verdict(
         rows,
         detection_fap=float(cfg.get("h01_detection_fap", 0.01)),
         admissible_pairs=admissible_pairs,
+        fap_estimator=fap_estimator,
     )
     open_issues = []
+    parametrico = {r["method"]: r.pop("_parametric") for r in rows}
+    detection_fap = float(cfg.get("h01_detection_fap", 0.01))
+    if fap_estimator == "empirical":
+        # El suelo del contador: si el criterio cae por debajo, no lo puede
+        # pasar ningun dato y el veredicto no significa lo que parece.
+        for r in rows:
+            suelo = r.get("minimum_resolvable_fap")
+            if suelo is not None and float(suelo) >= detection_fap:
+                open_issues.append(
+                    f"{r['method']}: el criterio FAP<{detection_fap:g} es INALCANZABLE con "
+                    f"{r['n_controls']} controles (suelo {float(suelo):.4f}). El veredicto "
+                    "'non_detection' puede no significar ausencia de senal.")
+    else:
+        # La cola solo vale si describe la nula y si no se extrapola a ciegas.
+        for r in rows:
+            ks = r.get("parametric_fap_ks_p")
+            if ks is not None and float(ks) < PARAMETRIC_FAP_MIN_KS_P:
+                open_issues.append(
+                    f"{r['method']}: la cola {cfg.get('h01_fap_family', 'gumbel')} NO describe la "
+                    f"nula (KS p={float(ks):.3f} < {PARAMETRIC_FAP_MIN_KS_P}); su FAP no vale.")
+            ex = r.get("parametric_fap_extrapolation_sd")
+            if ex is not None and float(ex) > 3.0:
+                open_issues.append(
+                    f"{r['method']}: la FAP parametrica extrapola {float(ex):.1f} sd por encima del "
+                    "mayor control; su orden de magnitud es defendible, su cifra no.")
     expected_controls = int(cfg.get("h01_expected_controls", 31))
     for method, arr in controls.items():
         if arr.shape[0] != expected_controls:
@@ -595,6 +665,17 @@ def compute_stage_h01_products(config, paths=None) -> StageH01Product:
             "requires_admissible_pair": True,
             "requires_rv_within_lsf": True,
             "admissible_pairs": [[a, b] for a, b in admissible_pairs],
+            "fap_estimator": fap_estimator,
+            "fap_estimator_column": FAP_ESTIMATORS[fap_estimator],
+            "fap_estimator_source": ("config.h01_fap_estimator" if "h01_fap_estimator" in cfg
+                                     else "default (empirical)"),
+        },
+        "parametric_fap": {
+            "family": str(cfg.get("h01_fap_family", "gumbel")),
+            "n_boot": int(cfg.get("h01_fap_n_boot", 2000)),
+            "seed": cfg.get("h01_fap_seed", 20260902),
+            "min_ks_p": PARAMETRIC_FAP_MIN_KS_P,
+            "by_method": parametrico,
         },
         "execution_order": ["controls", "object"],
         "line": {

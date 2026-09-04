@@ -269,6 +269,7 @@ def t2_spatial_coherence(
     centroid_threshold_px=1.0,
     elongation_threshold=1.5,
     chi2_ratio_threshold=0.8,
+    require_positive_amplitude=True,
 ):
     data = np.asarray(stamp, dtype=np.float64)
     psf = np.asarray(psf_stamp, dtype=np.float64)
@@ -286,6 +287,23 @@ def t2_spatial_coherence(
     ratio = np.nan
     if np.isfinite(chi2_plane) and chi2_plane > 0:
         ratio = float(chi2_psf / chi2_plane)
+    # La amplitud de la componente PSF y su signo. Sin esto, una SOBRE-sustraccion
+    # (PSF negativa) mejora el chi2 igual que una emision y T2 la da por buena:
+    # es como el combinado de ROXs 12 b pasaba con amplitud -7.2 sigma.
+    amplitude = amplitude_snr = np.nan
+    try:
+        finite = np.isfinite(data.ravel()) & np.all(np.isfinite(design_psf), axis=-1)
+        if int(np.count_nonzero(finite)) > design_psf.shape[-1]:
+            coef, *_ = np.linalg.lstsq(design_psf[finite], data.ravel()[finite], rcond=None)
+            resid = data.ravel()[finite] - design_psf[finite] @ coef
+            cov = np.linalg.pinv(design_psf[finite].T @ design_psf[finite]) * np.var(
+                resid, ddof=design_psf.shape[-1])
+            err = float(np.sqrt(cov[0, 0]))
+            amplitude = float(coef[0])
+            amplitude_snr = amplitude / err if err > 0 else np.nan
+    except (np.linalg.LinAlgError, ValueError):
+        pass
+
     centroid, axis_ratio = _positive_centroid_and_axis_ratio(data - plane_model)
     psf_centroid, psf_axis_ratio = _positive_centroid_and_axis_ratio(psf)
     if expected_center_yx is None:
@@ -303,8 +321,14 @@ def t2_spatial_coherence(
         or elongation_vs_psf >= float(elongation_threshold)
     ):
         status = "fail"
+    elif require_positive_amplitude and np.isfinite(amplitude) and amplitude <= 0:
+        # Emision, no absorcion: buscamos una linea. Una PSF negativa que ajusta
+        # bien no es una senal, es un agujero.
+        status = "fail"
     return {
         "chi2_ratio_psf_vs_plane": _finite_or_none(ratio),
+        "psf_amplitude": _finite_or_none(amplitude),
+        "psf_amplitude_snr": _finite_or_none(amplitude_snr),
         "centroid_offset_px": _finite_or_none(centroid_offset),
         "elongation_vs_psf": _finite_or_none(elongation_vs_psf),
         "centroid_y": _finite_or_none(centroid[0]),
@@ -418,7 +442,16 @@ def _extract_gap_edges(qc):
 
 
 def _load_signal_cube_and_wave(paths):
-    candidates = [paths["cube_psffit_residual"], paths["cube_residual_object"]]
+    """El cubo donde T2 busca la fuente: con la companera DENTRO.
+
+    Hasta el 2026-09-02 el primer candidato era `cube_psffit_residual`, que es
+    el residuo de C4. Pero C4 ajusta `psf_pair_design` -primaria Y companera- y
+    resta las dos, asi que T2 buscaba una fuente puntual en un cubo del que esa
+    fuente ya habia sido eliminada. Lo que medía era la SOBRE-sustraccion del
+    ajuste: en ROXs 12 b combinado daba -7.2 sigma (negativo) donde el cubo de
+    04b da +10.4 sigma. Ver docs/spec_E2_v2_codex_artifact_tests.md.
+    """
+    candidates = [paths["cube_residual_object"], paths["cube_psffit_residual"]]
     for path in candidates:
         if not Path(path).exists():
             continue
@@ -465,7 +498,7 @@ def _psf_stamp(psf_model, wave_A, shape, center_yx):
 
 def _compute_t2_from_files(paths, cfg, signal_wave_A):
     try:
-        cube, wave, _cube_path = _load_signal_cube_and_wave(paths)
+        cube, wave, cube_path = _load_signal_cube_and_wave(paths)
         qc01c = read_json(paths["stage01c_qc_json"])
         psf_model = read_json(paths["psf_model_json"])
         yx = _companion_yx_from_qc(qc01c)
@@ -474,7 +507,12 @@ def _compute_t2_from_files(paths, cfg, signal_wave_A):
             raise ValueError("Signal channel unavailable.")
         stamp, local_center = _stamp(cube[int(channel)], yx, int(cfg.get("h02_stamp_half_size_px", 5)))
         psf = _psf_stamp(psf_model, wave[int(channel)], stamp.shape, local_center)
-        return t2_spatial_coherence(stamp, psf, expected_center_yx=local_center)
+        out = t2_spatial_coherence(stamp, psf, expected_center_yx=local_center)
+        # Que cubo se uso NO se publicaba, y es justo lo que impidio ver durante
+        # semanas que T2 miraba el residuo de C4 -con la companera ya restada-.
+        out["cube"] = str(cube_path)
+        out["signal_channel"] = int(channel)
+        return out
     except Exception as exc:
         return {
             "chi2_ratio_psf_vs_plane": None,

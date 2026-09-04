@@ -16,8 +16,10 @@ from musepipe.stages.stage_h03_limits import (
     YR_S,
     compute_stage_h03_products,
     limit_conversion_chain,
+    resolve_tail_estimator,
     stage_h03_paths,
     write_stage_h03_products,
+    z_threshold_for,
 )
 
 
@@ -133,6 +135,9 @@ class H03ChainTests(unittest.TestCase):
                 json.dumps(
                     {
                         "verdict": {"verdict": "non_detection"},
+                        # E1 siempre declara con que cola decide, y H03 toma de
+                        # ahi el umbral del 99 % si el run no lo declara aparte.
+                        "criterion": {"fap_estimator": "empirical"},
                         "line": {"rest_A": 6562.8, "rv_sys_kms": 0.0},
                         "templates": {"lsf_fwhm_A": 2.5},
                     }
@@ -178,6 +183,43 @@ class H03ChainTests(unittest.TestCase):
                 written["qc"]["physical_inputs"]["lacc_aoyama21_relation"]
             )
             self.assertTrue(all("mdot_aoyama21" in lim for lim in written["qc"]["limits"]))
+
+
+class H03TailEstimatorTests(unittest.TestCase):
+    """De que cola sale el umbral del 99 %, y que pasa si nadie lo declara.
+
+    H03 tenia `z_99_empirical` incrustado. Cuando E1 paso a decidir con la cola
+    parametrica, los limites siguieron saliendo del cuantil empirico: el paper
+    citaba una deteccion y un limite calibrados con umbrales distintos, y el
+    limite quedaba un 32 % mas apretado de lo que da el metodo declarado.
+    """
+
+    TAIL = {"z_99_empirical": 2.5066, "z_99_gumbel": 3.3091}
+
+    def test_estimator_follows_e1_when_the_run_does_not_declare_one(self):
+        for estimador in ("empirical", "parametric"):
+            with self.subTest(estimador=estimador):
+                valor, fuente = resolve_tail_estimator(
+                    {}, {"criterion": {"fap_estimator": estimador}})
+                self.assertEqual(valor, estimador)
+                self.assertEqual(fuente, "h01_qc.criterion.fap_estimator")
+
+    def test_declared_knob_wins_over_e1(self):
+        valor, fuente = resolve_tail_estimator(
+            {"h03_tail_estimator": "empirical"},
+            {"criterion": {"fap_estimator": "parametric"}})
+        self.assertEqual(valor, "empirical")
+        self.assertEqual(fuente, "config.h03_tail_estimator")
+
+    def test_no_silent_default(self):
+        """Sin knob y sin QC de E1 es un error, no `empirical` por su cuenta."""
+        for cfg, qc in (({}, {}), ({}, None), ({"h03_tail_estimator": "gumbel"}, {})):
+            with self.subTest(cfg=cfg, qc=qc), self.assertRaises(RuntimeError):
+                resolve_tail_estimator(cfg, qc)
+
+    def test_parametric_threshold_is_the_gumbel_one(self):
+        self.assertEqual(z_threshold_for(self.TAIL, "empirical"), 2.5066)
+        self.assertEqual(z_threshold_for(self.TAIL, "parametric"), 3.3091)
 
 
 if __name__ == "__main__":
