@@ -253,13 +253,23 @@ def fov_redband(objetos, out: Path):
         ax.text(x0 + 0.25, y0 + 0.03 * (ext[3] - ext[2]), r'$0.5^{\prime\prime}$',
                 color="white", ha="center", fontsize=7)
 
-        # brujula: N segun el angulo declarado en el QC, E a 90 deg de N
+        # Brujula: las direcciones se piden a la MISMA funcion de B3 que coloca
+        # al compañero en este panel, `pixel_offset_from_sep_pa`, en vez de
+        # rehacer la trigonometria aqui. Rehecha, estaba 180 deg girada en los
+        # dos objetos: la convencion de B3 pone el Norte en -y cuando
+        # `north_angle_deg` es 0, y la brujula lo ponia en +y, de modo que un
+        # lector que comprobase el PA publicado del compañero contra el dibujo
+        # no habria encontrado 240 deg sino ~60. Con esto no pueden discrepar:
+        # si B3 cambia de convencion, la brujula la sigue.
+        from musepipe.stages.stage01c_localize import pixel_offset_from_sep_pa
+
         cxp = ext[1] - 0.16 * (ext[1] - ext[0])
         cyp = ext[3] - 0.20 * (ext[3] - ext[2])
         largo = 0.055 * (ext[1] - ext[0])
-        a = math.radians(norte)
-        for ang, etq in ((a, "N"), (a + math.pi / 2.0, "E")):
-            ux, uy = -math.sin(ang) * largo, math.cos(ang) * largo
+        for pa_deg, etq in ((0.0, "N"), (90.0, "E")):
+            vy, vx = pixel_offset_from_sep_pa(1.0, pa_deg, pix, norte)
+            norma = math.hypot(vx, vy)
+            ux, uy = vx / norma * largo, vy / norma * largo
             ax.annotate("", xy=(cxp + ux, cyp + uy), xytext=(cxp, cyp),
                         arrowprops=dict(arrowstyle="-|>", color="white", lw=0.7,
                                         mutation_scale=6))
