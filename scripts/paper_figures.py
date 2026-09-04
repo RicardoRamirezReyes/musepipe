@@ -129,6 +129,7 @@ class Objeto:
         # Segunda epoca, si el objeto la declara. Sale de `targets/<slug>.json`
         # y NUNCA de un literal aqui (`tests/test_no_hardcoded_target.py`).
         self.run_2a_epoca = bloque.get("second_epoch_run")
+        self.spt_source_dir = bloque.get("spt_source_dir")
         self.run_dir = ROOT / "runs" / self.run_id
         if not self.run_dir.is_dir():
             raise SystemExit(f"no existe runs/{self.run_id} (objeto {slug})")
@@ -416,13 +417,23 @@ def primary_variability(objetos, out: Path, media_ventana_A=45.0):
 # --------------------------------------------------------------------------
 
 def _g3_template_fit(obj: Objeto):
-    """El QC del ajuste de plantillas de G3, mire donde mire el run."""
-    directo = obj.run_dir / "stages" / "g3_template_fit.json"
-    if directo.exists():
-        return json.loads(directo.read_text()), directo.parent
-    cands = sorted((obj.run_dir / "stages").glob("g3_real_*/g3_template_fit.json"))
+    """El ajuste de plantillas de G3, del directorio que el objeto DECLARA.
+
+    `paper.spt_source_dir` en `targets/<slug>.json`. Sin el se cae al mas
+    reciente, pero avisando: elegir por orden alfabetico entre varios reintentos
+    archivados es como se acaba publicando el de otra cosecha.
+    """
+    stages = obj.run_dir / "stages"
+    declarado = obj.spt_source_dir
+    if declarado:
+        p = stages / declarado / "g3_template_fit.json"
+        if not p.exists():
+            raise SystemExit(f"{obj.nombre}: targets declara spt_source_dir={declarado} y no existe {p}")
+        return json.loads(p.read_text()), p.parent
+    cands = sorted(stages.glob("g3_real_*/g3_template_fit.json")) + sorted(stages.glob("g3_template_fit.json"))
     if not cands:
         raise SystemExit(f"{obj.nombre}: no hay g3_template_fit.json en runs/{obj.run_id}")
+    print(f"  AVISO: {obj.nombre} no declara `paper.spt_source_dir`; se usa {cands[-1].parent.name}")
     return json.loads(cands[-1].read_text()), cands[-1].parent
 
 
