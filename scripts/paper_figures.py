@@ -126,13 +126,17 @@ class Objeto:
         self.run_id = bloque["run"]
         self.orden = int(bloque.get("order", 99))
         self.nota = bloque.get("note", "")
+        # Segunda epoca, si el objeto la declara. Sale de `targets/<slug>.json`
+        # y NUNCA de un literal aqui (`tests/test_no_hardcoded_target.py`).
+        self.run_2a_epoca = bloque.get("second_epoch_run")
         self.run_dir = ROOT / "runs" / self.run_id
         if not self.run_dir.is_dir():
             raise SystemExit(f"no existe runs/{self.run_id} (objeto {slug})")
 
     # -- rutas ------------------------------------------------------------
-    def etapa(self, nombre: str) -> Path:
-        p = self.run_dir / "stages" / nombre
+    def etapa(self, nombre: str, *, run_id: str | None = None) -> Path:
+        raiz = ROOT / "runs" / run_id if run_id else self.run_dir
+        p = raiz / "stages" / nombre
         if not p.exists():
             raise SystemExit(f"falta {p} — {self.nombre} no tiene ese producto")
         return p
@@ -177,8 +181,11 @@ def _color(i: int) -> str:
     return COLOR_OBJETO[i % len(COLOR_OBJETO)]
 
 
-def _espectro(obj: Objeto, metodo: str):
+def _espectro(obj: Objeto, metodo: str, *, cual: str = "object", run_id: str | None = None):
     """`(wave_A, flux, err_total, escala_cgs)` del espectro calibrado de D2.
+
+    `cual` elige compañero (`object`) o primaria (`star`); `run_id` permite leer
+    otra epoca del MISMO objeto, declarada en `targets/<slug>.json`.
 
     La unidad viaja con el dato: se resuelve con `musepipe.io`, sin default.
     """
@@ -186,13 +193,15 @@ def _espectro(obj: Objeto, metodo: str):
 
     from musepipe.io import resolve_flux_unit
 
-    with fits.open(obj.etapa(f"spec_calibrated_{metodo}_object.fits")) as hdul:
+    with fits.open(obj.etapa(f"spec_calibrated_{metodo}_{cual}.fits", run_id=run_id)) as hdul:
         t = hdul["SPECTRUM"]
         wave = np.asarray(t.data["wave_A"], dtype=float)
         flux = np.asarray(t.data["flux"], dtype=float)
         err = np.asarray(t.data["flux_err_total"], dtype=float)
         bunit = t.header.get("BUNIT")
-    escala, _ = resolve_flux_unit(obj.config, bunit=bunit)
+    cfg = obj.config if run_id is None else json.loads(
+        (ROOT / "runs" / run_id / "config" / "config.json").read_text())["config"]
+    escala, _ = resolve_flux_unit(cfg, bunit=bunit)
     return wave, flux, err, escala
 
 
@@ -331,6 +340,170 @@ def spectra_halpha(objetos, out: Path, metodos=("aperture", "optimal_ls", "psffi
 
     axes[0].set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ "
                        r"$\mathrm{\AA}^{-1}$)")
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# Fig. primary_variability — la primaria cambia entre noches, la compañera no
+# --------------------------------------------------------------------------
+
+def _continuo_local(wave, flux, centro_A, media_ventana_A, excluir_A):
+    """Mediana del continuo en la ventana, excluyendo el entorno de la linea."""
+    sel = (np.abs(wave - centro_A) <= media_ventana_A) & (np.abs(wave - centro_A) > excluir_A)
+    return float(np.nanmedian(flux[sel])) if np.any(sel) else np.nan
+
+
+def primary_variability(objetos, out: Path, media_ventana_A=45.0):
+    """Halpha de la primaria y del compañero en las dos epocas del mismo objeto.
+
+    Es la figura del argumento de la luz dispersada: la primaria cambia entre
+    noches y el compañero no la sigue. Solo se dibuja para los objetos que
+    declaran `second_epoch_run` en `targets/<slug>.json`.
+
+    La primaria va **normalizada a su propio continuo**: entre las dos noches
+    cambian tambien las condiciones, asi que un F_lambda absoluto mezclaria la
+    variacion de la linea con la de la transmision. Normalizado, lo que se ve es
+    la anchura equivalente, que es la cantidad robusta.
+
+    El panel del compañero lleva su banda de +-1 sigma en las dos noches, que es
+    lo que deja ver que la segunda **no tiene sensibilidad** a la linea: no
+    ensena que el compañero no varie, ensena que esa noche no puede decirlo.
+    """
+    objs = [o for o in objetos if o.run_2a_epoca]
+    if not objs:
+        raise SystemExit("ningun objeto declara `second_epoch_run` en targets/")
+    obj = objs[0]
+    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 2.7))
+
+    epocas = [("first night", None, "#1f77b4"), ("second night", obj.run_2a_epoca, "#d62728")]
+
+    # --- panel a: la primaria, normalizada a su continuo
+    ax = axes[0]
+    for etq, run_id, color in epocas:
+        wave, flux, _err, escala = _espectro(obj, "psffit", cual="star", run_id=run_id)
+        sel = np.abs(wave - HALPHA_A) <= media_ventana_A
+        base = _continuo_local(wave, flux, HALPHA_A, media_ventana_A, 4.0)
+        ax.plot(wave[sel], flux[sel] / base, color=color, lw=0.9, label=etq)
+    ax.axhline(1.0, color="0.6", lw=0.5, ls="-")
+    ax.axvline(HALPHA_A, color="0.35", lw=0.5, ls=":")
+    ax.set_title(f"{obj.nombre.rsplit(' ', 1)[0]} A (primary)")
+    ax.set_ylabel("normalised flux")
+
+    # --- panel b: el compañero, en flujo, con su error
+    ax = axes[1]
+    for etq, run_id, color in epocas:
+        wave, flux, err, escala = _espectro(obj, "psffit", cual="object", run_id=run_id)
+        sel = np.abs(wave - HALPHA_A) <= media_ventana_A
+        w = wave[sel]; f = flux[sel] * escala * 1e18; e = err[sel] * escala * 1e18
+        ax.fill_between(w, f - e, f + e, color=color, alpha=0.20, lw=0)
+        ax.plot(w, f, color=color, lw=0.9, label=etq)
+    ax.axhline(0.0, color="0.6", lw=0.5, ls="-")
+    ax.axvline(HALPHA_A, color="0.35", lw=0.5, ls=":")
+    ax.set_title(f"{obj.nombre} (companion)")
+    ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
+
+    for ax in axes:
+        ax.set_xlim(HALPHA_A - media_ventana_A, HALPHA_A + media_ventana_A)
+        ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+        ax.legend(loc="upper left", handlelength=1.4)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# Fig. companion_type — que clase de objeto es el compañero
+# --------------------------------------------------------------------------
+
+def _g3_template_fit(obj: Objeto):
+    """El QC del ajuste de plantillas de G3, mire donde mire el run."""
+    directo = obj.run_dir / "stages" / "g3_template_fit.json"
+    if directo.exists():
+        return json.loads(directo.read_text()), directo.parent
+    cands = sorted((obj.run_dir / "stages").glob("g3_real_*/g3_template_fit.json"))
+    if not cands:
+        raise SystemExit(f"{obj.nombre}: no hay g3_template_fit.json en runs/{obj.run_id}")
+    return json.loads(cands[-1].read_text()), cands[-1].parent
+
+
+def _binado(wave, flux, paso_A):
+    bordes = np.arange(wave[0], wave[-1] + paso_A, paso_A)
+    idx = np.digitize(wave, bordes) - 1
+    w, f = [], []
+    for k in range(len(bordes) - 1):
+        m = idx == k
+        if m.sum() >= 3 and np.isfinite(flux[m]).sum() >= 3:
+            w.append(np.nanmean(wave[m])); f.append(np.nanmedian(flux[m]))
+    return np.asarray(w), np.asarray(f)
+
+
+def companion_type(objetos, out: Path, paso_A=25.0, rango_A=(6000.0, 9100.0)):
+    """Espectro del compañero contra las plantillas, y el chi2 por tipo espectral.
+
+    Lo que esta figura sostiene es la **clase**, no los parametros fisicos: el
+    ajuste de atmosferas no pasa sus puertas y no se usa (Apendice A). Las dos
+    plantillas se dibujan con el A_V de su propio mejor ajuste y reescaladas por
+    minimos cuadrados al espectro observado, porque el `scale_best` del ajuste
+    vive en las unidades de la libreria y no en las del producto.
+    """
+    from musepipe.models.extinction import CCMExtinction
+    from musepipe.models.prep import prepare_template
+
+    obj = objetos[0]
+    tf, raiz = _g3_template_fit(obj)
+    lsf = float(obj.config["h01_lsf_fwhm_A"])
+    ext = CCMExtinction(3.1, citation="Cardelli et al. 1989")
+
+    wave, flux, err, escala = _espectro(obj, "psffit")
+    m = (wave >= rango_A[0]) & (wave <= rango_A[1])
+    wb, fb = _binado(wave[m], flux[m] * escala * 1e18, paso_A)
+
+    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 2.8),
+                             gridspec_kw={"width_ratios": [2.0, 1.0]})
+    ax = axes[0]
+    ax.plot(wb, fb, color="0.15", lw=0.9, label=f"{obj.nombre}, {paso_A:.0f} " r"$\mathrm{\AA}$ bins")
+
+    for clase, color, etq in (("young", "#d62728", "young"), ("field", "#1f77b4", "field")):
+        mejor = tf[clase]["ranking"][0]
+        libro = ROOT.parent / "Data" / "external_libraries" / f"templates_{clase}"
+        # las dos librerias nombran distinto: `LM601_M7.5.npz` frente a `M9.npz`
+        ficheros = (sorted(libro.glob(f"*_{mejor['spt']}.npz"))
+                    or sorted(libro.glob(f"{mejor['spt']}.npz")))
+        if not ficheros:
+            continue
+        d = np.load(ficheros[0], allow_pickle=True)
+        meta = json.loads(str(d["meta_json"]))
+        class _T:  # el adaptador minimo que espera prepare_template
+            pass
+        t = _T(); t.wave_A = d["wave_A"]; t.flux = d["flux"]; t.meta = meta
+        modelo = prepare_template(t, wb, lsf_fwhm_A=lsf, extinction=ext,
+                                  av=float(mejor["av_best"]), scale=1.0,
+                                  template_fwhm_A=meta.get("resolution_fwhm_A"))
+        ok = np.isfinite(modelo) & np.isfinite(fb)
+        if ok.sum() < 5:
+            continue
+        k = float(np.nansum(modelo[ok] * fb[ok]) / np.nansum(modelo[ok] ** 2))
+        ax.plot(wb, k * modelo, color=color, lw=1.0, alpha=0.85,
+                label=f"{etq} {mejor['spt']} " r"($\chi^2_\nu=$" f"{mejor['chi2_red']:.1f})")
+    ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+    ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
+    ax.set_xlim(*rango_A)
+    ax.legend(loc="upper left", handlelength=1.4)
+
+    ax = axes[1]
+    for clase, color, marca in (("young", "#d62728", "o"), ("field", "#1f77b4", "s")):
+        r = [(x["spt_code"], x["chi2_red"]) for x in tf[clase]["ranking"]]
+        r.sort()
+        ax.plot([x[0] for x in r], [x[1] for x in r], marker=marca, ms=3.0, lw=0.8,
+                color=color, label=clase)
+    ax.axhline(3.0, color="0.5", lw=0.6, ls="--")
+    ax.set_yscale("log")
+    # la libreria de campo llega hasta tipos tempranos (codigos negativos); el
+    # panel se queda en el entorno del minimo, que es donde se decide.
+    ax.set_xlim(2.0, 11.0)
+    ax.set_xlabel("spectral type (M0 = 0, L0 = 10)")
+    ax.set_ylabel(r"$\chi^2_\nu$")
+    ax.legend(loc="upper right", handlelength=1.4)
     fig.savefig(out)
     plt.close(fig)
 
@@ -804,6 +977,8 @@ FIGURAS = {
     "fov_redband": fov_redband,
     "spectra_halpha": spectra_halpha,
     "hbeta_limit": hbeta_limit,
+    "primary_variability": primary_variability,
+    "companion_type": companion_type,
     "null_distributions": null_distributions,
     "injection_throughput": injection_throughput,
     "mdot_mass_plane": mdot_mass_plane,

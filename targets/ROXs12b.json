@@ -18,6 +18,8 @@
     "run": "ROXs12b_OB3445598",
     "order": 1,
     "note": "noche 1 sola: en el combinado los 33 controles tienen +2.7 sigma de modo comun -halo de Halpha de la primaria- que no se separa de la companera (docs/2026-09-03_handoff.md §2)",
-    "display": "ROXs 12 b"
+    "display": "ROXs 12 b",
+    "second_epoch_run": "ROXs12b_OB3444577",
+    "second_epoch_note": "OB 3444577, 2022-08-31, 7 exposiciones: la noche de peor calidad (seeing 0.84 frente a 0.57, tau0 2.1 frente a 6.6 ms, ruido en Halpha 18.8x peor). No se publica sobre ella; se usa para ensenar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera."
   }
 }
