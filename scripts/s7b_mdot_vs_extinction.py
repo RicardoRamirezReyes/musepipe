@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from musepipe.config import load_run_config  # noqa: E402
 from musepipe.stages.stage_h03_limits import (  # noqa: E402
     L_SUN_ERG_S,
+    MAGNETOSPHERIC_FACTOR,
     lacc_lsun_from_lha,
     luminosity_erg_s,
     mdot_msun_yr_from_lacc,
@@ -45,7 +46,10 @@ def _ladder_row(av, f_obs, phys):
     lha = luminosity_erg_s(f_dered, phys["distance_pc"])
     lha_lsun = lha / L_SUN_ERG_S
     lacc = lacc_lsun_from_lha(lha_lsun, phys["lacc_lha_a"], phys["lacc_lha_b"])
-    mdot = mdot_msun_yr_from_lacc(lacc, phys["companion_mass_msun"], phys["companion_radius_rsun"])
+    # el mismo factor magnetosferico que publica E3 y G3; sin el, la escalera
+    # de esta figura no cae sobre el limite del propio E3
+    mdot = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(
+        lacc, phys["companion_mass_msun"], phys["companion_radius_rsun"])
     row = {"a_v": av, "a_halpha": a_halpha, "ext_factor": ext,
            "f_lim_dereddened": f_dered, "l_halpha_lsun": lha_lsun,
            "l_acc_lsun": lacc, "mdot_msun_yr": mdot}
@@ -53,7 +57,8 @@ def _ladder_row(av, f_obs, phys):
     aoyama = phys.get("lacc_aoyama21")
     if aoyama:
         lacc_a = lacc_lsun_from_lha(lha_lsun, aoyama["a"], aoyama["b"])
-        mdot_a = mdot_msun_yr_from_lacc(lacc_a, phys["companion_mass_msun"], phys["companion_radius_rsun"])
+        mdot_a = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(
+            lacc_a, phys["companion_mass_msun"], phys["companion_radius_rsun"])
         row["l_acc_aoyama21_lsun"] = lacc_a
         row["mdot_aoyama21_msun_yr"] = mdot_a
     return row

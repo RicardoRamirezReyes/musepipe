@@ -1278,6 +1278,161 @@ def psf_chromatic(objetos, out: Path):
 
 
 # --------------------------------------------------------------------------
+# Fig. extinction — lo que cuesta la extincion, y que afirmacion le sobrevive
+# --------------------------------------------------------------------------
+
+def _cadena_mdot(phys, f_obs_cgs, av):
+    """`(l_halpha_lsun, l_acc_lsun, mdot)` a un A_V dado, con la cadena publicada.
+
+    Es LA de las etapas -- `stage_h03_limits` mas el factor magnetosferico de
+    `R_in = 5R` -- no una reimplementacion: si esa cadena cambia, esta figura
+    cambia con ella o falla su anclaje.
+    """
+    from musepipe.stages.stage_h03_limits import (L_SUN_ERG_S, MAGNETOSPHERIC_FACTOR,
+                                                  lacc_lsun_from_lha, luminosity_erg_s,
+                                                  mdot_msun_yr_from_lacc)
+    f_dered = f_obs_cgs * 10.0 ** (0.4 * av * phys["a_halpha_over_av"])
+    lha = luminosity_erg_s(f_dered, phys["distance_pc"]) / L_SUN_ERG_S
+    lacc = lacc_lsun_from_lha(lha, phys["lacc_lha_a"], phys["lacc_lha_b"])
+    mdot = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(
+        lacc, phys["companion_mass_msun"], phys["companion_radius_rsun"])
+    return lha, lacc, mdot
+
+
+def _entrada_extincion(obj: Objeto) -> dict:
+    """Flujo observado y Mdot publicado del objeto, con su naturaleza.
+
+    Deteccion: el flujo que consume G3 (`flux_direct` de la tabla de lineas de
+    G2) y su `mdot_p50_msun_yr`, que es la MEDIANA del Monte Carlo -- por eso el
+    anclaje le da holgura y al limite no.
+    Limite: el `f_lim_observed` de E3 en el metodo canonico y su `mdot`, que es
+    valor puntual y tiene que caer exacto.
+    """
+    from musepipe.stages.stage_h03_limits import physical_inputs_from_config
+
+    cfg = obj.config
+    phys = physical_inputs_from_config(dict(cfg))
+    escala = float(cfg["h03_flux_unit_cgs"])
+    h03 = obj.qc("stage_h03_qc.json")
+    canonico = h03["canonical_method"]
+    g3 = obj.qc("stage_g3_qc.json")
+    mdot_pub = g3.get("mdot_p50_msun_yr")
+    if mdot_pub is not None:
+        # DOS flujos, a proposito. `f_obs` es el que consume G3 (integracion
+        # directa de G2) y es el unico con el que la curva de Mdot cae sobre el
+        # numero publicado. `f_mf` es el del filtro adaptado de E1, que es el
+        # estimador con el que se mide el LIMITE del otro objeto: comparar
+        # contrastes exige el mismo estimador en los dos lados, y los dos
+        # difieren un 26 % en este objeto.
+        linea = next(r for r in obj.filas("g2_line_measurements.csv") if r["name"] == "Halpha")
+        det = next(r for r in obj.filas("halpha_detection_by_method.csv")
+                   if r["method"] == canonico)
+        return {"phys": phys, "f_obs": float(linea["flux_direct"]) * escala,
+                "f_mf": float(det["matched_flux"]) * escala,
+                "mdot_pub": float(mdot_pub), "limite": False, "tol": 0.05}
+    fila = next(L for L in h03["limits"] if L["method"] == canonico)
+    f_lim = float(fila["f_lim_observed"])
+    return {"phys": phys, "f_obs": f_lim, "f_mf": f_lim,
+            "mdot_pub": float(fila["mdot"]), "limite": True, "tol": 1e-6}
+
+
+def extinction(objetos, out: Path, av_max=6.0, dav_max=2.0):
+    """Que cuesta la extincion supuesta, y que afirmacion del par le sobrevive.
+
+    La extincion es la segunda palanca del Mdot y NADA de estos datos la mide: se
+    adopta la de la primaria en los dos objetos. El paper lo dice en prosa y con
+    una ecuacion de sensibilidad; esta figura lo pone en numeros dibujados.
+
+    *Izquierda:* Mdot contra el A_V supuesto -- la deteccion de uno y el limite
+    del otro -- por la MISMA cadena que publican las etapas. A su A_V adoptado
+    cada curva tiene que caer sobre el numero publicado: se comprueba, y si no
+    cae la figura **falla** en vez de dibujar una curva que discrepe de la tabla.
+
+    *Derecha:* el contraste del par contra la extincion DIFERENCIAL -- la que
+    tendria el segundo compañero de mas -- que es la cantidad que nadie ha
+    medido. Van las dos afirmaciones: la de Mdot, que cruza cero pronto, y la de
+    flujo de linea observado, que es un cociente de medidas y no depende de
+    ningun A_V, por eso es plana. Entre las dos esta el argumento de la seccion
+    de sistematicos: cual de las dos se sostiene sin medir la extincion.
+    """
+    if len(objetos) != 2:
+        raise SystemExit("la figura de extincion compara DOS objetos; hay "
+                         f"{len(objetos)} declarados con `paper`")
+
+    datos = [_entrada_extincion(o) for o in objetos]
+    for obj, d in zip(objetos, datos):
+        av = d["phys"]["av"]
+        mdot = _cadena_mdot(d["phys"], d["f_obs"], av)[2]
+        desvio = abs(mdot / d["mdot_pub"] - 1.0)
+        if desvio > d["tol"]:
+            raise SystemExit(
+                f"{obj.nombre}: la cadena da Mdot={mdot:.4e} a A_V={av:g} y el "
+                f"producto publica {d['mdot_pub']:.4e} ({100 * desvio:.1f}% de "
+                "desvio). La figura no se dibuja: discreparia de la tabla.")
+
+    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 2.6))
+
+    # -- izquierda: Mdot contra el A_V supuesto ---------------------------
+    ax = axes[0]
+    rejilla = np.linspace(0.0, av_max, 121)
+    for i, (obj, d) in enumerate(zip(objetos, datos)):
+        color = _color(i)
+        curva = np.array([_cadena_mdot(d["phys"], d["f_obs"], a)[2] for a in rejilla])
+        etq = f"{obj.nombre} " + ("(99% limit)" if d["limite"] else "(detection)")
+        ax.plot(rejilla, curva, color=color, lw=1.1,
+                ls="--" if d["limite"] else "-", label=etq)
+        av, av_err = d["phys"]["av"], d["phys"]["av_err"]
+        ax.axvspan(av - av_err, av + av_err, color=color, alpha=0.10, lw=0)
+        ax.plot([av], [d["mdot_pub"]], marker="v" if d["limite"] else "o",
+                ms=4.0, color=color, zorder=5)
+        ax.annotate(f"$A_V={av:g}$", (av, d["mdot_pub"]), textcoords="offset points",
+                    xytext=(5, -10 if d["limite"] else 5), fontsize=6.5, color=color)
+    phys = datos[0]["phys"]
+    pend = 0.4 * phys["lacc_lha_a"] * phys["a_halpha_over_av"]
+    ax.set_yscale("log")
+    ax.set_xlim(0.0, av_max)
+    ax.set_xlabel(r"assumed $A_V$ (mag)")
+    ax.set_ylabel(r"$\dot{M}_{\rm acc}$ ($M_\odot$ yr$^{-1}$)")
+    ax.legend(loc="upper left", handlelength=1.6,
+              title=(r"slope $0.4\,a\,A_{\mathrm{H}\alpha}/A_V$ = "
+                     f"{pend:.3f}" r" dex mag$^{-1}$"),
+              title_fontsize=6.5)
+
+    # -- derecha: el contraste contra la extincion DIFERENCIAL -------------
+    ax = axes[1]
+    dav = np.linspace(0.0, dav_max, 121)
+    a, b = datos  # el orden lo fija `paper.order` en targets/
+    # el ancla es el numero PUBLICADO, no el de la cadena: en la deteccion los
+    # dos difieren un 1.2 % porque el publicado es la mediana del Monte Carlo, y
+    # ese 1.2 % movia el cruce de 0.92 a 0.93 mag, o sea la figura contra la tabla
+    mdot_a = a["mdot_pub"]
+    mdot_b = b["mdot_pub"] * np.array(
+        [_cadena_mdot(b["phys"], b["f_obs"], b["phys"]["av"] + x)[2]
+         / _cadena_mdot(b["phys"], b["f_obs"], b["phys"]["av"])[2] for x in dav])
+    contraste_mdot = np.log10(mdot_a / mdot_b)
+    contraste_flujo = math.log10(a["f_mf"] / b["f_mf"])
+
+    ax.plot(dav, contraste_mdot, color="#d62728", lw=1.1,
+            label=r"$\Delta\log\dot{M}_{\rm acc}$ (detection vs limit)")
+    ax.axhline(contraste_flujo, color="0.20", lw=1.1, ls="-.",
+               label=r"$\Delta\log F(\mathrm{H}\alpha)$, observed")
+    ax.axhline(0.0, color="0.5", lw=0.6, ls=":")
+    cruce = float(np.interp(0.0, contraste_mdot[::-1], dav[::-1]))
+    if 0.0 < cruce < dav_max:
+        ax.axvline(cruce, color="#d62728", lw=0.6, ls="--")
+        ax.annotate(f"{cruce:.2f} mag", (cruce, 0.0), textcoords="offset points",
+                    xytext=(4, 7), fontsize=6.5, color="#d62728")
+    ax.set_xlim(0.0, dav_max)
+    ax.set_xlabel("differential " r"$A_V$ toward " f"{objetos[1].nombre} (mag)")
+    ax.set_ylabel("pair contrast (dex)")
+    ax.legend(loc="lower left", handlelength=1.8)
+
+    fig.tight_layout(pad=0.3)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
 
 #: nombre del PDF -> funcion, en el orden en que aparecen en el paper.
 FIGURAS = {
@@ -1294,6 +1449,7 @@ FIGURAS = {
     "mdot_mass_plane": mdot_mass_plane,
     "contrast_curves": contrast_curves,
     "psf_chromatic": psf_chromatic,
+    "extinction": extinction,
 }
 
 

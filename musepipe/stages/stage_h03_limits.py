@@ -726,7 +726,22 @@ def lacc_lsun_from_lha(lha_lsun, slope, intercept):
     return float(10.0 ** (float(slope) * math.log10(float(lha_lsun)) + float(intercept)))
 
 
+#: (1 - R/R_in)^-1 con R_in = 5R (Gullbring et al. 1998), el radio de truncamiento
+#: magnetosferico que fija el spec G3 (linea 143) y que la seccion de metodos del
+#: paper declara para TODA conversion a Mdot. G3 lo aplicaba (via
+#: `models.accretion.mdot_from_lacc`) y E3 no, asi que la deteccion y el limite del
+#: mismo paper no eran la misma formula: el limite salia 1.25x mas apretado que la
+#: medida con la que se compara. Vive aqui porque `models.accretion` ya importa de
+#: este modulo y al reves seria circular.
+MAGNETOSPHERIC_FACTOR = 1.25
+
+
 def mdot_msun_yr_from_lacc(lacc_lsun, mass_msun, radius_rsun):
+    """Mdot = L_acc R / (G M), SIN el factor magnetosferico.
+
+    Es la primitiva; quien publica un Mdot le aplica `MAGNETOSPHERIC_FACTOR`
+    (`limit_conversion_chain` aqui, `models.accretion.mdot_from_lacc` en G3).
+    """
     if lacc_lsun <= 0 or not np.isfinite(lacc_lsun):
         return np.nan
     lacc_cgs = float(lacc_lsun) * L_SUN_ERG_S
@@ -776,8 +791,8 @@ def limit_conversion_chain(
     lha_5sigma_lsun = lha_5sigma / L_SUN_ERG_S
     lacc = lacc_lsun_from_lha(lha_lsun, lacc_lha_slope, lacc_lha_intercept)
     lacc_5sigma = lacc_lsun_from_lha(lha_5sigma_lsun, lacc_lha_slope, lacc_lha_intercept)
-    mdot = mdot_msun_yr_from_lacc(lacc, mass_msun, radius_rsun)
-    mdot_5sigma = mdot_msun_yr_from_lacc(lacc_5sigma, mass_msun, radius_rsun)
+    mdot = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(lacc, mass_msun, radius_rsun)
+    mdot_5sigma = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(lacc_5sigma, mass_msun, radius_rsun)
     lha_frac = 0.0 if lha == 0 else abs(lha_err / lha)
     measurement_dex = lha_frac / math.log(10.0)
     mdot_err_dex = math.sqrt((float(lacc_lha_slope) * measurement_dex) ** 2 + float(relation_scatter_dex) ** 2)
@@ -786,8 +801,9 @@ def limit_conversion_chain(
     if alt_lacc_slope is not None and alt_lacc_intercept is not None:
         lacc_alt = lacc_lsun_from_lha(lha_lsun, alt_lacc_slope, alt_lacc_intercept)
         lacc_alt_5sigma = lacc_lsun_from_lha(lha_5sigma_lsun, alt_lacc_slope, alt_lacc_intercept)
-        mdot_alt = mdot_msun_yr_from_lacc(lacc_alt, mass_msun, radius_rsun)
-        mdot_alt_5sigma = mdot_msun_yr_from_lacc(lacc_alt_5sigma, mass_msun, radius_rsun)
+        mdot_alt = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(lacc_alt, mass_msun, radius_rsun)
+        mdot_alt_5sigma = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(
+            lacc_alt_5sigma, mass_msun, radius_rsun)
         alt_scatter = float(relation_scatter_dex if alt_scatter_dex is None else alt_scatter_dex)
         mdot_alt_err_dex = math.sqrt((float(alt_lacc_slope) * measurement_dex) ** 2 + alt_scatter ** 2)
     else:
@@ -1423,6 +1439,7 @@ __all__ = [
     "gumbel_isf",
     "interpolate_throughput",
     "limit_conversion_chain",
+    "MAGNETOSPHERIC_FACTOR",
     "mdot_msun_yr_from_lacc",
     "physical_inputs_from_config",
     "run_stage_h03",
