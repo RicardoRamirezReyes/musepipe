@@ -66,6 +66,17 @@ def main(argv=None) -> int:
                     help="regla de exclusion pre-registrada a dibujar")
     ap.add_argument("--metodos", default="aperture,psffit",
                     help="un panel por metodo, en este orden")
+    # Para incrustar en un .docx sin que cambie la paginacion hay que fijar el
+    # tamaño FISICO, no dejar que lo decida el numero de paneles.
+    ap.add_argument("--figsize-cm", default=None, metavar="ANCHOxALTO",
+                    help="tamaño fisico en cm, p.ej. 13.5x6.30; por defecto "
+                         "4.6 in por panel x 4.2 in")
+    ap.add_argument("--dpi", type=int, default=200, help="dpi del PNG")
+    # A tamaño pequeño el supertitulo y el pie no caben y roban alto a los
+    # paneles. Cuando la figura va dentro de un documento que ya lleva su
+    # leyenda, se quitan y esa informacion la escribe el pie del documento.
+    ap.add_argument("--sin-suptitulo", action="store_true")
+    ap.add_argument("--sin-pie", action="store_true")
     args = ap.parse_args(argv)
 
     in_dir = Path(args.in_dir)
@@ -85,8 +96,15 @@ def main(argv=None) -> int:
     color = {r: PALETA[i % len(PALETA)] for i, r in enumerate(runs)}
     etiqueta = {r: nombre_a_mostrar(r) for r in runs}
 
-    fig, axes = plt.subplots(1, len(metodos), figsize=(4.6 * len(metodos), 4.2),
-                             sharey=True)
+    if args.figsize_cm:
+        w_cm, h_cm = (float(x) for x in args.figsize_cm.lower().split("x"))
+        figsize = (w_cm / 2.54, h_cm / 2.54)
+        # A 13.5x6.30 cm los cuerpos por defecto no caben: se escalan con el alto.
+        escala = min(1.0, (h_cm / 2.54) / 4.2)
+    else:
+        figsize, escala = (4.6 * len(metodos), 4.2), 1.0
+    fs = lambda base: max(4.2, base * escala)
+    fig, axes = plt.subplots(1, len(metodos), figsize=figsize, sharey=True)
     if len(metodos) == 1:
         axes = [axes]
 
@@ -102,8 +120,15 @@ def main(argv=None) -> int:
             hi = [float(r["ic95_hi"]) for r in sel]
             n_pos = sel[0]["positions_per_point"] if sel else "?"
             ax.fill_between(x, lo, hi, color=color[run], alpha=0.18, linewidth=0)
-            ax.plot(x, y, "o-", color=color[run], markersize=4, linewidth=1.6,
-                    label=f"{etiqueta[run]} ({n_pos} positions)")
+            # n independiente si lo hay: es el que sostiene el p del titulo.
+            n_ind_run = None
+            if ind:
+                g = (ind.get("geometria") or {}).get(run) or {}
+                n_ind_run = g.get("n_tras_exclusion") or g.get("n_disjuntas")
+            etq = (f"{etiqueta[run]} ({n_ind_run} indep. positions)" if n_ind_run
+                   else f"{etiqueta[run]} ({n_pos} positions)")
+            ax.plot(x, y, "o-", color=color[run], markersize=3 * escala + 1,
+                    linewidth=1.6 * escala + 0.3, label=etq)
 
         c = comp[metodo][args.exclusion]
         cita = (ind["comparacion"][metodo]["independientes"]
@@ -119,18 +144,19 @@ def main(argv=None) -> int:
         sufijo = (f"\nfrom {n_ind[0]}+{n_ind[1]} non-overlapping positions" if n_ind else "")
         ax.set_title(f"{metodo}\n"
                      f"SNR$_{{50}}$: {cita['snr50_a']:.2f} vs {cita['snr50_b']:.2f}  "
-                     f"($\\times${cita['razon']:.2f}, {p_txt}){sufijo}", fontsize=10)
-        ax.set_xlabel("Injected S/N")
+                     f"($\\times${cita['razon']:.2f}, {p_txt}){sufijo}", fontsize=fs(10))
+        ax.set_xlabel("Injected S/N", fontsize=fs(10))
         ax.set_xlim(0, 3.1)
         ax.set_ylim(-0.03, 1.03)
         ax.grid(alpha=0.25, linewidth=0.6)
-        ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
+        ax.legend(loc="lower right", fontsize=fs(8), framealpha=0.9)
 
-    axes[0].set_ylabel("Completeness (recovered fraction)")
+    axes[0].set_ylabel("Completeness (recovered fraction)", fontsize=fs(10))
 
     tag = proc["procedencia"].get("tag") or proc["procedencia"]["commit_corto"]
-    fig.suptitle("Injection\u2013recovery completeness: both companions, "
-                 "identical configuration", fontsize=12)
+    if not args.sin_suptitulo:
+        fig.suptitle("Injection\u2013recovery completeness: both companions, "
+                     "identical configuration", fontsize=fs(12))
     pie = (f"{tag} · seed {proc['semilla']} · "
            f"{proc['n_boot']} bootstrap / {proc['n_perm']} permutations · "
            f"exclusion rule: {EXCL_EN[args.exclusion]}")
@@ -143,12 +169,22 @@ def main(argv=None) -> int:
                 f"{'+'.join(str(v['n_posiciones'][i]) for i, v in enumerate(list(nom.values())[:1] * 2))}"
                 " nominal positions the same test gives "
                 + ", ".join(f"{m}: p={v['p']:.4f}" for m, v in nom.items()) + ".")
-    fig.text(0.99, 0.005, pie, ha="right", va="bottom", fontsize=6.2, color="0.35")
-    fig.tight_layout(rect=(0, 0.03, 1, 0.94))
+    if not args.sin_pie:
+        fig.text(0.99, 0.005, pie, ha="right", va="bottom", fontsize=fs(6.2), color="0.35")
+    abajo = 0.0 if args.sin_pie else (0.10 if args.figsize_cm else 0.03)
+    arriba = 1.0 if args.sin_suptitulo else (0.90 if args.figsize_cm else 0.94)
+    fig.tight_layout(rect=(0, abajo, 1, arriba))
+    # el pie sigue imprimiendose siempre, para que quien escriba la leyenda del
+    # documento lo tenga a mano aunque no vaya dentro de la imagen
+    print("PIE:", pie.replace("\n", " "))
 
     out = Path(args.out) if args.out else in_dir / "fig2_completitud.pdf"
-    fig.savefig(out, bbox_inches="tight")
-    fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight")
+    # Con `--figsize-cm` NO se recorta: `bbox_inches="tight"` reajusta el lienzo
+    # al contenido y el fichero sale con otro tamaño fisico del pedido, que es
+    # justo lo que descuadra la paginacion de un .docx.
+    recorte = None if args.figsize_cm else "tight"
+    fig.savefig(out, bbox_inches=recorte)
+    fig.savefig(out.with_suffix(".png"), dpi=args.dpi, bbox_inches=recorte)
     print(out)
     print(out.with_suffix(".png"))
     return 0
