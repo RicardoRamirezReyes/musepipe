@@ -678,6 +678,210 @@ def hbeta_limit(objetos, out: Path, metodo="psffit", media_ventana_A=45.0):
 
 
 # --------------------------------------------------------------------------
+# Fig. control_ring — el anillo de controles, que es el argumento del halo
+# --------------------------------------------------------------------------
+
+def control_ring(objetos, out: Path, metodo="psffit", media_ventana_A=3.0):
+    """Donde se mide y donde se mide el halo, con el estadistico de cada sitio.
+
+    El argumento de que la señal no es halo de la primaria no se lee en una
+    tabla: las 33 posiciones de control estan **al mismo radio** que el
+    compañero, o sea dentro del mismo halo, y ninguna se le acerca. Esta figura
+    lo enseña en el sitio y en numero.
+
+    Izquierda: el canal de Halpha del cubo con el fondo local ya restado, que es
+    donde vive la deteccion, con el compañero y las 33 posiciones coloreadas por
+    su propio estadistico. Derecha: ese estadistico contra el azimut, con el del
+    compañero como linea.
+
+    Las posiciones se reconstruyen con la MISMA funcion que uso la extraccion
+    (`same_radius_control_positions`) y los mismos knobs del run; los valores
+    salen del npz de nulos de E1, en el mismo orden.
+    """
+    from astropy.io import fits
+
+    from musepipe.apertures import same_radius_control_positions
+
+    obj = objetos[0]
+    q = obj.qc("stage01c_qc.json")
+    sy, sx = map(float, q["primary"]["pos_yx"])
+    cy, cx = map(float, q["companion"]["pos_yx"])
+    pix = float(q["pixel_scale_arcsec"])
+    cfg = obj.config
+    h01 = obj.qc("stage_h01_qc.json")
+    pico = float(h01["line"]["rest_A"])
+
+    with fits.open(obj.etapa("cube_residual_local_object.fits"), memmap=True) as hdul:
+        cubo = hdul[0].data
+        nz, ny, nx = cubo.shape
+        w0 = float(obj.qc("stage01_qc.json")["wavelength_info"]["wmin_A"])
+        dw = float(obj.qc("stage01_qc.json")["wavelength_info"]["dw_A"])
+        wave = w0 + dw * np.arange(nz)
+        sel = np.abs(wave - pico) <= media_ventana_A
+        img = np.nanmean(np.asarray(cubo[sel], dtype=np.float32), axis=0)
+
+    pos = same_radius_control_positions(
+        (cy, cx), (sy, sx), ny, nx,
+        n_positions=int(cfg.get(f"x0{ {'aperture':1,'optimal_ls':2,'psffit':3}.get(metodo,3) }_control_apertures", 38)),
+        exclude_angle_deg=float(cfg.get("x03_control_exclude_angle_deg", 25.0)))
+    z = np.load(obj.etapa("stage_h01_null_maxima.npz"))[f"{metodo}_null_maxima"]
+    if len(pos) != len(z):
+        raise SystemExit(f"{len(pos)} posiciones contra {len(z)} nulos: la reconstruccion no cuadra")
+    z_obj = max(float(r["matched_z"]) for r in obj.filas("halpha_detection_by_method.csv")
+                if r["method"] == metodo)
+
+    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 3.1),
+                            gridspec_kw={"width_ratios": [1.0, 1.15], "wspace": 0.42})
+    ax = axes[0]
+    ext = [(-0.5 - sx) * pix, (nx - 0.5 - sx) * pix, (-0.5 - sy) * pix, (ny - 0.5 - sy) * pix]
+    # el nucleo satura cualquier escala lineal; se corta en el percentil 99 del
+    # ANILLO, que es la zona que la figura discute, no en el del campo entero.
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    rr = np.hypot(yy - sy, xx - sx)
+    anillo = np.isfinite(img) & (np.abs(rr - np.hypot(cy - sy, cx - sx)) < 12.0)
+    v = np.nanpercentile(img[anillo], [3.0, 99.0])
+    ax.imshow(img, origin="lower", extent=ext, cmap="Greys", vmin=v[0], vmax=v[1],
+              interpolation="nearest")
+    ang = np.linspace(0, 2 * np.pi, 361)
+    r = float(np.hypot(cy - sy, cx - sx)) * pix
+    ax.plot(r * np.cos(ang), r * np.sin(ang), color="0.55", lw=0.5, ls="--")
+    puntos = ax.scatter([(p[1] - sx) * pix for p in pos], [(p[0] - sy) * pix for p in pos],
+                        c=z, cmap="viridis", vmin=0.0, vmax=max(3.5, float(np.nanmax(z))),
+                        s=16, edgecolors="k", linewidths=0.3, zorder=3)
+    ax.plot((cx - sx) * pix, (cy - sy) * pix, marker="o", ms=7, mfc="none",
+            mec="#d62728", mew=1.2, zorder=4)
+    ax.annotate("b", ((cx - sx) * pix, (cy - sy) * pix), textcoords="offset points",
+                xytext=(8, 4), color="#d62728", fontsize=8)
+    ax.plot(0, 0, marker="+", color="k", ms=7, mew=1.0)
+    ax.set_aspect("equal")
+    ax.set_xlabel("offset from primary (arcsec)")
+    ax.set_ylabel("offset from primary (arcsec)")
+    cb = fig.colorbar(puntos, ax=ax, fraction=0.046, pad=0.02)
+    cb.set_label(r"control $z$", fontsize=7, labelpad=1)
+
+    ax = axes[1]
+    az = np.degrees(np.arctan2([p[0] - sy for p in pos], [p[1] - sx for p in pos])) % 360.0
+    orden = np.argsort(az)
+    ax.scatter(az[orden], z[orden], c=z[orden], cmap="viridis", vmin=0.0,
+               vmax=max(3.5, float(np.nanmax(z))), s=16, edgecolors="k", linewidths=0.3)
+    ax.axhline(z_obj, color="#d62728", lw=1.0)
+    ax.annotate(f"companion, $z = {z_obj:.1f}$", xy=(0.02, z_obj), xycoords=("axes fraction", "data"),
+                va="bottom", fontsize=7, color="#d62728")
+    ax.axhline(float(np.nanmax(z)), color="0.5", lw=0.6, ls="--")
+    ax.annotate(f"largest control, $z = {np.nanmax(z):.1f}$", xy=(0.02, float(np.nanmax(z))),
+                xycoords=("axes fraction", "data"), va="bottom", fontsize=6.5, color="0.35")
+    ax.set_xlim(0, 360); ax.set_xticks([0, 90, 180, 270, 360])
+    ax.set_ylim(0, z_obj * 1.18)
+    ax.set_xlabel("azimuth around the primary (deg)")
+    ax.set_ylabel(r"matched-filter $z$")
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# Fig. psf_radial — la primaria, los modelos y lo que sobra
+# --------------------------------------------------------------------------
+
+def _perfil_radial(img, cy, cx, r_max_px, *, excluir=None, paso_px=1.0):
+    """Mediana azimutal en anillos de `paso_px`, excluyendo lo que se le diga."""
+    ny, nx = img.shape
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    rr = np.hypot(yy - cy, xx - cx)
+    bueno = np.isfinite(img)
+    if excluir is not None:
+        for ey, ex, er in excluir:
+            bueno &= np.hypot(yy - ey, xx - ex) > er
+    bordes = np.arange(0.0, r_max_px + paso_px, paso_px)
+    r, v = [], []
+    for lo, hi in zip(bordes[:-1], bordes[1:]):
+        m = bueno & (rr >= lo) & (rr < hi)
+        if m.sum() >= 6:
+            r.append(0.5 * (lo + hi)); v.append(float(np.nanmedian(img[m])))
+    return np.asarray(r), np.asarray(v)
+
+
+def psf_radial(objetos, out: Path, wave_A=None, media_ventana_A=10.0):
+    """Perfil radial de la primaria contra los modelos de PSF, y el residuo.
+
+    Es la otra mitad del argumento del halo: el compañero se mide sobre un
+    fondo que este modelo tiene que reproducir, y hasta donde no lo reproduce
+    es el sistematico que el paper arrastra. Se dibujan los DOS modelos que C1
+    deja en disco --la mezcla por exposicion, que es la que usa la cadena, y el
+    psfao ajustado sobre el cubo combinado-- porque la diferencia entre ellos es
+    del tamaño del efecto.
+
+    Los modelos se normalizan dentro de `norm_radius_px` por construccion, asi
+    que se escalan al dato por su flujo dentro de ese mismo radio: no hay ningun
+    grado de libertad ajustado aqui.
+    """
+    from astropy.io import fits
+
+    from musepipe.psf import evaluate_psf_model
+
+    obj = objetos[0]
+    q = obj.qc("stage01c_qc.json")
+    sy, sx = map(float, q["primary"]["pos_yx"])
+    cy, cx = map(float, q["companion"]["pos_yx"])
+    pix = float(q["pixel_scale_arcsec"])
+    r_comp = float(np.hypot(cy - sy, cx - sx))
+    lam = float(wave_A if wave_A is not None else obj.qc("stage_h01_qc.json")["line"]["rest_A"])
+
+    with fits.open(obj.etapa("stage01_cropped_cube_stack.fits")) as hdul:
+        wave = np.asarray(hdul["WAVELENGTH"].data, dtype=float)
+        sel = np.abs(wave - lam) <= media_ventana_A
+        img = np.nanmedian(np.asarray(hdul["CUBES"].data[0][sel], dtype=np.float32), axis=0)
+    ny, nx = img.shape
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    rr = np.hypot(yy - sy, xx - sx)
+    fondo = float(np.nanmedian(img[np.isfinite(img) & (rr > 0.92 * min(sy, sx, ny - sy, nx - sx))]))
+    img = img - fondo
+
+    # el ultimo 8 % del radio son esquinas con pocos pixeles: el perfil ahi es
+    # borde de campo, no halo, y arrastraba el residuo a -50 %.
+    r_max = 0.92 * float(min(sy, sx, ny - 1 - sy, nx - 1 - sx))
+    r_dat, v_dat = _perfil_radial(img, sy, sx, r_max, excluir=[(cy, cx, 10.0)])
+
+    modelos = [("per-observation mixture", "psf_model.json", "#d62728"),
+               ("combined-cube fit", "psf_model_combined.json", "#1f77b4")]
+    dentro = np.isfinite(img) & (rr <= 25.0)
+    flujo_dato = float(np.nansum(img[dentro]))
+
+    fig, axes = plt.subplots(2, 1, figsize=(ANCHO_COL_IN * 1.65, 4.2), sharex=True,
+                             gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.08})
+    axes[0].plot(r_dat * pix, v_dat, color="0.10", lw=1.0, label=f"{obj.nombre.rsplit(' ', 1)[0]} A, data")
+    for etq, fichero, color in modelos:
+        try:
+            doc = json.loads(obj.etapa(fichero).read_text())
+        except SystemExit:
+            continue
+        mod = evaluate_psf_model(doc, lam, yy - sy, xx - sx) * flujo_dato
+        r_m, v_m = _perfil_radial(mod, sy, sx, r_max)
+        axes[0].plot(r_m * pix, v_m, color=color, lw=1.6 if "mixture" in etq else 0.9,
+                     ls="--", alpha=0.85 if "mixture" in etq else 1.0, label=etq)
+        # residuo fraccional sobre el perfil comun
+        v_i = np.interp(r_dat, r_m, v_m)
+        axes[1].plot(r_dat * pix, 100.0 * (v_dat - v_i) / np.abs(v_dat), color=color,
+                     lw=1.6 if "mixture" in etq else 0.9,
+                     alpha=0.85 if "mixture" in etq else 1.0)
+
+    axes[0].set_yscale("log")
+    axes[0].set_ylabel("azimuthal median (arbitrary units)")
+    axes[0].legend(loc="upper right", handlelength=1.6)
+    axes[1].axhline(0.0, color="0.5", lw=0.6)
+    axes[1].axhspan(-5.0, 5.0, color="0.88", lw=0, zorder=0)
+    axes[1].set_ylim(-60, 60)
+    axes[1].set_ylabel("residual (%)")
+    axes[1].set_xlabel("radius from primary (arcsec)")
+    for ax in axes:
+        ax.axvline(r_comp * pix, color="#2ca02c", lw=0.8, ls=":")
+    axes[0].annotate("companion", xy=(r_comp * pix, 0.06), xycoords=("data", "axes fraction"),
+                     rotation=90, va="bottom", ha="right", fontsize=6.5, color="#2ca02c")
+    axes[1].set_xlim(0.0, r_max * pix)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
 # Fig. null_distributions — el estadistico contra su nula
 # --------------------------------------------------------------------------
 
@@ -1048,6 +1252,8 @@ FIGURAS = {
     "spectra_halpha": spectra_halpha,
     "full_spectra": full_spectra,
     "hbeta_limit": hbeta_limit,
+    "control_ring": control_ring,
+    "psf_radial": psf_radial,
     "primary_variability": primary_variability,
     "companion_type": companion_type,
     "null_distributions": null_distributions,
