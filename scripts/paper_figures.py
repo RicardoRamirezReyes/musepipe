@@ -47,6 +47,12 @@ ANCHO_DOBLE_IN = 180.0 / 25.4
 
 #: Halpha en reposo, en aire. El mismo valor que usa E1 (`h01` line.rest_A).
 HALPHA_A = 6562.8
+#: Hbeta en reposo, en aire; el mismo que el catalogo de lineas de G2.
+HBETA_A = 4861.33
+#: razon intrinseca Halpha/Hbeta del caso B (Osterbrock & Ferland 2006,
+#: T = 10^4 K, n_e = 10^4 cm^-3). Es una SUPOSICION, no una medida: se dibuja
+#: para ensenar donde caeria Hbeta sin extincion diferencial, y va rotulada.
+CASO_B_HA_HB = 2.86
 
 #: un color por objeto, asignado por el orden declarado en `targets/`.
 COLOR_OBJETO = ("#1f77b4", "#d62728")
@@ -312,6 +318,105 @@ def spectra_halpha(objetos, out: Path, metodos=("aperture", "optimal_ls", "psffi
         ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
         ax.set_xlim(HALPHA_A - media_ventana_A, HALPHA_A + media_ventana_A)
         ax.legend(loc="upper left", handlelength=1.4)
+
+    axes[0].set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ "
+                       r"$\mathrm{\AA}^{-1}$)")
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# Fig. hbeta_limit — la NO deteccion de Hbeta, y por que no acota la extincion
+# --------------------------------------------------------------------------
+
+def _linea_g2(obj: Objeto, nombre: str) -> dict:
+    """La fila de `g2_line_measurements.csv` de una linea, o `{}` si no esta."""
+    for fila in obj.filas("g2_line_measurements.csv"):
+        if fila.get("name") == nombre:
+            return fila
+    return {}
+
+
+def _gaussiana(wave, centro_A, flujo, fwhm_A):
+    """Perfil gaussiano de flujo INTEGRADO `flujo` y anchura `fwhm_A`."""
+    sigma = float(fwhm_A) / 2.3548200450309493
+    return (flujo / (sigma * np.sqrt(2.0 * np.pi))
+            * np.exp(-0.5 * ((wave - centro_A) / sigma) ** 2))
+
+
+def hbeta_limit(objetos, out: Path, metodo="psffit", media_ventana_A=45.0):
+    """Hbeta no detectada, con el limite a 5 sigma y lo que el caso B predice.
+
+    Existe porque la no deteccion de Hbeta es la que cierra la via del
+    decremento de Balmer para medir la extincion, y un limite solo se puede
+    juzgar viendo contra que ruido se midio. Tres cosas por panel:
+
+    - el espectro calibrado de D2 y su `flux_err_total` (el mismo error que la
+      figura de Halpha), en la ventana de Hbeta;
+    - el limite a 5 sigma de G2 dibujado como perfil, con la LSF **medida** de
+      A4/M2 que declara el run, no una anchura inventada;
+    - donde caeria Hbeta si el decremento fuese el del caso B, escalando el
+      Halpha MEDIDO de este mismo objeto. Solo se dibuja donde Halpha esta
+      detectado, porque escalar un limite no ensena nada.
+
+    Que ese perfil quede por debajo del ruido es el resultado: el limite de
+    Hbeta no acota el decremento, y por tanto no acota A_V.
+    """
+    fig, axes = plt.subplots(1, len(objetos), figsize=(ANCHO_DOBLE_IN, 2.6))
+    axes = np.atleast_1d(axes)
+
+    for ax, obj in zip(axes, objetos):
+        wave, flux, err, escala = _espectro(obj, metodo)
+        cfg = obj.config
+        lsf = float(cfg["h01_lsf_fwhm_A"])
+        rv = float(cfg.get("h01_rv_sys_kms", 0.0))
+        centro = HBETA_A * (1.0 + rv / 299792.458)
+
+        sel = np.abs(wave - centro) <= media_ventana_A
+        w = wave[sel]
+        f = flux[sel] * escala * 1e18
+        e = err[sel] * escala * 1e18
+        ax.fill_between(w, f - e, f + e, color="0.6", alpha=0.30, lw=0,
+                        label=r"$\pm1\sigma$")
+        # el espectro va en gris oscuro y el rojo queda RESERVADO para lo que
+        # el caso B predice: con los dos en el color del metodo, la prediccion
+        # se confundia con el ruido del propio espectro.
+        ax.plot(w, f, color="0.15", lw=0.8, label=NOMBRE_METODO[metodo])
+        ax.axvline(centro, color="0.35", lw=0.5, ls=":")
+
+        # nivel local del continuo, medido en la propia ventana y fuera de la
+        # linea: dibujar los perfiles sobre cero mentiria sobre donde estan.
+        fuera = np.abs(w - centro) > 3.0 * lsf
+        base = float(np.nanmedian(f[fuera])) if np.any(fuera) else 0.0
+        # los dos perfiles se dibujan SOLO alrededor de la linea: extendidos a
+        # toda la ventana se leen como un continuo modelo, que no lo son.
+        cerca = np.abs(w - centro) <= 6.0 * lsf
+
+        hb = _linea_g2(obj, "Hbeta")
+        lim = float(hb.get("flux_upper_limit_5sigma", "nan"))
+        if np.isfinite(lim) and lim > 0:
+            perfil = base + _gaussiana(w[cerca], centro, lim * escala * 1e18, lsf)
+            ax.plot(w[cerca], perfil, color="#1f77b4", lw=0.9, ls="--",
+                    label=r"$5\sigma$ upper limit")
+
+        ha = _linea_g2(obj, "Halpha")
+        if ha.get("status") == "detected" and np.isfinite(lim) and lim > 0:
+            f_ha = float(ha.get("flux_fit") or ha.get("flux_direct"))
+            esperado = f_ha / CASO_B_HA_HB
+            perfil = base + _gaussiana(w[cerca], centro, esperado * escala * 1e18, lsf)
+            ax.plot(w[cerca], perfil, color="#d62728", lw=1.0,
+                    label=r"H$\alpha$/%.2f (case B)" % CASO_B_HA_HB)
+            # el numero es el resultado: cuantas veces por encima de lo que
+            # habria que ver esta el limite. Sin el, la figura solo ensena
+            # que una curva roja es pequena.
+            ax.annotate(r"limit $= %.1f\times$ the case-B line" % (lim / esperado),
+                        xy=(0.97, 0.06), xycoords="axes fraction", ha="right",
+                        va="bottom", fontsize=6.5, color="0.25")
+
+        ax.set_title(obj.nombre)
+        ax.set_xlim(centro - media_ventana_A, centro + media_ventana_A)
+        ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+        ax.legend(loc="upper left", handlelength=1.6)
 
     axes[0].set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ "
                        r"$\mathrm{\AA}^{-1}$)")
@@ -688,6 +793,7 @@ def psf_chromatic(objetos, out: Path):
 FIGURAS = {
     "fov_redband": fov_redband,
     "spectra_halpha": spectra_halpha,
+    "hbeta_limit": hbeta_limit,
     "null_distributions": null_distributions,
     "injection_throughput": injection_throughput,
     "mdot_mass_plane": mdot_mass_plane,
