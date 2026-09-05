@@ -40,6 +40,46 @@ class ParallelEquivalenceTests(unittest.TestCase):
         self.comp = (30.0, 40.0)
         self.cube, self.var = _scene(self.model, self.wave, self.star, self.comp)
 
+    def test_config_n_jobs_precedence(self):
+        """Knob declarado > `MUSEPIPE_N_JOBS` > cpu_count capado."""
+        import os
+        from unittest import mock
+
+        from musepipe.parallel import config_n_jobs
+
+        self.assertEqual(config_n_jobs({"x03_n_jobs": 3}, "x03_n_jobs", "n_jobs"), 3)
+        self.assertEqual(config_n_jobs({"n_jobs": 2}, "x03_n_jobs", "n_jobs"), 2)
+        with mock.patch.dict(os.environ, {"MUSEPIPE_N_JOBS": "5"}):
+            self.assertEqual(config_n_jobs({}, "x03_n_jobs", "n_jobs"), 5)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MUSEPIPE_N_JOBS", None)
+            self.assertGreaterEqual(config_n_jobs({}, "x03_n_jobs"), 1)
+
+    def test_extraction_stages_actually_request_parallelism(self):
+        """C3 y C4 tienen que PEDIR hilos, no solo poder pedirlos.
+
+        Este modulo lleva desde su primer commit demostrando que hilar los
+        bucles por canal es bit a bit identico, y aun asi la cadena corria en un
+        nucleo: los conductores llamaban a los extractores sin `n_jobs`, que por
+        defecto vale 1. La equivalencia estaba probada; el uso, no. Esto fija el
+        uso.
+        """
+        import inspect
+
+        from musepipe.stages import stage_x02_optimal, stage_x03_psffit
+
+        for modulo, llamadas in ((stage_x02_optimal,
+                                  ("make_optimal_product(", "fit_primary_psf_model_cube(")),
+                                 (stage_x03_psffit, ("make_psffit_products(",))):
+            fuente = inspect.getsource(modulo)
+            self.assertIn("config_n_jobs", fuente,
+                          f"{modulo.__name__} no resuelve n_jobs del run")
+            for llamada in llamadas:
+                for trozo in fuente.split(llamada)[1:]:
+                    cierre = trozo.index("\n    )") if "\n    )" in trozo else len(trozo)
+                    self.assertIn("n_jobs=", trozo[:cierre + 8],
+                                  f"{modulo.__name__}: {llamada} sin n_jobs")
+
     def test_channel_chunks_partition_is_exact(self):
         bounds = channel_chunks(41, 6)
         self.assertEqual(bounds[0][0], 0)

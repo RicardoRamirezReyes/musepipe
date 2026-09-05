@@ -71,6 +71,13 @@ def _synthetic_config(run_id, root, matched_sigma, **overrides):
 
 class ProcessPoolResolutionTests(unittest.TestCase):
     def test_disabled_by_default(self):
+        """Apagado por defecto, y por MEDIDA -- no por inercia.
+
+        Se probo encenderlo (2026-09-05, ROXs 42B b, 432 casos x 6 metodos) y los
+        tres backends dan el mismo reloj: 6384 s en serie, 6362 s con fork, 6327 s
+        con fork y BLAS a un hilo, gastando 7.5x la CPU. El cuello de E4 no es el
+        backend. Se enciende a proposito con `h04_process_pool`.
+        """
         self.assertEqual(_resolve_h04_process_pool({}, 100), 0)
         self.assertEqual(_resolve_h04_process_pool({"h04_process_pool": False}, 100), 0)
 

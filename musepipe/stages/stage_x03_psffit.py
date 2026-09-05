@@ -15,6 +15,7 @@ from ..growth_curve import resolve_flux_convention
 from ..extraction.product import SpectrumProduct
 from ..extraction.psffit import PsfFitProducts, crosstalk_metric, make_psffit_products
 from ..io import read_json, write_json
+from ..parallel import config_n_jobs
 from ..paths import RunPaths
 from .stage_x01_aperture import (
     _load_masks,
@@ -306,6 +307,7 @@ def compute_stage_x03_products(config, paths=None):
         bad_mask=bad_mask,
         n_controls=int(cfg.get("x03_control_apertures", 8)),
         exclude_angle_deg=float(cfg.get("x03_control_exclude_angle_deg", 25.0)),
+        n_jobs=config_n_jobs(cfg, "x03_n_jobs", "n_jobs"),
     )
     star_check = _star_large_aperture_check(cube, star_yx, psf_model, products.star)
     qc = _qc_payload(products, cfg, paths, psf_model_path, stat_state, star_check, open_issues)
