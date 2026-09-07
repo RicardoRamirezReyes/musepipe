@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "MUSE accretion pipeline"
+abstract: >-
+  A staged, reproducible pipeline for VLT/MUSE narrow-field-mode integral-field
+  data: raw-cube reduction, spectral extraction of a faint companion next to a
+  much brighter primary star with six independent extraction schemes, and
+  hydrogen-line accretion analysis with empirically calibrated detection limits.
+type: software
+authors:
+  - family-names: "Ramírez Reyes"
+    given-names: "Ricardo"
+    affiliation: "Departamento de Física y Astronomía, Facultad de Ciencias Exactas, Universidad Andrés Bello, Santiago, Chile"
+version: "0.1.0"
+date-released: "2026-09-07"
+license: BSD-3-Clause
+repository-code: "https://github.com/RicardoRamirezReyes/Muse-Accretion-Pipeline"
+keywords:
+  - astronomy
+  - integral field spectroscopy
+  - VLT/MUSE
+  - adaptive optics
+  - accretion
+  - substellar companions
+  - point spread function

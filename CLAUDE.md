@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Scientific MUSE/VLT NFM pipeline: raw-cube reduction, spectral extraction of a faint
 companion next to a bright primary, and accretion (Hα) analysis. `AGENTS.md` holds the
-agent policy (safety, conventions, coordination) and applies here too; `README.md` has the
+agent policy (safety, conventions, coordination) and applies here too; `README.es.md` has the
 full stage↔module map.
 
 ## Environment & commands

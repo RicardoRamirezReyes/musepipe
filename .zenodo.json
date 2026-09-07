@@ -1,0 +1,24 @@
+{
+  "title": "MUSE accretion pipeline",
+  "description": "<p>A staged, reproducible pipeline for VLT/MUSE narrow-field-mode integral-field data: raw-cube reduction, spectral extraction of a faint companion next to a much brighter primary star with six independent extraction schemes, and hydrogen-line accretion analysis with detection limits calibrated against empirical nulls from control positions processed identically to the object.</p><p>Every stage emits a machine-readable quality-control document, and later stages read those documents rather than trusting assumptions; provenance (input cube, SHA-256 hashes, specification version, wavelength frame, flux unit) travels with the products.</p><p>Research code under active development. This is the version used in Ram&iacute;rez Reyes &amp; C&aacute;ceres (in preparation).</p>",
+  "upload_type": "software",
+  "license": "BSD-3-Clause",
+  "version": "0.1.0",
+  "language": "eng",
+  "creators": [
+    {
+      "name": "Ramírez Reyes, Ricardo",
+      "affiliation": "Universidad Andrés Bello, Santiago, Chile"
+    }
+  ],
+  "keywords": [
+    "astronomy",
+    "integral field spectroscopy",
+    "VLT/MUSE",
+    "adaptive optics",
+    "accretion",
+    "substellar companions",
+    "point spread function"
+  ],
+  "access_right": "open"
+}

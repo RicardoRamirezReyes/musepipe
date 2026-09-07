@@ -8,7 +8,7 @@ and products in `runs/<RUN_ID>/`.
 
 ## Sources of Truth
 
-- Use `README.md` for the general architecture.
+- Use `README.es.md` for the general architecture (`README.md` is the public one-page summary).
 - Read the latest `docs/spec_*.md` version for the affected stage.
 - Follow `docs/noise_model.md` for noise, significance, and control handling.
 - Treat root-level notebooks and dated plans or reports as historical snapshots.
