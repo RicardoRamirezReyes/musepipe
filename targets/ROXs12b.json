@@ -17,11 +17,11 @@
   "paper": {
     "run": "ROXs12b_OB3445598",
     "order": 1,
-    "note": "noche 1 sola: en el combinado los 33 controles tienen +2.7 sigma de modo comun -halo de Halpha de la primaria- que no se separa de la companera (docs/2026-09-03_handoff.md §2)",
+    "note": "Se publica sobre una sola noche: en el cubo combinado los controles comparten un modo de emision de la primaria que no se separa de la compañera.",
     "display": "ROXs 12 b",
     "second_epoch_run": "ROXs12b_OB3444577",
-    "second_epoch_note": "OB 3444577, 2022-08-31, 7 exposiciones: la noche de peor calidad (seeing 0.84 frente a 0.57, tau0 2.1 frente a 6.6 ms, ruido en Halpha 18.8x peor). No se publica sobre ella; se usa para ensenar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
+    "second_epoch_note": "Segunda epoca, de peor calidad atmosferica. No se publica sobre ella: se usa para mostrar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
     "spt_source_dir": "g3_real_avwide_20260904T025945",
-    "spt_source_note": "Reintento del 2026-09-04: eje de A_V ensanchado a [0,10] (antes quedaba pegado al borde en 5.0) y LSF corregida a 2.2953, que entra en la convolucion de las plantillas. El tipo espectral no se movio (M7.5 joven) y el ajuste atmosferico sigue fallando su puerta por chi2 (11.23 contra 3.0), ahora SIN tocar borde. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos."
+    "spt_source_note": "Reintento con el eje de extincion ensanchado y la LSF corregida. El tipo espectral no cambia y el ajuste atmosferico sigue sin pasar su puerta de bondad de ajuste. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos."
   }
 }
