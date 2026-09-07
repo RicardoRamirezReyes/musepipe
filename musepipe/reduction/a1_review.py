@@ -169,7 +169,7 @@ def reduction_profile(run_id: str, *, project_root=None) -> str:
 
 
 def a1_work_dir(run_id: str, *, project_root=None) -> Path | None:
-    """Directorio de trabajo de la reducción (`/mnt/2TB/MUSE_work/...`).
+    """Directorio de trabajo de la reducción (`$MUSE_WORK/...`).
 
     Se declara en el config del run que ejecutó A1, no en el de la cadena.
     """
@@ -203,7 +203,7 @@ def _perexp_search_roots(work: Path) -> list[Path]:
     La P2 no siempre vive dentro del work-dir: ROXs 12 B tiene el `_by_night`
     para P1 y un `_p2` hermano para las exposiciones. Se admiten hermanos que
     compartan el prefijo del work-dir, nunca `work.parent` entero —
-    `/mnt/2TB/MUSE_work/` contiene los dos objetos y buscar ahí hacía que el
+    el directorio de trabajo contiene los dos objetos y buscar ahí hacía que el
     coste de un objeto se leyera del otro.
     """
 

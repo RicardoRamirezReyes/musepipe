@@ -18,7 +18,7 @@ and products in `runs/<RUN_ID>/`.
 ## Safety
 
 - Inspect `git status` before editing and preserve unrelated changes.
-- Do not modify raw data, `runs/`, `/mnt/2TB`, external libraries,
+- Do not modify raw data, `runs/`, the external work directory (`$MUSE_WORK`), external libraries,
   calibrations, reports, or `paper/` unless explicitly requested.
 - Before running a stage, check active processes and
   `runs/<RUN>/config/config.json`.

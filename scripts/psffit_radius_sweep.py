@@ -52,7 +52,7 @@ la hora 6 deja en disco lo de las cinco anteriores.
 Uso:
 
     python -u scripts/psffit_radius_sweep.py --runs ROXs12b_realigned,ROXs42Bb_realigned \
-        --salida /mnt/2TB/MUSE_work/psffit_radius_sweep
+        --salida $MUSE_WORK/psffit_radius_sweep
 """
 
 from __future__ import annotations

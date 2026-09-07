@@ -9,8 +9,9 @@
 # remuestreo, asi que ampliarlo ahi no compra nada.
 set -u
 
-REPO=/home/ricardo-ramirez/Offline_MUSE/MusePipeline/MUSE-accretion-pipeline
-BASE=/mnt/2TB/MUSE_work/psffit_radius_sweep/tarde_20260830
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${MUSE_WORK:?define MUSE_WORK: el directorio de trabajo externo, fuera del repo}"
+BASE="$MUSE_WORK/psffit_radius_sweep/tarde_20260830"
 mkdir -p "$BASE"
 cd "$REPO" || exit 1
 

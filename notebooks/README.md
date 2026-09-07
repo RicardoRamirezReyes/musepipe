@@ -63,7 +63,7 @@ reportan como pendientes, no como error. Regenerar es idempotente.
   el comando real para ESTE objeto desde su config y puede lanzarlo (background +
   log). Si falta un dato en el config, lo dice y no lanza.
 - **Los plots necesitan el kernel MUSE** (astropy/pandas/matplotlib) y, algunos,
-  los cubos en `/mnt/2TB`. Fallan con un mensaje claro sin romper el notebook.
+  los cubos en el directorio de trabajo externo (`$MUSE_WORK`). Fallan con un mensaje claro sin romper el notebook.
 - **Cambiar de objeto**: abre el set del otro (`notebooks/<obj>/`), o
   `export MUSE_RUN_ID=<run>`.
 

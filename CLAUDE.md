@@ -279,7 +279,7 @@ telluric bands and accretion lines) and its ECSV export.
 ## Safety
 
 - Check `git status` before editing; preserve unrelated work.
-- Do not touch raw data, `runs/`, `/mnt/2TB`, calibrations, `reports/`, or `paper/` unless
+- Do not touch raw data, `runs/`, the external work directory (`$MUSE_WORK`), calibrations, `reports/`, or `paper/` unless
   asked. Do not commit or push unless asked.
 - Never run two writing stages against the same run concurrently. Raw reduction, full
   notebook executions, downloads, and long injections need approval — they are hours-long

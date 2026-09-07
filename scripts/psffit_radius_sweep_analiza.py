@@ -43,7 +43,7 @@ se cerraria eso.
 Uso:
 
     python scripts/psffit_radius_sweep_analiza.py \\
-        --filas /mnt/2TB/MUSE_work/psffit_radius_sweep/manana_20260830/radius_sweep_rows_*.csv
+        --filas $MUSE_WORK/psffit_radius_sweep/manana_20260830/radius_sweep_rows_*.csv
 """
 
 from __future__ import annotations

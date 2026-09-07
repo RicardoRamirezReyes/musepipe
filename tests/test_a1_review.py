@@ -190,7 +190,7 @@ class MeasuredRuntimeTests(unittest.TestCase):
             self.assertAlmostEqual(runtime["totals"]["measured_minutes"], 13.0)
 
     def test_perexp_of_another_object_is_never_read(self):
-        """El fallo real: `/mnt/2TB/MUSE_work/` tiene los dos objetos dentro."""
+        """El fallo real: el directorio de trabajo tiene los dos objetos dentro."""
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

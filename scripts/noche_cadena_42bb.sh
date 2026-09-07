@@ -21,11 +21,12 @@
 #      sentido que los notebooks debug comparen contra ellos.
 set -u
 
-REPO=/home/ricardo-ramirez/Offline_MUSE/MusePipeline/MUSE-accretion-pipeline
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${MUSE_WORK:?define MUSE_WORK: el directorio de trabajo externo, fuera del repo}"
 RUN=ROXs42Bb_realigned
 SELLO=$(date +%Y%m%dT%H%M%S)
-FOTO=/mnt/2TB/MUSE_work/${RUN}_pre_binaria_${SELLO}
-LOG=/mnt/2TB/MUSE_work/cadena_42bb_${SELLO}
+FOTO="$MUSE_WORK/${RUN}_pre_binaria_${SELLO}"
+LOG="$MUSE_WORK/cadena_42bb_${SELLO}"
 PY=$(command -v python)
 mkdir -p "$LOG"
 cd "$REPO" || exit 1
@@ -42,12 +43,12 @@ if [ -n "$(git status --porcelain)" ]; then
     registra "          corrida tienen que ser trazables a un commit."
     exit 1
 fi
-LIBRE=$(df --output=avail -BG /mnt/2TB | tail -1 | tr -dc '0-9')
+LIBRE=$(df --output=avail -BG "$MUSE_WORK" | tail -1 | tr -dc '0-9')
 if [ "$LIBRE" -lt 40 ]; then
-    registra "ABORTADO: solo ${LIBRE}G libres en /mnt/2TB; la foto previa son ~12G."
+    registra "ABORTADO: solo ${LIBRE}G libres en \$MUSE_WORK; la foto previa son ~12G."
     exit 1
 fi
-cp -a "/mnt/2TB/MUSE_work/$RUN" "$FOTO" || { registra "ABORTADO: fallo la foto previa"; exit 1; }
+cp -a "$MUSE_WORK/$RUN" "$FOTO" || { registra "ABORTADO: fallo la foto previa"; exit 1; }
 registra "foto previa: $FOTO ($(du -sh "$FOTO" | cut -f1))"
 
 # --- 2 · puerta: suite rapida ----------------------------------------------

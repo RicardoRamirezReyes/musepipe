@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -35,7 +36,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # cualquier otro target las heredaba en silencio (plan multi-objeto, WP-P3w).
 GLOBAL_SOF = None
 GLOBAL_MASTER_DIR = None
-DEFAULT_WORK = Path("/mnt/2TB/MUSE_work/a2a_bias_by_night")
+# El directorio de trabajo externo se declara con `MUSE_WORK`; sin el, se
+# escribe bajo `work/` en la raiz del repo. No hay ruta de nadie cableada.
+DEFAULT_WORK = Path(os.environ.get("MUSE_WORK", "work")) / "a2a_bias_by_night"
 TABLE_OUT = None
 STAGE00R = None
 ESOREX = "esorex"

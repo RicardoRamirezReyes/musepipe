@@ -1294,7 +1294,7 @@ STAGES: list[dict] = [
             "    if not cube_path:\n"
             "        raise RuntimeError(\"el QC de A4 no declara el cubo de entrada\")\n"
             "    # El QC guarda unas rutas absolutas y otras RELATIVAS a la raiz del repo\n"
-            "    # (ROXs 12 b: /mnt/2TB/...; ROXs 42B b: runs/<run>/cube_telcorr.fits). El cwd\n"
+            "    # (ROXs 12 b: $MUSE_WORK/...; ROXs 42B b: runs/<run>/cube_telcorr.fits). El cwd\n"
             "    # del notebook es notebooks/<objeto>/ -- la celda de setup anade la raiz al\n"
             "    # sys.path pero NO hace chdir --, asi que una relativa no resuelve sola.\n"
             "    cube_path = Path(cube_path)\n"
@@ -2193,7 +2193,7 @@ STAGES: list[dict] = [
              "**(b) El realineado de esa misma reducción** (`muse_scipost_aligned`, alias "
              "`stages/stage00t_realigned_qc.json`): O₂ B **7.34 %**, H₂O 7200 1.0 %, H₂O 8200 "
              "0.054 % → `needed`, **aplicado**, sin checkpoint registrado; su curva es la que vive "
-             "en `/mnt/2TB/MUSE_work/ROXs12b_realigned/TELLURIC_TRANS.fits`, **fuera** del run. "
+             "en `$MUSE_WORK/ROXs12b_realigned/TELLURIC_TRANS.fits`, **fuera** del run. "
              "**(c) Multi-noche del 2026-07-28** (la cadena canónica de hoy): O₂ B **0.586 %** → "
              "`not_needed_shallow`, **no aplicado**, sin curva emitida.", None),
             ("**Cerrado (2026-07-30):** que la banda O₂ B pase de ~7 % en las reducciones antiguas "

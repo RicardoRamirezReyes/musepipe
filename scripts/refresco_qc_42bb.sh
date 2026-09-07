@@ -11,10 +11,11 @@
 # no cambia.
 set -u
 
-REPO=/home/ricardo-ramirez/Offline_MUSE/MusePipeline/MUSE-accretion-pipeline
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${MUSE_WORK:?define MUSE_WORK: el directorio de trabajo externo, fuera del repo}"
 RUN=ROXs42Bb_realigned
 SELLO=$(date +%Y%m%dT%H%M%S)
-LOG=/mnt/2TB/MUSE_work/refresco_qc_${SELLO}
+LOG="$MUSE_WORK/refresco_qc_${SELLO}"
 PY=$(command -v python)
 mkdir -p "$LOG"
 cd "$REPO" || exit 1
