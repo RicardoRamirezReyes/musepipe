@@ -14,7 +14,7 @@ authors:
 version: "0.1.0"
 date-released: "2026-09-07"
 license: BSD-3-Clause
-repository-code: "https://github.com/RicardoRamirezReyes/Muse-Accretion-Pipeline"
+repository-code: "https://github.com/RicardoRamirezReyes/musepipe"
 keywords:
   - astronomy
   - integral field spectroscopy
