@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Scientific MUSE/VLT NFM pipeline: raw-cube reduction, spectral extraction of a faint
 companion next to a bright primary, and accretion (Hα) analysis. `AGENTS.md` holds the
-agent policy (safety, conventions, coordination) and applies here too; `README.es.md` has the
+agent policy (safety, conventions, coordination) and applies here too; `README.md` has the
 full stage↔module map.
 
 ## Environment & commands
@@ -113,11 +113,15 @@ the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) an
 
 **F1's gate stops at E3.** `STAGE_DEFINITIONS` in `musepipe/report.py` lists A1→E3 and
 nothing from block G, so a `blocking` open issue raised by a G stage never reaches
-`report/run_summary.json`. Two are live in **both** runs as of 2026-09-01: G2's
-`halpha_reconciliation_v3` reports `consistent: false` (G2 says `detected`/`marginal`, E1
-says `non_detection`), and E1's FAP criterion (< 0.01) is unreachable with 33 controls,
-whose resolution floor is 1/34 = 0.029. Neither is a code bug to fix silently — both are
-frozen scientific decisions.
+`report/run_summary.json`. One of the two is now closed and one is still live (checked 2026-09-08).
+**Closed:** G2's `halpha_reconciliation_v3` reported `consistent: false` while E1 said
+`non_detection` in both objects; E1 now says `detection` for ROXs 12 b (all six methods
+significant) and `candidate` for ROXs 42B b, and the reconciliation is `true` in all three
+runs. The change came from the cycles that corrected the LSF and the throughput, not from
+G2. **Still live:** E1's FAP criterion (< 0.01) is unreachable with 33 controls, whose
+resolution floor is 1/34 = 0.029 — a frozen scientific decision, not a code bug.
+The review notebooks quote these verdicts in their markdown, so they go stale when the run
+does: 19 of 68 were quoting the pre-change state until 2026-09-08.
 
 `musepipe/stage_registry.py` is the machine-readable source of truth for this chain: for
 each stage, its QC path (plus `qc_aliases` for the other names that QC has had: B2 wrote
@@ -279,7 +283,7 @@ telluric bands and accretion lines) and its ECSV export.
 ## Safety
 
 - Check `git status` before editing; preserve unrelated work.
-- Do not touch raw data, `runs/`, the external work directory (`$MUSE_WORK`), calibrations, `reports/`, or `paper/` unless
+- Do not touch raw data, `runs/`, `/mnt/2TB`, calibrations, `reports/`, or `paper/` unless
   asked. Do not commit or push unless asked.
 - Never run two writing stages against the same run concurrently. Raw reduction, full
   notebook executions, downloads, and long injections need approval — they are hours-long
