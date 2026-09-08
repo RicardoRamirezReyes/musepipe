@@ -13,6 +13,14 @@ authors:
     orcid: "https://orcid.org/0000-0002-4678-8361"
     affiliation: "Departamento de Física y Astronomía, Facultad de Ciencias Exactas, Universidad Andrés Bello, Santiago, Chile"
 version: "0.1.0"
+doi: 10.5281/zenodo.22651844
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22651844
+    description: "Concept DOI: resolves to the latest version"
+  - type: doi
+    value: 10.5281/zenodo.22651845
+    description: "DOI of version 0.1.0"
 date-released: "2026-09-07"
 license: BSD-3-Clause
 repository-code: "https://github.com/RicardoRamirezReyes/musepipe"

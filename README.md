@@ -1,5 +1,7 @@
 # MUSE accretion pipeline
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22651844.svg)](https://doi.org/10.5281/zenodo.22651844)
+
 A staged, reproducible pipeline for VLT/MUSE narrow-field-mode (NFM) integral-field
 data: raw-cube reduction, spectral extraction of a faint companion next to a much
 brighter primary star, and hydrogen-line accretion analysis.
@@ -73,8 +75,11 @@ map, the run-selection rules and the per-object layout are documented in
 ## How to cite
 
 If this software contributes to work you publish, please cite it through the metadata
-in [`CITATION.cff`](CITATION.cff). A citable archived version with a DOI is being
-prepared; until it is available, cite the repository and the release tag.
+in [`CITATION.cff`](CITATION.cff). Every release is archived on Zenodo:
+
+- **10.5281/zenodo.22651844** — concept DOI, always resolves to the latest version. Cite this
+  one unless you need to pin a specific version.
+- **10.5281/zenodo.22651845** — the archived record of `v0.1.0` specifically.
 
 ## License
 
