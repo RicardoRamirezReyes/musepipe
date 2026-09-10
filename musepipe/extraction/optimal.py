@@ -256,6 +256,11 @@ def local_background_spectrum(
             mask_radius_px=float(plane_mask_radius_px),
         )
     if mode == "azimuthal":
+        if star_yx is None:
+            raise ValueError(
+                "background_mode='azimuthal' centra su anillo en la estrella y "
+                "necesita `star_yx`; llego None. Quien llama tiene que pasarlo."
+            )
         radius = float(np.hypot(float(center_yx[0]) - float(star_yx[0]),
                                 float(center_yx[1]) - float(star_yx[1])))
         return azimuthal_background_spectrum(

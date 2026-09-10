@@ -58,4 +58,22 @@ def run_channel_chunks(worker, nz, *, n_jobs=1, chunks_per_job=4, min_chunk=8):
             future.result()
 
 
-__all__ = ["channel_chunks", "resolve_n_jobs", "run_channel_chunks"]
+def config_n_jobs(config, *keys, max_default=8):
+    """Workers for a stage: primera clave declarada > `MUSEPIPE_N_JOBS` > cpu_count capado.
+
+    Existe porque este modulo era alcanzable y **nadie lo pedia**: los
+    conductores de C3 y C4 llamaban a los extractores con el `n_jobs=1` por
+    defecto, asi que sus bucles por canal corrian en un nucleo mientras
+    `tests/test_parallel_equivalence.py` llevaba meses demostrando que
+    hilarlos es bit a bit identico. El paralelismo no cambia la aritmetica por
+    canal ni los huecos de salida, solo el orden de ejecucion.
+
+    Para volver a serie sin tocar el config: `MUSEPIPE_N_JOBS=1`.
+    """
+    for key in keys:
+        if config.get(key) is not None:
+            return resolve_n_jobs(config[key], max_default=max_default)
+    return resolve_n_jobs(None, max_default=max_default)
+
+
+__all__ = ["channel_chunks", "config_n_jobs", "resolve_n_jobs", "run_channel_chunks"]

@@ -22,6 +22,7 @@ from ..extraction.optimal import (
 )
 from ..extraction.product import SpectrumProduct
 from ..io import read_json, resolve_bunit, write_json
+from ..parallel import config_n_jobs
 from ..paths import RunPaths
 from ..stage_registry import by_id
 from .stage_x01_aperture import (
@@ -285,7 +286,15 @@ def _clip_concentration(extraction: OptimalExtraction, object_yx, window_radius_
     return {"companion_window_over_mean": ratio}
 
 
-def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_factor, covariance_factor, stat_status, base):
+def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_factor,
+                     covariance_factor, stat_status, base, star_yx=None):
+    """Sesgo de la extraccion ante una PSF +-10 % de FWHM.
+
+    `star_yx` viaja porque el modo de fondo `azimuthal` centra su anillo en la
+    ESTRELLA: sin el llegaba `None` hasta `local_background_spectrum` y la etapa
+    moria con `TypeError: NoneType is not subscriptable`. El modo estaba
+    declarado en `BACKGROUND_MODES` y era inusable por esta via.
+    """
     biases = []
     for scale in (0.9, 1.1):
         model = scaled_psf_model(psf_model, scale)
@@ -294,6 +303,7 @@ def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_fa
             wave,
             object_yx,
             model,
+            star_yx=star_yx,
             run_id=cfg["run_id"],
             input_cube_path="psf_sensitivity",
             variant=f"ls_fwhm_{scale:g}",
@@ -313,6 +323,7 @@ def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_fa
             azimuthal_exclude_px=float(cfg.get("x02_azimuthal_exclude_px", 10.0)),
             plane_fit_radius_px=float(cfg.get("x02_plane_fit_radius_px", 14.0)),
             plane_mask_radius_px=float(cfg.get("x02_plane_mask_radius_px", 3.0)),
+            n_jobs=config_n_jobs(cfg, "x02_n_jobs", "n_jobs"),
         )
         good = np.isfinite(ext.product.flux) & np.isfinite(base.product.flux) & (np.abs(base.product.flux) > 0)
         if np.any(good):
@@ -460,6 +471,7 @@ def compute_stage_x02_products(config, paths=None):
         input_cube_path=stage02_path,
         variant="ls",
         **common,
+        n_jobs=config_n_jobs(cfg, "x02_n_jobs", "n_jobs"),
     )
     # La resta de la primaria: sobre el combinado (historico) o ya hecha por
     # exposicion en C1b. Restar aqui obliga a describir con UN modelo la mezcla
@@ -489,6 +501,7 @@ def compute_stage_x02_products(config, paths=None):
             fit_radius_px=float(cfg.get("x02_primary_fit_radius_px", 25.0)),
             exclude_centers_yx=[object_yx],
             exclude_radius_px=float(cfg.get("x02_primary_exclude_radius_px", cfg.get("x02_window_radius_px", 8.0))),
+            n_jobs=config_n_jobs(cfg, "x02_n_jobs", "n_jobs"),
         )
         psfsub_cube = stage02_cube - primary_model
         psfsub_model_meta = dict(psfsub_model_meta, source="combined_cube")
@@ -523,6 +536,7 @@ def compute_stage_x02_products(config, paths=None):
         input_cube_source=str(psfsub_model_meta.get("source", "")),
         variant="psfsub",
         **psfsub_common,
+        n_jobs=config_n_jobs(cfg, "x02_n_jobs", "n_jobs"),
     )
     psf_sensitivity = _psf_sensitivity(
         # El mismo cubo del que sale `ls`: la sensibilidad a la PSF se mide
@@ -537,6 +551,7 @@ def compute_stage_x02_products(config, paths=None):
         covariance_factor,
         stat_status,
         ls,
+        star_yx=star_yx,
     )
     extractions = {"ls": ls, "psfsub": psfsub}
     qc = _qc_payload(extractions, cfg, paths, stat_state, psf_model_path, psfsub_model_meta, open_issues, psf_sensitivity)

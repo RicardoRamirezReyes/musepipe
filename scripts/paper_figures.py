@@ -130,6 +130,10 @@ class Objeto:
         # y NUNCA de un literal aqui (`tests/test_no_hardcoded_target.py`).
         self.run_2a_epoca = bloque.get("second_epoch_run")
         self.spt_source_dir = bloque.get("spt_source_dir")
+        # La primaria se nombra DECLARADA, no derivada del nombre del companero:
+        # recortar el ultimo token daba «ROXs 42B A», y la primaria de ese
+        # sistema no es una estrella A sino la binaria sin resolver ROXs 42B.
+        self.nombre_primaria = ficha.get("primary_display_name")
         self.run_dir = ROOT / "runs" / self.run_id
         if not self.run_dir.is_dir():
             raise SystemExit(f"no existe runs/{self.run_id} (objeto {slug})")
@@ -366,40 +370,56 @@ def full_spectra(objetos, out: Path, metodo="psffit", suavizado=41):
     La curva gruesa es una mediana movil; la fina, el dato canal a canal. La
     primaria y el compañero van en paneles distintos porque se llevan tres
     ordenes de magnitud.
+
+    Una **columna por objeto**: dibujar solo `objetos[0]` dejaba fuera del paper
+    el espectro completo del segundo compañero, que existe y tiene S/N (~8.7 en
+    la mediana del continuo de 8000-9300 A, la misma que el primero).
     """
     from musepipe.paper_spectrum import AO_LASER_WINDOW_A, accretion_lines
     from musepipe.telluric_lines import TELLURIC_BANDS
 
-    obj = objetos[0]
-    fig, axes = plt.subplots(2, 1, figsize=(ANCHO_DOBLE_IN, 4.6), sharex=True)
+    fig, axes = plt.subplots(2, len(objetos), sharex=True, squeeze=False,
+                             figsize=(ANCHO_DOBLE_IN, 4.6))
     lineas = [l for l in accretion_lines() if l["kind"].startswith("accretion")]
+    bordes = []
 
-    for ax, cual, etq in ((axes[0], "star", f"{obj.nombre.rsplit(' ', 1)[0]} A (primary)"),
-                          (axes[1], "object", f"{obj.nombre} (companion)")):
-        wave, flux, err, escala = _espectro(obj, metodo, cual=cual)
-        f = flux * escala * 1e18
-        e = err * escala * 1e18
-        # sin dato en el hueco del laser: alli el flujo vale 0, no NaN
-        hueco = (wave >= AO_LASER_WINDOW_A[0]) & (wave <= AO_LASER_WINDOW_A[1])
-        f = np.where(hueco, np.nan, f); e = np.where(hueco, np.nan, e)
-        for b in TELLURIC_BANDS:
-            gris = {"strong": "0.82", "moderate": "0.90"}.get(b.get("severity"), "0.955")
-            ax.axvspan(b["lo_A"], b["hi_A"], color=gris, lw=0, zorder=0)
-        ax.axvspan(*AO_LASER_WINDOW_A, color="#ffd9d9", lw=0, zorder=0)
-        ax.fill_between(wave, f - e, f + e, color=COLOR_METODO[metodo], alpha=0.20, lw=0, zorder=2)
-        ax.plot(wave, f, color=COLOR_METODO[metodo], lw=0.25, alpha=0.55, zorder=3)
-        ax.plot(wave, _mediana_movil(f, suavizado), color="0.10", lw=0.7, zorder=4)
-        finito = np.isfinite(f)
-        lo, hi = np.nanpercentile(f[finito], [0.5, 99.8])
-        ax.set_ylim(lo - 0.15 * (hi - lo), hi + 0.30 * (hi - lo))
-        for l in lineas:
-            ax.axvline(l["wave_A"], color="0.45", lw=0.4, ls=":", zorder=1)
-        ax.set_title(etq, fontsize=8)
-        ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ cgs)")
+    for j, obj in enumerate(objetos):
+        if not obj.nombre_primaria:
+            raise SystemExit(
+                f"targets/{obj.slug}.json no declara `primary_display_name`: sin "
+                "el no se sabe como se llama la estrella de este panel."
+            )
+        for i, (cual, etq) in enumerate((("star", f"{obj.nombre_primaria} (primary)"),
+                                         ("object", f"{obj.nombre} (companion)"))):
+            ax = axes[i][j]
+            wave, flux, err, escala = _espectro(obj, metodo, cual=cual)
+            f = flux * escala * 1e18
+            e = err * escala * 1e18
+            # sin dato en el hueco del laser: alli el flujo vale 0, no NaN
+            hueco = (wave >= AO_LASER_WINDOW_A[0]) & (wave <= AO_LASER_WINDOW_A[1])
+            f = np.where(hueco, np.nan, f); e = np.where(hueco, np.nan, e)
+            for b in TELLURIC_BANDS:
+                gris = {"strong": "0.82", "moderate": "0.90"}.get(b.get("severity"), "0.955")
+                ax.axvspan(b["lo_A"], b["hi_A"], color=gris, lw=0, zorder=0)
+            ax.axvspan(*AO_LASER_WINDOW_A, color="#ffd9d9", lw=0, zorder=0)
+            ax.fill_between(wave, f - e, f + e, color=COLOR_METODO[metodo], alpha=0.20, lw=0, zorder=2)
+            ax.plot(wave, f, color=COLOR_METODO[metodo], lw=0.25, alpha=0.55, zorder=3)
+            ax.plot(wave, _mediana_movil(f, suavizado), color="0.10", lw=0.7, zorder=4)
+            finito = np.isfinite(f)
+            lo, hi = np.nanpercentile(f[finito], [0.5, 99.8])
+            ax.set_ylim(lo - 0.15 * (hi - lo), hi + 0.30 * (hi - lo))
+            for l in lineas:
+                ax.axvline(l["wave_A"], color="0.45", lw=0.4, ls=":", zorder=1)
+            ax.set_title(etq, fontsize=8)
+            if j == 0:
+                ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ cgs)")
+            bordes.append((float(np.nanmin(wave)), float(np.nanmax(wave))))
 
-    axes[-1].set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
-    axes[-1].set_xlim(float(np.nanmin(wave)), float(np.nanmax(wave)))
-    fig.subplots_adjust(hspace=0.22)
+    for ax in axes[-1]:
+        ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+    # el eje x es comun (sharex): un solo rango, el que cubren los dos cubos
+    axes[-1][0].set_xlim(min(b[0] for b in bordes), max(b[1] for b in bordes))
+    fig.subplots_adjust(hspace=0.22, wspace=0.20)
     fig.savefig(out)
     plt.close(fig)
 
@@ -515,66 +535,79 @@ def companion_type(objetos, out: Path, paso_A=25.0, rango_A=(6000.0, 9100.0)):
     plantillas se dibujan con el A_V de su propio mejor ajuste y reescaladas por
     minimos cuadrados al espectro observado, porque el `scale_best` del ajuste
     vive en las unidades de la libreria y no en las del producto.
+
+    Una **fila por objeto**. El segundo compañero no salia, y su G3 tiene
+    resultado: la clase de gravedad la decide con MAS peso que el primero
+    (dchi2 = 308 sobre el campo), y lo que no acota es el tipo, que se queda
+    por encima de la linea de aceptacion del panel derecho.
     """
     from musepipe.models.extinction import CCMExtinction
     from musepipe.models.prep import prepare_template
 
-    obj = objetos[0]
-    tf, raiz = _g3_template_fit(obj)
-    lsf = float(obj.config["h01_lsf_fwhm_A"])
     ext = CCMExtinction(3.1, citation="Cardelli et al. 1989")
-
-    wave, flux, err, escala = _espectro(obj, "psffit")
-    m = (wave >= rango_A[0]) & (wave <= rango_A[1])
-    wb, fb = _binado(wave[m], flux[m] * escala * 1e18, paso_A)
-
-    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 2.8),
+    fig, axes = plt.subplots(len(objetos), 2, squeeze=False,
+                             figsize=(ANCHO_DOBLE_IN, 2.45 * len(objetos)),
                              gridspec_kw={"width_ratios": [2.0, 1.0]})
-    ax = axes[0]
-    ax.plot(wb, fb, color="0.15", lw=0.9, label=f"{obj.nombre}, {paso_A:.0f} " r"$\mathrm{\AA}$ bins")
 
-    for clase, color, etq in (("young", "#d62728", "young"), ("field", "#1f77b4", "field")):
-        mejor = tf[clase]["ranking"][0]
-        libro = ROOT.parent / "Data" / "external_libraries" / f"templates_{clase}"
-        # las dos librerias nombran distinto: `LM601_M7.5.npz` frente a `M9.npz`
-        ficheros = (sorted(libro.glob(f"*_{mejor['spt']}.npz"))
-                    or sorted(libro.glob(f"{mejor['spt']}.npz")))
-        if not ficheros:
-            continue
-        d = np.load(ficheros[0], allow_pickle=True)
-        meta = json.loads(str(d["meta_json"]))
-        class _T:  # el adaptador minimo que espera prepare_template
-            pass
-        t = _T(); t.wave_A = d["wave_A"]; t.flux = d["flux"]; t.meta = meta
-        modelo = prepare_template(t, wb, lsf_fwhm_A=lsf, extinction=ext,
-                                  av=float(mejor["av_best"]), scale=1.0,
-                                  template_fwhm_A=meta.get("resolution_fwhm_A"))
-        ok = np.isfinite(modelo) & np.isfinite(fb)
-        if ok.sum() < 5:
-            continue
-        k = float(np.nansum(modelo[ok] * fb[ok]) / np.nansum(modelo[ok] ** 2))
-        ax.plot(wb, k * modelo, color=color, lw=1.0, alpha=0.85,
-                label=f"{etq} {mejor['spt']} " r"($\chi^2_\nu=$" f"{mejor['chi2_red']:.1f})")
-    ax.set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
-    ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
-    ax.set_xlim(*rango_A)
-    ax.legend(loc="upper left", handlelength=1.4)
+    for i, obj in enumerate(objetos):
+        tf, raiz = _g3_template_fit(obj)
+        lsf = float(obj.config["h01_lsf_fwhm_A"])
 
-    ax = axes[1]
-    for clase, color, marca in (("young", "#d62728", "o"), ("field", "#1f77b4", "s")):
-        r = [(x["spt_code"], x["chi2_red"]) for x in tf[clase]["ranking"]]
-        r.sort()
-        ax.plot([x[0] for x in r], [x[1] for x in r], marker=marca, ms=3.0, lw=0.8,
-                color=color, label=clase)
-    ax.axhline(3.0, color="0.5", lw=0.6, ls="--")
-    ax.set_yscale("log")
-    # la libreria de campo llega hasta tipos tempranos (codigos negativos); el
-    # panel se queda en el entorno del minimo, que es donde se decide.
-    ax.set_xlim(2.0, 11.0)
-    ax.set_xlabel("spectral type (M0 = 0, L0 = 10)")
-    ax.set_ylabel(r"$\chi^2_\nu$")
-    ax.legend(loc="upper right", handlelength=1.4)
-    fig.savefig(out)
+        wave, flux, err, escala = _espectro(obj, "psffit")
+        m = (wave >= rango_A[0]) & (wave <= rango_A[1])
+        wb, fb = _binado(wave[m], flux[m] * escala * 1e18, paso_A)
+
+        ax = axes[i][0]
+        ax.plot(wb, fb, color="0.15", lw=0.9,
+                label=f"{obj.nombre}, {paso_A:.0f} " r"$\mathrm{\AA}$ bins")
+
+        for clase, color, etq in (("young", "#d62728", "young"), ("field", "#1f77b4", "field")):
+            mejor = tf[clase]["ranking"][0]
+            libro = ROOT.parent / "Data" / "external_libraries" / f"templates_{clase}"
+            # las dos librerias nombran distinto: `LM601_M7.5.npz` frente a `M9.npz`
+            ficheros = (sorted(libro.glob(f"*_{mejor['spt']}.npz"))
+                        or sorted(libro.glob(f"{mejor['spt']}.npz")))
+            if not ficheros:
+                continue
+            d = np.load(ficheros[0], allow_pickle=True)
+            meta = json.loads(str(d["meta_json"]))
+            class _T:  # el adaptador minimo que espera prepare_template
+                pass
+            t = _T(); t.wave_A = d["wave_A"]; t.flux = d["flux"]; t.meta = meta
+            modelo = prepare_template(t, wb, lsf_fwhm_A=lsf, extinction=ext,
+                                      av=float(mejor["av_best"]), scale=1.0,
+                                      template_fwhm_A=meta.get("resolution_fwhm_A"))
+            ok = np.isfinite(modelo) & np.isfinite(fb)
+            if ok.sum() < 5:
+                continue
+            k = float(np.nansum(modelo[ok] * fb[ok]) / np.nansum(modelo[ok] ** 2))
+            ax.plot(wb, k * modelo, color=color, lw=1.0, alpha=0.85,
+                    label=f"{etq} {mejor['spt']} " r"($\chi^2_\nu=$" f"{mejor['chi2_red']:.1f})")
+        ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
+        ax.set_xlim(*rango_A)
+        ax.legend(loc="upper left", handlelength=1.4)
+
+        ax = axes[i][1]
+        for clase, color, marca in (("young", "#d62728", "o"), ("field", "#1f77b4", "s")):
+            r = [(x["spt_code"], x["chi2_red"]) for x in tf[clase]["ranking"]]
+            r.sort()
+            ax.plot([x[0] for x in r], [x[1] for x in r], marker=marca, ms=3.0, lw=0.8,
+                    color=color, label=clase)
+        ax.axhline(3.0, color="0.5", lw=0.6, ls="--")
+        ax.set_yscale("log")
+        # la libreria de campo llega hasta tipos tempranos (codigos negativos); el
+        # panel se queda en el entorno del minimo, que es donde se decide.
+        ax.set_xlim(2.0, 11.0)
+        ax.set_ylabel(r"$\chi^2_\nu$")
+        ax.legend(loc="upper right", handlelength=1.4, title=obj.nombre,
+                  title_fontsize=6.5)
+
+    axes[-1][0].set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
+    axes[-1][1].set_xlabel("spectral type (M0 = 0, L0 = 10)")
+    fig.subplots_adjust(hspace=0.30)
+    # el rotulo del panel derecho es mas ancho que su eje y el pad de 0.02 in
+    # del estilo le comia el parentesis final
+    fig.savefig(out, pad_inches=0.06)
     plt.close(fig)
 
 
@@ -1245,6 +1278,161 @@ def psf_chromatic(objetos, out: Path):
 
 
 # --------------------------------------------------------------------------
+# Fig. extinction — lo que cuesta la extincion, y que afirmacion le sobrevive
+# --------------------------------------------------------------------------
+
+def _cadena_mdot(phys, f_obs_cgs, av):
+    """`(l_halpha_lsun, l_acc_lsun, mdot)` a un A_V dado, con la cadena publicada.
+
+    Es LA de las etapas -- `stage_h03_limits` mas el factor magnetosferico de
+    `R_in = 5R` -- no una reimplementacion: si esa cadena cambia, esta figura
+    cambia con ella o falla su anclaje.
+    """
+    from musepipe.stages.stage_h03_limits import (L_SUN_ERG_S, MAGNETOSPHERIC_FACTOR,
+                                                  lacc_lsun_from_lha, luminosity_erg_s,
+                                                  mdot_msun_yr_from_lacc)
+    f_dered = f_obs_cgs * 10.0 ** (0.4 * av * phys["a_halpha_over_av"])
+    lha = luminosity_erg_s(f_dered, phys["distance_pc"]) / L_SUN_ERG_S
+    lacc = lacc_lsun_from_lha(lha, phys["lacc_lha_a"], phys["lacc_lha_b"])
+    mdot = MAGNETOSPHERIC_FACTOR * mdot_msun_yr_from_lacc(
+        lacc, phys["companion_mass_msun"], phys["companion_radius_rsun"])
+    return lha, lacc, mdot
+
+
+def _entrada_extincion(obj: Objeto) -> dict:
+    """Flujo observado y Mdot publicado del objeto, con su naturaleza.
+
+    Deteccion: el flujo que consume G3 (`flux_direct` de la tabla de lineas de
+    G2) y su `mdot_p50_msun_yr`, que es la MEDIANA del Monte Carlo -- por eso el
+    anclaje le da holgura y al limite no.
+    Limite: el `f_lim_observed` de E3 en el metodo canonico y su `mdot`, que es
+    valor puntual y tiene que caer exacto.
+    """
+    from musepipe.stages.stage_h03_limits import physical_inputs_from_config
+
+    cfg = obj.config
+    phys = physical_inputs_from_config(dict(cfg))
+    escala = float(cfg["h03_flux_unit_cgs"])
+    h03 = obj.qc("stage_h03_qc.json")
+    canonico = h03["canonical_method"]
+    g3 = obj.qc("stage_g3_qc.json")
+    mdot_pub = g3.get("mdot_p50_msun_yr")
+    if mdot_pub is not None:
+        # DOS flujos, a proposito. `f_obs` es el que consume G3 (integracion
+        # directa de G2) y es el unico con el que la curva de Mdot cae sobre el
+        # numero publicado. `f_mf` es el del filtro adaptado de E1, que es el
+        # estimador con el que se mide el LIMITE del otro objeto: comparar
+        # contrastes exige el mismo estimador en los dos lados, y los dos
+        # difieren un 26 % en este objeto.
+        linea = next(r for r in obj.filas("g2_line_measurements.csv") if r["name"] == "Halpha")
+        det = next(r for r in obj.filas("halpha_detection_by_method.csv")
+                   if r["method"] == canonico)
+        return {"phys": phys, "f_obs": float(linea["flux_direct"]) * escala,
+                "f_mf": float(det["matched_flux"]) * escala,
+                "mdot_pub": float(mdot_pub), "limite": False, "tol": 0.05}
+    fila = next(L for L in h03["limits"] if L["method"] == canonico)
+    f_lim = float(fila["f_lim_observed"])
+    return {"phys": phys, "f_obs": f_lim, "f_mf": f_lim,
+            "mdot_pub": float(fila["mdot"]), "limite": True, "tol": 1e-6}
+
+
+def extinction(objetos, out: Path, av_max=6.0, dav_max=2.0):
+    """Que cuesta la extincion supuesta, y que afirmacion del par le sobrevive.
+
+    La extincion es la segunda palanca del Mdot y NADA de estos datos la mide: se
+    adopta la de la primaria en los dos objetos. El paper lo dice en prosa y con
+    una ecuacion de sensibilidad; esta figura lo pone en numeros dibujados.
+
+    *Izquierda:* Mdot contra el A_V supuesto -- la deteccion de uno y el limite
+    del otro -- por la MISMA cadena que publican las etapas. A su A_V adoptado
+    cada curva tiene que caer sobre el numero publicado: se comprueba, y si no
+    cae la figura **falla** en vez de dibujar una curva que discrepe de la tabla.
+
+    *Derecha:* el contraste del par contra la extincion DIFERENCIAL -- la que
+    tendria el segundo compañero de mas -- que es la cantidad que nadie ha
+    medido. Van las dos afirmaciones: la de Mdot, que cruza cero pronto, y la de
+    flujo de linea observado, que es un cociente de medidas y no depende de
+    ningun A_V, por eso es plana. Entre las dos esta el argumento de la seccion
+    de sistematicos: cual de las dos se sostiene sin medir la extincion.
+    """
+    if len(objetos) != 2:
+        raise SystemExit("la figura de extincion compara DOS objetos; hay "
+                         f"{len(objetos)} declarados con `paper`")
+
+    datos = [_entrada_extincion(o) for o in objetos]
+    for obj, d in zip(objetos, datos):
+        av = d["phys"]["av"]
+        mdot = _cadena_mdot(d["phys"], d["f_obs"], av)[2]
+        desvio = abs(mdot / d["mdot_pub"] - 1.0)
+        if desvio > d["tol"]:
+            raise SystemExit(
+                f"{obj.nombre}: la cadena da Mdot={mdot:.4e} a A_V={av:g} y el "
+                f"producto publica {d['mdot_pub']:.4e} ({100 * desvio:.1f}% de "
+                "desvio). La figura no se dibuja: discreparia de la tabla.")
+
+    fig, axes = plt.subplots(1, 2, figsize=(ANCHO_DOBLE_IN, 2.6))
+
+    # -- izquierda: Mdot contra el A_V supuesto ---------------------------
+    ax = axes[0]
+    rejilla = np.linspace(0.0, av_max, 121)
+    for i, (obj, d) in enumerate(zip(objetos, datos)):
+        color = _color(i)
+        curva = np.array([_cadena_mdot(d["phys"], d["f_obs"], a)[2] for a in rejilla])
+        etq = f"{obj.nombre} " + ("(99% limit)" if d["limite"] else "(detection)")
+        ax.plot(rejilla, curva, color=color, lw=1.1,
+                ls="--" if d["limite"] else "-", label=etq)
+        av, av_err = d["phys"]["av"], d["phys"]["av_err"]
+        ax.axvspan(av - av_err, av + av_err, color=color, alpha=0.10, lw=0)
+        ax.plot([av], [d["mdot_pub"]], marker="v" if d["limite"] else "o",
+                ms=4.0, color=color, zorder=5)
+        ax.annotate(f"$A_V={av:g}$", (av, d["mdot_pub"]), textcoords="offset points",
+                    xytext=(5, -10 if d["limite"] else 5), fontsize=6.5, color=color)
+    phys = datos[0]["phys"]
+    pend = 0.4 * phys["lacc_lha_a"] * phys["a_halpha_over_av"]
+    ax.set_yscale("log")
+    ax.set_xlim(0.0, av_max)
+    ax.set_xlabel(r"assumed $A_V$ (mag)")
+    ax.set_ylabel(r"$\dot{M}_{\rm acc}$ ($M_\odot$ yr$^{-1}$)")
+    ax.legend(loc="upper left", handlelength=1.6,
+              title=(r"slope $0.4\,a\,A_{\mathrm{H}\alpha}/A_V$ = "
+                     f"{pend:.3f}" r" dex mag$^{-1}$"),
+              title_fontsize=6.5)
+
+    # -- derecha: el contraste contra la extincion DIFERENCIAL -------------
+    ax = axes[1]
+    dav = np.linspace(0.0, dav_max, 121)
+    a, b = datos  # el orden lo fija `paper.order` en targets/
+    # el ancla es el numero PUBLICADO, no el de la cadena: en la deteccion los
+    # dos difieren un 1.2 % porque el publicado es la mediana del Monte Carlo, y
+    # ese 1.2 % movia el cruce de 0.92 a 0.93 mag, o sea la figura contra la tabla
+    mdot_a = a["mdot_pub"]
+    mdot_b = b["mdot_pub"] * np.array(
+        [_cadena_mdot(b["phys"], b["f_obs"], b["phys"]["av"] + x)[2]
+         / _cadena_mdot(b["phys"], b["f_obs"], b["phys"]["av"])[2] for x in dav])
+    contraste_mdot = np.log10(mdot_a / mdot_b)
+    contraste_flujo = math.log10(a["f_mf"] / b["f_mf"])
+
+    ax.plot(dav, contraste_mdot, color="#d62728", lw=1.1,
+            label=r"$\Delta\log\dot{M}_{\rm acc}$ (detection vs limit)")
+    ax.axhline(contraste_flujo, color="0.20", lw=1.1, ls="-.",
+               label=r"$\Delta\log F(\mathrm{H}\alpha)$, observed")
+    ax.axhline(0.0, color="0.5", lw=0.6, ls=":")
+    cruce = float(np.interp(0.0, contraste_mdot[::-1], dav[::-1]))
+    if 0.0 < cruce < dav_max:
+        ax.axvline(cruce, color="#d62728", lw=0.6, ls="--")
+        ax.annotate(f"{cruce:.2f} mag", (cruce, 0.0), textcoords="offset points",
+                    xytext=(4, 7), fontsize=6.5, color="#d62728")
+    ax.set_xlim(0.0, dav_max)
+    ax.set_xlabel("differential " r"$A_V$ toward " f"{objetos[1].nombre} (mag)")
+    ax.set_ylabel("pair contrast (dex)")
+    ax.legend(loc="lower left", handlelength=1.8)
+
+    fig.tight_layout(pad=0.3)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
 
 #: nombre del PDF -> funcion, en el orden en que aparecen en el paper.
 FIGURAS = {
@@ -1261,6 +1449,7 @@ FIGURAS = {
     "mdot_mass_plane": mdot_mass_plane,
     "contrast_curves": contrast_curves,
     "psf_chromatic": psf_chromatic,
+    "extinction": extinction,
 }
 
 

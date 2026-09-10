@@ -9,7 +9,8 @@ import math
 
 import numpy as np
 
-from ..stages.stage_h03_limits import lacc_lsun_from_lha, luminosity_erg_s, mdot_msun_yr_from_lacc
+from ..stages.stage_h03_limits import (MAGNETOSPHERIC_FACTOR, lacc_lsun_from_lha,
+                                       luminosity_erg_s, mdot_msun_yr_from_lacc)
 
 L_SUN_ERG_S = 3.828e33
 
@@ -54,14 +55,14 @@ def combine_accretion(per_line):
     return {"kind": "none", "l_acc_lsun": None}
 
 
-def mdot_from_lacc(l_acc_lsun, mass_msun, radius_rsun, *, factor=1.25):
+def mdot_from_lacc(l_acc_lsun, mass_msun, radius_rsun, *, factor=MAGNETOSPHERIC_FACTOR):
     """Mdot = factor · L_acc · R / (G M); factor 1.25 for R_in = 5 R_star (spec §3.5)."""
     base = mdot_msun_yr_from_lacc(l_acc_lsun, mass_msun, radius_rsun)
     return float(factor) * base if np.isfinite(base) else np.nan
 
 
 def mdot_mc(l_acc_lsun, mass_msun, mass_err, radius_rsun, radius_err, scatter_dex,
-            *, factor=1.25, n_mc=2000, seed=0):
+            *, factor=MAGNETOSPHERIC_FACTOR, n_mc=2000, seed=0):
     """Monte-Carlo Mdot sampling L_acc (log-normal via scatter), M and R."""
     rng = np.random.default_rng(int(seed))
     lacc = 10.0 ** (np.log10(l_acc_lsun) + rng.normal(0.0, scatter_dex, n_mc))

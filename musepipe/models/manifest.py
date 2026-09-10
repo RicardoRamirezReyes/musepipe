@@ -142,9 +142,45 @@ def library_root(cfg, *, project_root: str | Path | None = None) -> Path:
     return root
 
 
+PROVENANCE_NAME = "PROVENANCE.json"
+
+
+def library_provenance(cfg, family: str = "bt-settl", *,
+                       project_root: str | Path | None = None) -> dict | None:
+    """Read a family's ``PROVENANCE.json``, or ``None`` if it is not on disk.
+
+    The fetch script writes it next to the manifest, so it is what the library
+    says about itself: grid, axes, citation and whether the download was
+    complete. A declared ``g3_atmosphere_family`` is a config string and can go
+    stale -- both runs carried ``[deferred, pending data]`` for seven weeks
+    after the library was fetched complete on 2026-07-17. Never returns a
+    partial read: a malformed file raises rather than passing as absent.
+    """
+    import json
+
+    try:
+        root = library_root(cfg, project_root=project_root)
+    except RuntimeError:
+        return None
+    path = root / LIBRARY_SUBDIRS.get(family, family) / PROVENANCE_NAME
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def library_is_complete(prov: dict | None) -> bool:
+    """True when the provenance says the download finished with no gaps."""
+    if not prov:
+        return False
+    return prov.get("partial") is False and not prov.get("n_failed")
+
+
 __all__ = [
     "LIBRARY_SUBDIRS",
+    "PROVENANCE_NAME",
     "MANIFEST_NAME",
+    "library_is_complete",
+    "library_provenance",
     "library_root",
     "parse_manifest",
     "verify_manifest",

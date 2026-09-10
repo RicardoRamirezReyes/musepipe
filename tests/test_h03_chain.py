@@ -11,6 +11,7 @@ from musepipe.stages.stage_h03_limits import (
     G_CGS,
     L_SUN_ERG_S,
     M_SUN_G,
+    MAGNETOSPHERIC_FACTOR,
     PC_CM,
     R_SUN_CM,
     YR_S,
@@ -85,7 +86,8 @@ class H03ChainTests(unittest.TestCase):
         f_obs = f_stat / 0.5
         lha = 4.0 * math.pi * (10.0 * PC_CM) ** 2 * f_obs
         lacc_lsun = lha / L_SUN_ERG_S
-        mdot = (lacc_lsun * L_SUN_ERG_S) * R_SUN_CM / (G_CGS * M_SUN_G) * YR_S / M_SUN_G
+        mdot = (MAGNETOSPHERIC_FACTOR * (lacc_lsun * L_SUN_ERG_S) * R_SUN_CM
+                / (G_CGS * M_SUN_G) * YR_S / M_SUN_G)
 
         self.assertAlmostEqual(result["f_stat_99"], f_stat)
         self.assertAlmostEqual(result["f_lim_observed"], f_obs)
@@ -94,6 +96,36 @@ class H03ChainTests(unittest.TestCase):
         self.assertAlmostEqual(result["l_acc_lsun"], lacc_lsun)
         self.assertAlmostEqual(result["mdot_msun_yr"], mdot)
         self.assertAlmostEqual(result["mdot_err_dex"], 0.3)
+
+    def test_limit_and_detection_use_the_same_magnetospheric_factor(self):
+        """El limite de E3 y la deteccion de G3 tienen que ser la MISMA formula.
+
+        No lo eran: G3 aplicaba `(1 - R/R_in)^-1 = 1.25` via
+        `models.accretion.mdot_from_lacc` y E3 devolvia `L_acc R / (G M)` a secas,
+        asi que el limite salia 1.25x mas apretado que la medida con la que el
+        paper lo compara -- y las dos cifras viajaban juntas en la misma tabla.
+        """
+        from musepipe.models.accretion import mdot_from_lacc
+
+        result = limit_conversion_chain(
+            z_threshold=3.0,
+            z_5sigma_extrap=5.0,
+            matched_sigma=2.0e-17,
+            throughput=0.5,
+            throughput_err=0.0,
+            distance_pc=10.0,
+            distance_err_pc=0.0,
+            av=0.0,
+            av_err=0.0,
+            a_halpha_over_av=1.0,
+            lacc_lha_slope=1.0,
+            lacc_lha_intercept=0.0,
+            relation_scatter_dex=0.3,
+            mass_msun=0.02,
+            radius_rsun=0.13,
+        )
+        por_g3 = mdot_from_lacc(result["l_acc_lsun"], 0.02, 0.13)
+        self.assertAlmostEqual(result["mdot_msun_yr"] / por_g3, 1.0, places=12)
 
     def test_aoyama21_alt_relation_absent_and_present(self):
         base = dict(

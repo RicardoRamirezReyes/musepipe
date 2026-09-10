@@ -804,8 +804,13 @@ def _resolve_h04_n_jobs(config, n_cases):
     from ..parallel import resolve_n_jobs
 
     requested = config.get("h04_n_jobs")
-    if requested is None:
-        return 1  # default: serial, to keep the frozen behaviour unless opted in
+    if requested is None or requested is False:
+        # Serie por defecto, y ahora POR MEDIDA y no por inercia. Sobre
+        # ROXs 42B b (432 casos x 6 metodos) los tres backends dan el mismo
+        # reloj: 6384 s en serie, 6362 s con fork, 6327 s con fork y BLAS a un
+        # hilo -- gastando 7.5x la CPU para nada. El cuello no es el backend.
+        # Se enciende a proposito con `h04_n_jobs` o `h04_process_pool`.
+        return 1
     return max(1, min(resolve_n_jobs(requested), int(n_cases)))
 
 
@@ -825,8 +830,13 @@ def _resolve_h04_process_pool(config, n_cases):
 
     requested = config.get("h04_process_pool")
     if requested is None or requested is False:
-        return 0
-    n = resolve_n_jobs(None) if requested is True else resolve_n_jobs(requested)
+        return 0  # apagado por defecto: medido, no acelera (ver `_fork_worker`)
+    # `is` y no `in (None, True)`: en Python `1 == True`, asi que el segundo
+    # convertia `h04_process_pool: 1` -- que tiene que DESACTIVAR -- en «auto».
+    if requested is None or requested is True:
+        n = resolve_n_jobs(None)
+    else:
+        n = resolve_n_jobs(requested)
     n = min(int(n), int(n_cases))
     return n if n >= 2 else 0
 
@@ -849,6 +859,12 @@ DEFAULT_SECONDS_PER_CASE_METHOD = 3.1
 THREADPOOL_SPEEDUP = 1.6
 
 
+#: Aceleracion que se le supone al ProcessPool con fork. Conservadora a proposito:
+#: la medida sin limitar BLAS fue 1.00x y el arreglo de hilos aun no se ha medido
+#: sobre la cadena entera. Se declara por run con `h04_fork_speedup`.
+DEFAULT_FORK_SPEEDUP = 2.0
+
+
 def estimate_runtime_budget(config, n_cases, n_methods, *, n_workers=1, forked=False):
     """Presupuesto de reloj de E4, contando el paralelismo.
 
@@ -865,7 +881,13 @@ def estimate_runtime_budget(config, n_cases, n_methods, *, n_workers=1, forked=F
     per_case = float(config.get("h04_expected_seconds_per_case_method", DEFAULT_SECONDS_PER_CASE_METHOD))
     serial_seconds = float(n_cases) * float(n_methods) * per_case
     workers = max(1, int(n_workers))
-    speedup = float(workers) if forked else min(float(workers), THREADPOOL_SPEEDUP)
+    # El fork NO escala lineal: la fase de preparacion (cargar el cubo, construir
+    # la rejilla) es serie, y ademas hay que dejarle a cada worker un solo hilo de
+    # BLAS. `h04_fork_speedup` permite declarar el medido en esta maquina; el
+    # default es deliberadamente conservador, porque la version anterior asumia
+    # `workers` a pelo y en ROXs 42B b predijo 1004 s para un trabajo de 6362.
+    fork_speedup = float(config.get("h04_fork_speedup", DEFAULT_FORK_SPEEDUP))
+    speedup = min(float(workers), fork_speedup) if forked else min(float(workers), THREADPOOL_SPEEDUP)
     seconds = serial_seconds / max(speedup, 1.0)
     hours = seconds / 3600.0
     max_hours = float(config.get("h04_max_runtime_hours", 4.0))
@@ -1787,7 +1809,14 @@ def _compute_case_rows(case, ctx):
 
 
 def _fork_worker(case):
-    """Process-pool entry point: read the fork-inherited context and run one case."""
+    """Process-pool entry point: read the fork-inherited context and run one case.
+
+    NO limita los hilos de BLAS, y se probo: hacerlo no toco el reloj (6327 s
+    contra 6362 s sin limitar y 6384 s en serie) y ADEMAS rompio la
+    reproducibilidad bit a bit -3257 celdas de la tabla de inyeccion cambiaron,
+    todas a nivel de ruido de coma flotante, peor caso 1.2e-14 relativo en el
+    throughput-. La identidad de esta etapa vale a numero de hilos de BLAS fijo.
+    """
     ctx = _FORK_CTX
     if ctx is None:
         raise RuntimeError("H04 process-pool worker started without inherited context.")

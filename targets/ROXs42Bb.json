@@ -14,6 +14,7 @@
     "membership": "Currie et al. 2014: ROXs 42B miembro de rho Oph, ~3 Myr"
   },
   "note": "Segundo objeto. Ver docs/2026-07-20_plan_roxs42bb_execution.md. Ajustes propios del objeto en scripts/target_overrides/ROXs42Bb.py.",
+  "primary_display_name": "ROXs 42B",
   "field_notes": {
     "background_source": {
       "reported": "Fuente de fondo brillante en un costado del campo, citada a veces como ROXs 42B c.",
@@ -27,6 +28,8 @@
     "run": "ROXs42Bb_realigned",
     "order": 2,
     "note": "cubo combinado; sus limites de E3 del 08-31 se verificaron validos el 09-03 (verifica_e3.json)",
-    "display": "ROXs 42B b"
+    "display": "ROXs 42B b",
+    "spt_source_dir": ".",
+    "spt_source_note": "El G3 de este objeto no esta archivado en un subdirectorio: vive en la raiz de stages/ (corrida del 2026-09-03 sobre el espectro calibrado del 08-31, con la LSF 2.297 del config, que es la que mide A4/M2: 2.2969). Se declara el punto para que la figura no dependa del orden alfabetico ni imprima un aviso."
   }
 }

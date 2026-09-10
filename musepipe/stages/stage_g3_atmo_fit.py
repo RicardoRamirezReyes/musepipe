@@ -21,13 +21,37 @@ from ..models import validate_label
 from ..models.btsettl import BTSettlLibrary
 from ..models.extinction import CCMExtinction
 from ..models.fit import fit_grid_3d
-from ..models.manifest import library_root
+from ..models.manifest import (library_is_complete, library_provenance,
+                               library_root)
 from ..models.observed import fit_spectrum
 from ..paths import RunPaths
 from .stage_g3_accretion import TABLE_FIELDS
 
 # Joint 2-parameter Δχ² levels for 1/2/3σ (Numerical Recipes / Avni 1976).
 _SIGMA_LEVELS = (2.30, 6.17, 11.83)
+
+
+def _library_block(cfg, citation):
+    """What the QC says about the atmosphere library, taken FROM the library.
+
+    ``g3_atmosphere_family`` is a config string and it went stale: both runs
+    kept ``BT-Settl (CIFIST) [deferred, pending data]`` for seven weeks after
+    the grid was fetched complete (146 nodes, ``partial: false``), so every QC
+    since declared a provisional library that was not provisional. The grid on
+    disk is the authority; the declared value travels as ``family_declared``
+    and a disagreement is recorded, not hidden.
+    """
+    prov = library_provenance(cfg)
+    declared = cfg.get("g3_atmosphere_family")
+    block = {"family": (prov or {}).get("grid") or declared,
+             "citation": citation,
+             "family_declared": declared,
+             "complete": library_is_complete(prov)}
+    if prov is not None:
+        block["provenance"] = {k: prov.get(k) for k in
+                               ("grid", "family", "metallicity", "n_nodes",
+                                "partial", "n_failed", "downloaded_utc")}
+    return block
 
 
 def stage_g3_atmo_fit_paths(run_id, project_root=None):
@@ -127,7 +151,7 @@ def compute_stage_g3_atmo_fit(cfg, paths, *, fit_spec=None, fit_spec_full=None,
 
     qc = {
         "stage": "g3_atmo_fit", "run_id": str(cfg.get("run_id", "")), "provisional": True,
-        "library": {"family": cfg.get("g3_atmosphere_family"), "citation": cite},
+        "library": _library_block(cfg, cite),
         "axes": {"teff": [float(teff_axis[0]), float(teff_axis[-1]), float(teff_axis.size)],
                  "logg": logg_axis.tolist(), "av_n": int(av_axis.size)},
         "best": {k: primary[k] for k in ("teff_best", "logg_best", "av_best",
