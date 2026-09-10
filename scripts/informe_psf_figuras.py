@@ -130,10 +130,20 @@ class Report:
 # ---------------------------------------------------------------- figuras
 
 def fig_psfao_params(rep, data):
+    """Siete parametros en cuatro filas: el septimo ocupa la fila entera.
+
+    Con `subplots(4, 2)` el octavo hueco se queda vacio y deja un cuarto de figura en
+    blanco. Un gridspec con la ultima fila fusionada lo llena y ademas le da a beta el
+    panel ancho, que es donde su estructura se lee mejor.
+    """
+
     keys = [("r0", "$r_0$ (m)"), ("C", "C"), ("A", "A"), ("alpha", r"$\alpha$"),
             ("ratio", "ratio"), ("theta", r"$\theta$"), ("beta", r"$\beta$")]
-    fig, axes = plt.subplots(4, 2, figsize=(9.5, 10.5), sharex=True)
-    for ax, (k, lab) in zip(axes.ravel(), keys):
+    fig = plt.figure(figsize=(9.8, 9.2))
+    gs = fig.add_gridspec(4, 2, hspace=0.32, wspace=0.24)
+    axes = [fig.add_subplot(gs[i // 2, i % 2]) for i in range(6)]
+    axes.append(fig.add_subplot(gs[3, :]))
+    for ax, (k, lab) in zip(axes, keys):
         for run, d in data.items():
             rows = d.get("psfao_rows")
             if not rows:
@@ -144,16 +154,14 @@ def fig_psfao_params(rep, data):
                         ms=2.6, lw=0.7, capsize=0, color=COLORS[run], label=LABEL[run])
         ax.set_ylabel(lab)
         ax.grid(alpha=0.25, lw=0.4)
-    axes.ravel()[-1].axis("off")
-    axes.ravel()[0].legend(loc="best")
-    for ax in axes[-1]:
-        ax.set_xlabel(r"$\lambda$ ($\AA$)")
-    axes[2, 1].set_xlabel(r"$\lambda$ ($\AA$)")
-    fig.suptitle("C1: los 7 parametros de Psfao por bin, con sus errores", y=0.995)
+    axes[0].legend(loc="best")
+    for ax in (axes[4], axes[5], axes[6]):
+        ax.set_xlabel(r"Wavelength ($\AA$)")
+    fig.suptitle("C1: the seven Psfao parameters per bin, with their errors", y=0.965)
     rep.save(fig, "01_psfao_parametros",
-             "Los siete parametros del ajuste Psfao en los 43 bins de 100 A, con los "
-             "errores del jacobiano. Un parametro que salta entre bins vecinos es una "
-             "degeneracion del ajuste, no cromatismo.")
+             "The seven parameters of the Psfao fit across the 43 bins of 100 A, with "
+             "the errors from the Jacobian. A parameter that jumps between neighbouring "
+             "bins is a degeneracy of the fit, not chromaticity.")
 
 
 def fig_r0_fried(rep, data):
@@ -168,7 +176,7 @@ def fig_r0_fried(rep, data):
         if m.sum() < 5:
             continue
         any_ok = True
-        ax.plot(lam[m], r0[m], "o", ms=3.2, color=COLORS[run], label=f"{LABEL[run]} medido")
+        ax.plot(lam[m], r0[m], "o", ms=3.2, color=COLORS[run], label=f"{LABEL[run]} measured")
         # ley de Fried: r0 propto lambda^(6/5), anclada a la mediana
         ref = np.nanmedian(r0[m])
         lam0 = np.nanmedian(lam[m])
@@ -180,14 +188,14 @@ def fig_r0_fried(rep, data):
         return rep.skip("02_r0_fried", "sin filas psfao")
     ax.set_xlabel(r"$\lambda$ ($\AA$)")
     ax.set_ylabel(r"$r_0$ (m)")
-    ax.set_title(r"$r_0$ sigue la ley de Fried; el resto de la estructura en $\lambda$ es ruido")
+    ax.set_title(r"$r_0$ follows the Fried law; the rest of the structure in $\lambda$ is noise")
     ax.legend()
     ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "02_r0_fried",
-             "El parametro de Fried contra la ley $r_0\\propto\\lambda^{6/5}$ anclada a la "
-             "mediana de cada objeto. Es el unico de los siete con cromatismo real: la "
-             "medida del 2026-08-09 que veia estructura en los demas usaba un "
-             "discriminante mal planteado.")
+             "The Fried parameter against the $r_0\\propto\\lambda^{6/5}$ law, anchored to each "
+             "object's median. It is the only one of the seven with real chromaticity: the "
+             "2026-08-09 measurement that saw structure in the others used a badly posed "
+             "discriminant.")
 
 
 def fig_ring(rep, data):
@@ -208,17 +216,17 @@ def fig_ring(rep, data):
                     color=COLORS[run],
                     ls="-" if tag == "Psfao" else "--",
                     label=f"{LABEL[run]} {tag}")
-    ax.axhline(5.0, color="k", lw=0.9, ls=":", label="umbral 5 %")
+    ax.axhline(5.0, color="k", lw=0.9, ls=":", label="5 % threshold")
     ax.set_xlabel(r"$\lambda$ ($\AA$)")
-    ax.set_ylabel("residuo de anillo (%)")
-    ax.set_title("El residuo de anillo por bin: la metrica que gobierna C1, y es ciega al nucleo")
+    ax.set_ylabel("ring residual (%)")
+    ax.set_title("Ring residual per bin: the metric that governs C1, and it is blind to the core")
     ax.legend(ncol=2)
     ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "03_residuo_anillo",
-             "Residuo de anillo en el radio de la compañera, por bin y por forma de PSF. "
-             "Es la metrica con la que C1 elige, y por construccion no mira el nucleo: de "
-             "ahi que una forma pueda clavar el anillo con la energia encerrada del nucleo "
-             "equivocada, que es lo que mide V4.")
+             "Ring residual at the companion's radius, per bin and per PSF form. This is the "
+             "metric C1 selects on, and by construction it does not look at the core: hence "
+             "a form can nail the ring with the core encircled energy completely wrong, "
+             "which is what V4 measures.")
 
 
 def fig_v4_core_ratio(rep, data):
@@ -235,29 +243,29 @@ def fig_v4_core_ratio(rep, data):
         cd = np.array([r["core_ratio_data"] for r in per])
         cm = np.array([r["core_ratio_model"] for r in per])
         err = np.array([r["err_pct"] for r in per])
-        a1.plot(lam, cd, "o-", ms=3, color=COLORS[run], label=f"{LABEL[run]} DATO")
+        a1.plot(lam, cd, "o-", ms=3, color=COLORS[run], label=f"{LABEL[run]} DATA")
         a1.plot(lam, cm, "s--", ms=3, color=COLORS[run], alpha=0.6,
-                label=f"{LABEL[run]} MODELO")
+                label=f"{LABEL[run]} MODEL")
         a2.plot(lam, err, "o-", ms=3, color=COLORS[run], label=LABEL[run])
     if not ok:
         plt.close(fig)
         return rep.skip("04_v4_core_ratio", "sin B_medida.json")
     a1.set_ylabel(r"$F(\leq 25\,\mathrm{px})\,/\,F(\mathrm{box3})$")
-    a1.set_title("V4 de C1: el cociente que ES la correccion de apertura de C2/C3")
+    a1.set_title("C1 V4: the ratio that IS the aperture correction C2/C3 apply")
     a1.legend(ncol=2)
     a1.grid(alpha=0.25, lw=0.4)
     a2.axhline(0, color="k", lw=0.8)
-    a2.axhspan(-3, 3, color="0.9", zorder=0, label="tolerancia $\\pm$3 %")
-    a2.set_ylabel("error del modelo (%)")
+    a2.axhspan(-3, 3, color="0.9", zorder=0, label="$\\pm$3 % tolerance")
+    a2.set_ylabel("model error (%)")
     a2.set_xlabel(r"$\lambda$ ($\AA$)")
     a2.legend(ncol=3)
     a2.grid(alpha=0.25, lw=0.4)
     _shade_bands(a2)
     rep.save(fig, "04_v4_core_ratio",
-             "Arriba, el cociente nucleo/norm medido sobre el DATO (sin modelo, en la "
-             "primaria) y el del modelo que C2 invierte. Abajo, el error del modelo contra "
-             "su tolerancia del 3 %: se sale, y se sale sobre todo en el rojo, que es donde "
-             "vive la divergencia de D1 (B5 y B6 sombreadas).")
+             "Top: the core-to-norm ratio measured on the DATA (no model, on the "
+             "primary) and the model ratio that C2 inverts. Bottom: the model error "
+             "against its 3 % tolerance. It misses, and it misses mostly in the red — "
+             "which is exactly where the D1 divergence lives (B5 and B6 shaded).")
 
 
 def fig_error_por_banda(rep, data):
@@ -273,18 +281,18 @@ def fig_error_por_banda(rep, data):
         v = [by.get(n, {}).get("err_pct_median", np.nan) for n in names]
         ax.bar(x + (i - 0.5 * (len(runs) - 1)) * w, v, w, color=COLORS[run],
                label=LABEL[run], alpha=0.9)
-    ax.axhspan(-3, 3, color="0.9", zorder=0, label="tolerancia $\\pm$3 %")
+    ax.axhspan(-3, 3, color="0.9", zorder=0, label="$\\pm$3 % tolerance")
     ax.axhline(0, color="k", lw=0.8)
     ax.set_xticks(x)
     ax.set_xticklabels([f"{n}\n{BANDS[n][0]}-{BANDS[n][1]}" for n in names], fontsize=8)
-    ax.set_ylabel("error de la apcorr del modelo (%)")
-    ax.set_title("El error del modelo se concentra en el rojo")
+    ax.set_ylabel("error of the model aperture correction (%)")
+    ax.set_title("The model error concentrates in the red")
     ax.legend()
     ax.grid(alpha=0.25, lw=0.4, axis="y")
     rep.save(fig, "05_error_por_banda",
-             "Mediana del error de la apcorr del modelo en cada banda de D1. En ROXs 12 b "
-             "vale +2.2 % en B1 y +13.7 % en B5: no es un offset, es una pendiente, y por "
-             "eso un escalar de throughput no lo puede arreglar.")
+             "Median error of the model aperture correction in each D1 band. In ROXs 12 "
+             "b it is +2.2 % in B1 and +13.7 % in B5: not an offset, a slope — which is "
+             "why a scalar throughput cannot fix it.")
 
 
 def fig_apcorr_curvas(rep, data):
@@ -302,27 +310,27 @@ def fig_apcorr_curvas(rep, data):
         cd = np.array([r["core_ratio_data"] for r in per])
         ratio = np.array([r["ratio"] for r in per])
         a1.plot(lam, cm, "s--", ms=3, alpha=0.65, color=COLORS[run],
-                label=f"{LABEL[run]} apcorr del MODELO")
+                label=f"{LABEL[run]} MODEL apcorr")
         a1.plot(lam, cd, "o-", ms=3, color=COLORS[run],
-                label=f"{LABEL[run]} apcorr del DATO")
+                label=f"{LABEL[run]} DATA apcorr")
         a2.plot(lam, ratio, "o-", ms=3, color=COLORS[run], label=LABEL[run])
     if not ok:
         plt.close(fig)
         return rep.skip("06_apcorr_curvas", "sin B_medida.json")
-    a1.set_ylabel("apcorr (sin el factor de flujo total)")
-    a1.set_title("La correccion de apertura: la del modelo contra la medida en el dato")
+    a1.set_ylabel("apcorr (without the total-flux factor)")
+    a1.set_title("The aperture correction: the model one against the one measured on the data")
     a1.legend(ncol=2, fontsize=7.5)
     a1.grid(alpha=0.25, lw=0.4)
     a2.axhline(1.0, color="k", lw=0.8)
-    a2.set_ylabel("dato / modelo")
+    a2.set_ylabel("data / model")
     a2.set_xlabel(r"$\lambda$ ($\AA$)")
     a2.legend()
     a2.grid(alpha=0.25, lw=0.4)
     _shade_bands(a2)
     rep.save(fig, "06_apcorr_curvas",
-             "La apcorr que C2 aplica sale del modelo (cuadrados); la medida directamente "
-             "sobre la primaria, sin modelo, es la de circulos. El panel de abajo es el "
-             "factor con el que habria que corregir cada canal.")
+             "The aperture correction C2 applies comes from the model (squares); the one "
+             "measured directly on the primary, with no model, is the circles. The lower "
+             "panel is the factor each channel would have to be corrected by.")
 
 
 def fig_fase_subpixel(rep, data, waves=(5000., 6563., 8800.)):
@@ -343,17 +351,18 @@ def fig_fase_subpixel(rep, data, waves=(5000., 6563., 8800.)):
         ax.plot(offs, vals / vals[len(offs) // 2], "o-", ms=3,
                 label=rf"$\lambda={w:.0f}\,\AA$")
     ax.axhline(1.0, color="k", lw=0.8)
-    ax.set_xlabel("desplazamiento subpixel en y (px)")
-    ax.set_ylabel("apcorr(box3) relativa al pixel centrado")
-    ax.set_title("box3 es fragil a la fase subpixel: la mediana se mueve un 10.4 %")
+    ax.set_xlabel("sub-pixel offset in y (px)")
+    ax.set_ylabel("apcorr(box3) relative to a pixel-centred source")
+    ax.set_title("box3 is fragile to sub-pixel phase: the median moves by 10.4 %")
     ax.legend()
     ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "07_fase_subpixel",
-             "La apcorr de box3 en funcion de donde cae la fuente dentro del pixel. Con "
-             "FWHM ~3 px una caja de 3x3 captura una fraccion que depende mucho de la fase: "
-             "entre la primaria y la compañera de ROXs 12 b la diferencia es del 10.4 % de "
-             "mediana. No es un error -C2 usa la fase correcta- pero dice que el metodo es "
-             "sensible a un error de posicion.")
+             "The box3 aperture correction as a function of where the source falls "
+             "inside the pixel. With FWHM ~3 px, a 3x3 box captures a fraction that "
+             "depends strongly on phase: between the primary and the companion of ROXs "
+             "12 b the difference is 10.4 % in the median. It is not an error — C2 uses "
+             "the right phase — but it says the method does not forgive a position "
+             "error.")
 
 
 def fig_box3_box5(rep, data):
@@ -376,27 +385,27 @@ def fig_box3_box5(rep, data):
             ww = w[m][idx]
             rr = (f5[m] / f3[m])[idx]
             ax.plot(ww, rr, ls, lw=1.2, color=COLORS[run], alpha=0.9 if ls == "-" else 0.55,
-                    label=f"{LABEL[run]} apcorr del {tag}")
+                    label=f"{LABEL[run]} {tag} apcorr")
     if not ok:
         plt.close(fig)
         return rep.skip("08_box3_box5", "faltan los productos box3/box5")
-    ax.axhline(1.0, color="k", lw=0.9, label="lo que deberia ser")
+    ax.axhline(1.0, color="k", lw=0.9, label="what it should be")
     ax.axvspan(7500, 9000, color="0.88", zorder=0)
     ax.text(8250, ax.get_ylim()[1], "banda de la V4(b)", ha="center", va="top",
             fontsize=7.5, color="0.35")
     ax.set_ylim(0.4, 1.4)
     ax.set_xlabel(r"$\lambda$ ($\AA$)")
-    ax.set_ylabel("box5 / box3, ya corregidos")
-    ax.set_title("V4(b) de C2: dos aperturas distintas deberian dar el mismo espectro")
+    ax.set_ylabel("box5 / box3, both corrected")
+    ax.set_title("C2 V4(b): two different apertures should give the same spectrum")
     ax.legend(ncol=2, fontsize=7.5)
     ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "08_box3_box5",
-             "Si la curva de crecimiento fuera correcta, el espectro corregido de box3 y el "
-             "de box5 coincidirian y este cociente seria 1. Vale 0.90 en la banda donde C2 "
-             "lo mide; con la apcorr medida en el dato sube a 0.93, o sea que la curva "
-             "empirica de la primaria transfiere solo un cuarto de la inconsistencia. Fuera "
-             "de 7500-9000 A el cociente no significa nada porque el continuo de la "
-             "compañera no esta detectado.")
+             "If the growth curve were right, the corrected box3 and box5 spectra would "
+             "agree and this ratio would be 1. It is 0.90 in the band where C2 measures "
+             "it; with the aperture correction measured on the data it rises to 0.93, so "
+             "the primary's empirical curve transfers only a quarter of the "
+             "inconsistency. Outside 7500-9000 A the ratio means nothing, because the "
+             "companion continuum is not detected there.")
 
 
 def fig_snr_por_banda(rep, data):
@@ -420,15 +429,15 @@ def fig_snr_por_banda(rep, data):
     ax.set_yscale("symlog", linthresh=1)
     ax.set_xticks(x)
     ax.set_xticklabels(names)
-    ax.set_ylabel("S/N mediana del continuo (box3)")
-    ax.set_title("El continuo de la compañera solo esta detectado en B5 y B6")
+    ax.set_ylabel("median continuum S/N (box3)")
+    ax.set_title("The companion continuum is detected only in B5 and B6")
     ax.legend()
     ax.grid(alpha=0.25, lw=0.4, axis="y")
     rep.save(fig, "09_snr_por_banda",
-             "S/N mediana del continuo de la compañera en cada banda de D1. En las cuatro "
-             "azules es ~0, asi que su |t| pequeño no es «los metodos concuerdan» sino que "
-             "no hay señal, y cualquier cociente construido alli es un cociente de ruidos. "
-             "La divergencia de continuo de D1 vive en las dos unicas bandas con continuo.")
+             "Median S/N of the companion continuum in each D1 band. In the four blue "
+             "bands it is ~0, so their small |t| is not 'the methods agree' but 'there "
+             "is no signal', and any ratio built there is a ratio of two noises. The D1 "
+             "continuum divergence lives in the only two bands that have continuum.")
 
 
 def fig_t_matrix(rep, tm_pre, tm_post, pairs):
@@ -439,7 +448,7 @@ def fig_t_matrix(rep, tm_pre, tm_post, pairs):
     post = np.array([[tm_post[p].get(b, np.nan) for b in names] for p in pairs])
     vmax = np.nanmax(np.abs(np.concatenate([pre, post])))
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2), sharey=True)
-    for ax, M, tt in zip(axes, (pre, post), ("apcorr del MODELO", "apcorr del DATO")):
+    for ax, M, tt in zip(axes, (pre, post), ("MODEL apcorr", "DATA apcorr")):
         im = ax.imshow(M, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
         ax.set_xticks(range(len(names)))
         ax.set_xticklabels(names)
@@ -451,15 +460,15 @@ def fig_t_matrix(rep, tm_pre, tm_post, pairs):
                             color="white" if abs(M[i, j]) > 0.55 * vmax else "black")
     axes[0].set_yticks(range(len(pairs)))
     axes[0].set_yticklabels([p.replace("_vs_", " vs ") for p in pairs], fontsize=8)
-    fig.colorbar(im, ax=axes, label="t de D1", fraction=0.03)
-    fig.suptitle("D1 en ROXs 12 b: corregir la apertura mueve el rojo y no cierra ningun par",
+    fig.colorbar(im, ax=axes, label="D1 t statistic", fraction=0.03)
+    fig.suptitle("D1: correcting the aperture moves the red end and closes no pair",
                  y=1.02)
     rep.save(fig, "10_t_matrix",
-             "Estadistico t por par y banda, antes y despues de sustituir la apcorr del "
-             "modelo por la medida en el dato. B6 de psffit-vs-aperture pasa de -18.7 a "
-             "-3.7 y el de optimal_ls-vs-aperture de -65.4 a -37.2; psffit-vs-optimal_ls no "
-             "se mueve ni un digito, porque ese par no comparte la apertura. Ningun par "
-             "cambia de veredicto.")
+             "The t statistic per pair and band, before and after replacing the model "
+             "aperture correction with the one measured on the data. B6 of psffit-vs- "
+             "aperture goes from -18.7 to -3.7 and optimal_ls-vs-aperture from -65.4 to "
+             "-37.2; psffit-vs-optimal_ls does not move by a single digit, because that "
+             "pair does not share the aperture. No pair changes verdict.")
 
 
 def fig_dos_modelos(rep, data):
@@ -484,8 +493,8 @@ def fig_dos_modelos(rep, data):
             ratios.append(tot / box if box > 0 else np.nan)
         a1.plot(waves, ratios, "o-", ms=3.5, label=lab)
     a1.set_xlabel(r"$\lambda$ ($\AA$)")
-    a1.set_ylabel(r"$F(\leq 25)/F(\mathrm{box3})$ del modelo")
-    a1.set_title("¿Explica el tamaño de la rejilla el 7.5 %?")
+    a1.set_ylabel(r"model $F(\leq 25)/F(\mathrm{box3})$")
+    a1.set_title("Does the grid size explain the 7.5 %?")
     a1.legend(fontsize=8)
     a1.grid(alpha=0.25, lw=0.4)
     half = int(np.ceil(norm))
@@ -497,18 +506,18 @@ def fig_dos_modelos(rep, data):
         rb = np.arange(0, norm + 1, 1.0)
         prof = [float(np.nanmean(img[(r >= a) & (r < a + 1)])) for a in rb[:-1]]
         a2.semilogy(rb[:-1] + 0.5, prof, color=c, label=rf"$\lambda={w:.0f}$")
-    a2.set_xlabel("radio (px)")
-    a2.set_ylabel("perfil radial del modelo")
-    a2.set_title(f"{LABEL[run]}: perfil del `psf_model` publicado")
+    a2.set_xlabel("radius (px)")
+    a2.set_ylabel("model radial profile")
+    a2.set_title(f"{LABEL[run]}: profile of the published `psf_model`")
     a2.legend(fontsize=8)
     a2.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "11_dos_modelos",
-             "C1 mide V4 sobre la reconstruccion Psfao en la rejilla del cubo (170x170) y "
-             "obtiene 5.128; C2 evalua el `psf_model` PUBLICADO en 51x51 y obtiene 5.510, "
-             "un 7.5 % mas. El panel izquierdo aisla cuanto de esa diferencia es solo el "
-             "tamaño de la rejilla: si las dos curvas coinciden, la diferencia esta en el "
-             "modelo, no en el soporte, y entonces C1 audita un objeto distinto del que C2 "
-             "consume.")
+             "C1 measures V4 on the Psfao reconstruction on the cube grid (170x170) and "
+             "gets 5.128; C2 evaluates the PUBLISHED psf_model on 51x51 and gets 5.510, "
+             "7.5 % higher. The left panel isolates how much of that difference is grid "
+             "size alone: if the two curves coincide, the difference is in the model and "
+             "not in the support, and then C1 audits a different object from the one C2 "
+             "consumes.")
 
 
 def fig_halosub(rep, halosub):
@@ -564,31 +573,32 @@ def fig_halosub(rep, halosub):
 
     a1.axhline(1.0, color="k", lw=0.9)
     a1.set_ylim(0.9, 1.05)
-    a1.set_ylabel("linea retenida (inyectada SOLA)")
-    a1.set_title("La linea SOBREVIVE")
+    a1.set_ylabel("line retained (injected ALONE)")
+    a1.set_title("The line SURVIVES")
     a1.legend(ncol=2, fontsize=6.8)
     a2.axhline(0.0, color="k", lw=0.9)
-    a2.set_ylabel(r"linea espuria / H$\alpha$ real del objeto")
-    a2.set_title("El CONTINUO fabrica una absorcion")
+    a2.set_ylabel(r"spurious line / real H$\alpha$ of the object")
+    a2.set_title("The CONTINUUM manufactures an absorption")
     a2.legend(fontsize=7)
     a3.axhline(1.0, color="k", lw=0.9)
     a3.axhline(0.0, color="k", lw=0.6, ls=":")
-    a3.set_ylabel("continuo retenido")
-    a3.set_title("El continuo se anula, por diseño")
+    a3.set_ylabel("continuum retained")
+    a3.set_title("The continuum is annulled, by design")
     a3.legend(ncol=2, fontsize=6.8)
     for ax in (a1, a2, a3):
-        ax.set_xlabel("separacion (arcsec)")
+        ax.set_xlabel("separation (arcsec)")
         ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "12_halosub_borrado",
-             "Que le hacen SGF y LPM al espectro de un compañero sintetico, medido por "
-             "diferencia (cubo limpio contra cubo inyectado, misma realizacion de ruido, "
-             "asi que la medida no tiene ruido de fotones). Inyectando la LINEA SOLA "
-             "sobrevive entera (0.98 SGF, 1.00 LPM) en los dos objetos y a todas las "
-             "separaciones: NO la borran. Inyectando SOLO CONTINUO, sin ninguna linea, "
-             "aparece una absorcion espuria de varias veces el Halpha real del objeto: la "
-             "FABRICAN. El mecanismo es la Halpha de la primaria impresa en el halo, que "
-             "el filtro paso-bajo no sigue. Las verticales marcan la separacion real de "
-             "cada objeto; `none` es el control sin sustraccion, que da 1.000 exacto.")
+             "What SGF and LPM do to the spectrum of a synthetic companion, measured by "
+             "difference (clean cube against injected cube, same noise realization, so "
+             "the measurement carries no photon noise). Injecting the LINE ALONE it "
+             "survives intact (0.98 SGF, 1.00 LPM) in both objects and at every "
+             "separation: they do NOT erase it. Injecting CONTINUUM ONLY, with no line "
+             "at all, a spurious absorption appears worth several times the object's "
+             "real Halpha: they MANUFACTURE it. The mechanism is the primary's own "
+             "Halpha imprinted on the halo, which the low-pass filter does not follow. "
+             "Vertical lines mark each object's real separation; `none` is the control "
+             "with no halo subtraction, which returns exactly 1.000.")
 
 
 # ---------------------------------------------------------------- carga

@@ -169,15 +169,16 @@ def fig_escalera(rep, data):
         return rep.skip("01_escalera_mdot_av", "sin producto E3")
     ax.set_xlabel(r"$A_V$ (mag)")
     ax.set_ylabel(r"$\dot{M}$ ($M_\odot$ yr$^{-1}$)")
-    ax.set_title(r"La segunda palanca: $\dot{M}$ contra la extincion supuesta")
+    ax.set_title(r"The second lever: $\dot{M}$ against the assumed extinction")
     ax.legend(ncol=2, fontsize=8)
     ax.grid(alpha=0.25, lw=0.4, which="both")
     rep.save(fig, "01_escalera_mdot_av",
-             "Mdot en funcion del A_V supuesto, para las dos relaciones de acrecion. Los "
-             "circulos son el numero PUBLICADO del metodo canonico a su A_V adoptado (la "
-             "vertical punteada): la figura los recalcula desde el flujo limite y falla si "
-             "no caen encima. Ese anclaje es el que destapo que E3 publicaba sin el factor "
-             "magnetosferico x1.25 que G3 si aplicaba.")
+             "Accretion rate as a function of the assumed A_V, for both accretion "
+             "relations. The circles are the PUBLISHED number of the canonical method at "
+             "its adopted A_V (the dotted vertical): the figure recomputes them from the "
+             "limiting flux and fails if they do not land on top. That anchor is what "
+             "uncovered that E3 published without the 1.25 magnetospheric factor that G3 "
+             "does apply.")
 
 
 def fig_sensibilidad(rep):
@@ -188,15 +189,16 @@ def fig_sensibilidad(rep):
         ax.axvline(dv, color=c, ls=":", lw=1.0)
         ax.text(dv, 10 ** (DLOGMDOT_DAV * dv), f"  x{10**(DLOGMDOT_DAV*dv):.2f}",
                 color=c, va="bottom", fontsize=9)
-    ax.set_xlabel(r"error en $A_V$ (mag)")
-    ax.set_ylabel(r"factor en $\dot{M}$")
-    ax.set_title(r"$d\log\dot{M}/dA_V = 0.370$ dex/mag: un factor 2.3 por magnitud")
+    ax.set_xlabel(r"error in $A_V$ (mag)")
+    ax.set_ylabel(r"factor in $\dot{M}$")
+    ax.set_title(r"$d\log\dot{M}/dA_V = 0.370$ dex/mag: a factor 2.3 per magnitude")
     ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "02_sensibilidad",
-             "Cuanto mueve el Mdot un error en la extincion. El +-0.5 mag adoptado son "
-             "0.185 dex; una magnitud entera es un factor 2.3. El A_V es el de la PRIMARIA "
-             "en los dos objetos, y el sesgo tiene signo: material circumplanetario implica "
-             "A_V mayor, luego el Mdot medido es una cota inferior.")
+             "How much an error in the extinction moves the accretion rate. The adopted "
+             "+-0.5 mag is 0.185 dex; a whole magnitude is a factor 2.3. The A_V used is "
+             "the PRIMARY's in both objects, and the bias has a known sign: "
+             "circumplanetary material means more extinction, so the published rate is a "
+             "lower bound.")
 
 
 def fig_chi2_perfiles(rep, chi2):
@@ -223,20 +225,21 @@ def fig_chi2_perfiles(rep, chi2):
         # de eje que no existe.
         ax.set_ylim(0, None)
         ax.set_xlabel(r"$A_V$ (mag)")
-        ax.set_ylabel(r"$\Delta\chi^2$ (perfilado sobre $T_{\rm eff}$ y $\log g$)")
+        ax.set_ylabel(r"$\Delta\chi^2$ (profiled over $T_{\rm eff}$ and $\log g$)")
         ax.set_title(LABEL.get(run, run))
         ax.legend(fontsize=8)
         ax.grid(alpha=0.25, lw=0.4)
-    fig.suptitle("Via 3: el ajuste atmosferico da intervalos de UN nodo y dos respuestas "
-                 "que difieren 4.9 mag", y=1.02)
+    fig.suptitle("Route 3: the atmospheric fit gives ONE-node intervals and two answers "
+                 "4.9 mag apart", y=1.02)
     rep.save(fig, "03_chi2_av",
-             "Perfil de chi2 a lo largo de A_V, minimizando sobre Teff y logg. Las dos "
-             "variantes del MISMO ajuste caen en nodos distintos separados 4.9 mag -1.81 dex "
-             "de Mdot, un factor 65- y las dos declaran un intervalo de un solo nodo de 51, "
-             "aun despues de inflar los errores x3.01 y x2.09. La que ajusta mucho mejor "
-             "(veiling, chi2 349.7 contra 724.8) esta pegada al TECHO del eje, asi que su "
-             "A_V preferido puede estar fuera de la rejilla. El QC de G3 publica el "
-             "`edge_touch` de la variante primaria, que dice False.")
+             "Chi-squared profile along A_V, minimising over Teff and log g. The two "
+             "variants of the SAME fit land on different nodes 4.9 mag apart — 1.81 dex "
+             "of accretion rate, a factor 65 — and both declare an interval of a single "
+             "node out of 51, even after inflating the errors by 3.01x and 2.09x. The "
+             "one that fits far better (veiling, chi2 349.7 against 724.8) is pinned "
+             "against the CEILING of the axis, so its preferred A_V may lie outside the "
+             "grid. The G3 QC publishes the edge_touch of the primary variant, which "
+             "reads False.")
 
 
 def fig_chi2_mapa(rep, chi2):
@@ -260,13 +263,13 @@ def fig_chi2_mapa(rep, chi2):
             ax.set_xlabel(r"$A_V$ (mag)")
             ax.set_ylabel(r"$T_{\rm eff}$ (K)")
             ax.set_title(f"{LABEL.get(run, run)} — {name}")
-            fig.colorbar(im, ax=ax, label=r"$\Delta\chi^2$ (recortado a 200)")
+            fig.colorbar(im, ax=ax, label=r"$\Delta\chi^2$ (clipped at 200)")
     for j in range(k, n):
         axes[0][j].axis("off")
     rep.save(fig, "04_chi2_mapa",
-             "El plano (Teff, A_V) con logg minimizado. La degeneracion entre temperatura y "
-             "enrojecimiento es lo que hace que anadir veiling -un continuo extra plano- "
-             "mueva la solucion de un extremo del eje al otro.")
+             "The (Teff, A_V) plane with log g minimised. The degeneracy between "
+             "temperature and reddening is what lets adding veiling — an extra flat "
+             "continuum — move the solution from one end of the axis to the other.")
 
 
 def fig_extincion_ley(rep):
@@ -280,16 +283,16 @@ def fig_extincion_ley(rep):
         ax.plot([lam], [r], "o", ms=6)
         ax.annotate(f"{name}\n{r:.3f}", (lam, r), textcoords="offset points",
                     xytext=(6, 6), fontsize=8)
-    ax.set_xlabel(r"$\lambda$ ($\AA$)")
+    ax.set_xlabel(r"Wavelength ($\AA$)")
     ax.set_ylabel(r"$A_\lambda / A_V$")
-    ax.set_title("La ley de extincion (Cardelli+1989, $R_V$=3.1) en el rango de MUSE")
+    ax.set_title("The extinction law (Cardelli+1989, $R_V$=3.1) across the MUSE range")
     ax.grid(alpha=0.25, lw=0.4)
     rep.save(fig, "05_ley_extincion",
-             "El cociente A_lambda/A_V que convierte una extincion supuesta en un factor de "
-             "correccion. En Halpha vale 0.818, que con a=1.13 de la relacion L_acc-L_Halpha "
-             "da los 0.370 dex/mag. Las lineas de Balmer estan lo bastante juntas en este "
-             "cociente como para que el decremento tenga poca palanca sobre A_V, que es la "
-             "razon de fondo de que la via 1 se cierre.")
+             "The A_lambda/A_V ratio that turns an assumed extinction into a correction "
+             "factor. At Halpha it is 0.818, which with a=1.13 from the L_acc-L_Halpha "
+             "relation gives the 0.370 dex/mag. The Balmer lines sit close enough in "
+             "this ratio that the decrement has little leverage on A_V, which is the "
+             "underlying reason route 1 closes.")
 
 
 def main():

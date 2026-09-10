@@ -84,12 +84,11 @@ from musepipe.halosub import (  # noqa: E402
 )
 from musepipe.injection import InjectionSource, source_template  # noqa: E402
 from musepipe.io import read_json  # noqa: E402
-from musepipe.spectral import STANDARD_LINE_WINDOWS_A  # noqa: E402
+from musepipe.spectral import STANDARD_LINE_WINDOWS_A, resolve_lsf_fwhm_A  # noqa: E402
 from musepipe.stages.halosub_stage import (  # noqa: E402
     BOX3_APERTURE,
     combine_residuals,
     load_stage02_exposures,
-    lsf_fwhm_A_from_qc_or_config,
     subtract_exposures,
 )
 
@@ -112,32 +111,21 @@ HALPHA_REST_A = 6562.8
 
 
 def resolve_lsf(paths, cfg):
-    """La LSF MEDIDA, y las otras dos que circulan, todas declaradas.
+    """La LSF y su procedencia, por el resolutor compartido de la pipeline.
 
-    `lsf_fwhm_A_from_qc_or_config` busca `lsf.fwhm_A` y `cube.lsf_fwhm_A` en el QC de
-    A4; A4 la escribe en `m2_lsf.lsf_fwhm_at_halpha_A`. Luego cae a `cfg["lsf_fwhm_A"]`,
-    que el config declara como `h01_lsf_fwhm_A`. Los DOS caminos fallan, asi que C5/C6
-    corren con el default 2.6 mientras A4 midio 2.285/2.297 y E1 usa 2.383. Como
-    `R` es proporcional a la LSF, el predictor publicado sale ~14 % de mas.
-
-    Aqui se usa la MEDIDA y se registran las tres, en vez de heredar el fallback.
+    Esta funcion tenia aqui su propia cascada porque, cuando se midio el borrado
+    (2026-09-10), `lsf_fwhm_A_from_qc_or_config` devolvia el default de 2.6 A: buscaba
+    la LSF en dos claves que A4 no escribe y luego en un knob que el config no declara
+    con ese nombre. Eso ya esta arreglado en `spectral.resolve_lsf_fwhm_A`, asi que
+    aqui se llama a la de la pipeline y no se mantiene una copia.
     """
 
     qc00 = read_json(paths["stage00q_qc_json"]) if paths["stage00q_qc_json"].exists() else {}
-    measured = ((qc00.get("m2_lsf") or {}).get("lsf_fwhm_at_halpha_A")
-                if isinstance(qc00, dict) else None)
-    declared = cfg.get("h01_lsf_fwhm_A")
-    fallback = lsf_fwhm_A_from_qc_or_config(paths, cfg)
-    used = float(measured) if measured else (float(declared) if declared else fallback)
-    return used, {"measured_a4_m2": None if measured is None else float(measured),
-                  "declared_config_h01": None if declared is None else float(declared),
-                  "halosub_effective_today": float(fallback),
-                  "used_here": float(used),
-                  "note": ("C5/C6 corren con el default por un fallback silencioso: el QC de "
-                           "A4 guarda la LSF en `m2_lsf.lsf_fwhm_at_halpha_A` y el buscador "
-                           "mira `lsf.fwhm_A`/`cube.lsf_fwhm_A`; el config la declara como "
-                           "`h01_lsf_fwhm_A` y el buscador mira `lsf_fwhm_A`.")}
-
+    valor, procedencia = resolve_lsf_fwhm_A(qc00, cfg, stage_key="halosub_lsf_fwhm_A")
+    medida = ((qc00.get("m2_lsf") or {}).get("lsf_fwhm_at_halpha_A")
+              if isinstance(qc00, dict) else None)
+    return valor, {"used_here": float(valor), "source": procedencia,
+                   "measured_a4_m2": None if medida is None else float(medida)}
 
 
 def _subtract_fn_for(method, cfg, wave):
@@ -296,9 +284,9 @@ def main():
     print(f"run {args.run}: {len(exposures_raw)} exposiciones, cubo {exposures_raw[0].shape}")
     print(f"  primaria {primary_yx}  compañera {comp_yx}")
     print(f"  separacion real {real_sep:.2f} px = {real_sep*scale_arcsec:.3f} arcsec")
-    print(f"  LSF {lsf_fwhm_A:.4f} A (medida), linea en {line_center_A:.2f} A (rv {rv:+.2f} km/s)")
-    print(f"  OJO: C5/C6 corren hoy con {lsf_provenance['halosub_effective_today']:.4f} "
-          f"por fallback; el config declara {lsf_provenance['declared_config_h01']}")
+    print(f"  LSF {lsf_fwhm_A:.4f} A, linea en {line_center_A:.2f} A (rv {rv:+.2f} km/s)")
+    print(f"  procedencia: {lsf_provenance['source']} "
+          f"(A4/M2 midio {lsf_provenance['measured_a4_m2']})")
 
     # amplitud del compañero sintetico, anclada al real para estar en su regimen
     from astropy.io import fits
