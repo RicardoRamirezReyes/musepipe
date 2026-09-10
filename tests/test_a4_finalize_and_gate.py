@@ -147,8 +147,17 @@ class RollupGateTests(unittest.TestCase):
         self.assertEqual(status, "red")
 
     def test_the_frozen_policy_is_untouched(self):
-        # El arreglo es del mecanismo, no de la lista de limitaciones.
-        self.assertEqual(ACCEPTED_LIMITATIONS_HASH, "63df641f6073")
+        # Cable trampa: la politica de puerta no puede cambiar en silencio, asi que
+        # tocarla obliga a mover este literal Y a escribir por que.
+        #
+        # 2026-09-10, 63df641f6073 -> bd13caeb9f23: la limitacion de D2 afirmaba
+        # «no affecta a la NO-DETECCION de Halpha», y E1 ya da `detection` en un
+        # objeto y `candidate` en el otro. La frase ahora nombra el MECANISMO -la
+        # linea se mide sobre continuo LOCAL, asi que un sistematico de nivel no la
+        # toca- en vez de un veredicto, que es lo que caduca. No se nombran los
+        # objetos a proposito: esta lista es agnostica del objeto (y
+        # `test_no_hardcoded_target` lo exige).
+        self.assertEqual(ACCEPTED_LIMITATIONS_HASH, "bd13caeb9f23")
 
 
 class DeclaredPriorityTests(unittest.TestCase):
