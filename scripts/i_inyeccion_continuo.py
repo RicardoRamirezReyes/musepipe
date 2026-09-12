@@ -40,6 +40,33 @@ from musepipe.extraction.optimal import BACKGROUND_MODES, make_optimal_product  
 from musepipe.psf import evaluate_psf_model  # noqa: E402
 from musepipe.stages import stage_x02_optimal as x02  # noqa: E402
 from musepipe.stages.stage_x01_aperture import _load_positions, _load_residual_cube  # noqa: E402
+from musepipe.stages.stage_x02_optimal import _load_stage02_cube  # noqa: E402
+
+
+def load_extraction_cube(paths, cfg):
+    """El cubo del que `optimal_ls` extrae DE VERDAD, no el que uno supone.
+
+    Esto es un arreglo, no un detalle. La primera version de este script cargaba
+    `_load_residual_cube` -el residual de 04b, con la superficie local ya
+    restada- y midio la recuperacion del continuo alli. Pero desde el 2026-07-26,
+    con `x02_wings_intact_ls` encendido (el valor por defecto), LS extrae del
+    cubo CRUDO de stage02 con el fondo de anillo, igual que `aperture`: el propio
+    QC de C3 lo declara en sus `open_issues`. Medir en el residual es medir en un
+    cubo al que ya le han quitado el halo, que es justo lo que se quiere pesar.
+
+    Se replica aqui la MISMA decision que `compute_stage_x02_products`, leyendo
+    los mismos knobs, en vez de fijar una de las dos ramas.
+    """
+    ls_cube, wave, _good, _bad, _path, _bunit = _load_residual_cube(paths, cfg)
+    stage02_cube, _s02_wave, stage02_path, _s02_bunit = _load_stage02_cube(
+        paths, cfg, expected_wave=wave)
+    if stage02_cube.shape != ls_cube.shape:
+        raise SystemExit(f"stage02 {stage02_cube.shape} != residual {ls_cube.shape}")
+    wings_intact = bool(cfg.get("x02_wings_intact_ls", True))
+    anillo = cfg.get("x02_local_bkg_annulus_px")
+    if wings_intact and anillo is not None:
+        return stage02_cube, wave, "stage02_crudo (wings_intact_ls)"
+    return ls_cube, wave, "residual_04b (historico)"
 
 
 def inject(cube, wave, psf_model, center_yx, amplitude):
@@ -94,11 +121,11 @@ def main(argv=None):
     paths = x02.stage_x02_paths(args.run, root)
     object_yx, star_yx, _p, _q = _load_positions(paths, cfg)
     psf_model, _path = x02._load_psf_model(paths, cfg)
-    cube, wave, _good, _bad, _cp, _bunit = _load_residual_cube(paths, cfg)
+    cube, wave, etiqueta = load_extraction_cube(paths, cfg)
 
     step = max(1, int(args.channel_step))
     cube, wave = cube[::step], wave[::step]
-    print(f"cubo {cube.shape} tras submuestrear 1 de cada {step} canales", flush=True)
+    print(f"cubo {etiqueta} {cube.shape} tras submuestrear 1 de cada {step} canales", flush=True)
 
     # Amplitud: el nivel de continuo de la compañera en el rojo, donde SI hay
     # senal (B5/B6 son las dos unicas bandas con continuo detectado, 09-10).
@@ -123,6 +150,7 @@ def main(argv=None):
           f"{[tuple(int(v) for v in q) for q in posiciones]}", flush=True)
 
     report = {"script": "i_inyeccion_continuo", "run": args.run, "amplitude": amplitude,
+              "cube": etiqueta,
               "separation_px": sep, "channel_step": step,
               "wave_A": [float(w) for w in wave], "modes": {}}
     for mode in args.modes:
