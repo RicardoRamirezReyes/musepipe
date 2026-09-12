@@ -44,6 +44,7 @@ from ..io import read_json, write_json
 from ..observations import resolve_observation_plan
 from ..paths import RunPaths
 from ..qc.cube_qc import sha256_file
+from ..spectral import resolve_lsf_fwhm_A
 from ..stats import robust_sigma, robust_sigma_axis0
 from .stage_e01_perobs import load_aligned_exposure
 from .stage_e01b_perobs_subtract import models_by_exposure
@@ -308,7 +309,15 @@ def compute_stage_h04b_products(config, paths=None) -> StageH04bProduct:
     apertura = cfg["x06b_apertures"][0]
     etiqueta_ap = aperture_label(apertura)
     line_center = float(cfg.get("h04_line_center_A", cfg.get("h01_line_center_A", 6562.8)))
-    lsf_fwhm = float(cfg.get("h01_lsf_fwhm_A", 2.383))
+    # La LSF NO es cosmetica aqui: entra en `line_fwhm_A` de la fuente inyectada, asi
+    # que un valor equivocado ensancha o estrecha la linea que luego se recupera, y con
+    # ella el throughput. Antes era `cfg.get("h01_lsf_fwhm_A", 2.383)`: un default
+    # silencioso con el numero de un objeto escrito a mano, que en un run que no
+    # declarara el knob habria inyectado la LSF del otro. Va por el resolutor
+    # compartido, que exige knob o medida de A4/M2 y si no revienta.
+    lsf_fwhm, lsf_source = resolve_lsf_fwhm_A(
+        read_json(paths["stage00q_qc_json"]) if paths["stage00q_qc_json"].exists() else {},
+        cfg, stage_key="x06b_lsf_fwhm_A")
 
     # La agrupacion se resuelve ANTES del trabajo caro. `group_exposures` devuelve
     # {grupo: [INDICES]}, no objetos, y consumirla mal costo 34 min de calculo
@@ -384,6 +393,7 @@ def compute_stage_h04b_products(config, paths=None) -> StageH04bProduct:
             "line_center_A": line_center,
             "band_A": list(cfg["x06b_band_A"]) if cfg.get("x06b_band_A") else None,
             "lsf_fwhm_A": lsf_fwhm,
+            "lsf_fwhm_A_source": str(lsf_source),
         },
         "wavelength_frame": _wavelength_frame(cfg, qc00, open_issues, knob="x06b_wframe"),
         # Tres campos distintos a proposito: confundir posiciones con filas ya

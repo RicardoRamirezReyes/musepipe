@@ -165,7 +165,8 @@ ACCEPTED_LIMITATIONS = {
             "optimal_psfsub ~1.76x): residual chromatic halo subtraction of the bright primary at "
             "the faint companion, at the PSF floor (Psfao, ~4.4% red ring residual). The red "
             "spectral SHAPE is real and method-consistent (corr 0.957); only the LEVEL disagrees. "
-            "Does NOT affect the Halpha emission-line non-detection or the Mdot limit. Fully "
+            "Affects the continuum LEVEL only: it does not affect the Halpha emission-line "
+            "measurement nor the Mdot limit, both of which sit on a LOCAL continuum. Fully "
             "diagnosed in docs/2026-07-10_d2_red_continuum_diagnosis.md."
         ),
     },

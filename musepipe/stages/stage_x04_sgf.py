@@ -163,7 +163,7 @@ def compute_stage_x04_products(config, paths=None):
 
     references = np.stack([e.reference for e in exposures], axis=0)
     mean_reference = np.nanmean(references, axis=0)
-    lsf_fwhm_A = lsf_fwhm_A_from_qc_or_config(paths, cfg)
+    lsf_fwhm_A, lsf_source = lsf_fwhm_A_from_qc_or_config(paths, cfg)
     predictors = self_subtraction_predictors(
         mean_reference, wave, lsf_fwhm_A=lsf_fwhm_A, window_channels=window
     )
@@ -175,6 +175,9 @@ def compute_stage_x04_products(config, paths=None):
         "window": window,
         "degree": degree,
         "lsf_fwhm_A": float(lsf_fwhm_A),
+        # De donde sale la LSF, porque la `R` del predictor es proporcional a ella y
+        # hasta el 2026-09-10 salia de un default silencioso.
+        "lsf_fwhm_A_source": str(lsf_source),
         "ref_exclude_radius_px": float(cfg.get("halosub_exclude_radius_px", 3.0)),
     }
     qc["self_subtraction_predictor"] = predictors

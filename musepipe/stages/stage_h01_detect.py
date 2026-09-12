@@ -14,7 +14,7 @@ from ..extraction.aperture import FLAG_BAD_WINDOW, FLAG_SKYLINE
 from ..extraction.product import SpectrumProduct
 from ..io import load_calibrated_controls, read_json, write_csv, write_json
 from ..paths import RunPaths
-from ..spectral import continuum_running_median
+from ..spectral import continuum_running_median, resolve_lsf_fwhm_A
 from .stage08c_look_elsewhere import empirical_fap, parametric_fap
 from .stage_x10_compare import METHOD_ORDER
 
@@ -499,21 +499,16 @@ def classify_h01_verdict(rows, *, detection_fap=0.01, admissible_pairs=DEFAULT_A
 
 
 def _lsf_fwhm_from_qc_or_config(qc00, cfg):
-    if cfg.get("h01_lsf_fwhm_A") is not None:
-        return float(cfg["h01_lsf_fwhm_A"]), "config.h01_lsf_fwhm_A"
-    m2 = (qc00 or {}).get("m2_lsf", {})
-    for key in ("fwhm_at_halpha_A", "halpha_fwhm_A", "lsf_fwhm_A"):
-        if key in m2 and m2[key] is not None:
-            return float(m2[key]), f"stage00q_qc.m2_lsf.{key}"
-    coeffs = m2.get("poly2_coeffs")
-    if coeffs:
-        return float(np.polyval(np.asarray(coeffs, dtype=np.float64), HALPHA_REST_A)), "stage00q_qc.m2_lsf.poly2_coeffs"
-    table = m2.get("table_A_fwhm")
-    if table:
-        waves = np.asarray([row[0] if isinstance(row, (list, tuple)) else row.get("wave_A") for row in table], dtype=float)
-        fwhm = np.asarray([row[1] if isinstance(row, (list, tuple)) else row.get("fwhm_A") for row in table], dtype=float)
-        return float(np.interp(HALPHA_REST_A, waves, fwhm)), "stage00q_qc.m2_lsf.table_A_fwhm"
-    raise RuntimeError("H01 requires LSF FWHM at Halpha from A4/M2 or h01_lsf_fwhm_A config.")
+    """Delega en el resolutor COMPARTIDO (`spectral.resolve_lsf_fwhm_A`).
+
+    Antes tenia su propia cascada, que en su rama de QC miraba `fwhm_at_halpha_A` -A4
+    escribe `lsf_fwhm_at_halpha_A`- y por tanto nunca acertaba esa clave; funcionaba
+    solo porque el config declara `h01_lsf_fwhm_A` y esa rama va primero. Tener dos
+    definiciones del mismo numero en dos etapas que se citan juntas es como se cuelan
+    los desfases, asi que ahora hay una.
+    """
+
+    return resolve_lsf_fwhm_A(qc00, cfg)
 
 
 def _rv_from_config(cfg):

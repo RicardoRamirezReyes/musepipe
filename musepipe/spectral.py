@@ -204,8 +204,71 @@ def integrated_line_flux(spec_1d, line_idxs, dlam_A):
     return float(np.nansum(np.asarray(spec_1d)[idx]) * dlam_A)
 
 
+#: Halpha en reposo, en aire. El mismo valor que usan E1 y G2.
+HALPHA_REST_A = 6562.8
+
+#: knobs que declaran la LSF, del mas especifico al mas general. La convencion del
+#: proyecto es que el DECLARADO gana sobre el medido (igual que `resolve_flux_unit` y
+#: `_wavelength_frame`), para que un run pueda congelar el numero que ya publico.
+LSF_CONFIG_KEYS = ("h01_lsf_fwhm_A", "lsf_fwhm_A")
+
+#: donde A4/M2 guarda la medida, en orden de preferencia. `lsf_fwhm_at_halpha_A` es la
+#: clave REAL que escribe A4; las otras son nombres que tuvo antes.
+LSF_M2_KEYS = ("lsf_fwhm_at_halpha_A", "fwhm_at_halpha_A", "halpha_fwhm_A", "lsf_fwhm_A")
+
+
+def resolve_lsf_fwhm_A(qc00, cfg, *, stage_key=None):
+    """FWHM de la LSF en Halpha: knob declarado -> medida de A4/M2 -> error.
+
+    Devuelve ``(valor, procedencia)``. **Nunca un default silencioso**, que es
+    precisamente lo que este resolutor viene a arreglar: hasta el 2026-09-10, C5 y C6
+    corrian con 2.6 A porque su buscador miraba `lsf.fwhm_A` y `cube.lsf_fwhm_A` -que
+    A4 no escribe, escribe `m2_lsf.lsf_fwhm_at_halpha_A`- y luego `lsf_fwhm_A`, que el
+    config declara como `h01_lsf_fwhm_A`. Los dos caminos fallaban en silencio y el
+    predictor de autosustraccion que publican salia con la LSF equivocada.
+
+    Existe UNO solo, compartido, porque el numero lo consumen E1, G2, G3, C5 y C6 y ya
+    van tres veces en este proyecto que dos etapas que se citan juntas no comparten una
+    definicion.
+    """
+
+    for key in ((stage_key,) if stage_key else ()) + LSF_CONFIG_KEYS:
+        value = (cfg or {}).get(key)
+        if value is not None:
+            return float(value), f"config.{key}"
+
+    m2 = ((qc00 or {}).get("m2_lsf") or {})
+    for key in LSF_M2_KEYS:
+        if m2.get(key) is not None:
+            return float(m2[key]), f"stage00q_qc.m2_lsf.{key}"
+
+    coeffs = m2.get("poly2_coeffs")
+    if coeffs:
+        value = float(np.polyval(np.asarray(coeffs, dtype=np.float64), HALPHA_REST_A))
+        return value, "stage00q_qc.m2_lsf.poly2_coeffs"
+
+    table = m2.get("table_A_fwhm")
+    if table:
+        waves = np.asarray([r[0] if isinstance(r, (list, tuple)) else r.get("wave_A")
+                            for r in table], dtype=np.float64)
+        fwhm = np.asarray([r[1] if isinstance(r, (list, tuple)) else r.get("fwhm_A")
+                           for r in table], dtype=np.float64)
+        return float(np.interp(HALPHA_REST_A, waves, fwhm)), "stage00q_qc.m2_lsf.table_A_fwhm"
+
+    raise RuntimeError(
+        "No hay FWHM de la LSF en Halpha: declara "
+        + " o ".join(f"`{k}`" for k in (((stage_key,) if stage_key else ()) + LSF_CONFIG_KEYS))
+        + " en el config, o corre A4/M2 para que escriba `m2_lsf` en stage00q_qc.json. "
+        "No hay valor por defecto a proposito."
+    )
+
+
 __all__ = [
     "continuum_running_median",
+    "HALPHA_REST_A",
+    "LSF_CONFIG_KEYS",
+    "LSF_M2_KEYS",
+    "resolve_lsf_fwhm_A",
     "continuum_polyfit_loglambda",
     "integrated_line_flux",
     "make_wavelength_mask",
