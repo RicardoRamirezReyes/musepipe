@@ -109,11 +109,25 @@ def main(argv=None):
     dy, dx = float(obj[0] - star[0]), float(obj[1] - star[1])
     print(f"desplazamiento compañera-primaria: dy={dy:+.2f} dx={dx:+.2f} px", flush=True)
 
+    # De donde salen los cubos, en orden y declarandolo: el config si los tiene
+    # (ROXs 12 b), y si no el PLAN DEL COMBINADO, que los lista por construccion
+    # -es con los que se hizo el cubo- (ROXs 42B b no declara `perexp_cubes`).
     cubos = list((cfg.get("perexp_cubes") or []))
+    origen = "config.perexp_cubes"
+    if not cubos:
+        plan = paths["paths"].stage_dir / "stream_combine_plan.json"
+        if plan.exists():
+            payload = json.loads(plan.read_text(encoding="utf-8"))
+            cubos = [e["file"] for e in payload.get("exposures", [])]
+            origen = f"{plan.name} (metodo {payload.get('method')}, pesos {payload.get('weight_mode')})"
+    if not cubos:
+        raise SystemExit("ni `perexp_cubes` en el config ni `stream_combine_plan.json` en el run")
+    faltan = [c for c in cubos if not Path(c).exists()]
+    if faltan:
+        raise SystemExit(f"{len(faltan)} cubos del plan no estan en disco, p.ej. {faltan[0]}")
+    print(f"cubos: {len(cubos)} de {origen}", flush=True)
     if args.limit:
         cubos = cubos[: int(args.limit)]
-    if not cubos:
-        raise SystemExit("el run no declara `perexp_cubes`")
     lo, hi = float(args.banda[0]), float(args.banda[1])
     step = max(1, int(args.channel_step))
 
@@ -143,7 +157,7 @@ def main(argv=None):
               f"ann={niveles['annulus']:9.2f} azi={niveles['azimuthal']:9.2f} "
               f"razon={razon:6.3f}", flush=True)
         Path(args.out_json).write_text(json.dumps({"script": "k_por_exposicion_posang",
-                                                   "run": args.run, "banda_A": [lo, hi],
+                                                   "run": args.run, "banda_A": [lo, hi], "origen_cubos": origen,
                                                    "channel_step": step, "filas": filas}, indent=1),
                                        encoding="utf-8")
 
