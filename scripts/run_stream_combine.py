@@ -47,11 +47,25 @@ def main(argv: list[str] | None = None) -> int:
 
     nz = int(plan.wavelength["n_channels"])
     npix = int(plan.crop_npix)
-    stack_gb = (len(plan.exposures) * plan.chunk_channels * npix * npix * 4 * 2) / 1024**3
+    from musepipe.reduction.stream_combine import (
+        accumulator_bytes, available_memory_bytes, chunk_bytes_per_channel,
+    )
+    fijo = accumulator_bytes(nz, npix)
+    por_canal = chunk_bytes_per_channel(len(plan.exposures), npix, plan.method)
+    pico_gb = (fijo + plan.chunk_channels * por_canal) / 1024**3
+    disponible = available_memory_bytes()
+    vueltas = -(-nz // max(1, int(plan.chunk_channels)))
     print(f"plan: {len(plan.exposures)} exposures, method={plan.method}, weight={plan.weight_mode}")
     print(f"output cube: {nz} x {npix} x {npix} -> {output}")
-    print(f"chunk={plan.chunk_channels} channels, peak stack ~{stack_gb:.2f} GB "
-          f"({'stacked' if plan.method == 'sigclip' else 'accumulated'})")
+    origen = (plan.chunk_sizing or {}).get("source", "plan")
+    print(f"chunk={plan.chunk_channels} channels ({origen}), {vueltas} vueltas, "
+          f"pico estimado ~{pico_gb:.2f} GB "
+          f"(fijo {fijo / 1024**3:.2f} GB + trozo {plan.chunk_channels * por_canal / 1024**3:.2f} GB)")
+    if disponible is not None:
+        print(f"memoria disponible ahora: {disponible / 1024**3:.1f} GB")
+        if pico_gb > 0.8 * disponible / 1024**3:
+            print("  AVISO: el pico estimado se acerca a la memoria disponible; "
+                  "baja --chunk-channels si el sistema mata el proceso")
     if not args.execute:
         print("dry run: pass --execute to write the cube")
         return 0
