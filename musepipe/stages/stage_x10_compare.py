@@ -929,27 +929,31 @@ def _classify_pair_rows(pair_rows, *, p_divergent, p_strong):
 
     pvals = [row["p_value"] for row in pair_rows]
     if not pair_rows or any(p is None for p in pvals):
-        return {"verdict": "insufficient", "marginal": [], "line_hits": []}
+        return {"verdict": "insufficient", "marginal": [], "strong": [], "line_hits": []}
     marginal = []
-    strong = False
+    # Las bandas con p < p_strong ponian un booleano y no se guardaban en ningun
+    # sitio: el QC nombraba la evidencia debil (`marginal`) y escondia la fuerte,
+    # que es la que dispara el veredicto. `optimal_ls_vs_aperture` listaba CERO
+    # bandas con un B6 de -65 sigma (docs/2026-09-10_apertura_y_cola_parametrica.md §1.1).
+    strong = []
     n_div_continuum = 0
     line_hits = []
     for row in pair_rows:
         p = float(row["p_value"])
         if row["band_kind"] == "continuum":
             if p < p_strong:
-                strong = True
                 n_div_continuum += 1
+                strong.append({"pair": row["pair"], "band": row["band"], "t": row["t_stat"], "p": p})
             elif p < p_divergent:
                 n_div_continuum += 1
                 marginal.append({"pair": row["pair"], "band": row["band"], "t": row["t_stat"], "p": p})
         elif row["band_kind"] == "line" and p < p_divergent:
             line_hits.append({"pair": row["pair"], "band": row["band"], "t": row["t_stat"], "p": p})
     if strong or n_div_continuum >= 2:
-        return {"verdict": "divergent_continuum", "marginal": marginal, "line_hits": line_hits}
+        return {"verdict": "divergent_continuum", "marginal": marginal, "strong": strong, "line_hits": line_hits}
     if line_hits:
-        return {"verdict": "divergent_lines", "marginal": marginal, "line_hits": line_hits}
-    return {"verdict": "consistent", "marginal": marginal, "line_hits": []}
+        return {"verdict": "divergent_lines", "marginal": marginal, "strong": strong, "line_hits": line_hits}
+    return {"verdict": "consistent", "marginal": marginal, "strong": strong, "line_hits": []}
 
 
 def classify_verdict_v2(
@@ -1003,14 +1007,17 @@ def classify_verdict_v2(
             "verdict_by_pair": verdict_by_pair,
             "pairs_degraded": degraded,
             "marginal": [],
+            "strong": [],
         }
 
     marginal = []
+    strong = []
     line_hits = []
     active_verdicts = []
     for pid in active_ids:
         active_verdicts.append(verdict_by_pair[pid]["verdict"])
         marginal.extend(verdict_by_pair[pid]["marginal"])
+        strong.extend(verdict_by_pair[pid].get("strong", []))
         line_hits.extend(verdict_by_pair[pid]["line_hits"])
     if "divergent_continuum" in active_verdicts:
         verdict = "divergent_continuum"
@@ -1029,6 +1036,7 @@ def classify_verdict_v2(
         "verdict_by_pair": verdict_by_pair,
         "pairs_degraded": degraded,
         "marginal": marginal,
+        "strong": strong,
     }
     if line_hits:
         result["line_hits"] = line_hits
@@ -1161,14 +1169,17 @@ def classify_verdict_v4(
             "pairs_degraded": degraded,
             "pairs_degraded_by_observable": degraded_by_observable,
             "marginal": [],
+            "strong": [],
         }
 
     marginal = []
+    strong = []
     line_hits = []
     continuum_divergent = False
     for _pid, result in active_continuum:
         continuum_divergent |= result["verdict"] == "divergent_continuum"
         marginal.extend(result["marginal"])
+        strong.extend(result.get("strong", []))
     lines_divergent = False
     for _pid, result in active_lines:
         lines_divergent |= result["verdict"] == "divergent_lines"
@@ -1191,6 +1202,7 @@ def classify_verdict_v4(
         "pairs_degraded": degraded,
         "pairs_degraded_by_observable": degraded_by_observable,
         "marginal": marginal,
+        "strong": strong,
     }
     if line_hits:
         result["line_hits"] = line_hits
@@ -1548,6 +1560,7 @@ def compare_methods(
         "checks": checks,
         "correlations": _correlation_summary(products, pair_sigmas),
         "marginal": verdict.get("marginal", []),
+        "strong": verdict.get("strong", []),
         "open_issues": open_issues,
     }
     if "line_hits" in verdict:

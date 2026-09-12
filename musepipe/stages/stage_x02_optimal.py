@@ -275,15 +275,56 @@ def _snr_gain_vs_aperture(optimal: SpectrumProduct, aperture_path):
     return _finite_percentiles(gain), bias
 
 
-def _clip_concentration(extraction: OptimalExtraction, object_yx, window_radius_px):
-    ypix, xpix = circular_window_indices(extraction.rejection_map.shape, object_yx, window_radius_px)
+#: Radio del nucleo del compañero para V4, en pixeles. Con FWHM ~3 px, r<=1.5
+#: es el nucleo, que es donde el spec pide que el recorte NO se cebe.
+CLIP_CORE_RADIUS_PX = 1.5
+
+#: Umbral de V4 (spec C3 §6): "< 2x la tasa media en su ventana".
+DEFAULT_CLIP_CONCENTRATION_MAX = 2.0
+
+
+def _clip_concentration(extraction: OptimalExtraction, object_yx, window_radius_px,
+                        core_radius_px=CLIP_CORE_RADIUS_PX):
+    """Concentracion del recorte sigma alrededor del compañero (V4 del spec).
+
+    `companion_window_over_mean` es pico/media de la ventana y se conserva por
+    continuidad, pero el pico puede caer en cualquier pixel: lo que V4 nombra es
+    la tasa EN el compañero. Asi que se mide tambien el nucleo (r <= 1.5 px)
+    contra el resto de su ventana, que es la cifra auditada en
+    `docs/2026-09-08_d1_tension_continuo_medida.md` §8 (186.7 canales de media
+    en el nucleo contra 3.7 fuera: 50x) y la que juzga el chequeo.
+    """
+    shape = extraction.rejection_map.shape
+    ypix, xpix = circular_window_indices(shape, object_yx, window_radius_px)
     local = extraction.rejection_map[ypix, xpix]
+    out = {
+        "companion_window_over_mean": None,
+        "core_radius_px": float(core_radius_px),
+        "core_rate_channels": None,
+        "outer_rate_channels": None,
+        "core_over_outer": None,
+        "peak_offset_px": None,
+    }
     if local.size == 0:
-        return {"companion_window_over_mean": None}
+        return out
     mean = float(np.nanmean(local))
     peak = float(np.nanmax(local))
-    ratio = None if mean <= 0 else float(peak / mean)
-    return {"companion_window_over_mean": ratio}
+    if mean > 0:
+        out["companion_window_over_mean"] = float(peak / mean)
+    radius = np.hypot(np.asarray(ypix, dtype=float) - float(object_yx[0]),
+                      np.asarray(xpix, dtype=float) - float(object_yx[1]))
+    if np.any(np.isfinite(local)):
+        out["peak_offset_px"] = float(radius[int(np.nanargmax(local))])
+    core = radius <= float(core_radius_px)
+    outer = ~core
+    if np.any(core):
+        out["core_rate_channels"] = float(np.nanmean(local[core]))
+    if np.any(outer):
+        out["outer_rate_channels"] = float(np.nanmean(local[outer]))
+    core_rate, outer_rate = out["core_rate_channels"], out["outer_rate_channels"]
+    if core_rate is not None and outer_rate is not None and outer_rate > 0:
+        out["core_over_outer"] = float(core_rate / outer_rate)
+    return out
 
 
 def _psf_sensitivity(ls_cube, wave, object_yx, psf_model, cfg, variance, stat_factor,
@@ -343,6 +384,30 @@ def _qc_payload(extractions, cfg, paths, stat_state, psf_model_path, psfsub_mode
         "frac_clipped_median": float(np.nanmedian(ls.clip_fraction)),
         "channels_flagged": int(np.count_nonzero(ls.product.flags & FLAG_CLIPPED)),
     }
+    concentration_max = float(cfg.get("x02_clip_concentration_max", DEFAULT_CLIP_CONCENTRATION_MAX))
+    concentration = _clip_concentration(
+        ls,
+        (ls.product.header["SRCPOS_Y"], ls.product.header["SRCPOS_X"]),
+        cfg.get("x02_window_radius_px", 8.0),
+    )
+    concentration["max_ratio"] = concentration_max
+    v4_measure = concentration["core_over_outer"]
+    if v4_measure is None:
+        v4_measure = concentration["companion_window_over_mean"]
+    issues = list(open_issues)
+    if v4_measure is not None and v4_measure > concentration_max:
+        # Declarada `minor` a proposito: la anomalia es real y grande (x14-x49
+        # en los runs del repo) pero su consecuencia sobre el flujo esta MEDIDA
+        # y es pequeña (<=4 %, `docs/2026-09-08_...` §8), porque Horne pondera
+        # por 1/sigma^2 y a los pixeles recortados los suplen sus vecinos.
+        issues.append({
+            "issue": (
+                f"V4: sigma-clipping concentrates on the companion core "
+                f"({v4_measure:.1f}x the rest of its window, limit {concentration_max:g}x). "
+                "Measured flux consequence <=4% (docs/2026-09-08_d1_tension_continuo_medida.md §8)."
+            ),
+            "priority": "minor",
+        })
     return {
         "stage": "x02_optimal",
         "run_id": str(cfg["run_id"]),
@@ -351,7 +416,7 @@ def _qc_payload(extractions, cfg, paths, stat_state, psf_model_path, psfsub_mode
         "window_px": float(cfg.get("x02_window_radius_px", 8.0)),
         "p_normalization": "window_renorm_plus_apcorr",
         "clip": clip,
-        "clip_concentration": _clip_concentration(ls, (ls.product.header["SRCPOS_Y"], ls.product.header["SRCPOS_X"]), cfg.get("x02_window_radius_px", 8.0)),
+        "clip_concentration": concentration,
         "errors": {
             "mode": ls.error_mode,
             "stat_vs_empirical_median_ratio": ratio,
@@ -370,10 +435,13 @@ def _qc_payload(extractions, cfg, paths, stat_state, psf_model_path, psfsub_mode
             "v1_snr_gain_ok": None if snr_gain["median"] is None else bool(snr_gain["median"] >= 1.0),
             "v2_error_ratio_ok": None if ratio is None else bool(0.7 <= ratio <= 1.4),
             "v3_continuum_bias_ok": None if continuum_bias is None else bool(abs(continuum_bias) <= 3.0),
-            "v4_clip_concentration_ok": True,
+            # V4 comparaba contra nada: era la constante `True`, y con eso no
+            # podia disparar con ningunos datos. El spec (§6) pide < 2x la tasa
+            # media de la ventana en la posicion del compañero.
+            "v4_clip_concentration_ok": None if v4_measure is None else bool(v4_measure <= concentration_max),
             "v5_ls_vs_psfsub_written": "psfsub" in extractions,
         },
-        "open_issues": list(open_issues),
+        "open_issues": issues,
     }
 
 
