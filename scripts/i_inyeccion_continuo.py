@@ -109,6 +109,10 @@ def main(argv=None):
     ap.add_argument("--modes", nargs="+", default=list(BACKGROUND_MODES))
     ap.add_argument("--n-positions", type=int, default=4,
                     help="angulos de posicion; 1 no sirve, la del compañero se excluye")
+    ap.add_argument("--at-companion", action="store_true",
+                    help="inyectar en la posicion de la COMPAÑERA en vez de en los controles. "
+                         "Es la prueba del dipolo del halo: los controles estan al mismo radio "
+                         "pero en otros angulos, asi que no ven el halo que ve ella.")
     ap.add_argument("--channel-step", type=int, default=10,
                     help="submuestreo de canales: el continuo no necesita los 3681")
     ap.add_argument("--amplitude-scale", type=float, default=1.0,
@@ -137,21 +141,29 @@ def main(argv=None):
     print(f"amplitud inyectada: {amplitude:.4g} (continuo medido de la compañera en 7600-9100 A)", flush=True)
 
     sep = float(np.hypot(object_yx[0] - star_yx[0], object_yx[1] - star_yx[1]))
-    posiciones = same_radius_control_positions(
-        object_yx, star_yx, cube.shape[1], cube.shape[2],
-        n_positions=int(args.n_positions), exclude_angle_deg=25.0)
+    if args.at_companion:
+        # La compañera YA esta ahi: la inyeccion es diferencial, asi que su flujo
+        # se cancela en la resta y lo que queda es la respuesta del metodo a lo
+        # añadido EN ESE PUNTO, con el halo que de verdad hay bajo ella.
+        posiciones = [tuple(int(round(v)) for v in object_yx)]
+    else:
+        posiciones = same_radius_control_positions(
+            object_yx, star_yx, cube.shape[1], cube.shape[2],
+            n_positions=int(args.n_positions), exclude_angle_deg=25.0)
     if not posiciones:
         raise SystemExit(
             f"0 posiciones utilizables a {sep:.2f} px. `same_radius_control_positions` excluye "
             f"la del propio compañero (angulo < {25.0:g} deg), asi que --n-positions 1 nunca "
             "devuelve nada: usa 3 o mas, y comprueba que el radio cabe en el cubo."
         )
-    print(f"{len(posiciones)} posiciones a {sep:.2f} px de la primaria: "
+    donde = "LA COMPAÑERA" if args.at_companion else "controles"
+    print(f"{len(posiciones)} posiciones ({donde}) a {sep:.2f} px de la primaria: "
           f"{[tuple(int(v) for v in q) for q in posiciones]}", flush=True)
 
     report = {"script": "i_inyeccion_continuo", "run": args.run, "amplitude": amplitude,
               "cube": etiqueta,
               "separation_px": sep, "channel_step": step,
+              "at_companion": bool(args.at_companion),
               "wave_A": [float(w) for w in wave], "modes": {}}
     for mode in args.modes:
         rec = []
