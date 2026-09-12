@@ -16,7 +16,6 @@ sys.path.insert(0, str(ROOT))
 
 from musepipe.config import load_run_config  # noqa: E402
 from musepipe.reduction.stream_combine import (  # noqa: E402
-    DEFAULT_CHUNK_CHANNELS,
     DEFAULT_PAD,
     DEFAULT_SIGCLIP_K,
     DEFAULT_SIGCLIP_MIN_N,
@@ -33,7 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan-json", help="Plan path (default: runs/<RUN_ID>/stages/stream_combine_plan.json)")
     parser.add_argument("--crop-npix", type=int, help="Default: crop_npix from the run config")
     parser.add_argument("--pad", type=int, default=DEFAULT_PAD)
-    parser.add_argument("--chunk-channels", type=int, default=DEFAULT_CHUNK_CHANNELS)
+    parser.add_argument("--chunk-channels", type=int, default=None,
+                        help="canales por trozo; por defecto se dimensiona a la memoria "
+                             "disponible (auto_chunk_channels). Un valor explicito manda.")
     parser.add_argument("--method", choices=("mean", "sigclip"), default="mean")
     parser.add_argument("--sigclip-k", type=float, default=DEFAULT_SIGCLIP_K)
     parser.add_argument("--sigclip-min-n", type=int, default=DEFAULT_SIGCLIP_MIN_N)
@@ -77,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         pad=int(args.pad),
         data_ext=int(config.get("data_ext", 1)),
         stat_ext=str(config.get("stat_ext", "STAT")),
-        chunk_channels=int(args.chunk_channels),
+        chunk_channels=None if args.chunk_channels is None else int(args.chunk_channels),
         method=args.method,
         sigclip_k=float(args.sigclip_k),
         sigclip_min_n=int(args.sigclip_min_n),

@@ -46,7 +46,117 @@ class StreamCombineError(RuntimeError):
 # is deliberately wider than the 170 px science crop.
 DEFAULT_CROP_NPIX = 200
 DEFAULT_PAD = 12
+#: Tamaño de trozo de reserva, el que se usó hasta 2026-09-12 y el que se sigue
+#: usando cuando la memoria disponible no se puede leer. Se eligió cuando esta
+#: máquina tenía 62 GB y `muse_exp_combine` moría; con 78 GB es innecesariamente
+#: pequeño, y trocear de más no ahorra memoria -el coste fijo son los cuatro
+#: acumuladores del cubo entero-, solo multiplica el número de vueltas.
 DEFAULT_CHUNK_CHANNELS = 128
+
+#: Bytes por (exposición, vóxel) que el bucle necesita EN EL AIRE, medidos sobre
+#: lo que reserva cada rama:
+#:   sigclip -> data_stack (4) + stat_stack (4) + el temporal de `_sigclip_mask`
+#:              `np.abs(stack - median)` (4) + `keep` (1) + `rejected` (1) = 14
+#:   mean    -> una exposición cada vez: data float64 (8) + stat float32 (4) +
+#:              valid bool (1) + los recortes con `pad` de `_aligned_chunk` (~8)
+#: Se redondea al alza porque el margen barato aquí vale más que apurar.
+BYTES_PER_EXPOSURE_VOXEL = {"sigclip": 16.0, "mean": 24.0}
+
+#: Fracción de la memoria disponible que se deja usar al trozo. Conservadora a
+#: propósito: esta máquina mata procesos que CRECEN aunque quede memoria libre
+#: (ver `docs/2026-09-11_refresco_qc_y_controles_psfsub.md` §4), así que el
+#: objetivo no es apurar la RAM sino dejar de dar 29 vueltas cuando bastan 4.
+DEFAULT_MEMORY_FRACTION = 0.5
+
+#: Suelo y techo del trozo automático. El techo existe para que un cubo pequeño
+#: en una máquina grande no se cargue entero de una vez y convierta el combinado
+#: en lo que este módulo existe para evitar.
+MIN_AUTO_CHUNK_CHANNELS = 32
+MAX_AUTO_CHUNK_CHANNELS = 512
+
+
+def available_memory_bytes() -> int | None:
+    """`MemAvailable` de /proc/meminfo, o None si no se puede leer.
+
+    `MemAvailable` y no `MemFree`: la caché de página es reclamable, y en esta
+    máquina son 62 de los 78 GB. Mirar `MemFree` es lo que hace creer que no hay
+    memoria cuando hay de sobra.
+    """
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def accumulator_bytes(n_channels: int, crop_npix: int) -> int:
+    """Coste FIJO del combinado: no depende del trozo y no se puede trocear.
+
+    Tres acumuladores float64 (suma pesada, suma de pesos, suma de varianzas) y
+    un contador int16, todos del cubo de salida entero.
+    """
+    voxels = int(n_channels) * int(crop_npix) * int(crop_npix)
+    return voxels * (8 * 3 + 2)
+
+
+def chunk_bytes_per_channel(n_exposures: int, crop_npix: int, method: str) -> float:
+    """Lo que cuesta UN canal de trozo, con todas las exposiciones en el aire."""
+    per_voxel = BYTES_PER_EXPOSURE_VOXEL.get(str(method), BYTES_PER_EXPOSURE_VOXEL["sigclip"])
+    if str(method) == "mean":
+        # La rama `mean` procesa una exposición cada vez: no apila.
+        return float(crop_npix) * float(crop_npix) * per_voxel
+    return float(n_exposures) * float(crop_npix) * float(crop_npix) * per_voxel
+
+
+def auto_chunk_channels(
+    *,
+    n_exposures: int,
+    crop_npix: int,
+    n_channels: int,
+    method: str,
+    available_bytes: int | None = None,
+    memory_fraction: float = DEFAULT_MEMORY_FRACTION,
+    floor: int = MIN_AUTO_CHUNK_CHANNELS,
+    cap: int = MAX_AUTO_CHUNK_CHANNELS,
+) -> dict:
+    """Trozo dimensionado a la memoria que hay, con la cuenta declarada.
+
+    Devuelve el número y **cómo se llegó a él**, porque un tamaño de trozo que
+    cambia de una máquina a otra sin dejar rastro haría irreproducible el
+    combinado: el plan guarda el entero ya resuelto, y esto guarda la cuenta.
+    """
+    available = available_memory_bytes() if available_bytes is None else int(available_bytes)
+    fijo = accumulator_bytes(n_channels, crop_npix)
+    por_canal = chunk_bytes_per_channel(n_exposures, crop_npix, method)
+    detalle = {
+        "available_bytes": available,
+        "accumulator_bytes": int(fijo),
+        "bytes_per_channel": float(por_canal),
+        "memory_fraction": float(memory_fraction),
+        "floor": int(floor),
+        "cap": int(cap),
+    }
+    if available is None:
+        detalle.update(chunk_channels=int(DEFAULT_CHUNK_CHANNELS), source="fallback_no_meminfo")
+        return detalle
+    presupuesto = (available - fijo) * float(memory_fraction)
+    if presupuesto <= 0 or por_canal <= 0:
+        # Ni siquiera caben los acumuladores: trocear no lo arregla, pero se
+        # devuelve el suelo y que falle donde de verdad falla.
+        detalle.update(chunk_channels=int(floor), source="floor_no_budget")
+        return detalle
+    bruto = int(presupuesto // por_canal)
+    elegido = max(int(floor), min(int(cap), int(n_channels), bruto))
+    detalle.update(
+        chunk_channels=int(elegido),
+        raw_chunk_channels=int(bruto),
+        source="auto",
+        estimated_peak_bytes=int(fijo + elegido * por_canal),
+    )
+    return detalle
 DEFAULT_COARSE_STRIDE = 25
 DEFAULT_SIGCLIP_K = 3.0
 DEFAULT_SIGCLIP_MIN_N = 5
@@ -123,6 +233,11 @@ class StreamCombinePlan:
     #: Y estando en el plan es procedencia: queda escrito qué T entró en cada
     #: exposición.
     transmission_by_exposure: dict = field(default_factory=dict)
+    #: Cómo se eligió `chunk_channels`: la memoria que se vio, la cuenta y el
+    #: origen (`auto`, `declared`, `fallback_no_meminfo`). El plan guarda el
+    #: ENTERO ya resuelto -así el combinado es reproducible aunque la máquina
+    #: cambie-, y esto guarda de dónde salió.
+    chunk_sizing: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -134,6 +249,7 @@ class StreamCombinePlan:
             "data_ext": int(self.data_ext),
             "stat_ext": str(self.stat_ext),
             "chunk_channels": int(self.chunk_channels),
+            "chunk_sizing": dict(self.chunk_sizing),
             "method": self.method,
             "sigclip_k": float(self.sigclip_k),
             "sigclip_min_n": int(self.sigclip_min_n),
@@ -510,7 +626,7 @@ def build_stream_combine_plan(
     pad: int = DEFAULT_PAD,
     data_ext: int = 1,
     stat_ext: str = "STAT",
-    chunk_channels: int = DEFAULT_CHUNK_CHANNELS,
+    chunk_channels: int | None = None,
     method: str = "mean",
     sigclip_k: float = DEFAULT_SIGCLIP_K,
     sigclip_min_n: int = DEFAULT_SIGCLIP_MIN_N,
@@ -575,6 +691,21 @@ def build_stream_combine_plan(
             f"CRVAL3 differs by up to {crval3_spread_channels:.4f} channels "
             f"({(crval3_values.max() - crval3_values.min()):.5f} A); combined without spectral resampling"
         )
+
+    # El trozo: declarado manda, si no se dimensiona a la memoria que hay. Es
+    # la misma convención que el resto del repo -el knob declarado gana- y aquí
+    # importa el doble, porque de él depende que el combinado quepa.
+    if chunk_channels is None:
+        sizing = auto_chunk_channels(
+            n_exposures=len(measurements),
+            crop_npix=int(crop_npix),
+            n_channels=int(next(iter(n_wave))),
+            method=str(method),
+        )
+        resolved_chunk = int(sizing["chunk_channels"])
+    else:
+        resolved_chunk = int(chunk_channels)
+        sizing = {"source": "declared", "chunk_channels": resolved_chunk}
 
     half = int(crop_npix) // 2
     weights = _weights([m["exptime"] for m in measurements], weight_mode)
@@ -648,7 +779,8 @@ def build_stream_combine_plan(
         pad=int(pad),
         data_ext=int(data_ext),
         stat_ext=str(stat_ext),
-        chunk_channels=int(chunk_channels),
+        chunk_channels=int(resolved_chunk),
+        chunk_sizing=dict(sizing),
         method=str(method),
         sigclip_k=float(sigclip_k),
         sigclip_min_n=int(sigclip_min_n),
@@ -707,6 +839,7 @@ def plan_from_dict(payload: dict) -> StreamCombinePlan:
         reference=dict(payload["reference"]),
         wavelength=dict(payload["wavelength"]),
         exposures=exposures,
+        chunk_sizing=dict(payload.get("chunk_sizing", {})),
         warnings=tuple(payload.get("warnings", [])),
         transmission_by_exposure=dict(payload.get("transmission_by_exposure", {})),
     )
