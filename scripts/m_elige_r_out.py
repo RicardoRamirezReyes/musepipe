@@ -24,6 +24,25 @@ se midió no es multiplicativo, es el nivel de fondo restado.
 **Lo que este script NO hace**: elegir por el acuerdo entre estimadores (acuerdo
 no es verdad) ni por el efecto en D1 o en Mdot (eso se reporta, no se optimiza).
 
+**AVISO, medido el 2026-09-12, y que este criterio NO captura.** A, B y C son
+escalares de una banda: miden el sesgo del NIVEL. Pero el radio del anillo cambia
+tambien el COLOR del continuo extraido, y el color es lo que G3 ajusta: su
+`_best_scale_chi2` marginaliza sobre una escala libre, asi que un cambio de nivel
+no le mueve T_eff y uno de color si. Sobre el rango de ajuste de G3 (6300-9350 A),
+cambio de color entre la mitad azul y la roja:
+
+    ROXs 42B b (sep 46.6 px):  r_out 10 vs 14  +42 %   |  18 vs 14  -17 %
+    ROXs 12 b  (sep 71.2 px):  r_out 10 vs 14  +2.3 %  |  18 vs 14  +15.9 %
+
+No lo mitigan ni las mascaras ni los pesos: pesando por 1/sigma^2 sobre los 815
+canales que G3 usa de verdad, el 42 % se queda en 42 %.
+
+**Consecuencia practica:** el minimo blando que este criterio da para ROXs 12 b
+(r_out = 22 contra el 14 en produccion) NO se puede aplicar sin re-ajustar G3. Ya
+a r_out = 18 el color de 12 b se mueve un 15.9 %, y de ese observable salen T_eff
+y SpT. Un criterio de nivel no puede autorizar un cambio que mueve el color.
+Detalle en `docs/2026-09-12_el_radio_mueve_el_color_no_solo_el_nivel.md`.
+
     python scripts/m_elige_r_out.py --run <run> --out-json <out>.json
 """
 from __future__ import annotations
