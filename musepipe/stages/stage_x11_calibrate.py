@@ -61,6 +61,21 @@ class CalibrationCorrections:
     #: para poder citarlo sin mover el error de la ciencia congelada.
     flux_declared_err_frac: float = 0.0
     flux_declared_source: str = ""
+    #: SESGO -no error- del fondo local: el anillo se come parte de las alas de
+    #: la compañera, asi que el flujo sale CORTO. Medido por inyeccion-
+    #: recuperacion el 2026-09-12 (`docs/2026-09-12_como_se_elige_el_radio_del_anillo.md`):
+    #: -3.5 % en ROXs 12 b y -1.6 % en ROXs 42B b al radio en produccion, y hasta
+    #: -4.4 % y -2.5 % al radio mas pequeño probado. La apcorr NO lo corrige
+    #: -corrige perdidas de APERTURA, no lo que el fondo resta-. La LINEA si esta
+    #: cubierta: el throughput de inyeccion-recuperacion de E4 se mide con el
+    #: mismo tratamiento de fondo y ya lo absorbe. El continuo no tiene
+    #: equivalente, asi que llega crudo a G3.
+    #:
+    #: `None` significa NO MEDIDO PARA ESTE RUN, y se declara asi en el
+    #: presupuesto. No se pone 0.0 por defecto: un cero silencioso diria que el
+    #: efecto no existe, que es justo lo que no sabemos.
+    bkg_selfsub_frac: float | None = None
+    bkg_selfsub_source: str = ""
     variability_caveat: bool = True
     psf_frac: float = 0.0
     psf_source: str = "stage_e01_qc.companion_ring_metric.residual_pct_median"
@@ -402,6 +417,9 @@ def calibration_corrections_from_qc(qc00, qc_psf=None, qc_sky=None, qc_telluric=
         flux_source=flux_source,
         flux_declared_err_frac=float(cfg.get("x11_fluxcal_declared_frac", flux_declared)),
         flux_declared_source=flux_declared_source,
+        bkg_selfsub_frac=(None if cfg.get("x11_bkg_selfsub_frac") is None
+                          else float(cfg["x11_bkg_selfsub_frac"])),
+        bkg_selfsub_source=str(cfg.get("x11_bkg_selfsub_source", "")),
         variability_caveat=variability,
         psf_frac=float(cfg.get("x11_psf_frac", psf_frac)),
         sky_frac=float(cfg.get("x11_sky_frac", sky_frac)),
@@ -561,6 +579,32 @@ def _error_budget_rows(flux_err_stat, sys_fluxcal, sys_psf, sys_sky, sys_telluri
                 "propio 10% de calibracion absoluta (g3_sys_fluxcal_frac), mayor que este valor."
             ),
         })
+    # El sesgo del fondo local viaja SIEMPRE, medido o no: si no se ha medido para
+    # este run, la fila lo dice. Un termino ausente se lee como inexistente.
+    medido = corrections.bkg_selfsub_frac is not None
+    rows.append({
+        "term": "background_selfsub",
+        "type": "bias_declared_not_applied",
+        "value": (None if not medido else float(corrections.bkg_selfsub_frac)),
+        "median": None,
+        "source": (corrections.bkg_selfsub_source or
+                   ("" if medido else "NO MEDIDO para este run")),
+        "note": (
+            "SESGO con signo, no un error simetrico: el anillo de fondo se come parte de las "
+            "alas de la compañera y el flujo sale CORTO. La apcorr no lo corrige (corrige "
+            "perdidas de apertura, no lo que el fondo resta). NO se pliega en `flux_err_total` "
+            "ni se aplica al flujo: hacerlo moveria decisiones congeladas. La LINEA ya lo lleva "
+            "absorbido por el throughput de E4, que se mide con el mismo fondo; el CONTINUO no "
+            "tiene equivalente. Medido por inyeccion-recuperacion: -3.5 % (ROXs 12 b) y -1.6 % "
+            "(ROXs 42B b) al radio en produccion "
+            "(docs/2026-09-12_como_se_elige_el_radio_del_anillo.md)."
+            if medido else
+            "SESGO del fondo local sobre el continuo de la compañera, sin medir para este run. "
+            "Se declara en vez de omitirse: un termino ausente se lee como inexistente. Se mide "
+            "con `scripts/m_elige_r_out.py` (termino B) y se declara en "
+            "`x11_bkg_selfsub_frac`."
+        ),
+    })
     return rows
 
 
