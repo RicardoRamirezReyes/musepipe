@@ -4794,7 +4794,17 @@ STAGES: list[dict] = [
                     "Gaia (|1−`flux_factor`|), **declarado y no plegado**: M3 no publica barra de error, "
                     "y plegarlo movería el error del compañero, que sostiene decisiones congeladas. G3 ya "
                     "asume su propio 10% (`g3_sys_fluxcal_frac`), mayor que este valor.\n\n"
-                    "El total sólido es, por tanto, `stat ⊕ fluxcal ⊕ psf ⊕ cielo ⊕ telúrico`."
+                    "El total sólido es, por tanto, `stat ⊕ fluxcal ⊕ psf ⊕ cielo ⊕ telúrico`.\n\n"
+                    "**Y hay un tercer término declarado que este plot NO puede dibujar**, porque "
+                    "no tiene columna: `background_selfsub`, en el `error_budget` del QC. No es un "
+                    "error simétrico sino un **sesgo con signo** — el anillo de fondo se come parte "
+                    "de las alas del compañero, así que su continuo sale **corto** — y la apcorr no lo "
+                    "corrige: corrige pérdidas de **apertura**, no lo que el fondo resta. La **línea** "
+                    "sí está cubierta, porque el throughput de inyección-recuperación de E4 se mide con "
+                    "el mismo tratamiento de fondo y ya lo absorbe; el **continuo** no tiene "
+                    "equivalente y llega crudo a G3. La celda de abajo lo imprime: si el run no lo ha "
+                    "medido, la fila lo dice en vez de desaparecer, que es justo el punto — un término "
+                    "ausente se lee como inexistente."
                 ),
                 code=(
                     "try:\n"
@@ -4830,6 +4840,31 @@ STAGES: list[dict] = [
                     "    print('figura ->', outdir / 'error_budget.png'); plt.show()\n"
                     "except Exception as e:\n"
                     "    print('No se pudo generar el plot:', type(e).__name__, e)"
+                ),
+            ),
+            dict(
+                md=(
+                    "### El sesgo del fondo, el término sin columna\n\n"
+                    "`background_selfsub` se declara en el config del run "
+                    "(`x11_bkg_selfsub_frac`) y se mide **por run**, no por objeto: depende de las "
+                    "alas de la PSF, así que el combinado y una noche sola del mismo objeto dan "
+                    "valores distintos (−3.5 % contra −2.0 % en ROXs 12 b). Se mide con "
+                    "`scripts/m_elige_r_out.py` (término B) y se documenta en "
+                    "[`docs/2026-09-12_selfsub_declarado_y_la_nota_de_f1.md`]"
+                    "(../../docs/2026-09-12_selfsub_declarado_y_la_nota_de_f1.md)."
+                ),
+                code=(
+                    "fila = next((f for f in nb.load_qc('stages/stage_x11_qc.json', RUN_ID)\n"
+                    "             .get('error_budget', []) if f.get('term') == 'background_selfsub'),\n"
+                    "            None)\n"
+                    "if fila is None:\n"
+                    "    print('Este QC es anterior al termino: re-corre D2 para que la fila exista.')\n"
+                    "elif fila.get('value') is None:\n"
+                    "    print('background_selfsub: NO MEDIDO para este run ->', fila.get('source'))\n"
+                    "else:\n"
+                    "    print(f\"background_selfsub = {100 * fila['value']:+.2f} % "
+                    "({fila['type']})\")\n"
+                    "    print('  procedencia:', fila.get('source', '')[:300])"
                 ),
             ),
             dict(
