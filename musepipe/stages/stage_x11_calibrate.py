@@ -232,7 +232,14 @@ def _scatter_frac(values):
 
 def _flux_scale_from_m3(m3):
     if not m3:
-        return 1.0, 0.0, True, "stage00q_qc.m3_flux unavailable", ["A4/M3 flux QC unavailable; using scale=1."]
+        # Los SIETE valores, como la salida larga. Esta rama existe para degradar
+        # con gracia -escala 1 y el aviso en `open_issues`- y devolvia solo cinco
+        # desde que se añadio el fluxcal declarado: el llamador desempaqueta siete,
+        # asi que un run sin `m3_flux` en su QC de A4 no caia a escala 1, reventaba
+        # con un ValueError que no nombra ni A4 ni el flujo. Si se añade un valor
+        # mas, va en las DOS salidas (`tests/test_x11_m3_ausente.py` lo comprueba).
+        return (1.0, 0.0, True, "stage00q_qc.m3_flux unavailable",
+                ["A4/M3 flux QC unavailable; using scale=1."], 0.0, "")
     issues = []
     if "scale_factor" in m3:
         scale = float(m3["scale_factor"])
