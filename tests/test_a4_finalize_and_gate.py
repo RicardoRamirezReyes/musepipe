@@ -157,7 +157,16 @@ class RollupGateTests(unittest.TestCase):
         # toca- en vez de un veredicto, que es lo que caduca. No se nombran los
         # objetos a proposito: esta lista es agnostica del objeto (y
         # `test_no_hardcoded_target` lo exige).
-        self.assertEqual(ACCEPTED_LIMITATIONS_HASH, "bd13caeb9f23")
+        #
+        # 2026-09-12, bd13caeb9f23 -> cdb11b8a5770: la limitacion de D2 nombraba
+        # el par «psffit vs optimal_psfsub ~1.76x», y D2 ya no compara ese par.
+        # El comparador NO es fijo: sale de `primary_pairs` de D1, y al arreglarse
+        # los controles de psfsub (2026-09-11) paso a `aperture` en los tres runs.
+        # Medido el 2026-09-12 con D2 re-corrido: cociente 0.868 / 0.914 / 0.871
+        # -psffit un 9-13 % POR DEBAJO- y correlacion de forma 0.999-1.000 en la
+        # banda roja. El texto ahora dice de donde sale el par, para que la
+        # proxima vez que D1 lo mueva se lea como lo que es y no como un error.
+        self.assertEqual(ACCEPTED_LIMITATIONS_HASH, "cdb11b8a5770")
 
 
 class DeclaredPriorityTests(unittest.TestCase):

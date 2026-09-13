@@ -161,13 +161,17 @@ ACCEPTED_LIMITATIONS = {
         # not a defect and not a mislabel of real signal (v3 now gates on the
         # signal-free inter-method metric, not |runmed-poly|).
         "checks.v3_continuum_stable.ok": (
-            "Red-band (8600-9100 A) inter-method continuum LEVEL systematic (psffit vs "
-            "optimal_psfsub ~1.76x): residual chromatic halo subtraction of the bright primary at "
-            "the faint companion, at the PSF floor (Psfao, ~4.4% red ring residual). The red "
-            "spectral SHAPE is real and method-consistent (corr 0.957); only the LEVEL disagrees. "
-            "Affects the continuum LEVEL only: it does not affect the Halpha emission-line "
-            "measurement nor the Mdot limit, both of which sit on a LOCAL continuum. Fully "
-            "diagnosed in docs/2026-07-10_d2_red_continuum_diagnosis.md."
+            "Red-band (8600-9100 A) inter-method continuum LEVEL systematic: the canonical psffit "
+            "sits 9-13% BELOW the comparison method (median ratio 0.87-0.91, re-measured across "
+            "the runs on 2026-09-12). Residual chromatic halo subtraction of the bright primary at "
+            "the faint companion, at the PSF floor. The red spectral SHAPE is real and "
+            "method-consistent (running-median continuum correlation 0.999-1.000 in the red band); "
+            "only the LEVEL disagrees. Affects the continuum LEVEL only: it does not affect the "
+            "Halpha emission-line measurement nor the Mdot limit, both of which sit on a LOCAL "
+            "continuum. The comparator is NOT fixed: D2 takes it from D1's primary pair "
+            "(stage_x10_qc.json), excluding sgf, so the pair this text describes can change when "
+            "D1 is re-run -- today it is `aperture` in every run. Fully diagnosed in "
+            "docs/2026-07-10_d2_red_continuum_diagnosis.md."
         ),
     },
 }
