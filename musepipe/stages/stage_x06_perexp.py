@@ -467,6 +467,11 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
             "flux_convention": flux_convention,
             "group_by": str(cfg["x06_group_by"]),
             "combine": ley,
+            # La ley `exptime` NO lee EXPTIME: usa el `weight` del plan del
+            # combinado, que es `exptime` solo si el cubo se peso asi. Con un
+            # cubo pesado por varianza (`invvar` en el plan) esa ley reproduce
+            # los pesos del cubo, y esto dice cuales son.
+            "plan_weight_mode": str(obs.plan.weight_mode),
             "weight_band_A": [float(x) for x in banda_peso],
             "n_controls": int(len(controles)),
             "sigma": "dispersion de los controles combinados con los mismos pesos",

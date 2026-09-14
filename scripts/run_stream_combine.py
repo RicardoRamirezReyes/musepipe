@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     disponible = available_memory_bytes()
     vueltas = -(-nz // max(1, int(plan.chunk_channels)))
     print(f"plan: {len(plan.exposures)} exposures, method={plan.method}, weight={plan.weight_mode}")
+    if plan.weight_source:
+        print(f"  weights from {plan.weight_source.get('path')} "
+              f"(sha256 {str(plan.weight_source.get('sha256', ''))[:12]})")
     print(f"output cube: {nz} x {npix} x {npix} -> {output}")
     origen = (plan.chunk_sizing or {}).get("source", "plan")
     print(f"chunk={plan.chunk_channels} channels ({origen}), {vueltas} vueltas, "

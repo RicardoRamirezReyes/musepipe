@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -10,9 +11,11 @@ from musepipe.reduction.stream_combine import (
     StreamCombineError,
     build_stream_combine_plan,
     combine_streaming,
+    load_weight_table,
     measure_primary_center,
     plan_from_dict,
     read_window,
+    reweight_plan,
     shift_data_chunk,
     shift_variance_chunk,
     write_combined_cube,
@@ -552,3 +555,159 @@ class TransmisionPorExposicionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _c7_qc(weights, *, combine="invvar", groups=None, band=(8600.0, 9000.0)):
+    """Un `spec_perexp_qc.json` mínimo con la forma que C7 escribe."""
+
+    groups = groups or {"all": weights}
+    return {
+        "stage": "x06_perexp", "spec_version": "C7", "run_id": "synthetic",
+        "convention": {"combine": combine, "group_by": "none" if len(groups) == 1 else "night",
+                       "weight_band_A": list(band),
+                       "sigma": "dispersion de los controles combinados con los mismos pesos"},
+        "groups": {name: {"apertures": {
+            "box3": {"weights_normalised": dict(table), "n_eff": 1.0 / sum(v * v for v in table.values())},
+            "box5": {"weights_normalised": {k: v for k, v in table.items()}, "n_eff": 1.0},
+        }} for name, table in groups.items()},
+    }
+
+
+class PesosPorVarianzaTests(unittest.TestCase):
+    """`invvar`: los pesos no se deducen del cubo, llegan declarados desde C7."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        # Los cubos por exposición se llaman todos DATACUBE_FINAL.fits y el
+        # exposure_id sale del directorio padre: se reproduce esa disposición.
+        self.files = []
+        for i, amp in enumerate((1000.0, 2000.0)):
+            carpeta = self.tmp / f"2022-08-{29 + 2 * i}_MUSE.T{i}"
+            carpeta.mkdir()
+            self.files.append(make_cube(carpeta / "DATACUBE_FINAL.fits", y_center=30, x_center=30,
+                                        amplitude=amp, variance=4.0, exptime=300.0))
+        self.ids = [Path(f).parent.name for f in self.files]
+
+    def _qc_path(self, payload, name="spec_perexp_qc.json"):
+        path = self.tmp / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def _plan(self, **kwargs):
+        kwargs.setdefault("crop_npix", 20)
+        kwargs.setdefault("pad", 4)
+        kwargs.setdefault("centering_method", "peak")
+        kwargs.setdefault("chunk_channels", 7)
+        return build_stream_combine_plan(
+            self.files, run_id="synthetic", output=str(self.tmp / "cube.fits"), **kwargs)
+
+    def test_the_table_sets_the_weights_and_the_closed_form_follows(self):
+        table = {self.ids[0]: 0.9, self.ids[1]: 0.1}
+        weights, source = load_weight_table(self._qc_path(_c7_qc(table)))
+        self.assertEqual(weights, table)
+        self.assertEqual(source["law"], "invvar")
+        self.assertEqual(source["weight_band_A"], [8600.0, 9000.0])
+        self.assertEqual(len(source["sha256"]), 64)
+
+        plan = self._plan(weight_mode="invvar", weight_table=weights, weight_source=source)
+        self.assertEqual([exp.weight for exp in plan.exposures], [0.9, 0.1])
+        result = combine_streaming(plan)
+        centre = plan.crop_npix // 2
+        w = np.array([0.9, 0.1])
+        values = np.array([1001.0, 2001.0])
+        self.assertAlmostEqual(float(result["data"][0, centre, centre]),
+                               float((w * values).sum() / w.sum()), places=2)
+        self.assertAlmostEqual(float(result["stat"][0, centre, centre]),
+                               float((w**2 * 4.0).sum() / w.sum() ** 2), places=6)
+        self.assertEqual(result["qc"]["weight_mode"], "invvar")
+        self.assertEqual(result["qc"]["weight_source"]["sha256"], source["sha256"])
+        self.assertEqual(result["qc"]["weights_by_exposure"], table)
+
+        # La procedencia sobrevive al JSON y llega a la cabecera del cubo.
+        again = plan_from_dict(json.loads(json.dumps(plan.as_dict())))
+        self.assertEqual(again.weight_source, source)
+        self.assertEqual([exp.weight for exp in again.exposures], [0.9, 0.1])
+        out = write_combined_cube(result, plan, self.tmp / "out.fits")
+        with fits.open(out) as hdul:
+            self.assertEqual(hdul[0].header["COMBWGT"], "invvar")
+            self.assertEqual(hdul[0].header["COMBWSRC"], "spec_perexp_qc.json")
+            self.assertEqual(hdul[0].header["COMBWSHA"], source["sha256"][:16])
+
+    def test_invvar_without_a_table_or_without_provenance_is_an_error(self):
+        with self.assertRaisesRegex(StreamCombineError, "provenance"):
+            self._plan(weight_mode="invvar", weight_table={self.ids[0]: 0.5, self.ids[1]: 0.5})
+        with self.assertRaisesRegex(StreamCombineError, "weight table"):
+            self._plan(weight_mode="invvar", weight_source={"path": "x"})
+
+    def test_a_table_for_another_harvest_is_refused(self):
+        source = {"path": "x", "sha256": "0" * 64}
+        # Falta una exposición: no se rellena con nada.
+        with self.assertRaisesRegex(StreamCombineError, "1 planned exposures without weight"):
+            self._plan(weight_mode="invvar", weight_table={self.ids[0]: 1.0}, weight_source=source)
+        # Sobra una: la tabla describe otro conjunto (30 pesos para 29 cubos).
+        with self.assertRaisesRegex(StreamCombineError, "1 weights without exposure"):
+            self._plan(weight_mode="invvar", weight_source=source,
+                       weight_table={self.ids[0]: 0.5, self.ids[1]: 0.4, "otra": 0.1})
+        # Un peso nulo o no finito tampoco vale.
+        with self.assertRaisesRegex(StreamCombineError, "finite, positive"):
+            self._plan(weight_mode="invvar", weight_source=source,
+                       weight_table={self.ids[0]: 1.0, self.ids[1]: 0.0})
+
+    def test_the_qc_must_be_ungrouped_and_inverse_variance(self):
+        table = {self.ids[0]: 0.9, self.ids[1]: 0.1}
+        with self.assertRaisesRegex(StreamCombineError, "not 'invvar'"):
+            load_weight_table(self._qc_path(_c7_qc(table, combine="exptime")))
+        por_noche = _c7_qc(table, groups={"20220829": {self.ids[0]: 1.0}, "20220831": {self.ids[1]: 1.0}})
+        with self.assertRaisesRegex(StreamCombineError, "ONE group"):
+            load_weight_table(self._qc_path(por_noche))
+        with self.assertRaisesRegex(StreamCombineError, "no aperture 'box7'"):
+            load_weight_table(self._qc_path(_c7_qc(table)), aperture="box7")
+
+    def test_reweight_keeps_the_geometry_and_changes_only_the_weights(self):
+        plan = self._plan(weight_mode="exptime")
+        self.assertEqual([exp.weight for exp in plan.exposures], [300.0, 300.0])
+        table = {self.ids[0]: 0.98, self.ids[1]: 0.02}
+        weights, source = load_weight_table(self._qc_path(_c7_qc(table)))
+        nuevo = reweight_plan(plan, "invvar", weight_table=weights, weight_source=source)
+        self.assertEqual(nuevo.weight_mode, "invvar")
+        self.assertEqual([exp.weight for exp in nuevo.exposures], [0.98, 0.02])
+        for antes, despues in zip(plan.exposures, nuevo.exposures):
+            self.assertEqual(replace(antes, weight=0.0), replace(despues, weight=0.0))
+        self.assertEqual(nuevo.reference, plan.reference)
+        self.assertEqual(nuevo.wavelength, plan.wavelength)
+        # Y de vuelta a `exptime` la procedencia de la tabla desaparece.
+        vuelta = reweight_plan(nuevo, "exptime")
+        self.assertEqual([exp.weight for exp in vuelta.exposures], [300.0, 300.0])
+        self.assertEqual(vuelta.weight_source, {})
+        with self.assertRaises(ValueError):
+            reweight_plan(plan, "quality")
+
+    def test_the_reweight_script_reports_the_share_by_night(self):
+        import subprocess, sys
+        plan = self._plan(weight_mode="exptime")
+        plan_path = self.tmp / "plan.json"
+        plan_path.write_text(json.dumps(plan.as_dict()), encoding="utf-8")
+        qc = self._qc_path(_c7_qc({self.ids[0]: 0.97, self.ids[1]: 0.03}))
+        out_plan = self.tmp / "plan_invvar.json"
+        r = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "reweight_stream_combine_plan.py"),
+             "--plan", str(plan_path), "--out-plan", str(out_plan), "--weight", "invvar",
+             "--weight-table", str(qc), "--run-id", "synthetic_invvar", "--output", str(self.tmp / "nuevo.fits")],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("20220829:  50.00 % ->  97.00 %", r.stdout)
+        self.assertIn("20220831:  50.00 % ->   3.00 %", r.stdout)
+        nuevo = plan_from_dict(json.loads(out_plan.read_text(encoding="utf-8")))
+        self.assertEqual(nuevo.run_id, "synthetic_invvar")
+        self.assertEqual(nuevo.output, str(self.tmp / "nuevo.fits"))
+        self.assertEqual([exp.weight for exp in nuevo.exposures], [0.97, 0.03])
+        self.assertEqual(nuevo.weight_source["path"], str(qc))
+        # Sin --overwrite no pisa el plan que acaba de escribir.
+        r2 = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "reweight_stream_combine_plan.py"),
+             "--plan", str(plan_path), "--out-plan", str(out_plan), "--weight", "none"],
+            capture_output=True, text=True)
+        self.assertEqual(r2.returncode, 2)
+        self.assertIn("refusing to overwrite", r2.stderr)

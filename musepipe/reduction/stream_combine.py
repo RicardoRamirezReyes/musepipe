@@ -16,8 +16,10 @@ mean under the usual assumption that exposures are independent.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Sequence
 
@@ -238,6 +240,12 @@ class StreamCombinePlan:
     #: ENTERO ya resuelto -así el combinado es reproducible aunque la máquina
     #: cambie-, y esto guarda de dónde salió.
     chunk_sizing: dict = field(default_factory=dict)
+    #: De dónde salieron los pesos cuando NO se deducen del cubo (`invvar`): la
+    #: tabla que los declaró, con su sha, la ley y la banda en que se midieron.
+    #: Vacío para `exptime` y `none`, que se leen de las cabeceras. Es procedencia
+    #: por la misma razón que `transmission_by_exposure`: un cubo pesado por
+    #: varianza sin decir QUÉ varianza es un cubo que no se puede reproducir.
+    weight_source: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -263,6 +271,7 @@ class StreamCombinePlan:
             "exposures": [exp.as_dict() for exp in self.exposures],
             "warnings": list(self.warnings),
             "transmission_by_exposure": dict(self.transmission_by_exposure),
+            "weight_source": dict(self.weight_source),
         }
 
 
@@ -520,7 +529,16 @@ def exposure_from_measurement(
     )
 
 
-def _weights(exptimes: Sequence[float], weight_mode: str) -> list[float]:
+WEIGHT_MODES = ("exptime", "none", "invvar")
+
+
+def _weights(
+    exptimes: Sequence[float],
+    weight_mode: str,
+    *,
+    exposure_ids: Sequence[str] | None = None,
+    weight_table: dict | None = None,
+) -> list[float]:
     if weight_mode == "none":
         return [1.0] * len(exptimes)
     if weight_mode == "exptime":
@@ -528,7 +546,117 @@ def _weights(exptimes: Sequence[float], weight_mode: str) -> list[float]:
         if not np.all(np.isfinite(values)) or np.any(values <= 0):
             raise StreamCombineError("exptime weighting needs a positive EXPTIME in every cube")
         return [float(v) for v in values]
+    if weight_mode == "invvar":
+        # La varianza NO se mide aquí: el combinado no sabe dónde está el
+        # compañero ni cuáles son los controles. La mide C7 (por exposición, en
+        # posiciones vacías al radio del compañero, en una banda declarada) y
+        # llega como tabla. Sin tabla no hay ley, y no hay fallback a `exptime`.
+        if weight_table is None or exposure_ids is None:
+            raise StreamCombineError(
+                "invvar weighting needs a per-exposure weight table (see load_weight_table)"
+            )
+        ids = [str(v) for v in exposure_ids]
+        if len(set(ids)) != len(ids):
+            duplicated = sorted({v for v in ids if ids.count(v) > 1})
+            raise StreamCombineError(
+                f"invvar weighting keys the table by exposure_id, and these are not unique: {duplicated}"
+            )
+        missing = [v for v in ids if v not in weight_table]
+        extra = sorted(set(weight_table) - set(ids))
+        if missing or extra:
+            raise StreamCombineError(
+                "the weight table does not describe this set of exposures: "
+                f"{len(missing)} planned exposures without weight (first: {missing[:1]}), "
+                f"{len(extra)} weights without exposure (first: {extra[:1]}). "
+                "A table measured on another harvest is not a table for this cube."
+            )
+        values = np.asarray([weight_table[v] for v in ids], dtype=float)
+        if not np.all(np.isfinite(values)) or np.any(values <= 0):
+            raise StreamCombineError("invvar weighting needs a finite, positive weight for every exposure")
+        return [float(v) for v in values]
     raise ValueError(f"Unknown weight_mode: {weight_mode}")
+
+
+def load_weight_table(path, *, aperture: str | None = None) -> tuple[dict, dict]:
+    """Los pesos por exposición de un QC de C7 (`spec_perexp_qc.json`).
+
+    Devuelve `({exposure_id: peso}, procedencia)`. Exige lo que hace que esos
+    pesos sean los del combinado y no otros: un solo grupo (`--group-by none`;
+    agrupado por noche los pesos se normalizan DENTRO de cada noche y no dicen
+    nada del reparto entre noches) y la ley `invvar` (con otra ley
+    `weights_normalised` es `exptime` o `equal` con otro nombre). La apertura es
+    la primera del QC salvo que se pida otra: los pesos se miden en la banda
+    declarada `weight_band_A`, no en la apertura, así que box3 y box5 difieren
+    poco, pero el QC dice cuál se usó.
+    """
+
+    path = Path(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    convention = payload.get("convention") or {}
+    if str(convention.get("combine")) != "invvar":
+        raise StreamCombineError(
+            f"{path}: its weights follow the law {convention.get('combine')!r}, not 'invvar'"
+        )
+    groups = payload.get("groups") or {}
+    if len(groups) != 1:
+        raise StreamCombineError(
+            f"{path}: expected ONE group (C7 run with --group-by none), found {sorted(groups)}; "
+            "per-night weights are normalised within each night and say nothing about the share between nights"
+        )
+    group_name, group = next(iter(groups.items()))
+    apertures = group.get("apertures") or {}
+    if not apertures:
+        raise StreamCombineError(f"{path}: the group {group_name!r} has no apertures")
+    label = str(aperture or next(iter(apertures)))
+    if label not in apertures:
+        raise StreamCombineError(f"{path}: no aperture {label!r} (has {sorted(apertures)})")
+    table = apertures[label].get("weights_normalised")
+    if not isinstance(table, dict) or not table:
+        raise StreamCombineError(f"{path}: aperture {label!r} carries no `weights_normalised`")
+    weights = {str(k): float(v) for k, v in table.items()}
+    source = {
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "stage": str(payload.get("stage")),
+        "spec_version": str(payload.get("spec_version")),
+        "run_id": str(payload.get("run_id")),
+        "law": "invvar",
+        "group": str(group_name),
+        "aperture": label,
+        "weight_band_A": [float(v) for v in (convention.get("weight_band_A") or ())],
+        "sigma": str(convention.get("sigma")),
+        "n_exposures": int(len(weights)),
+        "n_eff": apertures[label].get("n_eff"),
+    }
+    return weights, source
+
+
+def reweight_plan(
+    plan: "StreamCombinePlan",
+    weight_mode: str,
+    *,
+    weight_table: dict | None = None,
+    weight_source: dict | None = None,
+) -> "StreamCombinePlan":
+    """El mismo plan con otra ley de pesos: misma geometría, otros `weight`.
+
+    Es la manera de cambiar SOLO los pesos de un combinado: los centroides, las
+    ventanas y los desplazamientos se conservan tal cual, así que la diferencia
+    entre los dos cubos es la ley y nada más. Re-planificar mediría de nuevo los
+    centroides (deterministas, pero no es lo que se quiere aislar).
+    """
+
+    if weight_mode not in WEIGHT_MODES:
+        raise ValueError(f"Unknown weight_mode: {weight_mode}")
+    weights = _weights(
+        [exp.exptime for exp in plan.exposures], weight_mode,
+        exposure_ids=[exp.exposure_id for exp in plan.exposures], weight_table=weight_table,
+    )
+    exposures = tuple(replace(exp, weight=float(w)) for exp, w in zip(plan.exposures, weights))
+    source = dict(weight_source or {}) if weight_mode == "invvar" else {}
+    if weight_mode == "invvar" and not source:
+        raise StreamCombineError("invvar weighting needs its provenance (weight_source)")
+    return replace(plan, weight_mode=str(weight_mode), exposures=exposures, weight_source=source)
 
 
 def _alignment_repeatability(
@@ -631,6 +759,8 @@ def build_stream_combine_plan(
     sigclip_k: float = DEFAULT_SIGCLIP_K,
     sigclip_min_n: int = DEFAULT_SIGCLIP_MIN_N,
     weight_mode: str = "exptime",
+    weight_table: dict | None = None,
+    weight_source: dict | None = None,
     drop_wave_min_A: float = 5780.0,
     drop_wave_max_A: float = 6050.0,
     centering_method: str = "maoppy",
@@ -644,6 +774,10 @@ def build_stream_combine_plan(
         raise StreamCombineError("need at least two cubes to combine")
     if method not in {"mean", "sigclip"}:
         raise StreamCombineError(f"unknown method: {method}")
+    if weight_mode not in WEIGHT_MODES:
+        raise ValueError(f"Unknown weight_mode: {weight_mode}")
+    if weight_mode == "invvar" and not weight_source:
+        raise StreamCombineError("invvar weighting needs its provenance (weight_source)")
     if int(crop_npix) <= 0:
         raise StreamCombineError("crop_npix must be positive")
 
@@ -708,7 +842,10 @@ def build_stream_combine_plan(
         sizing = {"source": "declared", "chunk_channels": resolved_chunk}
 
     half = int(crop_npix) // 2
-    weights = _weights([m["exptime"] for m in measurements], weight_mode)
+    weights = _weights(
+        [m["exptime"] for m in measurements], weight_mode,
+        exposure_ids=[_exposure_id(m["file"]) for m in measurements], weight_table=weight_table,
+    )
 
     exposures = []
     for index, (measurement, weight) in enumerate(zip(measurements, weights)):
@@ -792,6 +929,7 @@ def build_stream_combine_plan(
         wavelength=wavelength,
         exposures=tuple(exposures),
         warnings=tuple(warnings),
+        weight_source=dict(weight_source or {}) if weight_mode == "invvar" else {},
     )
 
 
@@ -842,6 +980,7 @@ def plan_from_dict(payload: dict) -> StreamCombinePlan:
         chunk_sizing=dict(payload.get("chunk_sizing", {})),
         warnings=tuple(payload.get("warnings", [])),
         transmission_by_exposure=dict(payload.get("transmission_by_exposure", {})),
+        weight_source=dict(payload.get("weight_source", {})),
     )
 
 
@@ -1040,6 +1179,8 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
         "n_exposures": n_exp,
         "method": plan.method,
         "weight_mode": plan.weight_mode,
+        "weight_source": dict(plan.weight_source),
+        "weights_by_exposure": {exp.exposure_id: float(exp.weight) for exp in plan.exposures},
         "sigclip_k": float(plan.sigclip_k) if plan.method == "sigclip" else None,
         "cube_shape": [int(nz), int(npix), int(npix)],
         "voxels_total": int(nz) * int(npix) * int(npix),
@@ -1115,6 +1256,9 @@ def write_combined_cube(result: dict, plan: StreamCombinePlan, output, *, bunit=
     primary["ORIGIN"] = "musepipe.stream_combine"
     primary["COMBMETH"] = str(plan.method)
     primary["COMBWGT"] = str(plan.weight_mode)
+    if plan.weight_source:
+        primary["COMBWSRC"] = Path(str(plan.weight_source.get("path", ""))).name
+        primary["COMBWSHA"] = str(plan.weight_source.get("sha256", ""))[:16]
     primary["NEXP"] = len(plan.exposures)
     primary["CROPPIX"] = int(plan.crop_npix)
     primary["CENTER"] = str(plan.centering_method)
@@ -1126,7 +1270,8 @@ def write_combined_cube(result: dict, plan: StreamCombinePlan, output, *, bunit=
     for exposure in plan.exposures:
         primary.add_history(
             f"exp {exposure.index:02d} {exposure.exposure_id} "
-            f"t={exposure.exptime:.0f}s shift=({exposure.shift_y:+.3f},{exposure.shift_x:+.3f})"
+            f"t={exposure.exptime:.0f}s w={exposure.weight:.4g} "
+            f"shift=({exposure.shift_y:+.3f},{exposure.shift_x:+.3f})"
         )
 
     wcs_header = build_output_header(plan, bunit=bunit)
@@ -1144,13 +1289,16 @@ __all__ = [
     "ExposureAlignment",
     "StreamCombineError",
     "StreamCombinePlan",
+    "WEIGHT_MODES",
     "build_output_header",
     "build_stream_combine_plan",
     "combine_streaming",
     "exposure_from_measurement",
+    "load_weight_table",
     "measure_primary_center",
     "plan_from_dict",
     "read_window",
+    "reweight_plan",
     "shift_data_chunk",
     "shift_variance_chunk",
     "write_combined_cube",
