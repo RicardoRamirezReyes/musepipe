@@ -356,6 +356,18 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
             sigma_peso = np.asarray(
                 [np.nanstd(np.nanmedian(c[:, sel_peso], axis=1)) for c in ctrls])
             w, escala = combine_measurements(objetos, pesos_plan, sigma_peso, ley)
+            # El MISMO 1/sigma^2 pero sobre los controles CRUDOS (sin la apcorr
+            # de cada exposicion): es el peso que le corresponde a un CUBO. Los
+            # controles llevan `apcorr_i`, asi que `sigma_peso` es
+            # apcorr_i * sigma_raw_i y `w` castiga por apcorr_i^2 — correcto para
+            # combinar MEDIDAS de flujo total, no para combinar cubos, donde la
+            # apcorr se aplica una vez al final. Medido el 2026-09-14
+            # (ROXs12b_invvar): con los pesos de medida el cubo se queda en
+            # n_eff = 13.9 de 29 y pierde un 20 % de S/N contra la noche buena.
+            sigma_cubo = np.asarray(
+                [np.nanstd(np.nanmedian((c / a[None, :])[:, sel_peso], axis=1))
+                 for c, a in zip(ctrls, apcorrs)])
+            w_cubo, _ = combine_measurements(objetos, pesos_plan, sigma_cubo, "invvar")
 
             flujo = escala * np.nansum(w[:, None] * objetos, axis=0)
             crudo = escala * np.nansum(w[:, None] * crudos, axis=0)
@@ -414,6 +426,10 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
                 "n_exposures": int(len(idx)),
                 "weights_normalised": {filas[i]["exposure_id"]: float(x) for i, x in zip(idx, w)},
                 "n_eff": float(1.0 / np.nansum(w ** 2)),
+                # Para `stream_combine --weight invvar`: 1/sigma^2 de los controles
+                # crudos, sin apcorr. NO es lo que combina este producto.
+                "weights_cube_normalised": {filas[i]["exposure_id"]: float(x) for i, x in zip(idx, w_cubo)},
+                "n_eff_cube": float(1.0 / np.nansum(w_cubo ** 2)),
                 "apcorr_median": float(np.nanmedian(apcorr)),
                 "sigma_median": float(np.nanmedian(sigma)),
                 "flux_median": float(np.nanmedian(flujo)),
@@ -439,6 +455,12 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
             w, _ = combine_measurements(filas, pesos0, sigma0, otra)
             reparto[otra] = {noche: float(np.nansum(w[idx]))
                              for noche, idx in group_exposures(obs.exposures, "night").items()}
+        apc0 = np.asarray([f["apertures"][etiqueta0]["apcorr"] for f in filas])
+        sigma_c0 = np.asarray([np.nanstd(np.nanmedian((c / a[None, :])[:, sel_peso], axis=1))
+                               for c, a in zip(ctrls0, apc0)])
+        w, _ = combine_measurements(filas, pesos0, sigma_c0, "invvar")
+        reparto["invvar_cube"] = {noche: float(np.nansum(w[idx]))
+                                  for noche, idx in group_exposures(obs.exposures, "night").items()}
         open_issues.append(
             "Las exposiciones se combinan sin agrupar y el run tiene mas de una noche: "
             "`weight_share_by_night` dice cuanto peso se lleva cada una con cada ley."

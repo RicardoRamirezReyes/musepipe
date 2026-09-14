@@ -557,19 +557,30 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def _c7_qc(weights, *, combine="invvar", groups=None, band=(8600.0, 9000.0)):
-    """Un `spec_perexp_qc.json` mínimo con la forma que C7 escribe."""
+def _c7_qc(weights, *, combine="invvar", groups=None, band=(8600.0, 9000.0), cube_weights=None):
+    """Un `spec_perexp_qc.json` mínimo con la forma que C7 escribe.
+
+    `weights` es la tabla de MEDIDA (`weights_normalised`); la de CUBO
+    (`weights_cube_normalised`) es la misma salvo que se pase otra. Un QC sin
+    tabla de cubo (anterior al 2026-09-14) se simula con `cube_weights={}`.
+    """
 
     groups = groups or {"all": weights}
+
+    def apertures(table):
+        cube = table if cube_weights is None else cube_weights
+        out = {"weights_normalised": dict(table), "n_eff": 1.0 / sum(v * v for v in table.values())}
+        if cube:
+            out["weights_cube_normalised"] = dict(cube)
+            out["n_eff_cube"] = 1.0 / sum(v * v for v in cube.values())
+        return {"box3": out, "box5": dict(out)}
+
     return {
         "stage": "x06_perexp", "spec_version": "C7", "run_id": "synthetic",
         "convention": {"combine": combine, "group_by": "none" if len(groups) == 1 else "night",
                        "weight_band_A": list(band),
                        "sigma": "dispersion de los controles combinados con los mismos pesos"},
-        "groups": {name: {"apertures": {
-            "box3": {"weights_normalised": dict(table), "n_eff": 1.0 / sum(v * v for v in table.values())},
-            "box5": {"weights_normalised": {k: v for k, v in table.items()}, "n_eff": 1.0},
-        }} for name, table in groups.items()},
+        "groups": {name: {"apertures": apertures(table)} for name, table in groups.items()},
     }
 
 
@@ -664,6 +675,26 @@ class PesosPorVarianzaTests(unittest.TestCase):
             load_weight_table(self._qc_path(por_noche))
         with self.assertRaisesRegex(StreamCombineError, "no aperture 'box7'"):
             load_weight_table(self._qc_path(_c7_qc(table)), aperture="box7")
+
+    def test_the_cube_table_is_the_default_and_the_measurement_one_is_explicit(self):
+        medida = {self.ids[0]: 0.5, self.ids[1]: 0.5}
+        cubo = {self.ids[0]: 0.8, self.ids[1]: 0.2}
+        qc = self._qc_path(_c7_qc(medida, cube_weights=cubo))
+        weights, source = load_weight_table(qc)
+        self.assertEqual(weights, cubo)
+        self.assertEqual((source["kind"], source["field"]), ("cube", "weights_cube_normalised"))
+        self.assertAlmostEqual(source["n_eff"], 1.0 / (0.64 + 0.04))
+        weights, source = load_weight_table(qc, kind="measurement")
+        self.assertEqual(weights, medida)
+        self.assertEqual(source["field"], "weights_normalised")
+        with self.assertRaises(ValueError):
+            load_weight_table(qc, kind="pixel")
+        # Un QC de C7 anterior al 2026-09-14 no trae la tabla de cubo: se niega
+        # en vez de leer la de medida, que es la que perdio n_eff.
+        viejo = self._qc_path(_c7_qc(medida, cube_weights={}), name="viejo.json")
+        with self.assertRaisesRegex(StreamCombineError, "weights_cube_normalised.*re-run C7"):
+            load_weight_table(viejo)
+        self.assertEqual(load_weight_table(viejo, kind="measurement")[0], medida)
 
     def test_reweight_keeps_the_geometry_and_changes_only_the_weights(self):
         plan = self._plan(weight_mode="exptime")

@@ -577,8 +577,21 @@ def _weights(
     raise ValueError(f"Unknown weight_mode: {weight_mode}")
 
 
-def load_weight_table(path, *, aperture: str | None = None) -> tuple[dict, dict]:
+WEIGHT_TABLE_KINDS = {"cube": "weights_cube_normalised", "measurement": "weights_normalised"}
+
+
+def load_weight_table(path, *, aperture: str | None = None, kind: str = "cube") -> tuple[dict, dict]:
     """Los pesos por exposición de un QC de C7 (`spec_perexp_qc.json`).
+
+    `kind="cube"` (por defecto) lee `weights_cube_normalised`: 1/sigma^2 de los
+    controles CRUDOS, sin la apcorr de cada exposicion, que es el peso que le
+    corresponde a un cubo (la apcorr se aplica una vez, al final, sobre el
+    combinado). `kind="measurement"` lee `weights_normalised`, el peso con el
+    que C7 combina MEDIDAS de flujo total (lleva apcorr_i^2 dentro). Combinar
+    el cubo con los de medida castiga las exposiciones de la noche buena con
+    peor seeing por su apcorr^2: n_eff 13.9 de 29 y un 20 % menos de S/N que la
+    noche buena sola (ROXs12b_invvar, 2026-09-14). Un QC de C7 anterior a ese
+    dia no trae la tabla de cubo, y esto falla en vez de leer la otra.
 
     Devuelve `({exposure_id: peso}, procedencia)`. Exige lo que hace que esos
     pesos sean los del combinado y no otros: un solo grupo (`--group-by none`;
@@ -610,9 +623,15 @@ def load_weight_table(path, *, aperture: str | None = None) -> tuple[dict, dict]
     label = str(aperture or next(iter(apertures)))
     if label not in apertures:
         raise StreamCombineError(f"{path}: no aperture {label!r} (has {sorted(apertures)})")
-    table = apertures[label].get("weights_normalised")
+    if kind not in WEIGHT_TABLE_KINDS:
+        raise ValueError(f"unknown weight table kind: {kind!r} (expected one of {sorted(WEIGHT_TABLE_KINDS)})")
+    field_name = WEIGHT_TABLE_KINDS[kind]
+    table = apertures[label].get(field_name)
     if not isinstance(table, dict) or not table:
-        raise StreamCombineError(f"{path}: aperture {label!r} carries no `weights_normalised`")
+        raise StreamCombineError(
+            f"{path}: aperture {label!r} carries no `{field_name}`"
+            + (" (C7 QC written before 2026-09-14: re-run C7)" if kind == "cube" else "")
+        )
     weights = {str(k): float(v) for k, v in table.items()}
     source = {
         "path": str(path),
@@ -621,12 +640,14 @@ def load_weight_table(path, *, aperture: str | None = None) -> tuple[dict, dict]
         "spec_version": str(payload.get("spec_version")),
         "run_id": str(payload.get("run_id")),
         "law": "invvar",
+        "kind": kind,
+        "field": field_name,
         "group": str(group_name),
         "aperture": label,
         "weight_band_A": [float(v) for v in (convention.get("weight_band_A") or ())],
         "sigma": str(convention.get("sigma")),
         "n_exposures": int(len(weights)),
-        "n_eff": apertures[label].get("n_eff"),
+        "n_eff": apertures[label].get("n_eff_cube" if kind == "cube" else "n_eff"),
     }
     return weights, source
 
@@ -1290,6 +1311,7 @@ __all__ = [
     "StreamCombineError",
     "StreamCombinePlan",
     "WEIGHT_MODES",
+    "WEIGHT_TABLE_KINDS",
     "build_output_header",
     "build_stream_combine_plan",
     "combine_streaming",

@@ -54,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weight", required=True, choices=WEIGHT_MODES)
     parser.add_argument("--weight-table",
                         help="Con --weight invvar: QC de C7 (--group-by none --combine invvar)")
+    parser.add_argument("--weight-kind", choices=("cube", "measurement"), default="cube",
+                        help="que tabla del QC de C7: `cube` (1/sigma^2 de los controles crudos, sin apcorr; "
+                             "la que le corresponde a un cubo) o `measurement` (la que C7 usa para combinar "
+                             "medidas, con apcorr_i^2 dentro; probada el 2026-09-14 y pierde n_eff)")
     parser.add_argument("--weight-aperture", help="Apertura del QC de C7 (por defecto la primera)")
     parser.add_argument("--run-id", help="run_id del plan nuevo (por defecto el del plan viejo)")
     parser.add_argument("--output", help="Cubo de salida del plan nuevo (por defecto el del viejo, "
@@ -70,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.weight == "invvar":
         if not args.weight_table:
             raise StreamCombineError("--weight invvar needs --weight-table <spec_perexp_qc.json>")
-        weight_table, weight_source = load_weight_table(args.weight_table, aperture=args.weight_aperture)
+        weight_table, weight_source = load_weight_table(args.weight_table, aperture=args.weight_aperture, kind=args.weight_kind)
 
     before = weight_share_by_night(plan)
     new_plan = reweight_plan(plan, args.weight, weight_table=weight_table, weight_source=weight_source)
