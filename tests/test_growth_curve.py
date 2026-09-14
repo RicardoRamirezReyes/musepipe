@@ -404,3 +404,43 @@ class MonotoneInterpolationTests(unittest.TestCase):
     def test_an_unknown_method_raises(self):
         with self.assertRaises(ValueError):
             factor_at_wavelengths(self.qc, self.wave, method="spline37")
+
+
+class ExcludeBandsAboveTests(unittest.TestCase):
+    """El remedio de ROXs12b_OB3445598 para la banda roja, ahora en codigo."""
+
+    def _qc(self, ratios):
+        waves = [5037.0, 5612.0, 6187.0, 6762.0, 7337.0, 7912.0, 8487.0, 9062.0]
+        return {"bands": [{"wave_A": w, "ratio_total_over_normrad": r, "ratio_min": r, "ratio_max": r,
+                           "halo_power": 3.0, "sky_floor": 0.0, "tail_fraction": 0.05}
+                          for w, r in zip(waves, ratios)]}
+
+    def test_the_red_rebound_trips_the_gate_and_the_cut_removes_it(self):
+        from musepipe.growth_curve import exclude_bands_above, factor_at_wavelengths
+
+        # Las bandas medidas en ROXs12b_invvar el 2026-09-14: minimo en 6762 y
+        # la ultima rebota un 2.2%, que extrapolada al borde pasa del 3%.
+        qc = self._qc([1.3046, 1.2787, 1.2637, 1.2627, 1.2698, 1.2733, 1.2691, 1.2908])
+        wave = np.linspace(4750.0, 9350.0, 50)
+        with self.assertRaisesRegex(RuntimeError, "rebounds"):
+            factor_at_wavelengths(qc, wave)
+        cut = exclude_bands_above(qc, 8500.0, reason="OH y banda A telurica")
+        self.assertEqual([b["wave_A"] for b in cut["bands"]], [5037.0, 5612.0, 6187.0, 6762.0, 7337.0, 7912.0, 8487.0])
+        self.assertEqual(len(cut["excluded_bands"]), 1)
+        self.assertEqual(cut["excluded_bands"][0]["wave_A"], 9062.0)
+        self.assertEqual(cut["excluded_bands"][0]["reason"], "OH y banda A telurica")
+        self.assertEqual(cut["exclude_above_A"], 8500.0)
+        factor = factor_at_wavelengths(cut, wave)
+        self.assertTrue(np.all(np.isfinite(factor)))
+        # El original no se toca.
+        self.assertEqual(len(qc["bands"]), 8)
+
+    def test_a_cut_that_drops_halpha_is_refused_and_no_cut_is_a_no_op(self):
+        from musepipe.growth_curve import exclude_bands_above
+
+        qc = self._qc([1.30, 1.28, 1.26, 1.25, 1.24, 1.23, 1.22, 1.21])
+        with self.assertRaisesRegex(ValueError, "Halpha"):
+            exclude_bands_above(qc, 6000.0, reason="x")
+        same = exclude_bands_above(qc, 9500.0, reason="x")
+        self.assertEqual(same["bands"], qc["bands"])
+        self.assertNotIn("excluded_bands", same)
