@@ -580,18 +580,20 @@ def _weights(
 WEIGHT_TABLE_KINDS = {"cube": "weights_cube_normalised", "measurement": "weights_normalised"}
 
 
-def load_weight_table(path, *, aperture: str | None = None, kind: str = "cube") -> tuple[dict, dict]:
+def load_weight_table(path, *, aperture: str | None = None, kind: str = "measurement") -> tuple[dict, dict]:
     """Los pesos por exposición de un QC de C7 (`spec_perexp_qc.json`).
 
-    `kind="cube"` (por defecto) lee `weights_cube_normalised`: 1/sigma^2 de los
-    controles CRUDOS, sin la apcorr de cada exposicion, que es el peso que le
-    corresponde a un cubo (la apcorr se aplica una vez, al final, sobre el
-    combinado). `kind="measurement"` lee `weights_normalised`, el peso con el
-    que C7 combina MEDIDAS de flujo total (lleva apcorr_i^2 dentro). Combinar
-    el cubo con los de medida castiga las exposiciones de la noche buena con
-    peor seeing por su apcorr^2: n_eff 13.9 de 29 y un 20 % menos de S/N que la
-    noche buena sola (ROXs12b_invvar, 2026-09-14). Un QC de C7 anterior a ese
-    dia no trae la tabla de cubo, y esto falla en vez de leer la otra.
+    `kind="measurement"` (por defecto) lee `weights_normalised`, el peso con el
+    que C7 combina sus medidas: 1/sigma_i^2 con la apcorr de cada exposicion
+    dentro. Es tambien el peso que le corresponde al cubo, porque lo que cuenta
+    es la S/N de cada exposicion EN EL COMPANERO, (S_i/sigma_i)^2 = 1/(apcorr_i
+    * sigma_raw_i)^2: una exposicion con mala PSF tiene poco ruido en la caja
+    en unidades de cubo, pero tambien poca senal. `kind="cube"` lee
+    `weights_cube_normalised` (1/sigma^2 de los controles CRUDOS, sin apcorr):
+    se probo el 2026-09-14 (via B ronda 2) con la hipotesis de que la apcorr_i^2
+    castigaba de mas, y lo que hizo fue devolver a la noche mala el 49 % del
+    peso (2.4 % con la tabla de medida) sin recuperar n_eff (15.8 de 29 contra
+    13.9). Queda disponible como diagnostico, no como defecto.
 
     Devuelve `({exposure_id: peso}, procedencia)`. Exige lo que hace que esos
     pesos sean los del combinado y no otros: un solo grupo (`--group-by none`;

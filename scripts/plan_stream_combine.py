@@ -45,10 +45,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="Con --weight invvar: el QC de C7 (spec_perexp_qc.json, corrido con "
                              "--group-by none --combine invvar) que declara el peso de cada exposicion. "
                              "Obligatorio con invvar, ignorado con las otras leyes.")
-    parser.add_argument("--weight-kind", choices=("cube", "measurement"), default="cube",
-                        help="que tabla del QC de C7: `cube` (1/sigma^2 de los controles crudos, sin apcorr; "
-                             "la que le corresponde a un cubo) o `measurement` (la que C7 usa para combinar "
-                             "medidas, con apcorr_i^2 dentro; probada el 2026-09-14 y pierde n_eff)")
+    parser.add_argument("--weight-kind", choices=("measurement", "cube"), default="measurement",
+                        help="que tabla del QC de C7: `measurement` (1/sigma_i^2 con la apcorr de cada "
+                             "exposicion dentro: la S/N de cada una en el companero, y la que le corresponde "
+                             "al cubo) o `cube` (controles crudos sin apcorr; probada el 2026-09-14 y devuelve "
+                             "a la noche mala el 49 %% del peso sin recuperar n_eff: solo diagnostico)")
     parser.add_argument("--weight-aperture",
                         help="Con --weight-table: la apertura del QC de la que se leen los pesos "
                              "(por defecto la primera, box3)")

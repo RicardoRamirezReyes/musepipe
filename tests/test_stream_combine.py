@@ -560,9 +560,10 @@ if __name__ == "__main__":
 def _c7_qc(weights, *, combine="invvar", groups=None, band=(8600.0, 9000.0), cube_weights=None):
     """Un `spec_perexp_qc.json` mínimo con la forma que C7 escribe.
 
-    `weights` es la tabla de MEDIDA (`weights_normalised`); la de CUBO
-    (`weights_cube_normalised`) es la misma salvo que se pase otra. Un QC sin
-    tabla de cubo (anterior al 2026-09-14) se simula con `cube_weights={}`.
+    `weights` es la tabla de MEDIDA (`weights_normalised`, la que lee el
+    combinado por defecto); la de CUBO (`weights_cube_normalised`, diagnostico)
+    es la misma salvo que se pase otra. Un QC sin tabla de cubo (anterior al
+    2026-09-14) se simula con `cube_weights={}`.
     """
 
     groups = groups or {"all": weights}
@@ -676,25 +677,30 @@ class PesosPorVarianzaTests(unittest.TestCase):
         with self.assertRaisesRegex(StreamCombineError, "no aperture 'box7'"):
             load_weight_table(self._qc_path(_c7_qc(table)), aperture="box7")
 
-    def test_the_cube_table_is_the_default_and_the_measurement_one_is_explicit(self):
+    def test_the_measurement_table_is_the_default_and_the_cube_one_is_explicit(self):
+        # La de medida lleva la apcorr_i dentro, y por eso es la S/N de cada
+        # exposicion en el companero. La de cubo (sin apcorr) se probo el
+        # 2026-09-14 y devolvio a la noche mala el 49 % del peso: queda como
+        # diagnostico, y hay que pedirla.
         medida = {self.ids[0]: 0.5, self.ids[1]: 0.5}
         cubo = {self.ids[0]: 0.8, self.ids[1]: 0.2}
         qc = self._qc_path(_c7_qc(medida, cube_weights=cubo))
         weights, source = load_weight_table(qc)
-        self.assertEqual(weights, cubo)
-        self.assertEqual((source["kind"], source["field"]), ("cube", "weights_cube_normalised"))
-        self.assertAlmostEqual(source["n_eff"], 1.0 / (0.64 + 0.04))
-        weights, source = load_weight_table(qc, kind="measurement")
         self.assertEqual(weights, medida)
-        self.assertEqual(source["field"], "weights_normalised")
+        self.assertEqual((source["kind"], source["field"]), ("measurement", "weights_normalised"))
+        self.assertAlmostEqual(source["n_eff"], 2.0)
+        weights, source = load_weight_table(qc, kind="cube")
+        self.assertEqual(weights, cubo)
+        self.assertEqual(source["field"], "weights_cube_normalised")
+        self.assertAlmostEqual(source["n_eff"], 1.0 / (0.64 + 0.04))
         with self.assertRaises(ValueError):
             load_weight_table(qc, kind="pixel")
-        # Un QC de C7 anterior al 2026-09-14 no trae la tabla de cubo: se niega
-        # en vez de leer la de medida, que es la que perdio n_eff.
+        # Un QC de C7 anterior al 2026-09-14 no trae la tabla de cubo: el
+        # defecto lo lee igual, y pedir la de cubo falla en vez de leer la otra.
         viejo = self._qc_path(_c7_qc(medida, cube_weights={}), name="viejo.json")
+        self.assertEqual(load_weight_table(viejo)[0], medida)
         with self.assertRaisesRegex(StreamCombineError, "weights_cube_normalised.*re-run C7"):
-            load_weight_table(viejo)
-        self.assertEqual(load_weight_table(viejo, kind="measurement")[0], medida)
+            load_weight_table(viejo, kind="cube")
 
     def test_reweight_keeps_the_geometry_and_changes_only_the_weights(self):
         plan = self._plan(weight_mode="exptime")

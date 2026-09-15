@@ -54,10 +54,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weight", required=True, choices=WEIGHT_MODES)
     parser.add_argument("--weight-table",
                         help="Con --weight invvar: QC de C7 (--group-by none --combine invvar)")
-    parser.add_argument("--weight-kind", choices=("cube", "measurement"), default="cube",
-                        help="que tabla del QC de C7: `cube` (1/sigma^2 de los controles crudos, sin apcorr; "
-                             "la que le corresponde a un cubo) o `measurement` (la que C7 usa para combinar "
-                             "medidas, con apcorr_i^2 dentro; probada el 2026-09-14 y pierde n_eff)")
+    parser.add_argument("--weight-kind", choices=("measurement", "cube"), default="measurement",
+                        help="que tabla del QC de C7: `measurement` (1/sigma_i^2 con la apcorr de cada "
+                             "exposicion dentro: la S/N de cada una en el companero, y la que le corresponde "
+                             "al cubo) o `cube` (controles crudos sin apcorr; probada el 2026-09-14 y devuelve "
+                             "a la noche mala el 49 %% del peso sin recuperar n_eff: solo diagnostico)")
     parser.add_argument("--weight-aperture", help="Apertura del QC de C7 (por defecto la primera)")
     parser.add_argument("--run-id", help="run_id del plan nuevo (por defecto el del plan viejo)")
     parser.add_argument("--output", help="Cubo de salida del plan nuevo (por defecto el del viejo, "

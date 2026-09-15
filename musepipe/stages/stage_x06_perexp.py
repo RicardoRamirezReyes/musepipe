@@ -357,13 +357,15 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
                 [np.nanstd(np.nanmedian(c[:, sel_peso], axis=1)) for c in ctrls])
             w, escala = combine_measurements(objetos, pesos_plan, sigma_peso, ley)
             # El MISMO 1/sigma^2 pero sobre los controles CRUDOS (sin la apcorr
-            # de cada exposicion): es el peso que le corresponde a un CUBO. Los
-            # controles llevan `apcorr_i`, asi que `sigma_peso` es
-            # apcorr_i * sigma_raw_i y `w` castiga por apcorr_i^2 — correcto para
-            # combinar MEDIDAS de flujo total, no para combinar cubos, donde la
-            # apcorr se aplica una vez al final. Medido el 2026-09-14
-            # (ROXs12b_invvar): con los pesos de medida el cubo se queda en
-            # n_eff = 13.9 de 29 y pierde un 20 % de S/N contra la noche buena.
+            # de cada exposicion). Se publica como DIAGNOSTICO (`n_eff_cube`,
+            # `weight_share_by_night.invvar_cube`), no como peso del combinado:
+            # el 2026-09-14 (via B, ronda 2) se probo como tabla del cubo con la
+            # hipotesis de que `w` castigaba de mas por apcorr_i^2, y devolvio a
+            # la noche mala el 49 % del peso (2.4 % con `w`) sin recuperar n_eff
+            # (15.8 de 29 contra 13.9). El peso que le corresponde al cubo es
+            # `w`: (S_i/sigma_i)^2 = 1/(apcorr_i * sigma_raw_i)^2, la S/N de cada
+            # exposicion en el companero — una PSF mala tiene poco ruido en la
+            # caja en unidades de cubo, y tambien poca senal.
             sigma_cubo = np.asarray(
                 [np.nanstd(np.nanmedian((c / a[None, :])[:, sel_peso], axis=1))
                  for c, a in zip(ctrls, apcorrs)])
@@ -426,8 +428,9 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
                 "n_exposures": int(len(idx)),
                 "weights_normalised": {filas[i]["exposure_id"]: float(x) for i, x in zip(idx, w)},
                 "n_eff": float(1.0 / np.nansum(w ** 2)),
-                # Para `stream_combine --weight invvar`: 1/sigma^2 de los controles
-                # crudos, sin apcorr. NO es lo que combina este producto.
+                # Diagnostico (`stream_combine --weight-kind cube`): 1/sigma^2 de
+                # los controles crudos, sin apcorr. NO es lo que combina este
+                # producto ni lo que le corresponde al cubo (ver arriba).
                 "weights_cube_normalised": {filas[i]["exposure_id"]: float(x) for i, x in zip(idx, w_cubo)},
                 "n_eff_cube": float(1.0 / np.nansum(w_cubo ** 2)),
                 "apcorr_median": float(np.nanmedian(apcorr)),
