@@ -101,7 +101,7 @@ def main(argv=None):
                         help="posicion del companero EN EL CUBO GRANDE, para enmascararlo")
     parser.add_argument("--exclude-above-A", type=float, default=None,
                         help="aparta del factor las bandas a partir de esta lambda (quedan en "
-                             "`excluded_bands` con la razon). Es el remedio de ROXs12b_OB3445598 "
+                             "`excluded_bands` con la razon). Es el remedio del run de una noche sola "
                              "(2026-08-21) para la banda >8500 A, que rebota por OH y la banda A "
                              "telurica y hace saltar el guardian de monotonia.")
     args = parser.parse_args(argv)
@@ -123,7 +123,7 @@ def main(argv=None):
             result, args.exclude_above_A,
             reason=(f"Banda excluida del factor por --exclude-above-A {args.exclude_above_A:.0f}: rebota "
                     "sobre el minimo y ahi viven las lineas de OH y la banda A telurica; el rebote no es "
-                    "de binado (ROXs12b_OB3445598, 2026-08-21: 1.0% con 5 bandas, 3.7% con 8, 4-5% con 10-12). "
+                    "de binado (run de una noche sola, 2026-08-21: 1.0% con 5 bandas, 3.7% con 8, 4-5% con 10-12). "
                     "Se recorta la causa en vez de elegir el binado que pasa el guardian."))
     print(f"cubo   : {cube}")
     print(f"estrella en yx = {[round(v, 2) for v in result['star_yx']]}"
