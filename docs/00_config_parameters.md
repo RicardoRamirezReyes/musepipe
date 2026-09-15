@@ -190,6 +190,7 @@ cambie el crop, el centrado de Stage01 o la estructura de stripes.
 | `x06_group_by` | `none` | `none` o `night`: un producto por noche |
 | `x06_combine` | `invvar` | `invvar` / `exptime` / `equal` / `sum` (ver spec C7) |
 | `x06_weight_band_A` | `[8600, 9000]` | banda donde se miden los pesos; **no** puede ser la que se mide |
+| `x06_sigma_shrink` | `none` | cómo se estima la σ_i de `invvar`: `none` (sus 7 controles tal cual), `night` (la σ cruda de su noche, apcorr_i intacta) o `auto` (encogida en la fracción que χ²_k no explica; λ por noche en el QC). Los n_eff de los tres modos se publican siempre |
 | `x06_max_workers` | 4 | el techo lo pone la memoria (un cubo alineado por worker) |
 | `x06_flux_convention` | la del run | `normrad` o `total` |
 | `x06_wframe` | — | marco de lambda declarado, por delante del QC de A4 |

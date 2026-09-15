@@ -99,6 +99,20 @@ continuo). Nunca debe ser el valor por defecto.
 que se está midiendo.** Medido: pesar con la σ de la propia banda infla la S/N un 40–60 % por
 auto-selección (27.94 contra 19.33 en el continuo).
 
+**La σᵢ de cada exposición sale de 7 controles (6 grados de libertad), y eso hace ruidoso al
+peso** (`x06_sigma_shrink`, añadido el 2026-09-15 para la vía B, punto 2). Con `k = 6`, 22
+exposiciones de la **misma** σ verdadera dan `n_eff` ≈ 15 (5–95 %: 8–18) y un factor ≈ 11 entre el
+mayor y el menor peso sólo por el ruido del estimador — la noche buena de ROXs 12 b mide 13.9 y
+un factor 13. La etapa separa la σᵢ en dos partes: la de los controles **crudos** (7 muestras,
+ruidosa) y la apcorrᵢ efectiva en la banda (del modelo de PSF de esa exposición, no del ruido).
+`none` (defecto) deja las dos; `night` sustituye la cruda por la media geométrica de su noche;
+`auto` encoge `log σ²_cruda` hacia la media de su noche en la fracción que la dispersión observada
+no explica con χ²ₖ (`λ = Var[log χ²ₖ/k] / Var_obs`, recortado a [0, 1], James–Stein). El QC publica
+siempre `sigma_shrink` con `λ`, la dispersión observada y esperada por noche, y el `n_eff` de los
+**tres** modos (total y dentro de cada noche): es la prueba barata de si la dispersión de los pesos
+es ruido, sin re-extraer. La tabla que lee el combinado (`load_weight_table`) declara el modo en
+`weight_source.sigma_shrink`.
+
 ### 3.2 · La σ del producto
 
 De **controles combinados con los mismos pesos**, nunca de `STAT` (que subestima ~4× el ruido de

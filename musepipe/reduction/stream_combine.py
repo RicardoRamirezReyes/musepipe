@@ -647,6 +647,9 @@ def load_weight_table(path, *, aperture: str | None = None, kind: str = "measure
         "group": str(group_name),
         "aperture": label,
         "weight_band_A": [float(v) for v in (convention.get("weight_band_A") or ())],
+        # Como se estimo la sigma_i (`x06_sigma_shrink`): un QC anterior a
+        # 2026-09-15 no lo declara y equivale a `none`.
+        "sigma_shrink": str(convention.get("sigma_shrink", "none")),
         "sigma": str(convention.get("sigma")),
         "n_exposures": int(len(weights)),
         "n_eff": apertures[label].get("n_eff_cube" if kind == "cube" else "n_eff"),
