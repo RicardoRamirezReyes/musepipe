@@ -67,6 +67,7 @@ from astropy.io import fits
 # divergirian. Aqui solo queda el CLI y la presentacion.
 from musepipe.growth_curve import (  # noqa: E402
     DEFAULT_FIT_FRACTION,
+    exclude_bands_above,
     measure_growth_curve,
 )
 
@@ -98,6 +99,11 @@ def main(argv=None):
                         help="rango de ajuste del cielo, en fracciones del ultimo anillo completo")
     parser.add_argument("--companion-yx", type=float, nargs=2, default=None,
                         help="posicion del companero EN EL CUBO GRANDE, para enmascararlo")
+    parser.add_argument("--exclude-above-A", type=float, default=None,
+                        help="aparta del factor las bandas a partir de esta lambda (quedan en "
+                             "`excluded_bands` con la razon). Es el remedio del run de una noche sola "
+                             "(2026-08-21) para la banda >8500 A, que rebota por OH y la banda A "
+                             "telurica y hace saltar el guardian de monotonia.")
     args = parser.parse_args(argv)
 
     cube = _resolve_cube(args.run_id, args.project_root, args.cube)
@@ -112,6 +118,13 @@ def main(argv=None):
             companion_yx=args.companion_yx, pixel_scale_arcsec=pix,
         )
 
+    if args.exclude_above_A is not None:
+        result = exclude_bands_above(
+            result, args.exclude_above_A,
+            reason=(f"Banda excluida del factor por --exclude-above-A {args.exclude_above_A:.0f}: rebota "
+                    "sobre el minimo y ahi viven las lineas de OH y la banda A telurica; el rebote no es "
+                    "de binado (run de una noche sola, 2026-08-21: 1.0% con 5 bandas, 3.7% con 8, 4-5% con 10-12). "
+                    "Se recorta la causa en vez de elegir el binado que pasa el guardian."))
     print(f"cubo   : {cube}")
     print(f"estrella en yx = {[round(v, 2) for v in result['star_yx']]}"
           f" | ultimo anillo completo r = {result['r_last_complete_annulus_px']:.0f} px")
@@ -123,6 +136,8 @@ def main(argv=None):
               f"   {row['ratio_min']:.3f} - {row['ratio_max']:.3f}"
               f"   {row['halo_power']:6.3f} {row['sky_floor']:+8.4f}"
               f" {100 * row['tail_fraction']:5.1f}%")
+    for row in result.get("excluded_bands", []):
+        print(f"  {row['wave_A']:8.0f} {row['ratio_total_over_normrad']:8.3f}   EXCLUIDA: {row['reason'][:70]}...")
 
     if args.write_run_product:
         # Producto de run: A2 lo emite cuando corre, pero los runs con perfil

@@ -73,6 +73,19 @@ COMBINE_LAWS = ("invvar", "exptime", "equal", "sum")
 #: con las 29).
 GROUPINGS = ("none", "night")
 
+#: Como se estima la sigma_i con la que `invvar` pesa cada exposicion. `none` es
+#: la dispersion de sus controles tal cual (7 en ROXs 12 b: con 6 grados de
+#: libertad, 22 exposiciones de IGUAL sigma verdadera dan n_eff ~15 y un factor
+#: ~11 entre el mayor y el menor peso solo por el ruido del estimador; medido
+#: en la noche buena de 12 b: n_eff 13.9 y factor 13). `night` sustituye la
+#: parte ruidosa (la sigma de los controles crudos) por la media geometrica de
+#: su noche y deja la apcorr_i de cada exposicion, que es una medida del modelo
+#: de PSF y no del ruido. `auto` encoge cada log-varianza hacia la media de su
+#: noche en la fraccion que la dispersion observada entre exposiciones NO
+#: explica con chi^2_k (James-Stein sobre log s^2): lambda = var_esperada /
+#: var_observada, recortada a [0, 1]. Con lambda = 0 es `none`; con 1, `night`.
+SIGMA_SHRINK_MODES = ("none", "night", "auto")
+
 #: El anillo de fondo de C2, donde vive el default real (el run no suele
 #: declararlo): (r_in, r_out, radio de exclusion de la primaria) en pixeles.
 ANNULUS_BKG_FALLBACK_PX = (8.0, 14.0, 30.0)
@@ -152,6 +165,7 @@ def stage_x06_config_from_run(run_id=None, *, project_root=None, overrides=None,
     cfg.setdefault("x06_group_by", "none")
     cfg.setdefault("x06_combine", "invvar")
     cfg.setdefault("x06_weight_band_A", list(DEFAULT_WEIGHT_BAND_A))
+    cfg.setdefault("x06_sigma_shrink", "none")
     cfg.setdefault("x06_max_workers", DEFAULT_MAX_WORKERS)
     cfg.setdefault("x06_flux_convention", cfg.get("flux_convention", "normrad"))
     if not cfg.get("x06_apertures"):
@@ -163,6 +177,9 @@ def stage_x06_config_from_run(run_id=None, *, project_root=None, overrides=None,
         raise PerExpError(f"`x06_group_by` solo entiende {GROUPINGS}, no {cfg['x06_group_by']!r}.")
     if str(cfg["x06_combine"]) not in COMBINE_LAWS:
         raise PerExpError(f"`x06_combine` solo entiende {COMBINE_LAWS}, no {cfg['x06_combine']!r}.")
+    if str(cfg["x06_sigma_shrink"]) not in SIGMA_SHRINK_MODES:
+        raise PerExpError(
+            f"`x06_sigma_shrink` solo entiende {SIGMA_SHRINK_MODES}, no {cfg['x06_sigma_shrink']!r}.")
     return cfg
 
 
@@ -180,6 +197,66 @@ def group_exposures(exposures, mode):
         noche = str(e.exposure_id).split("_")[0].replace("-", "")
         grupos.setdefault(noche, []).append(i)
     return dict(sorted(grupos.items()))
+
+
+def shrink_sigma_by_night(sigma_peso, sigma_raw, nights, n_controls, mode):
+    """Las sigma_i de `invvar`, con la parte ruidosa encogida hacia su noche.
+
+    `sigma_peso` es la sigma con la que C7 pesa (controles CON la apcorr de la
+    exposicion), `sigma_raw` la misma sigma sobre los controles crudos. La
+    razon entre ambas es la apcorr efectiva de la exposicion en la banda de
+    pesos: se conserva tal cual, porque sale del modelo de PSF y no de 7
+    muestras. Lo que se encoge es `log(sigma_raw^2)`, hacia la media de su
+    noche, en la fraccion `lambda` que `mode` dicta. Devuelve
+    `(sigma_encogida, diagnostico)`; el diagnostico lleva, por noche, la
+    dispersion observada y la esperada de las log-varianzas y el lambda usado,
+    y se publica aunque `mode` sea `none` para que el QC diga si la dispersion
+    de los pesos es ruido del estimador.
+    """
+
+    from scipy.special import polygamma
+
+    if mode not in SIGMA_SHRINK_MODES:
+        raise PerExpError(f"`x06_sigma_shrink` solo entiende {SIGMA_SHRINK_MODES}, no {mode!r}.")
+    sigma_peso = np.asarray(sigma_peso, dtype=np.float64)
+    sigma_raw = np.asarray(sigma_raw, dtype=np.float64)
+    nights = np.asarray([str(n) for n in nights])
+    dof = max(int(n_controls) - 1, 1)
+    # Var[log(chi^2_k / k)] = trigamma(k / 2): la dispersion que tendrian las
+    # log-varianzas de exposiciones con la MISMA sigma verdadera.
+    var_esperada = float(polygamma(1, dof / 2.0))
+    logvar = np.log(np.maximum(sigma_raw, 1e-30) ** 2)
+    encogida = logvar.copy()
+    por_noche = {}
+    for noche in sorted(set(nights.tolist())):
+        idx = np.flatnonzero(nights == noche)
+        n = int(idx.size)
+        media = float(np.mean(logvar[idx]))
+        var_obs = float(np.var(logvar[idx], ddof=1)) if n > 1 else float("nan")
+        if mode == "none":
+            lam = 0.0
+        elif mode == "night":
+            lam = 1.0
+        elif n > 1 and np.isfinite(var_obs) and var_obs > 0:
+            lam = float(np.clip(var_esperada / var_obs, 0.0, 1.0))
+        else:
+            # Una sola exposicion en la noche: no hay hacia donde encoger.
+            lam = 0.0
+        encogida[idx] = (1.0 - lam) * logvar[idx] + lam * media
+        por_noche[noche] = {
+            "n_exposures": n,
+            "lambda": lam,
+            "sd_log_var_observed": float(np.sqrt(var_obs)) if np.isfinite(var_obs) else None,
+            "sd_log_var_expected": float(np.sqrt(var_esperada)),
+            # > 1: hay mas dispersion de la que el estimador explica (sigma
+            # verdaderas distintas); ~1: todo es ruido del estimador.
+            "excess_ratio": (float(np.sqrt(var_obs / var_esperada))
+                             if np.isfinite(var_obs) else None),
+        }
+    factor = np.exp(0.5 * (encogida - logvar))
+    diagnostico = {"mode": mode, "n_controls": int(n_controls), "dof": dof,
+                   "by_night": por_noche}
+    return sigma_peso * factor, diagnostico
 
 
 def combine_measurements(valores, pesos_plan, sigma_peso, ley):
@@ -340,6 +417,7 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
 
     productos, controles_out, qc_grupos = {}, {}, {}
     sel_peso = _banda(wave, banda_peso)
+    modo_shrink = str(cfg["x06_sigma_shrink"])
     for grupo, idx in grupos.items():
         pesos_plan = np.asarray([filas[i]["weight"] for i in idx], dtype=np.float64)
         qc_apert = {}
@@ -355,7 +433,43 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
             # que se esta midiendo: eso ultimo infla la S/N por auto-seleccion.
             sigma_peso = np.asarray(
                 [np.nanstd(np.nanmedian(c[:, sel_peso], axis=1)) for c in ctrls])
-            w, escala = combine_measurements(objetos, pesos_plan, sigma_peso, ley)
+            # El MISMO 1/sigma^2 pero sobre los controles CRUDOS (sin la apcorr
+            # de cada exposicion). Se publica como DIAGNOSTICO (`n_eff_cube`,
+            # `weight_share_by_night.invvar_cube`), no como peso del combinado:
+            # el 2026-09-14 (via B, ronda 2) se probo como tabla del cubo con la
+            # hipotesis de que `w` castigaba de mas por apcorr_i^2, y devolvio a
+            # la noche mala el 49 % del peso (2.4 % con `w`) sin recuperar n_eff
+            # (15.8 de 29 contra 13.9). El peso que le corresponde al cubo es
+            # `w`: (S_i/sigma_i)^2 = 1/(apcorr_i * sigma_raw_i)^2, la S/N de cada
+            # exposicion en el companero — una PSF mala tiene poco ruido en la
+            # caja en unidades de cubo, y tambien poca senal.
+            sigma_cubo = np.asarray(
+                [np.nanstd(np.nanmedian((c / a[None, :])[:, sel_peso], axis=1))
+                 for c, a in zip(ctrls, apcorrs)])
+            w_cubo, _ = combine_measurements(objetos, pesos_plan, sigma_cubo, "invvar")
+            # La sigma_i que pesa, con su parte ruidosa (la de los controles
+            # crudos) encogida hacia su noche segun `x06_sigma_shrink`. Con
+            # `none` es `sigma_peso` tal cual. Los n_eff con los TRES modos se
+            # publican siempre: son la prueba barata de si la dispersion de los
+            # pesos dentro de una noche es ruido del estimador (via B, punto 2).
+            noches = [str(filas[i]["exposure_id"]).split("_")[0].replace("-", "") for i in idx]
+            sigma_usada, shrink = shrink_sigma_by_night(
+                sigma_peso, sigma_cubo, noches, len(controles), modo_shrink)
+            w, escala = combine_measurements(objetos, pesos_plan, sigma_usada, ley)
+            n_eff_por_modo, reparto_por_modo = {}, {}
+            for modo in SIGMA_SHRINK_MODES:
+                s_m, _ = shrink_sigma_by_night(sigma_peso, sigma_cubo, noches, len(controles), modo)
+                w_m, _ = combine_measurements(objetos, pesos_plan, s_m, "invvar")
+                n_eff_por_modo[modo] = float(1.0 / np.nansum(w_m ** 2))
+                reparto_por_modo[modo] = {
+                    noche: {"share": float(np.nansum(w_m[sel])),
+                            # n_eff DENTRO de la noche: pesos renormalizados a ella.
+                            "n_eff_within": float(np.nansum(w_m[sel]) ** 2 / np.nansum(w_m[sel] ** 2))}
+                    for noche in sorted(set(noches))
+                    for sel in [np.asarray([n == noche for n in noches])]
+                }
+            shrink["n_eff_by_mode"] = n_eff_por_modo
+            shrink["by_night_by_mode"] = reparto_por_modo
 
             flujo = escala * np.nansum(w[:, None] * objetos, axis=0)
             crudo = escala * np.nansum(w[:, None] * crudos, axis=0)
@@ -387,6 +501,7 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
                 "GROUP": grupo,
                 "NEXP": int(len(idx)),
                 "WBAND": f"{float(banda_peso[0]):.1f}-{float(banda_peso[1]):.1f}",
+                "WSHRINK": modo_shrink,
                 "POSFRAME": "plan_window",
                 "NCTRL": int(len(controles)),
                 "EXPIDS": ",".join(filas[i]["exposure_id"] for i in idx)[:60],
@@ -414,6 +529,19 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
                 "n_exposures": int(len(idx)),
                 "weights_normalised": {filas[i]["exposure_id"]: float(x) for i, x in zip(idx, w)},
                 "n_eff": float(1.0 / np.nansum(w ** 2)),
+                # Diagnostico (`stream_combine --weight-kind cube`): 1/sigma^2 de
+                # los controles crudos, sin apcorr. NO es lo que combina este
+                # producto ni lo que le corresponde al cubo (ver arriba).
+                "weights_cube_normalised": {filas[i]["exposure_id"]: float(x) for i, x in zip(idx, w_cubo)},
+                "n_eff_cube": float(1.0 / np.nansum(w_cubo ** 2)),
+                # La sigma_i de cada exposicion en la banda de pesos (con la
+                # apcorr de la exposicion, y cruda), para que la dispersion de
+                # los pesos se pueda auditar sin re-extraer.
+                "sigma_weight_by_exposure": {filas[i]["exposure_id"]: float(x)
+                                             for i, x in zip(idx, sigma_peso)},
+                "sigma_raw_weight_by_exposure": {filas[i]["exposure_id"]: float(x)
+                                                 for i, x in zip(idx, sigma_cubo)},
+                "sigma_shrink": shrink,
                 "apcorr_median": float(np.nanmedian(apcorr)),
                 "sigma_median": float(np.nanmedian(sigma)),
                 "flux_median": float(np.nanmedian(flujo)),
@@ -435,10 +563,20 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
         ctrls0 = np.asarray([f["apertures"][etiqueta0]["controls"] for f in filas])
         sigma0 = np.asarray([np.nanstd(np.nanmedian(c[:, sel_peso], axis=1)) for c in ctrls0])
         pesos0 = np.asarray([f["weight"] for f in filas], dtype=np.float64)
+        apc0 = np.asarray([f["apertures"][etiqueta0]["apcorr"] for f in filas])
+        sigma_c0 = np.asarray([np.nanstd(np.nanmedian((c / a[None, :])[:, sel_peso], axis=1))
+                               for c, a in zip(ctrls0, apc0)])
+        noches0 = [str(f["exposure_id"]).split("_")[0].replace("-", "") for f in filas]
+        # La misma sigma_i (encogida o no) que pesa el producto: `invvar` aqui
+        # es la ley del producto, no otra.
+        sigma0, _ = shrink_sigma_by_night(sigma0, sigma_c0, noches0, len(controles), modo_shrink)
         for otra in COMBINE_LAWS:
             w, _ = combine_measurements(filas, pesos0, sigma0, otra)
             reparto[otra] = {noche: float(np.nansum(w[idx]))
                              for noche, idx in group_exposures(obs.exposures, "night").items()}
+        w, _ = combine_measurements(filas, pesos0, sigma_c0, "invvar")
+        reparto["invvar_cube"] = {noche: float(np.nansum(w[idx]))
+                                  for noche, idx in group_exposures(obs.exposures, "night").items()}
         open_issues.append(
             "Las exposiciones se combinan sin agrupar y el run tiene mas de una noche: "
             "`weight_share_by_night` dice cuanto peso se lleva cada una con cada ley."
@@ -467,7 +605,13 @@ def compute_stage_x06_products(config, paths=None) -> StageX06Product:
             "flux_convention": flux_convention,
             "group_by": str(cfg["x06_group_by"]),
             "combine": ley,
+            # La ley `exptime` NO lee EXPTIME: usa el `weight` del plan del
+            # combinado, que es `exptime` solo si el cubo se peso asi. Con un
+            # cubo pesado por varianza (`invvar` en el plan) esa ley reproduce
+            # los pesos del cubo, y esto dice cuales son.
+            "plan_weight_mode": str(obs.plan.weight_mode),
             "weight_band_A": [float(x) for x in banda_peso],
+            "sigma_shrink": modo_shrink,
             "n_controls": int(len(controles)),
             "sigma": "dispersion de los controles combinados con los mismos pesos",
         },
@@ -516,6 +660,10 @@ def main(argv=None):
                         help="`night` entrega un producto por noche.")
     parser.add_argument("--combine", choices=list(COMBINE_LAWS), default=None,
                         help="ley de combinacion de las medidas.")
+    parser.add_argument("--sigma-shrink", choices=list(SIGMA_SHRINK_MODES), default=None,
+                        help="como se estima la sigma_i de `invvar`: `none` (sus controles "
+                             "tal cual), `night` (la de su noche) o `auto` (encogida en la "
+                             "fraccion que el estimador no explica).")
     parser.add_argument("--jobs", type=int, default=None)
     args = parser.parse_args(argv)
     overrides = {}
@@ -523,6 +671,8 @@ def main(argv=None):
         overrides["x06_group_by"] = args.group_by
     if args.combine:
         overrides["x06_combine"] = args.combine
+    if args.sigma_shrink:
+        overrides["x06_sigma_shrink"] = args.sigma_shrink
     if args.jobs:
         overrides["x06_max_workers"] = int(args.jobs)
     out = run_stage_x06(run_id=args.run_id, project_root=args.project_root,
@@ -535,6 +685,7 @@ def main(argv=None):
 __all__ = [
     "COMBINE_LAWS",
     "GROUPINGS",
+    "SIGMA_SHRINK_MODES",
     "PerExpError",
     "StageX06Product",
     "combine_measurements",
@@ -543,6 +694,7 @@ __all__ = [
     "group_exposures",
     "main",
     "run_stage_x06",
+    "shrink_sigma_by_night",
     "stage_x06_config_from_run",
     "stage_x06_paths",
     "write_stage_x06_products",
