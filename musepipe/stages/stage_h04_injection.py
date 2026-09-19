@@ -19,7 +19,7 @@ from ..extraction.product import SpectrumProduct
 from ..injection import InjectionSource, create_run_clone, inject, tree_sha256
 from ..io import read_json, read_wavelength_axis, write_csv, write_json
 from ..paths import RunPaths
-from ..spectral import continuum_running_median as _CONTINUUM_RUNMED
+from ..spectral import continuum_running_median as _CONTINUUM_RUNMED, resolve_lsf_fwhm_A
 from ..stats import empirical_z, finite_values, robust_sigma, robust_sigma_axis0
 from .stage08c_look_elsewhere import empirical_fap
 from .stage_h01_detect import BAD_DETECTION_FLAGS, HALPHA_REST_A, matched_filter_point
@@ -927,15 +927,19 @@ def close_runtime_budget(budget, elapsed_seconds):
 
 
 def _lsf_fwhm_from_config_or_qc(config, paths=None):
-    for key in ("h04_lsf_fwhm_A", "h01_lsf_fwhm_A", "lsf_fwhm_A"):
-        if config.get(key) is not None:
-            return float(config[key]), f"config.{key}"
+    """FWHM de la LSF en Halpha, por el resolutor UNICO del proyecto.
+
+    Era el cuarto buscador privado de la LSF, y con el mismo agujero que tenian
+    los otros tres: su lista de claves de A4/M2 no incluia `lsf_fwhm_at_halpha_A`,
+    que es la que A4 escribe de verdad. Mientras el config declarase
+    `h01_lsf_fwhm_A` no se notaba -el knob declarado gana por diseno-, pero un run
+    que no lo declarara habria reventado con A4/M2 medida en disco. Ver
+    `docs/2026-09-16_lsf_del_canonico.md` y el mismo arreglo en G2.
+
+    `h04_lsf_fwhm_A` sigue teniendo prioridad sobre `h01_lsf_fwhm_A`, como antes.
+    """
     qc = _read_optional_json(paths["stage00q_qc_json"]) if paths is not None else None
-    m2 = (qc or {}).get("m2_lsf", {})
-    for key in ("fwhm_at_halpha_A", "halpha_fwhm_A", "lsf_fwhm_A"):
-        if m2.get(key) is not None:
-            return float(m2[key]), f"stage00q_qc.m2_lsf.{key}"
-    raise RuntimeError("H04 requires LSF FWHM at Halpha from config or stage00q QC.")
+    return resolve_lsf_fwhm_A(qc or {}, config, stage_key="h04_lsf_fwhm_A")
 
 
 def _line_center_from_config(config):
@@ -1611,6 +1615,43 @@ def _v5_continuum(rows, methods, continuum_info):
     }
 
 
+
+def _injection_scale_qc(config, paths=None):
+    """Con que vara se mide `input_snr`, para que el producto se pueda leer solo.
+
+    `input_snr` NO es una S/N por spaxel ni una S/N del cubo: es el flujo TOTAL de
+    linea en unidades de `sigma_flux`, y `sigma_flux` se calibra inyectando una
+    fuente brillante EN LA POSICION DEL COMPANERO y midiendola con el estimador de
+    E1 sobre el espectro que devuelve el metodo de referencia
+    (`_derive_injection_sigma`). La completitud, en cambio, se evalua en las
+    posiciones de CONTROL, donde ese sigma es mucho menor: medido el 2026-09-17,
+    9.2x en ROXs 12 b y 4.8x en ROXs 42B b. Por eso se recupera la mitad de las
+    fuentes con `input_snr` < 1, y por eso hay que declararlo aqui: hasta hoy
+    `h04_sigma_calibration` se calculaba, se guardaba en `cfg` y no llegaba al QC,
+    asi que el numero solo se podia interpretar leyendo el codigo.
+    """
+    calib = config.get("h04_sigma_calibration")
+    sigma = config.get("h04_injection_flux_sigma")
+    try:
+        lsf, lsf_source = _lsf_fwhm_from_config_or_qc(config, paths)
+    except Exception as exc:  # noqa: BLE001
+        lsf, lsf_source = None, f"no resoluble: {exc}"
+    return {
+        "input_snr_unit": "total_line_flux / sigma_flux",
+        "sigma_flux": float(sigma) if sigma is not None else None,
+        "sigma_flux_source": ("calibration_injection_at_companion_position" if calib
+                              else "declared:h04_injection_flux_sigma"),
+        "sigma_flux_calibration": calib,
+        "completeness_measured_at": "control_positions",
+        "lsf_fwhm_A": float(lsf) if lsf is not None else None,
+        "lsf_fwhm_A_source": str(lsf_source),
+        "line_center_A": _line_center_from_config(config),
+        "note": ("`input_snr` esta en sigmas del filtro adaptado EN LA POSICION DEL "
+                 "COMPANERO; la completitud se mide en los controles, donde el ruido es "
+                 "menor. No es una S/N por spaxel ni del array de varianza del "
+                 "instrumento."),
+    }
+
 def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, continuum_info, null_reference):
     threshold = float(config.get("h04_detection_threshold_snr", 5.0))
     standardization = str(config.get("h04_snr_standardization", "none"))
@@ -1672,6 +1713,7 @@ def _qc_from_rows(config, paths, rows, methods, cases, budget, regression, conti
         },
         "runtime_budget": budget,
         "psf_provenance": config.get("h04_psf_provenance"),
+        "injection_scale": _injection_scale_qc(config, paths),
         "continuum_injection": continuum_info,
         "empirical_null_reference": {
             method: {
