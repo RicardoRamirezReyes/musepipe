@@ -19,6 +19,7 @@ from ..config import load_run_config
 from ..io import load_calibrated_controls
 from ..lines import measure_catalog
 from ..paths import RunPaths
+from ..spectral import resolve_lsf_fwhm_A
 from ..stages.stage07_accretion_lines import default_accretion_lines
 
 TABLE_FIELDS = [
@@ -104,14 +105,58 @@ def _load_spectrum(path):
     return wave, flux, ferr, flags
 
 
+#: cuanto puede separarse el knob declarado de la medida de A4/M2 antes de que G2
+#: levante un issue. No es una tolerancia fisica: es "el numero declarado y el
+#: medido describen el mismo cubo o no".
+LSF_DECLARED_VS_M2_TOL = 0.01
+
+
+def _lsf_de_a4(qc00):
+    """La LSF que A4/M2 mide, o `None` si este run no la tiene.
+
+    Se pregunta al resolutor compartido con un config VACIO para que solo pueda
+    contestar con la medida.
+    """
+    try:
+        return resolve_lsf_fwhm_A(qc00, {})
+    except RuntimeError:
+        return None
+
+
 def _resolve_lsf(cfg, qc00):
-    m2 = (qc00 or {}).get("m2_lsf", {})
-    if isinstance(m2, dict) and m2.get("status") == "ok" and m2.get("fwhm_A") is not None:
-        return float(m2["fwhm_A"]), "stage00q_qc.m2_lsf"
-    for key in ("g2_lsf_fwhm_A", "h01_lsf_fwhm_A", "lsf_fwhm_A"):
-        if cfg.get(key) is not None:
-            return float(cfg[key]), f"config.{key}(estimate; A4 M2 unavailable)"
-    raise RuntimeError("G2 requires an LSF: A4 M2 is unavailable and no config LSF is set (spec §2.3 stop).")
+    """FWHM de la LSF para G2, por el resolutor compartido, y su aviso.
+
+    Devuelve `(valor, procedencia, issue|None)`. G2 tenia el **tercer** buscador
+    privado del proyecto y no acertaba ninguna de las dos claves que A4 escribe
+    (`m2_lsf.lsf_fwhm_at_halpha_A`, con `status` "yellow" y no "ok"), asi que su
+    rama de medida no podia dispararse nunca y **siempre** caia al config
+    anunciandolo como «A4 M2 unavailable». En tres de los cuatro runs eso no se
+    veia porque el config llevaba a mano el valor de M2; en el canonico de
+    ROXs 12 b declaraba 2.383 A -medido en julio de 2026- contra los 2.2849 que
+    su propio A4 mide desde el 2026-08-25.
+
+    El orden lo pone `resolve_lsf_fwhm_A`: **el declarado gana sobre el medido**,
+    que es la convencion del proyecto (igual que `resolve_flux_unit` y
+    `_wavelength_frame`) para que un run pueda congelar el numero que publico.
+    Lo que aqui se anade es que, si el declarado se separa de la medida, se
+    **dice**: hasta ahora un config de otra cosecha entraba en silencio.
+    """
+    value, source = resolve_lsf_fwhm_A(qc00, cfg, stage_key="g2_lsf_fwhm_A")
+    medido = _lsf_de_a4(qc00)
+    if medido is None:
+        return value, source, {
+            "issue": f"LSF from {source}; A4 M2 is not measured in this run (spec §2.3 would stop). Provisional.",
+            "priority": "major",
+        }
+    if source.startswith("config.") and abs(value / medido[0] - 1.0) > LSF_DECLARED_VS_M2_TOL:
+        return value, source, {
+            "issue": (f"Declared LSF {source}={value:.4f} A differs by "
+                      f"{100.0 * (value / medido[0] - 1.0):+.2f} pct from A4/M2 "
+                      f"({medido[1]}={medido[0]:.4f} A): the declared value wins by convention, "
+                      "but one of the two describes another vintage of this run."),
+            "priority": "major",
+        }
+    return value, source, None
 
 
 def _empirical_scale_block(measurements, control_source):
@@ -158,7 +203,7 @@ def compute_stage_g2(cfg, paths):
     h01 = _read_optional(paths["stage_h01_qc_json"]) or {}
 
     wave, flux, ferr, flags = _load_spectrum(paths["spectrum_fits"])
-    lsf_fwhm, lsf_source = _resolve_lsf(cfg, qc00)
+    lsf_fwhm, lsf_source, lsf_issue = _resolve_lsf(cfg, qc00)
     catalog = cfg.get("g2_line_catalog", default_accretion_lines())
     vsys = float(cfg.get("h03_rv_sys_kms", cfg.get("h01_rv_sys_kms", 0.0)))
     wl_cal_err = float(cfg.get("g2_wl_cal_err_kms", 0.0))
@@ -168,8 +213,8 @@ def compute_stage_g2(cfg, paths):
     seed = int(cfg.get("g2_seed", 0))
 
     open_issues = []
-    if "estimate" in lsf_source:
-        open_issues.append({"issue": f"LSF from {lsf_source}; A4 M2 not measured (spec §2.3 would stop). Provisional.", "priority": "major"})
+    if lsf_issue is not None:
+        open_issues.append(lsf_issue)
     if wl_cal_err == 0.0:
         open_issues.append({"issue": "Wavelength-calibration RV error unavailable (A4 M1); RV errors omit the λ-cal term.", "priority": "major"})
     if "default" in throughput_source:
