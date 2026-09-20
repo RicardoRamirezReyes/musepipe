@@ -62,9 +62,34 @@ Reutiliza, sin duplicar:
 
 ## 5 · Verificación
 
-- **V1 — Ancla contra E4**: con una sola exposición y sin agrupar, la fila tiene que reproducir lo
-  que E4 daría sobre ese mismo cubo. Es lo que hace honesto llamarlo «la misma medida, otro
-  sustrato».
+- **V1 — Convenciones compartidas con E4** *(reescrita el 2026-09-20; antes decía «ancla contra
+  E4»)*. Lo que se comprueba es que las dos etapas usan **la misma rejilla de casos, el mismo
+  estimador, las mismas posiciones y el mismo resolutor de la LSF** — no que den el mismo número.
+
+  **Por qué cambió.** La redacción anterior pedía que, con una sola exposición y sin agrupar, la
+  fila reprodujera «lo que E4 daría sobre ese mismo cubo». Medido el 2026-09-19, eso **no puede
+  dar cero**, porque las dos etapas no extraen igual:
+
+  | | E4 (combinado) | E4b (por exposición) |
+  |---|---|---|
+  | `aperture` | resta la superficie local de 04b, luego box3 | box3 + **fondo de anillo** |
+  | error por canal | STAT del run con sus factores | dispersión entre los controles de esa exposición |
+  | escala de flujo | **cruda** del extractor, sin `apcorr` (§`resolve_continuum_injection`) | con `apcorr` aplicada |
+
+  Sobre el **mismo** cubo esos caminos difieren un **39 %** en mediana con `aperture` y más con
+  `psffit`. Quien corriera la V1 antigua leería ese 39 % como «el sustrato por exposición es malo»,
+  cuando es la receta. Las tres divergencias son **de diseño**, no bugs: E4b se hizo barata y
+  autónoma a propósito.
+
+  **Y el ancla ya no habilita nada.** Servía para poder poner un número de E4b al lado de uno de
+  E4; esa comparación está hecha por otro camino —`scripts/niveles_inyeccion.py`, que unifica la
+  receta y varía solo el sustrato— y publicada en `docs/2026-09-18_nivel_de_inyeccion_e4.md` §4:
+  el combinado sobreestima el flujo recuperado un **2.9 %**, y en S/N el nivel por exposición gana
+  2.9× (ROXs 12 b) y 1.75× (ROXs 42B b) **por la ponderación**, no por el sustrato.
+
+  **Cuándo habría que volver al ancla**: el día que una cifra de E4b entre en una publicación.
+  Mientras sea producto de referencia, basta con declarar su escala (`input_snr` en sigmas de cada
+  exposición, §4). `tests/test_e4b_v1_convenciones.py` fija esta versión.
 - **V2 — Señal nula es señal nula**: con `input_snr=0` el flujo inyectado tiene que ser
   **exactamente** `0.0` en todas las exposiciones. Es la definición que hace del punto SNR=0 una
   medida de falsos positivos y no un relleno.
