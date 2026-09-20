@@ -15,13 +15,15 @@
   "note": "Primer objeto de la cadena. display_name se usa en la prosa de los informes. `primary_display_name` es la estrella que domina el cubo; `display_name` es el compañero, que es de quien va el run.",
   "primary_display_name": "ROXs 12 A",
   "paper": {
-    "run": "ROXs12b_OB3445598",
+    "run": "ROXs12b_invvar",
     "order": 1,
-    "note": "noche 1 sola: en el combinado los 33 controles tienen +2.7 sigma de modo comun -halo de Halpha de la primaria- que no se separa de la companera (docs/2026-09-03_handoff.md §2)",
+    "note": "cubo `invvar` (2026-09-20, decision del usuario). Antes se publicaba sobre `ROXs12b_OB3445598` -la noche buena sola- porque en el combinado por `exptime` los 33 controles tienen modo comun de +2.7 sigma, el halo de Halpha de la primaria repartido por el anillo (docs/2026-09-03_handoff.md §2). Medido el 2026-09-20: ese modo comun es de la NOCHE MALA (+4.2 sigma ella sola) y el cubo `invvar`, que le da el 0.5 % del peso, NO lo tiene: controles -12 +-283, -0.24 sigma, razon compañera/controles 180 contra 130 de la noche buena. Ademas el limite baja un 9.4 % (2.747e-14 contra 3.033e-14) y la FAP de aperture mejora 12x. docs/2026-09-20_invvar_contra_noche_buena.md y docs/2026-09-20_invvar_pasa_a_publicacion.md",
     "display": "ROXs 12 b",
     "second_epoch_run": "ROXs12b_OB3444577",
     "second_epoch_note": "OB 3444577, 2022-08-31, 7 exposiciones: la noche de peor calidad (seeing 0.84 frente a 0.57, tau0 2.1 frente a 6.6 ms, ruido en Halpha 18.8x peor). No se publica sobre ella; se usa para ensenar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
-    "spt_source_dir": "g3_real_avwide_20260904T025945",
-    "spt_source_note": "Reintento del 2026-09-04: eje de A_V ensanchado a [0,10] (antes quedaba pegado al borde en 5.0) y LSF corregida a 2.2953, que entra en la convolucion de las plantillas. El tipo espectral no se movio (M7.5 joven) y el ajuste atmosferico sigue fallando su puerta por chi2 (11.23 contra 3.0), ahora SIN tocar borde. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos."
+    "spt_source_dir": "g3_real_invvar_20260920T095520",
+    "spt_source_note": "Ajuste de plantillas corrido sobre el cubo de publicacion (`invvar`) el 2026-09-20, con el eje de A_V a [0,10] y la LSF que ESE run declara (2.2849). El tipo espectral no se mueve respecto al de la noche buena: M7.5 joven en los dos, indice 6.184+-0.332 contra 6.156+-0.371. El ajuste atmosferico sigue fallando su puerta por chi2 (12.77 aqui contra 11.23 alli, umbral 3.0) y da av=5.5 contra 5.3. Se declara para que la figura no dependa del orden alfabetico de los archivos.",
+    "previous_run": "ROXs12b_OB3445598",
+    "previous_run_note": "La noche buena sola, run de publicacion hasta el 2026-09-20. Se cita en el paper como control de robustez: el resultado se mantiene descartando la noche ruidosa, con Mdot < 3.0e-14 en vez de 2.7e-14. La Figura 2 congelada (tag fondecyt-fig2-v1) sale de su cosecha de 11 controles, respaldada en stages/e4_11controles_respaldo/."
   }
 }
