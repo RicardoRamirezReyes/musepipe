@@ -21,9 +21,10 @@ from ..models import validate_label
 from ..models.btsettl import BTSettlLibrary
 from ..models.extinction import CCMExtinction
 from ..models.fit import fit_grid_3d
-from ..models.manifest import (library_is_complete, library_provenance,
-                               library_root)
-from ..models.observed import fit_spectrum
+from ..models.libraries import data_frame, resolve_declaration
+from ..models.manifest import (LIBRARY_SUBDIRS, library_is_complete,
+                               library_provenance, library_root)
+from ..models.observed import fit_spectrum, load_fit_inputs
 from ..paths import RunPaths
 from .stage_g3_accretion import TABLE_FIELDS
 
@@ -52,6 +53,33 @@ def _library_block(cfg, citation):
                                ("grid", "family", "metallicity", "n_nodes",
                                 "partial", "n_failed", "downloaded_utc")}
     return block
+
+
+def atmosphere_declaration(cfg):
+    """Declaración (marco, resolución, cita) de la rejilla atmosférica.
+
+    Entrada opcional ``g3_atmosphere_library`` en el config (mismos campos que
+    las de ``g3_template_libraries``); si no, la de ``bt-settl-cifist`` leída de
+    su PROVENANCE.json y de los defaults documentados (nítida, vacío).
+    """
+    entry = dict(cfg.get("g3_atmosphere_library") or {})
+    entry.setdefault("name", LIBRARY_SUBDIRS["bt-settl"])
+    entry.setdefault("subdir", LIBRARY_SUBDIRS["bt-settl"])
+    try:
+        root = library_root(cfg, project_root=cfg.get("project_root"))
+        family = root / entry["subdir"]
+    except RuntimeError:
+        family = Path("/nonexistent")  # sin biblioteca: defaults documentados
+    return resolve_declaration(entry, family)
+
+
+def _prep_kwargs(decl, cfg):
+    r, fw = decl.resolution_for(None)
+    if fw is not None:
+        raise RuntimeError(f"{decl.name}: la rejilla atmosférica declara FWHM fija; "
+                           "declárese R o 'sharp'")
+    return {"template_R": r, "template_frame": decl.wave_frame,
+            "data_frame": data_frame(cfg)}
 
 
 def stage_g3_atmo_fit_paths(run_id, project_root=None):
@@ -92,7 +120,7 @@ def _interval_row(prop, best, interval, base_label, *, unit, cite, depends,
 
 
 def compute_stage_g3_atmo_fit(cfg, paths, *, fit_spec=None, fit_spec_full=None,
-                              library=None):
+                              library=None, declaration=None, fit_spec_binned=None):
     lsf = float(cfg["h01_lsf_fwhm_A"])
     ext = CCMExtinction(rv=float(cfg.get("h03_rv_extinction", 3.1)),
                         citation=cfg.get("h03_extinction_law_citation", "Cardelli+1989"))
@@ -103,22 +131,33 @@ def compute_stage_g3_atmo_fit(cfg, paths, *, fit_spec=None, fit_spec_full=None,
     sysfrac = float(cfg.get("g3_sys_fluxcal_frac", 0.10))
     if fit_spec is None:
         fit_spec = fit_spectrum(cfg, paths["paths"])
+    library_injected = library is not None
     if library is None:
         root = library_root(cfg, project_root=cfg["project_root"])
         library = BTSettlLibrary(root / "bt-settl-cifist",
                                  citation=cfg.get("g3_atmosphere_citation", "Allard et al. 2012"),
                                  version=cfg.get("g3_atmosphere_version"))
 
+    injected_undeclared = declaration is None and library_injected
+    decl = (declaration if declaration is not None
+            else None if injected_undeclared else atmosphere_declaration(cfg))
+    # Una rejilla sintética inyectada sin declaración (tests) conserva la regla
+    # histórica; la real SIEMPRE va con su declaración (marco + R).
+    prep_kw = ({"template_R": None, "template_frame": None, "data_frame": None}
+               if decl is None else _prep_kwargs(decl, cfg))
+
     def run(fs, veiling=False):
         return fit_grid_3d(fs, library, ext, teff_axis=teff_axis, logg_axis=logg_axis,
                            av_axis=av_axis, lsf_fwhm_A=lsf, chi2red_inflate_threshold=infl,
                            sys_fluxcal_frac=sysfrac, veiling=veiling,
                            veiling_alpha_axis=cfg.get("g3_veiling_alpha_axis",
-                                                      (-2.0, -1.0, 0.0, 1.0, 2.0)))
+                                                      (-2.0, -1.0, 0.0, 1.0, 2.0)),
+                           **prep_kw)
 
     primary = run(fit_spec)
     veil = run(fit_spec, veiling=True) if cfg.get("g3_veiling_variant", True) else None
     full = run(fit_spec_full) if fit_spec_full is not None else None
+    binned = run(fit_spec_binned) if fit_spec_binned is not None else None
 
     # systematics on Teff / A_V from the variants
     def sys_of(key):
@@ -169,6 +208,30 @@ def compute_stage_g3_atmo_fit(cfg, paths, *, fit_spec=None, fit_spec_full=None,
             "full_range": None if full is None else {"teff_best": full["teff_best"],
                                                      "av_best": full["av_best"],
                                                      "chi2_min": full["chi2_min"]},
+        },
+        # La prueba de ESTA biblioteca (plan 2026-09-23): procedencia + resultado
+        # + borde; la variante binada (Q4) aparte, nunca promediada.
+        "library_test": {
+            "provenance": (decl.to_qc() if decl is not None
+                           else {"name": "injected library (undeclared, synthetic)"}),
+            "resolution": {"label": "MUSE LSF (template degraded)", "data_lsf_fwhm_A": lsf,
+                           "template_R": prep_kw["template_R"],
+                           "template_frame": prep_kw["template_frame"],
+                           "data_frame": prep_kw["data_frame"]},
+            "fit_bin_channels": getattr(fit_spec, "bin_channels", None),
+            "result": {k: primary[k] for k in ("teff_best", "logg_best", "av_best",
+                                               "chi2_min", "chi2_red", "ndof", "n_bins",
+                                               "n_eff")}
+            | {"intervals": {"teff": primary["teff_interval"],
+                             "logg": primary["logg_interval"],
+                             "av": primary["av_interval"]},
+               "edge": primary["edge"], "edge_touch_3sigma": primary["edge_touch"]},
+            "sensitivity_binned": None if binned is None else {
+                "label": "Q4: binned sensitivity variant; never averaged",
+                "fit_bin_channels": getattr(fit_spec_binned, "bin_channels", None),
+                "result": {k: binned[k] for k in ("teff_best", "logg_best", "av_best",
+                                                  "chi2_min", "chi2_red", "ndof")}
+                | {"edge": binned["edge"]}},
         },
     }
     return rows, qc, primary
@@ -229,13 +292,18 @@ def run_stage_g3_atmo_fit(run_id=None, *, project_root=None, overrides=None,
     cfg["run_id"] = rc.run_id
     cfg["project_root"] = str(rc.paths.project_root)
     paths = stage_g3_atmo_fit_paths(cfg["run_id"], project_root=cfg["project_root"])
-    fit_spec = fit_spectrum(cfg, paths["paths"])
+    inputs = load_fit_inputs(cfg, paths["paths"])
+    fit_spec = fit_spectrum(cfg, paths["paths"], inputs=inputs)
     full_cfg = dict(cfg)
     full_cfg["g3_fit_wave_range_A"] = cfg.get("g3_fit_wave_range_full_A",
                                               cfg.get("g3_fit_wave_range_A"))
-    fit_spec_full = fit_spectrum(full_cfg, paths["paths"])
+    fit_spec_full = fit_spectrum(full_cfg, paths["paths"], inputs=inputs)
+    n_sens = int(cfg.get("g3_fit_bin_channels_sensitivity", 20))
+    fit_spec_binned = (fit_spectrum(cfg, paths["paths"], inputs=inputs, n_channels=n_sens)
+                       if n_sens != fit_spec.bin_channels else None)
     rows, qc, primary = compute_stage_g3_atmo_fit(
-        cfg, paths, fit_spec=fit_spec, fit_spec_full=fit_spec_full)
+        cfg, paths, fit_spec=fit_spec, fit_spec_full=fit_spec_full,
+        fit_spec_binned=fit_spec_binned)
     written = write_stage_g3_atmo_fit(rows, qc, primary, paths)
     return {"config": cfg, "paths": paths, "qc": qc, "written": written}
 

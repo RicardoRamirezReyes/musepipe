@@ -30,7 +30,7 @@ class EmpiricalTemplateLibrary:
     """Empirical template library adapter (``SpectralLibrary``)."""
 
     def __init__(self, family_dir, *, gravity_class, citation, version,
-                 resolution_fwhm_A=None):
+                 resolution_fwhm_A=None, declaration=None):
         if gravity_class not in _GRAVITY_CLASSES:
             raise RuntimeError(
                 f"gravity_class must be one of {_GRAVITY_CLASSES}, got {gravity_class!r}")
@@ -43,6 +43,11 @@ class EmpiricalTemplateLibrary:
         self.version = version
         self.resolution_fwhm_A = (float(resolution_fwhm_A)
                                   if resolution_fwhm_A is not None else None)
+        #: :class:`musepipe.models.libraries.LibraryDeclaration` (marco, R, cita
+        #: …). Las etapas de G3 la exigen; los llamadores sintéticos pueden
+        #: omitirla.
+        self.declaration = declaration
+        self.name = declaration.name if declaration is not None else self.family_dir.name
         self.manifest_info = verify_manifest(self.family_dir)
 
         # {spt_code -> [(path, source_meta), ...]}; several objects may share a
@@ -61,11 +66,27 @@ class EmpiricalTemplateLibrary:
     def grid(self) -> dict:
         return {"spt": self._codes.copy()}
 
+    def n_by_spt(self) -> dict:
+        """Número de espectros por subtipo (procedencia del QC)."""
+        return {spt_label(c): len(self._by_code[c]) for c in self._codes}
+
+    def entries(self) -> list:
+        """Todos los espectros: ``[(spt_code, path, source_meta), ...]`` ordenados."""
+        return [(float(c), path, meta) for c in self._codes
+                for path, meta in self._by_code[c]]
+
+    def load_entry(self, code, path, src_meta) -> TemplateSpectrum:
+        """Un espectro concreto (no solo el primero de su subtipo)."""
+        return self._spectrum(float(code), float(code), path, src_meta)
+
     def get(self, *, spt, **_) -> TemplateSpectrum:
         code = spt_code(spt) if isinstance(spt, str) else float(spt)
         i = int(np.argmin(np.abs(self._codes - code)))
         nearest = float(self._codes[i])
         path, src_meta = self._by_code[nearest][0]
+        return self._spectrum(nearest, code, path, src_meta)
+
+    def _spectrum(self, nearest, code, path, src_meta) -> TemplateSpectrum:
         spec = load_spectrum_npz(path)
         fwhm = src_meta.get("resolution_fwhm_A", self.resolution_fwhm_A)
         meta = {
@@ -78,7 +99,13 @@ class EmpiricalTemplateLibrary:
             "citation": self.citation,
             "resolution_fwhm_A": fwhm,
             "n_at_spt": len(self._by_code[nearest]),
+            "source_npz": Path(path).name,
         }
+        if self.declaration is not None:
+            r, fw = self.declaration.resolution_for(src_meta)
+            meta["declared_resolution_R"] = r
+            meta["declared_resolution_fwhm_A"] = fw
+            meta["declared_wave_frame"] = self.declaration.wave_frame
         return TemplateSpectrum(spec.wave_A, spec.flux, meta)
 
 

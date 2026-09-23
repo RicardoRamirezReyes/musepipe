@@ -26,7 +26,7 @@ def _template_flux(code):
     return cont * band
 
 
-def _make_library(tmp, name, codes, gravity="young"):
+def _make_library(tmp, name, codes, gravity="young", declare=False, **decl_kw):
     family = Path(tmp) / name
     family.mkdir()
     rels = []
@@ -36,8 +36,14 @@ def _make_library(tmp, name, codes, gravity="young"):
         write_spectrum_npz(family / rel, _WAVE, _template_flux(c), {"spt": spt})
         rels.append(rel)
     write_manifest(family, rels)
+    decl = None
+    if declare:
+        from musepipe.models.libraries import LibraryDeclaration
+        kw = {"wave_frame": "air", "resolution_sharp": True, **decl_kw}
+        decl = LibraryDeclaration(name=name, subdir=name, gravity_class=gravity,
+                                  citation=f"synthetic {name}", **kw)
     return EmpiricalTemplateLibrary(family, gravity_class=gravity,
-                                    citation="synthetic", version="v")
+                                    citation="synthetic", version="v", declaration=decl)
 
 
 def _observed(code, av, *, scale=2.0, veiling_a=0.0, veiling_alpha=0.0, seed=0):
@@ -85,6 +91,20 @@ class FitTemplatesTests(unittest.TestCase):
             best = res["ranking"][0]
             self.assertGreater(best["veiling_a"], 0.0)
             self.assertLess(abs(best["veiling_a"] - a0) / a0, 0.4)
+
+
+    def test_undeclared_library_is_refused_by_the_stage(self):
+        from musepipe.stages.stage_g3_template_fit import (
+            compute_stage_g3_template_fit, stage_g3_template_fit_paths)
+        with tempfile.TemporaryDirectory() as tmp:
+            young = _make_library(tmp, "young", range(0, 9))  # sin declaración
+            fs, _ = _observed(5.0, 1.0, seed=5)
+            cfg = {"h01_lsf_fwhm_A": 2.383, "g3_atmo_av_axis": [0.0, 3.0, 0.5],
+                   "h03_extinction_law_citation": "c", "run_id": "syn"}
+            with self.assertRaises(RuntimeError):
+                compute_stage_g3_template_fit(
+                    cfg, stage_g3_template_fit_paths("syn", project_root=tmp),
+                    fit_spec=fs, libraries=[young])
 
 
 class ClassifyGravityTests(unittest.TestCase):
@@ -145,8 +165,10 @@ class PowerlawAndStageTests(unittest.TestCase):
             compute_stage_g3_template_fit, stage_g3_template_fit_paths,
             write_stage_g3_template_fit)
         with tempfile.TemporaryDirectory() as tmp:
-            young = _make_library(tmp, "young", range(0, 9), gravity="young")
-            field = _make_library(tmp, "field", range(0, 9), gravity="field")
+            young = _make_library(tmp, "templates_young", range(0, 9), gravity="young",
+                                  declare=True)
+            field = _make_library(tmp, "templates_field", range(0, 9), gravity="field",
+                                  declare=True)
             fs, _ = _observed(5.0, 1.0, seed=5)
             cfg = {"h01_lsf_fwhm_A": 2.383, "g3_atmo_av_axis": [0.0, 3.0, 0.5],
                    "h03_extinction_law_citation": "c", "g3_seed": 0,
@@ -158,6 +180,12 @@ class PowerlawAndStageTests(unittest.TestCase):
             self.assertEqual(props, {"spectral_type", "spt_templates", "spt_indices"})
             self.assertIn("gravity_classes", fj)
             self.assertIn("best_class", fj["gravity_classes"])
+            # una prueba por biblioteca, con su procedencia y su borde
+            self.assertEqual(set(fj["library_tests"]), {"templates_young", "templates_field"})
+            for blk in fj["library_tests"].values():
+                self.assertIn("edge", blk["result"])
+                self.assertIn("citation", blk["provenance"])
+            self.assertEqual(fj["libraries"]["templates_young"], "synthetic templates_young")
             # spt_indices is not_constrained without config index definitions (D7)
             spt_idx = next(r for r in rows if r["property"] == "spt_indices")
             self.assertEqual(spt_idx["label"], "not_constrained")
