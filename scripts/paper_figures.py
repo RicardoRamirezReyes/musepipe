@@ -14,6 +14,7 @@ datos del primero (ver `tests/test_no_hardcoded_target.py`).
     python scripts/paper_figures.py                       # las siete, a paper/figures
     python scripts/paper_figures.py --figure null_distributions
     python scripts/paper_figures.py --outdir /tmp/figs --list
+    python scripts/paper_figures.py --project-root ../MUSE-accretion-pipeline  # desde un worktree
 
 `mdot_mass_plane` necesita ademas una compilacion de literatura en CSV
 (`--literature`, por defecto `paper/literature_mdot.csv`): sin ella dibuja solo
@@ -32,6 +33,7 @@ from pathlib import Path
 import numpy as np
 
 import matplotlib
+import matplotlib.ticker
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -40,6 +42,10 @@ from matplotlib.patches import Circle
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+#: raiz del proyecto que CONTIENE `runs/`. Es el repo salvo que se dibuje desde
+#: un worktree, que no lleva los runs: `--project-root` la apunta al clon que si.
+PROYECTO = ROOT
 
 #: anchos de columna de A&A (aa.cls): `\hsize` en dos columnas y `figure*`.
 ANCHO_COL_IN = 88.0 / 25.4
@@ -134,13 +140,13 @@ class Objeto:
         # recortar el ultimo token daba «ROXs 42B A», y la primaria de ese
         # sistema no es una estrella A sino la binaria sin resolver ROXs 42B.
         self.nombre_primaria = ficha.get("primary_display_name")
-        self.run_dir = ROOT / "runs" / self.run_id
+        self.run_dir = PROYECTO / "runs" / self.run_id
         if not self.run_dir.is_dir():
             raise SystemExit(f"no existe runs/{self.run_id} (objeto {slug})")
 
     # -- rutas ------------------------------------------------------------
     def etapa(self, nombre: str, *, run_id: str | None = None) -> Path:
-        raiz = ROOT / "runs" / run_id if run_id else self.run_dir
+        raiz = PROYECTO / "runs" / run_id if run_id else self.run_dir
         p = raiz / "stages" / nombre
         if not p.exists():
             raise SystemExit(f"falta {p} — {self.nombre} no tiene ese producto")
@@ -205,7 +211,7 @@ def _espectro(obj: Objeto, metodo: str, *, cual: str = "object", run_id: str | N
         err = np.asarray(t.data["flux_err_total"], dtype=float)
         bunit = t.header.get("BUNIT")
     cfg = obj.config if run_id is None else json.loads(
-        (ROOT / "runs" / run_id / "config" / "config.json").read_text())["config"]
+        (PROYECTO / "runs" / run_id / "config" / "config.json").read_text())["config"]
     escala, _ = resolve_flux_unit(cfg, bunit=bunit)
     return wave, flux, err, escala
 
@@ -492,7 +498,7 @@ def primary_variability(objetos, out: Path, media_ventana_A=45.0):
 
 
 # --------------------------------------------------------------------------
-# Fig. companion_type — que clase de objeto es el compañero
+# Figs. template_comparison y companion_type — el tipo del compañero (G3)
 # --------------------------------------------------------------------------
 
 def _g3_template_fit(obj: Objeto):
@@ -516,98 +522,340 @@ def _g3_template_fit(obj: Objeto):
     return json.loads(cands[-1].read_text()), cands[-1].parent
 
 
-def _binado(wave, flux, paso_A):
-    bordes = np.arange(wave[0], wave[-1] + paso_A, paso_A)
-    idx = np.digitize(wave, bordes) - 1
-    w, f = [], []
-    for k in range(len(bordes) - 1):
-        m = idx == k
-        if m.sum() >= 3 and np.isfinite(flux[m]).sum() >= 3:
-            w.append(np.nanmean(wave[m])); f.append(np.nanmedian(flux[m]))
-    return np.asarray(w), np.asarray(f)
+#: un color por biblioteca de plantillas de G3, estable entre figuras
+#: (`template_comparison` y `companion_type`). Paleta validada con el
+#: validador de dataviz (--pairs all: CVD y vision normal pasan; el ambar pide
+#: rotulo visible, y todas las curvas llevan rotulo y marcador propio).
+COLOR_BIBLIOTECA = {
+    "templates_young": "#c0392b",
+    "templates_field": "#1f5fa8",
+    "templates_young_lateM_xshooter": "#d08a00",
+    "templates_xshyne_L_xshooter": "#1a9a8a",
+}
+MARCA_BIBLIOTECA = {
+    "templates_young": "o",
+    "templates_field": "s",
+    "templates_young_lateM_xshooter": "D",
+    "templates_xshyne_L_xshooter": "^",
+}
+#: como se nombra cada biblioteca en el paper (cita corta).
+NOMBRE_BIBLIOTECA = {
+    "templates_young": "Manara+13,17 (young)",
+    "templates_field": "Kesseli+17 (field)",
+    "templates_young_lateM_xshooter": "X-shooter young late-M",
+    "templates_xshyne_L_xshooter": "X-SHYNE L (10–150 Myr)",
+}
 
 
-def companion_type(objetos, out: Path, paso_A=25.0, rango_A=(6000.0, 9100.0)):
-    """Espectro del compañero contra las plantillas, y el chi2 por tipo espectral.
+def _nombre_bib(nombre: str) -> str:
+    return NOMBRE_BIBLIOTECA.get(nombre, nombre)
 
-    Lo que esta figura sostiene es la **clase**, no los parametros fisicos: el
-    ajuste de atmosferas no pasa sus puertas y no se usa (Apendice A). Las dos
-    plantillas se dibujan con el A_V de su propio mejor ajuste y reescaladas por
-    minimos cuadrados al espectro observado, porque el `scale_best` del ajuste
-    vive en las unidades de la libreria y no en las del producto.
 
-    Una **fila por objeto**. El segundo compañero no salia, y su G3 tiene
-    resultado: la clase de gravedad la decide con MAS peso que el primero
-    (dchi2 = 308 sobre el campo), y lo que no acota es el tipo, que se queda
-    por encima de la linea de aceptacion del panel derecho.
+def _color_bib(nombre: str, i: int) -> str:
+    return COLOR_BIBLIOTECA.get(nombre, _color(i))
+
+
+def _g3_config(obj: Objeto, raiz: Path) -> dict:
+    """El config con el que CORRIO el G3 que se dibuja.
+
+    Un G3 archivado deja `config_usado.json` a su lado; uno en la raiz de
+    `stages/` corrio con el config del run. Se completa como lo hace
+    `run_stage_g3_template_fit` (`run_id`, `project_root`).
     """
+    usado = raiz / "config_usado.json"
+    cfg = dict(json.loads(usado.read_text())["config"]) if usado.exists() else dict(obj.config)
+    cfg["run_id"] = obj.run_id
+    cfg["project_root"] = str(PROYECTO)
+    return cfg
+
+
+_G3_MODELOS: dict = {}
+
+
+def _g3_modelos(obj: Objeto) -> dict:
+    """El mejor modelo de CADA biblioteca, preparado por el mismo camino que G3.
+
+    Para cada prueba de `library_tests` se reconstruye el espectro binado de la
+    bondad de ajuste con `_Spectra` de la etapa (mascara D9 + telúricas propias
+    de la biblioteca, y el DATO degradado si la biblioteca es mas gruesa que
+    MUSE: Kesseli), y se prepara la plantilla ganadora del nativo
+    (`binned_gof.native_best_object`) con `prepare_template_base` (marco al del
+    dato, degradacion a la resolucion de la prueba) al A_V de su propio ajuste
+    binado y con la escala analitica. El chi2_nu que sale se COMPRUEBA contra el
+    del JSON: si no coincide, el dato del disco ya no es el que se ajusto y la
+    figura no se dibuja.
+    """
+    if obj.slug in _G3_MODELOS:
+        return _G3_MODELOS[obj.slug]
     from musepipe.models.extinction import CCMExtinction
-    from musepipe.models.prep import prepare_template
+    from musepipe.models.fit import _best_scale_chi2
+    from musepipe.models.libraries import data_frame
+    from musepipe.models.observed import fit_spectrum_from_inputs, load_fit_inputs
+    from musepipe.models.prep import apply_extinction, prepare_template_base
+    from musepipe.models.template_fit import declared_prep_kwargs
+    from musepipe.paths import RunPaths
+    from musepipe.stages.stage_g3_template_fit import _build_libraries, _Spectra
 
-    ext = CCMExtinction(3.1, citation="Cardelli et al. 1989")
-    fig, axes = plt.subplots(len(objetos), 2, squeeze=False,
-                             figsize=(ANCHO_DOBLE_IN, 2.45 * len(objetos)),
-                             gridspec_kw={"width_ratios": [2.0, 1.0]})
+    tf, raiz = _g3_template_fit(obj)
+    cfg = _g3_config(obj, raiz)
+    lsf = float(cfg["h01_lsf_fwhm_A"])
+    ext = CCMExtinction(rv=float(cfg.get("h03_rv_extinction", 3.1)),
+                        citation=cfg.get("h03_extinction_law_citation", "Cardelli+1989"))
+    dframe = data_frame(cfg)
+    n_gof = int(tf.get("gof_bin_channels") or cfg.get("g3_gof_bin_channels", 20))
+    rp = RunPaths.from_project_root(obj.run_id, PROYECTO)
+    inputs = load_fit_inputs(cfg, rp)
+    rango = cfg.get("g3_fit_wave_range_A")
+    if not rango:
+        raise SystemExit(f"{obj.nombre}: el config de G3 no declara g3_fit_wave_range_A")
+    rango = [float(rango[0]), float(rango[1])]
+    maxfrac = float(cfg.get("g3_fit_bin_max_masked_frac", 0.5))
+    libs = {lib.name: lib for lib in _build_libraries(cfg)}
+    # el dato a MUSE en bins de 25 A, con solo la mascara D9 (la referencia negra)
+    ref = fit_spectrum_from_inputs(inputs, n_channels=n_gof, wave_range=rango,
+                                   max_masked_frac=maxfrac)
+    salida = {"tf": tf, "raiz": raiz, "inputs": inputs, "rango": rango, "ref": ref,
+              "n_gof": n_gof, "libs": {}}
+    for nombre, prueba in tf["library_tests"].items():
+        gof = prueba["binned_gof"]
+        lib = libs.get(nombre)
+        if lib is None:
+            raise SystemExit(f"{obj.nombre}: G3 probo {nombre} y el config ya no la declara")
+        sp = _Spectra([lib], lsf=lsf, inputs=inputs, fs_native=None, cfg=cfg,
+                      wave_range=rango)
+        fs = sp.get(n_gof)
+        code = float(prueba["native_type"]["spt_best_code"])
+        item = next(((c, p, m) for c, p, m in lib.entries()
+                     if float(c) == code and m.get("object", Path(p).stem) == gof["native_best_object"]),
+                    None)
+        if item is None:
+            raise SystemExit(f"{obj.nombre}: {nombre} no tiene {gof['native_best_object']}")
+        tmpl = lib.load_entry(*item)
+        wave = np.asarray(fs.wave_bin, float)
+        flux = np.asarray(fs.flux_bin, float)
+        err = np.asarray(fs.err_bin, float)
+        base, _ = prepare_template_base(tmpl, wave, lsf_fwhm_A=lsf, target_fwhm_A=sp.model_target,
+                                        **declared_prep_kwargs(tmpl, dframe))
+        av = float(gof["av_native_best"])
+        modelo = apply_extinction(base, wave, ext, av)
+        good = np.isfinite(flux) & np.isfinite(err) & (err > 0) & np.isfinite(modelo)
+        inv_var = np.where(good, 1.0 / np.where(err > 0, err, 1.0) ** 2, 0.0)
+        escala, chi2 = _best_scale_chi2(flux, np.where(good, modelo, np.nan), inv_var)
+        ndof = max(1.0, float(good.sum()) - 2.0)
+        chi2_red = chi2 / ndof
+        esperado = float(gof["chi2_red_native_best"])
+        if not math.isclose(chi2_red, esperado, rel_tol=2e-3):
+            raise SystemExit(
+                f"{obj.nombre}/{nombre}: el chi2_nu reconstruido ({chi2_red:.4f}) no es el "
+                f"del G3 ({esperado:.4f}): el dato o la biblioteca cambiaron desde el ajuste")
+        salida["libs"][nombre] = {
+            "wave": wave, "flux": flux, "err": err, "modelo": escala * modelo,
+            "resid": np.where(good, (flux - escala * modelo) / err, np.nan),
+            "chi2_red": chi2_red, "umbral": gof.get("threshold"), "pasa": gof.get("pass"),
+            "spt": gof["native_best_spt"], "objeto": gof["native_best_object"], "av": av,
+            "degradado": bool(prueba["resolution"].get("data_degraded")),
+            "bandas_extra": [(float(b["lo_A"]), float(b["hi_A"])) for b in
+                             prueba["resolution"].get("telluric_bands_masked_in_data", [])],
+            "native": prueba["native_type"],
+        }
+    _G3_MODELOS[obj.slug] = salida
+    return salida
 
+
+def _tramos(wave, mascara):
+    """Intervalos [lo, hi] contiguos donde `mascara` es True (medio canal de margen)."""
+    wave = np.asarray(wave, float)
+    m = np.asarray(mascara, bool)
+    if not m.any():
+        return []
+    dl = np.gradient(wave)
+    bordes = np.diff(np.concatenate([[0], m.astype(int), [0]]))
+    ini, fin = np.nonzero(bordes == 1)[0], np.nonzero(bordes == -1)[0] - 1
+    return [(wave[a] - 0.5 * dl[a], wave[b] + 0.5 * dl[b]) for a, b in zip(ini, fin)]
+
+
+def _sombrear_excluido(ax, g, *, extra=True, ancho_min_A=0.0):
+    """Gris: lo que G3 excluye para todas las bibliotecas (mascara D9: canales
+    malos, ventanas de linea, bandas teluricas). Rayado: las bandas que solo se
+    excluyen para las bibliotecas X-shooter sin correccion telurica."""
+    lo, hi = g["rango"]
+    w, m = g["inputs"]["wave"], g["inputs"]["mask"]
+    sel = (w >= lo) & (w <= hi)
+    for a, b in _tramos(w[sel], m[sel]):
+        # un canal malo suelto no se ve y solo emborrona: se sombrea desde
+        # `ancho_min_A` (las ventanas de linea miden +-300 km/s, ~13 A)
+        if b - a >= ancho_min_A:
+            ax.axvspan(a, b, color="0.88", lw=0, zorder=0)
+    if not extra:
+        return
+    vistas = set()
+    for d in g["libs"].values():
+        for a, b in d["bandas_extra"]:
+            if (a, b) in vistas or b < lo or a > hi:
+                continue
+            vistas.add((a, b))
+            ax.axvspan(max(a, lo), min(b, hi), facecolor="none", edgecolor="0.70",
+                       hatch="////", lw=0, zorder=0)
+
+
+def _con_huecos(x, *ys, factor=1.6):
+    """Inserta NaN donde faltan bins, para que una linea no cruce lo excluido."""
+    x = np.asarray(x, float)
+    if x.size < 3:
+        return (x, *ys)
+    dx = np.diff(x)
+    salto = np.nonzero(dx > factor * np.median(dx))[0]
+    xo = np.insert(x, salto + 1, np.nan)
+    return (xo, *[np.insert(np.asarray(y, float), salto + 1, np.nan) for y in ys])
+
+
+def template_comparison(objetos, out: Path, ancho_min_sombra_A=5.0):
+    """El compañero contra la MEJOR plantilla de cada biblioteca, y donde falla.
+
+    Una columna por objeto. Arriba, el espectro en el rango del ajuste de G3:
+    muestreo nativo en gris claro y los bins de 25 A de la bondad de ajuste en
+    negro, con el mejor modelo (el ganador del nativo) de cada biblioteca
+    preparado exactamente como en el ajuste (`_g3_modelos`). Kesseli se compara
+    con el DATO degradado a su resolucion (Q2): esos bins van aparte, huecos y
+    en su color, y su residuo es contra ellos. Abajo, (dato - modelo)/sigma por
+    bin y biblioteca, con la banda de +-1. Nada se suaviza mas alla del ajuste.
+    Ninguna pasa el umbral calibrado, y el rotulo lo dice con los dos numeros.
+    """
+    from matplotlib.patches import Patch
+
+    n = len(objetos)
+    fig = plt.figure(figsize=(ANCHO_DOBLE_IN, 4.6))
+    gs = fig.add_gridspec(2, n, height_ratios=[2.0, 1.45], hspace=0.0, wspace=0.17)
+    entradas = {}
     for i, obj in enumerate(objetos):
-        tf, raiz = _g3_template_fit(obj)
-        lsf = float(obj.config["h01_lsf_fwhm_A"])
+        g = _g3_modelos(obj)
+        _, _, _, escala = _espectro(obj, "psffit")
+        k = escala * 1e18
+        lo, hi = g["rango"]
+        ax = fig.add_subplot(gs[0, i])
+        axr = fig.add_subplot(gs[1, i], sharex=ax)
+        for a in (ax, axr):
+            _sombrear_excluido(a, g, ancho_min_A=ancho_min_sombra_A)
 
-        wave, flux, err, escala = _espectro(obj, "psffit")
-        m = (wave >= rango_A[0]) & (wave <= rango_A[1])
-        wb, fb = _binado(wave[m], flux[m] * escala * 1e18, paso_A)
+        w, f, msk = g["inputs"]["wave"], g["inputs"]["flux"], g["inputs"]["mask"]
+        sel = (w >= lo) & (w <= hi)
+        h, = ax.plot(w[sel], np.where(msk[sel], np.nan, f[sel] * k), color="0.75", lw=0.3,
+                     zorder=1)
+        entradas.setdefault("native sampling (fitted channels)", h)
+        ref = g["ref"]
+        h = ax.errorbar(ref.wave_bin, ref.flux_bin * k, yerr=ref.err_bin * k, fmt="o", ms=1.5,
+                        color="0.05", elinewidth=0.5, capsize=0, zorder=4)
+        entradas.setdefault(f"data, {g['n_gof']}-channel (25 " r"$\mathrm{\AA}$) bins", h)
 
-        ax = axes[i][0]
-        ax.plot(wb, fb, color="0.15", lw=0.9,
-                label=f"{obj.nombre}, {paso_A:.0f} " r"$\mathrm{\AA}$ bins")
+        propias = []
+        for j, (nombre, d) in enumerate(g["libs"].items()):
+            c = _color_bib(nombre, j)
+            mk = MARCA_BIBLIOTECA.get(nombre, "o")
+            if d["degradado"]:
+                h, = ax.plot(d["wave"], d["flux"] * k, ls="none", marker="o", ms=2.3, mfc="none",
+                             mec=c, mew=0.5, zorder=3)
+                entradas.setdefault(f"data degraded to {_nombre_bib(nombre).split(' (')[0]} "
+                                    "resolution, 25 " r"$\mathrm{\AA}$ bins", h)
+            xm, ym = _con_huecos(d["wave"], d["modelo"] * k)
+            h, = ax.plot(xm, ym, color=c, lw=0.9, zorder=5)
+            entradas.setdefault(_nombre_bib(nombre), h)
+            xr, yr = _con_huecos(d["wave"], d["resid"])
+            axr.plot(xr, yr, lw=0.55, color=c, marker=mk, ms=2.0, mew=0, zorder=3)
+            rel = "\\leq" if d["pasa"] else ">"
+            txt = (f"{d['spt']} ({d['objeto']})" + (", degr." if d["degradado"] else "")
+                   + f": $\\chi^2_\\nu = {d['chi2_red']:.1f} {rel} {d['umbral']:.2f}$")
+            propias.append((Line2D([], [], color=c, lw=0.9, marker=mk, ms=2.5, mew=0), txt))
+        axr.axhspan(-1, 1, color="0.62", alpha=0.35, lw=0, zorder=1)
+        # sin el tick de arriba: chocaba con el rotulo inferior del panel de flujo
+        axr.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(nbins=6, prune="upper"))
+        axr.axhline(0, color="0.3", lw=0.5, zorder=2)
 
-        for clase, color, etq in (("young", "#d62728", "young"), ("field", "#1f77b4", "field")):
-            mejor = tf[clase]["ranking"][0]
-            libro = ROOT.parent / "Data" / "external_libraries" / f"templates_{clase}"
-            # las dos librerias nombran distinto: `LM601_M7.5.npz` frente a `M9.npz`
-            ficheros = (sorted(libro.glob(f"*_{mejor['spt']}.npz"))
-                        or sorted(libro.glob(f"{mejor['spt']}.npz")))
-            if not ficheros:
-                continue
-            d = np.load(ficheros[0], allow_pickle=True)
-            meta = json.loads(str(d["meta_json"]))
-            class _T:  # el adaptador minimo que espera prepare_template
-                pass
-            t = _T(); t.wave_A = d["wave_A"]; t.flux = d["flux"]; t.meta = meta
-            modelo = prepare_template(t, wb, lsf_fwhm_A=lsf, extinction=ext,
-                                      av=float(mejor["av_best"]), scale=1.0,
-                                      template_fwhm_A=meta.get("resolution_fwhm_A"))
-            ok = np.isfinite(modelo) & np.isfinite(fb)
-            if ok.sum() < 5:
-                continue
-            k = float(np.nansum(modelo[ok] * fb[ok]) / np.nansum(modelo[ok] ** 2))
-            ax.plot(wb, k * modelo, color=color, lw=1.0, alpha=0.85,
-                    label=f"{etq} {mejor['spt']} " r"($\chi^2_\nu=$" f"{mejor['chi2_red']:.1f})")
-        ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
-        ax.set_xlim(*rango_A)
-        ax.legend(loc="upper left", handlelength=1.4)
-
-        ax = axes[i][1]
-        for clase, color, marca in (("young", "#d62728", "o"), ("field", "#1f77b4", "s")):
-            r = [(x["spt_code"], x["chi2_red"]) for x in tf[clase]["ranking"]]
-            r.sort()
-            ax.plot([x[0] for x in r], [x[1] for x in r], marker=marca, ms=3.0, lw=0.8,
-                    color=color, label=clase)
-        ax.axhline(3.0, color="0.5", lw=0.6, ls="--")
         ax.set_yscale("log")
-        # la libreria de campo llega hasta tipos tempranos (codigos negativos); el
-        # panel se queda en el entorno del minimo, que es donde se decide.
-        ax.set_xlim(2.0, 11.0)
-        ax.set_ylabel(r"$\chi^2_\nu$")
-        ax.legend(loc="upper right", handlelength=1.4, title=obj.nombre,
-                  title_fontsize=6.5)
+        ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        # el eje lo fijan los bins: el nativo del azul es ruido y bajaria a 1e-3
+        pos = ref.flux_bin[ref.flux_bin > 0] * k
+        ax.set_ylim(0.12 * float(np.percentile(pos, 5)), 2.2 * float(np.max(pos)))
+        ax.set_xlim(lo, hi)
+        ax.tick_params(labelbottom=False)
+        ax.set_title(obj.nombre, pad=3)
+        axr.set_xlabel(r"Wavelength ($\mathrm{\AA}$, air)")
+        if i == 0:
+            ax.set_ylabel(r"$F_\lambda$ ($10^{-18}$ erg s$^{-1}$ cm$^{-2}$ $\mathrm{\AA}^{-1}$)")
+            axr.set_ylabel(r"(data $-$ model) / $\sigma$")
+        ax.legend([p[0] for p in propias], [p[1] for p in propias], loc="lower right",
+                  handlelength=1.3, fontsize=6.5, borderaxespad=0.3, labelspacing=0.2,
+                  title="best template, binned GoF vs threshold", title_fontsize=6.5,
+                  alignment="left")
+    entradas["excluded from all fits (D9 mask)"] = Patch(color="0.88", lw=0)
+    entradas["excluded for X-shooter libraries only"] = Patch(facecolor="none", edgecolor="0.6",
+                                                                hatch="////", lw=0)
+    fig.legend(list(entradas.values()), list(entradas.keys()), loc="lower center",
+               bbox_to_anchor=(0.5, 0.905), ncol=3, fontsize=6.5, handlelength=1.6,
+               columnspacing=1.2, labelspacing=0.25)
+    fig.savefig(out, pad_inches=0.04)
+    plt.close(fig)
 
-    axes[-1][0].set_xlabel(r"Wavelength ($\mathrm{\AA}$, barycentric)")
-    axes[-1][1].set_xlabel("spectral type (M0 = 0, L0 = 10)")
-    fig.subplots_adjust(hspace=0.30)
-    # el rotulo del panel derecho es mas ancho que su eje y el pad de 0.02 in
-    # del estilo le comia el parentesis final
-    fig.savefig(out, pad_inches=0.06)
+
+def companion_type(objetos, out: Path, xlim=(-1.0, 14.5)):
+    """El tipo espectral por biblioteca: Delta-chi2 del ajuste NATIVO por subtipo.
+
+    Una curva por biblioteca (el mejor espectro de cada subtipo), en el panel de
+    cada objeto. Se marca el subtipo ganador y su intervalo (Delta-chi2 <= 1 con
+    grados de libertad efectivos), y el borde de cobertura de cada biblioteca con
+    un marcador hueco en su ultimo subtipo: un minimo EN el borde (`edge`) no
+    acota el tipo por ese lado. No hay linea de aceptacion: el nativo mide el
+    tipo y no tiene puerta absoluta; la bondad se juzga en bins de 25 A
+    (`template_comparison`). El panel izquierdo de la version anterior (espectro
+    + plantillas) se retira: lo sustituye `template_comparison`.
+    """
+    from musepipe.constants import spt_code as _codigo
+
+    n = len(objetos)
+    fig, axes = plt.subplots(1, n, figsize=(ANCHO_DOBLE_IN, 2.35), sharey=True, squeeze=False)
+    axes = axes[0]
+    for i, obj in enumerate(objetos):
+        tf, _ = _g3_template_fit(obj)
+        ax = axes[i]
+        for j, (nombre, prueba) in enumerate(tf["library_tests"].items()):
+            nt = prueba["native_type"]
+            c = _color_bib(nombre, j)
+            mk = MARCA_BIBLIOTECA.get(nombre, "o")
+            pares = sorted((_codigo(s), float(v)) for s, v in nt["dchi2_by_spt"].items())
+            x = np.array([p[0] for p in pares]); y = np.array([p[1] for p in pares])
+            ax.plot(x, y, color=c, lw=0.8, marker=mk, ms=2.6, mew=0, zorder=3)
+            # borde de cobertura: el ultimo (y primero, si cae dentro) subtipo
+            for xb in {float(x.min()), float(x.max())}:
+                if xlim[0] <= xb <= xlim[1]:
+                    yb = float(y[np.argmin(np.abs(x - xb))])
+                    ax.plot([xb], [yb], ls="none", marker=mk, ms=6.0, mfc="white", mec=c,
+                            mew=0.9, zorder=4)
+            xb = float(nt["spt_best_code"])
+            iv = nt.get("spt_interval")
+            if isinstance(iv, (list, tuple)) and len(iv) == 2:
+                ax.plot([iv[0], iv[1]], [0, 0], color=c, lw=2.2, solid_capstyle="butt", zorder=5)
+            ax.plot([xb], [0], ls="none", marker=mk, ms=5.0, color=c, mec="white", mew=0.5,
+                    zorder=6)
+            etq = f"{_nombre_bib(nombre)}: {nt['spt_best']}"
+            if nt.get("edge"):
+                etq += " (edge)"
+            ax.plot([], [], color=c, marker=mk, ms=3.0, lw=0.8, label=etq)
+        ax.set_yscale("symlog", linthresh=10.0, linscale=0.6)
+        ax.set_ylim(-1.0, 1.5e5)
+        ax.axhline(1.0, color="0.55", lw=0.5, ls=":", zorder=1)
+        ax.set_xlim(*xlim)
+        ticks = [0, 2, 4, 6, 8, 10, 12, 14]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(["M0", "M2", "M4", "M6", "M8", "L0", "L2", "L4"])
+        ax.set_xlabel("Spectral type")
+        ax.set_title(obj.nombre, pad=3)
+        ax.plot([], [], ls="none", marker="o", ms=5, mfc="white", mec="0.3", mew=0.9,
+                label="first/last subtype of a library")
+        ax.plot([], [], color="0.55", lw=0.5, ls=":", label=r"$\Delta\chi^2 = 1$ (interval)")
+        ax.legend(loc="lower left", handlelength=1.4, fontsize=6.5, labelspacing=0.25,
+                  borderaxespad=0.3)
+    axes[0].set_ylabel(r"$\Delta\chi^2$ (native sampling)")
+    fig.subplots_adjust(wspace=0.06)
+    fig.savefig(out, pad_inches=0.04)
     plt.close(fig)
 
 
@@ -1443,6 +1691,7 @@ FIGURAS = {
     "control_ring": control_ring,
     "psf_radial": psf_radial,
     "primary_variability": primary_variability,
+    "template_comparison": template_comparison,
     "companion_type": companion_type,
     "null_distributions": null_distributions,
     "injection_throughput": injection_throughput,
@@ -1462,10 +1711,16 @@ def main(argv=None) -> int:
                     help="dibuja solo esta figura (repetible); por defecto todas")
     ap.add_argument("--literature", default=str(ROOT / "paper" / "literature_mdot.csv"),
                     help="CSV de la compilacion de literatura para mdot_mass_plane")
+    ap.add_argument("--project-root", default=None,
+                    help="raiz que contiene runs/ (por defecto la del repo; "
+                         "necesaria al dibujar desde un worktree)")
     ap.add_argument("--list", action="store_true",
                     help="lista las figuras y el run de cada objeto, y sale")
     args = ap.parse_args(argv)
 
+    global PROYECTO
+    if args.project_root:
+        PROYECTO = Path(args.project_root).resolve()
     objetos = objetos_del_paper()
     if args.list:
         for o in objetos:
