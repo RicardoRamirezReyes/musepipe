@@ -21,8 +21,8 @@
     "display": "ROXs 12 b",
     "second_epoch_run": "ROXs12b_OB3444577",
     "second_epoch_note": "OB 3444577, 2022-08-31, 7 exposiciones: la noche de peor calidad (seeing 0.84 frente a 0.57, tau0 2.1 frente a 6.6 ms, ruido en Halpha 18.8x peor). No se publica sobre ella; se usa para ensenar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
-    "spt_source_dir": "g3_real_invvar_20260920T095520",
-    "spt_source_note": "Ajuste de plantillas corrido sobre el cubo de publicacion (`invvar`) el 2026-09-20, con el eje de A_V a [0,10] y la LSF que ESE run declara (2.2849). El tipo espectral no se mueve respecto al de la noche buena: M7.5 joven en los dos, indice 6.184+-0.332 contra 6.156+-0.371. El ajuste atmosferico sigue fallando su puerta por chi2 (12.77 aqui contra 11.23 alli, umbral 3.0) y da av=5.5 contra 5.3. Se declara para que la figura no dependa del orden alfabetico de los archivos.",
+    "spt_source_dir": "g3_resolucion_invvar_20260924T220548",
+    "spt_source_note": "G3 a resolucion MUSE con una prueba por biblioteca (tipo por Δχ² en nativo, bondad de ajuste en bins de 25 Å con umbral calibrado same_subtype_neighbour), corrido 2026-09-24 sobre invvar a 55 px con la rama g3-resolucion-bibliotecas (41ddeb8). Ninguna biblioteca pasa la bondad de ajuste (Manara 5.38 > 4.05). Sustituye a g3_real_invvar_20260920T095520 (78 px, una sola biblioteca mezclada, bins de 25 Å).",
     "previous_run": "ROXs12b_OB3445598",
     "previous_run_note": "La noche buena sola, run de publicacion hasta el 2026-09-20. Se cita en el paper como control de robustez: el resultado se mantiene descartando la noche ruidosa, con Mdot < 3.0e-14 en vez de 2.7e-14. La Figura 2 congelada (tag fondecyt-fig2-v1) sale de su cosecha de 11 controles, respaldada en stages/e4_11controles_respaldo/."
   }
