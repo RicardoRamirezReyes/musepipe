@@ -336,7 +336,7 @@ def _build_models(cfg, run_paths, atmo_qc, template_json, ext, lsf):
         tlib = EmpiricalTemplateLibrary(root / entry["subdir"], gravity_class=decl.gravity_class,
                                         citation=decl.citation, version=None,
                                         declaration=decl)
-        rank0 = template_json["library_tests"][decl.name]["result"]
+        rank0 = template_json["library_tests"][decl.name]["native_type"]
         tmpl = next(tlib.load_entry(c, pth, m) for c, pth, m in tlib.entries()
                     if m.get("object", Path(pth).stem) == rank0["spt_best_object"])
         fit0 = template_json[template_json["spt_templates"]["class"]]["ranking"][0]
@@ -459,9 +459,25 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
 
     # 3. STOP conditions (spec §8.2)
     stops = []
-    chi2_red = float(atmo_qc["best"]["chi2_red"])
-    if chi2_red > 3.0:
-        stops.append(f"chi2_red={chi2_red:.2f} > 3 (atmo fit)")
+    # Bondad del ajuste atmosférico: en la variante BINADA (25 Å), que es el
+    # régimen en el que se calibró g3_chi2red_stop = 3.0 (D11). En el nativo cada
+    # canal está dominado por el ruido y χ²_ν ≈ 1 no discrimina (2026-09-24).
+    lt = atmo_qc.get("library_test") or {}
+    sens = (lt.get("sensitivity_binned") or {}).get("result")
+    stop_thr = float(cfg.get("g3_chi2red_stop", 3.0))
+    if sens is not None:
+        chi2_red = float(sens["chi2_red"])
+        if chi2_red > stop_thr:
+            stops.append(f"chi2_red={chi2_red:.2f} > {stop_thr:g} (atmo fit, 25 A bins)")
+    else:
+        chi2_red = float(atmo_qc["best"]["chi2_red"])
+        if chi2_red > stop_thr:
+            stops.append(f"chi2_red={chi2_red:.2f} > {stop_thr:g} (atmo fit)")
+    acc = template_json.get("acceptance") or {}
+    if acc.get("pass") is False:
+        stops.append(f"template binned GOF failed ({acc.get('library')}: chi2_red="
+                     f"{acc.get('chi2_red'):.2f} > {acc.get('threshold'):.2f}, "
+                     f"{acc.get('threshold_source')})")
     if not v2["pass"]:
         stops.append(f"V2 undeclared 3-sigma edge on axes {v2['undeclared_edges']}")
     if v3.get("pass") is False:
@@ -496,9 +512,11 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
         "atmo_omega": atmo_qc["omega"], "atmo_inflate": atmo_qc["inflate"],
         "atmo_variants": atmo_qc["variants"],
         "spt": {"templates": template_json["spt_templates"], "indices": template_json["spt_indices"],
-                "gravity_classes": template_json["gravity_classes"]},
+                "gravity_classes": template_json["gravity_classes"],
+                "acceptance": template_json.get("acceptance")},
         "library_tests": library_tests,
-        "fit_bin_channels": template_json.get("fit_bin_channels"),
+        "type_bin_channels": template_json.get("type_bin_channels"),
+        "gof_bin_channels": template_json.get("gof_bin_channels"),
         "mass_coverage_by_family": coverage,
         "verifications": {"V1_real_noise": v1, "V2_edge": v2, "V3_spt": v3,
                           "V5_h03": v5, "V6_labels": v6,

@@ -183,7 +183,8 @@ class PowerlawAndStageTests(unittest.TestCase):
             # una prueba por biblioteca, con su procedencia y su borde
             self.assertEqual(set(fj["library_tests"]), {"templates_young", "templates_field"})
             for blk in fj["library_tests"].values():
-                self.assertIn("edge", blk["result"])
+                self.assertIn("edge", blk["native_type"])
+                self.assertIn("binned_gof", blk)
                 self.assertIn("citation", blk["provenance"])
             self.assertEqual(fj["libraries"]["templates_young"], "synthetic templates_young")
             # spt_indices is not_constrained without config index definitions (D7)

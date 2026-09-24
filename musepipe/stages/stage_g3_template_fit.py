@@ -111,52 +111,153 @@ def _resolution_block(lsf, libs, wave_range, *, degraded, label):
             "libraries": [lib.name for lib in libs]}
 
 
-def _library_test(lib, *, lsf, ext, av_axis, infl, dframe, fs_native, inputs, cfg,
-                  n_primary, n_sens, wave_range):
-    """La prueba de UNA biblioteca: procedencia + resultado + variante binada (Q4)."""
-    coarser = _coarser_than_data(lsf, [lib], wave_range)
-    target = _target(lsf, [lib]) if coarser else None
-    data_kernel = ((lambda w: np.sqrt(np.clip(target(w) ** 2 - lsf ** 2, 0.0, None)))
-                   if coarser else None)
+def _telluric_mask(lib, wave):
+    """Canales del dato a enmascarar para la prueba de ``lib`` (bandas telúricas
+    que la biblioteca NO tiene corregidas)."""
+    wave = np.asarray(wave, float)
+    m = np.zeros(wave.shape, bool)
+    decl = lib.declaration
+    for band in (decl.telluric_mask_bands if decl is not None else []):
+        m |= (wave >= float(band["lo_A"])) & (wave <= float(band["hi_A"]))
+    return m
 
-    def spectrum(n_channels):
-        if inputs is None:
-            return None
-        if not coarser and n_channels == n_primary:
-            return fs_native
+
+def _masked_inputs(inputs, libs):
+    extra = np.zeros(np.shape(inputs["wave"]), bool)
+    for lib in libs:
+        extra |= _telluric_mask(lib, inputs["wave"])
+    if not extra.any():
+        return inputs
+    return {**inputs, "mask": np.asarray(inputs["mask"], bool) | extra}
+
+
+def _masked_fit_spec(fs, libs):
+    """Sin datos por canal (tests): los bins en bandas enmascaradas → NaN."""
+    extra = np.zeros(np.shape(fs.wave_bin), bool)
+    for lib in libs:
+        extra |= _telluric_mask(lib, fs.wave_bin)
+    if not extra.any():
+        return fs
+    from dataclasses import replace
+    return replace(fs, flux_bin=np.where(extra, np.nan, fs.flux_bin))
+
+
+class _Spectra:
+    """Espectros de ajuste de una prueba: nativo (tipo) y binado (bondad), con el
+    dato degradado si alguna biblioteca de la prueba es más gruesa que MUSE y
+    las bandas telúricas de sus bibliotecas enmascaradas."""
+
+    def __init__(self, libs, *, lsf, inputs, fs_native, cfg, wave_range):
+        self.libs = list(libs)
+        self.coarser = _coarser_than_data(lsf, self.libs, wave_range)
+        self.target = _target(lsf, self.libs) if self.coarser else None
+        self.inputs = None if inputs is None else _masked_inputs(inputs, self.libs)
+        self.degraded = self.coarser and inputs is not None
+        self.fs_native = fs_native
+        self.cfg, self.lsf, self.wave_range = cfg, lsf, wave_range
+        self.masked = any(lib.declaration is not None and lib.declaration.telluric_mask_bands
+                          for lib in self.libs)
+
+    def get(self, n_channels):
+        if self.inputs is None:
+            # espectro inyectado sin bin_channels = nativo (1)
+            if int(n_channels) != int(getattr(self.fs_native, "bin_channels", None) or 1):
+                return None
+            return _masked_fit_spec(self.fs_native, self.libs)
+        lsf, target = self.lsf, self.target
+        kern = ((lambda w: np.sqrt(np.clip(target(w) ** 2 - lsf ** 2, 0.0, None)))
+                if self.degraded else None)
         return fit_spectrum_from_inputs(
-            inputs, n_channels=n_channels, wave_range=wave_range,
-            max_masked_frac=float(cfg.get("g3_fit_bin_max_masked_frac", 0.5)),
-            data_kernel_fwhm_A=data_kernel)
+            self.inputs, n_channels=int(n_channels), wave_range=self.wave_range,
+            max_masked_frac=float(self.cfg.get("g3_fit_bin_max_masked_frac", 0.5)),
+            data_kernel_fwhm_A=kern)
 
-    fs = spectrum(n_primary) if inputs is not None else fs_native
-    degraded = coarser and inputs is not None
-    res = fit_templates(fs, lib, ext, av_axis=av_axis, lsf_fwhm_A=lsf,
-                        chi2red_inflate_threshold=infl, data_frame=dframe,
-                        target_fwhm_A=(target if degraded else None), per_spectrum=True)
+    @property
+    def model_target(self):
+        return self.target if self.degraded else None
+
+    def resolution(self, label_native, label_degraded):
+        blk = _resolution_block(self.lsf, self.libs, self.wave_range,
+                                degraded=self.degraded,
+                                label=label_degraded if self.degraded else label_native)
+        if self.coarser and not self.degraded:
+            blk["note"] = ("fit_spec inyectado sin datos por canal: el dato no se pudo "
+                           "degradar; resolution_mismatch marcado")
+        bands = [b for lib in self.libs if lib.declaration is not None
+                 for b in lib.declaration.telluric_mask_bands]
+        if bands:
+            blk["telluric_bands_masked_in_data"] = bands
+        return blk
+
+
+_DCHI2_NOTE = ("native chi2 uses per-channel variance sigma^2 * (n/n_eff) of the G1 block, "
+               "i.e. Delta-chi2 = Delta-chi2_raw * n_eff/n: intervals use effective dof")
+
+
+def _native_type(res, spectra):
+    return {
+        "spt_best": res["spt_best"], "spt_best_code": res["spt_best_code"],
+        "spt_best_object": res["spt_best_object"], "spt_interval": res["spt_interval"],
+        "dchi2_confidence": res["dchi2_confidence"], "dchi2_by_spt": res["dchi2_by_spt"],
+        "dchi2_correction": _DCHI2_NOTE, "edge": res["edge"], "spt_axis": res["spt_axis"],
+        "av_best": res["av_best"],
+        "chi2_red_informative": res["chi2_red_min"],
+        "chi2_red_note": ("information only: at native sampling every channel is noise-"
+                          "dominated and right and wrong templates all give chi2_red ~ 1; "
+                          "no absolute acceptance gate here"),
+        "ndof": res["ndof"], "n_bins": res["n_bins"], "n_eff": res["n_eff"],
+        "n_templates_fitted": res["n_templates_fitted"],
+    }
+
+
+def _binned_gof(res_bin, native, threshold):
+    """χ²_ν en 25 Å del MISMO espectro que ganó en el nativo (A_V y escala se
+    reajustan), contra el umbral calibrado; y el mejor subtipo del binado."""
+    if res_bin is None:
+        return {"status": "not_computed", "reason": "no per-channel data to bin"}
+    row = next((r for r in res_bin["ranking"]
+                if r["spt_code"] == native["spt_best_code"]
+                and r.get("object") == native["spt_best_object"]), None)
+    chi2_red = float(row["chi2_red"]) if row is not None else None
+    thr = threshold.get("value") if threshold else None
+    ok = None if (chi2_red is None or thr is None) else bool(chi2_red <= float(thr))
+    return {
+        "native_best_spt": native["spt_best"], "native_best_object": native["spt_best_object"],
+        "chi2_red_native_best": chi2_red,
+        "av_native_best": (row["av_best"] if row is not None else None),
+        "threshold": thr, "threshold_source": (threshold or {}).get("source"),
+        "pass": ok,
+        "binned_best_spt": res_bin["spt_best"], "binned_best_object": res_bin["spt_best_object"],
+        "binned_spt_interval": res_bin["spt_interval"], "binned_edge": res_bin["edge"],
+        "chi2_red_binned_best": res_bin["chi2_red_min"], "ndof": res_bin["ndof"],
+        "fit_bin_channels": res_bin.get("bin_channels"),
+        "note": "goodness of fit only; never averaged with native_type",
+    }
+
+
+def _library_test(lib, *, lsf, ext, av_axis, infl, dframe, fs_native, inputs, cfg,
+                  n_type, n_gof, wave_range, dchi2_conf, threshold):
+    """La prueba de UNA biblioteca: procedencia + ``native_type`` + ``binned_gof``."""
+    sp = _Spectra([lib], lsf=lsf, inputs=inputs, fs_native=fs_native, cfg=cfg,
+                  wave_range=wave_range)
+    kw = dict(av_axis=av_axis, lsf_fwhm_A=lsf, chi2red_inflate_threshold=infl,
+              data_frame=dframe, target_fwhm_A=sp.model_target, per_spectrum=True)
+    fs = sp.get(n_type)
+    res = fit_templates(fs, lib, ext, dchi2_confidence=dchi2_conf, **kw)
+    fs_b = sp.get(n_gof) if int(n_gof) != int(n_type) else None
+    res_b = fit_templates(fs_b, lib, ext, **kw) if fs_b is not None else None
+    if res_b is not None:
+        res_b["bin_channels"] = int(n_gof)
+    native = _native_type(res, sp)
     block = {
         "provenance": (lib.declaration.to_qc(n_by_spt=lib.n_by_spt())
                        if lib.declaration is not None else {"name": lib.name}),
-        "resolution": _resolution_block(
-            lsf, [lib], wave_range, degraded=degraded,
-            label=("library resolution (data degraded, Q2)" if degraded
-                   else "MUSE LSF (template degraded)")),
-        "fit_bin_channels": int(n_primary),
-        "result": _result_summary(res),
-        "fit": res,
+        "resolution": sp.resolution("MUSE LSF (template degraded)",
+                                    "library resolution (data degraded, Q2)"),
+        "native_type": native,
+        "binned_gof": _binned_gof(res_b, native, threshold),
     }
-    if coarser and inputs is None:
-        block["resolution"]["note"] = ("fit_spec inyectado sin datos por canal: el dato "
-                                       "no se pudo degradar; resolution_mismatch marcado")
-    if inputs is not None and n_sens and int(n_sens) != int(n_primary):
-        fs_s = spectrum(int(n_sens))
-        rs = fit_templates(fs_s, lib, ext, av_axis=av_axis, lsf_fwhm_A=lsf,
-                           chi2red_inflate_threshold=infl, data_frame=dframe,
-                           target_fwhm_A=(target if degraded else None), per_spectrum=True)
-        block["sensitivity_binned"] = {
-            "label": f"Q4: {int(n_sens)}-channel bins (~25 A); sensitivity only, never averaged",
-            "fit_bin_channels": int(n_sens), "result": _result_summary(rs)}
-    return block, res, fs
+    return block, res, fs, sp
 
 
 def _result_summary(res):
@@ -167,41 +268,59 @@ def _result_summary(res):
 
 
 def _gravity_common(pair_libs, *, lsf, ext, av_axis, infl, dframe, fs_native, inputs,
-                    cfg, n_primary, wave_range, alpha_axis):
-    """Δχ² joven/campo/no estelar a RESOLUCIÓN COMÚN (Q3): la más gruesa del par."""
+                    cfg, n_type, wave_range, alpha_axis, **_):
+    """Δχ² entre clases a RESOLUCIÓN COMÚN (Q3), en el ajuste NATIVO (tipo)."""
     libs = list(pair_libs.values())
-    coarser = _coarser_than_data(lsf, libs, wave_range)
-    target = _target(lsf, libs) if coarser else None
-    degraded = coarser and inputs is not None
-    if degraded:
-        fs = fit_spectrum_from_inputs(
-            inputs, n_channels=n_primary, wave_range=wave_range,
-            max_masked_frac=float(cfg.get("g3_fit_bin_max_masked_frac", 0.5)),
-            data_kernel_fwhm_A=lambda w: np.sqrt(np.clip(target(w) ** 2 - lsf ** 2, 0, None)))
-    else:
-        fs = fs_native
+    sp = _Spectra(libs, lsf=lsf, inputs=inputs, fs_native=fs_native, cfg=cfg,
+                  wave_range=wave_range)
+    fs = sp.get(n_type)
     fits = {cls: fit_templates(fs, lib, ext, av_axis=av_axis, lsf_fwhm_A=lsf,
                                chi2red_inflate_threshold=infl, data_frame=dframe,
-                               target_fwhm_A=(target if degraded else None),
-                               per_spectrum=True)
+                               target_fwhm_A=sp.model_target, per_spectrum=True)
             for cls, lib in pair_libs.items()}
     pl = fit_powerlaw(fs, alpha_axis=alpha_axis)
     grav = classify_gravity({**fits, "nonstellar": pl})
-    return {
-        "young": grav["young"], "field": grav["field"], "nonstellar": grav["nonstellar"],
+    out = {cls: grav[cls] for cls in (*pair_libs, "nonstellar")}
+    out.update({
         "best_class": grav["best_class"], "dchi2_by_class": grav["dchi2_by_class"],
-        "resolution": _resolution_block(
-            lsf, libs, wave_range, degraded=degraded,
-            label="common resolution (coarsest of the pair; Q3)"),
+        "dchi2_correction": _DCHI2_NOTE,
+        "resolution": sp.resolution("MUSE LSF (common)",
+                                    "common resolution (coarsest of the pair; Q3)"),
         "libraries": {cls: lib.name for cls, lib in pair_libs.items()},
         "spt_best_at_common_resolution": {cls: f["spt_best"] for cls, f in fits.items()},
-        "fit_bin_channels": int(n_primary),
-    }, pl
+        "fit_bin_channels": int(n_type),
+        "representation": "native (type)",
+    })
+    return out, pl
+
+
+def _gof_threshold(cfg, young_lib, inputs, *, lsf, ext, av_axis, dframe, wave_range, n_gof):
+    """Umbral de la bondad binada: el del config si lo declara, si no calibrado
+    en el run (Q1 sobre la representación binada)."""
+    declared = cfg.get("g3_gof_chi2red_threshold")
+    if declared not in (None, "", "auto"):
+        return {"value": float(declared), "source": "config g3_gof_chi2red_threshold"}, None
+    if inputs is None or young_lib is None:
+        return {"value": None, "source": "not calibrated (no per-channel data)"}, None
+    from ..models.calibration import calibrate_gof_threshold
+    cal = calibrate_gof_threshold(
+        young_lib, inputs, wave_range=wave_range, n_channels=int(n_gof), lsf_fwhm_A=lsf,
+        extinction=ext, av_axis=av_axis, data_frame=dframe,
+        n_draws=int(cfg.get("g3_gof_calibration_n_draws", 20)),
+        seed=int(cfg.get("g3_seed", 0)),
+        percentile=float(cfg.get("g3_gof_calibration_percentile", 95.0)),
+        max_masked_frac=float(cfg.get("g3_fit_bin_max_masked_frac", 0.5)))
+    summary = {k: v for k, v in cal.items() if k != "rows"}
+    return {"value": cal["threshold_proposed"],
+            "source": f"calibrated in-run on {young_lib.name} (Q1, binned, "
+                      f"p{summary['percentile']:.0f} of {summary['distribution']['n']})",
+            "calibration": summary}, cal
 
 
 def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None,
                                   libraries=None, fit_inputs=None):
-    """Una prueba por biblioteca (plan 2026-09-23) + Δχ² de gravedad a resolución común.
+    """Una prueba por biblioteca: TIPO en el ajuste nativo (Δχ² entre subtipos) y
+    BONDAD en la variante binada de 25 Å contra un umbral calibrado (2026-09-24).
 
     ``libraries``: lista de :class:`EmpiricalTemplateLibrary` con declaración
     (por defecto, las de ``g3_template_libraries``). ``fit_spec``/``fit_inputs``
@@ -213,14 +332,15 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                         citation=cfg.get("h03_extinction_law_citation", "Cardelli+1989"))
     infl = float(cfg.get("g3_chi2red_inflate_threshold", 1.5))
     dframe = data_frame(cfg)
-    n_primary = int(cfg.get("g3_fit_bin_channels", DEFAULT_BIN_CHANNELS))
-    n_sens = int(cfg.get("g3_fit_bin_channels_sensitivity", 20))
+    n_type = int(cfg.get("g3_type_bin_channels", DEFAULT_BIN_CHANNELS))
+    n_gof = int(cfg.get("g3_gof_bin_channels", 20))
+    dchi2_conf = float(cfg.get("g3_dchi2_1sigma_per_param", 1.0))
     alpha_axis = _axis(cfg.get("g3_nonstellar_alpha_axis", [-3.0, 3.0, 1.0]))
     inputs = fit_inputs
     if fit_spec is None:
         if inputs is None:
             inputs = load_fit_inputs(cfg, paths["paths"])
-        fit_spec = fit_spectrum(cfg, paths["paths"], inputs=inputs, n_channels=n_primary)
+        fit_spec = fit_spectrum(cfg, paths["paths"], inputs=inputs, n_channels=n_type)
     wave_range = cfg.get("g3_fit_wave_range_A") or [float(np.min(fit_spec.wave_bin)),
                                                    float(np.max(fit_spec.wave_bin))]
     libs = list(libraries) if libraries is not None else _build_libraries(cfg)
@@ -230,29 +350,36 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                 f"biblioteca {lib.family_dir} sin declaración (marco, R, cita): "
                 "ninguna biblioteca se ajusta sin declarar su resolución")
     by_name = {lib.name: lib for lib in libs}
-
-    common = dict(lsf=lsf, ext=ext, av_axis=av_axis, infl=infl, dframe=dframe,
-                  fs_native=fit_spec, inputs=inputs, cfg=cfg, n_primary=n_primary,
-                  wave_range=wave_range)
-    tests, fits, test_fs = {}, {}, {}
-    for lib in libs:
-        block, res, fs_lib = _library_test(lib, n_sens=n_sens, **common)
-        tests[lib.name] = block
-        fits[lib.name] = res
-        test_fs[lib.name] = fs_lib
-
     pair = gravity_pair(cfg)
     pair_libs = {cls: by_name[name] for cls, name in pair.items() if name in by_name}
+
+    threshold, _cal = _gof_threshold(cfg, pair_libs.get("young"), inputs, lsf=lsf, ext=ext,
+                                     av_axis=av_axis, dframe=dframe, wave_range=wave_range,
+                                     n_gof=n_gof)
+    common = dict(lsf=lsf, ext=ext, av_axis=av_axis, infl=infl, dframe=dframe,
+                  fs_native=fit_spec, inputs=inputs, cfg=cfg, n_type=n_type,
+                  wave_range=wave_range)
+    tests, fits, test_fs, test_sp = {}, {}, {}, {}
+    for lib in libs:
+        block, res, fs_lib, sp = _library_test(lib, n_gof=n_gof, dchi2_conf=dchi2_conf,
+                                               threshold=threshold, **common)
+        tests[lib.name], fits[lib.name], test_fs[lib.name], test_sp[lib.name] = \
+            block, res, fs_lib, sp
+
     if set(pair_libs) == {"young", "field"}:
         gravity, pl_fit = _gravity_common(pair_libs, alpha_axis=alpha_axis, **common)
-        by_young = {}
+        others = {}
         for lib in libs:
-            if lib.gravity_class == "young" and lib.name != pair_libs["young"].name:
-                g, _ = _gravity_common({"young": lib, "field": pair_libs["field"]},
-                                       alpha_axis=alpha_axis, **common)
-                by_young[lib.name] = {k: g[k] for k in ("dchi2_by_class", "best_class",
-                                                        "resolution", "libraries")}
-        gravity["other_young_libraries"] = by_young
+            if lib.name in (pair_libs["young"].name, pair_libs["field"].name):
+                continue
+            # cada biblioteca extra contra la de campo, a su resolución común y con
+            # sus telúricas enmascaradas en las dos; nunca juntas con la del par
+            g, _ = _gravity_common({lib.gravity_class if lib.gravity_class != "field"
+                                    else "other": lib, "field": pair_libs["field"]},
+                                   alpha_axis=alpha_axis, **common)
+            others[lib.name] = {k: g[k] for k in ("dchi2_by_class", "best_class",
+                                                  "resolution", "libraries")}
+        gravity["other_libraries_vs_field"] = others
         stellar_class = gravity["best_class"] if gravity["best_class"] in pair_libs else "young"
     else:
         missing = sorted({"young", "field"} - set(pair_libs))
@@ -270,13 +397,20 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
     veil_fit = fit_templates(test_fs[lib_best.name], lib_best, ext, av_axis=av_axis,
                              lsf_fwhm_A=lsf, veiling=True, data_frame=dframe,
                              veiling_alpha_axis=cfg.get("g3_veiling_alpha_axis"),
-                             target_fwhm_A=(_target(lsf, [lib_best])
-                                            if tests[lib_best.name]["resolution"]["data_degraded"]
-                                            else None),
+                             target_fwhm_A=test_sp[lib_best.name].model_target,
                              per_spectrum=True)
     veiling_spt_shift = abs(veil_fit["spt_best_code"] - stellar_best["spt_best_code"])
     young_fit = fits[pair_libs["young"].name] if "young" in pair_libs else None
     field_fit = fits[pair_libs["field"].name] if "field" in pair_libs else None
+    gof_best = tests[lib_best.name]["binned_gof"]
+    acceptance = {"gate": "binned_gof", "library": lib_best.name,
+                  "chi2_red": gof_best.get("chi2_red_native_best"),
+                  "threshold": gof_best.get("threshold"),
+                  "threshold_source": gof_best.get("threshold_source"),
+                  "pass": gof_best.get("pass"),
+                  "note": ("acceptance of the template match is judged on the 25 A binned "
+                           "fit; the native fit measures the type (Delta-chi2) and has no "
+                           "absolute gate")}
 
     # indices (per-channel; only if config supplies definitions — D7)
     idx_defs = dict(cfg.get("g3_spt_indices", {}))
@@ -306,9 +440,9 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
     err_sys_parts = [x for x in (spt_disc, veiling_spt_shift) if np.isfinite(x)]
     err_sys = float(np.sqrt(np.sum(np.square(err_sys_parts)))) if err_sys_parts else ""
 
-    native = n_primary == 1
+    native = n_type == 1
     data_used = ("fit_spectrum (native channels, n_eff dof)" if native
-                 else f"fit_spectrum ({n_primary}-channel bins)")
+                 else f"fit_spectrum ({n_type}-channel bins)")
     lib_cite = lib_best.declaration.citation
     rows = [
         _row("spectral_type", stellar_best["spt_best"], "empirical_inference",
@@ -340,7 +474,8 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
         "stage": "g3_template_fit", "run_id": str(cfg.get("run_id", "")),
         "provisional": True,
         "decision": "docs/2026-09-23_decision_g3_resolucion_y_bibliotecas.md",
-        "fit_bin_channels": n_primary, "data_wave_frame": dframe,
+        "type_bin_channels": n_type, "gof_bin_channels": n_gof, "data_wave_frame": dframe,
+        "acceptance": acceptance, "gof_threshold": threshold,
         # etiquetas LEÍDAS de cada biblioteca (PROVENANCE.json), no del config
         "libraries": {lib.name: lib.declaration.citation for lib in libs},
         "libraries_declared_in_config": {
@@ -349,8 +484,7 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
             "g3_template_field_citation": cfg.get("g3_template_field_citation"),
             "note": "config strings are NOT used as labels; each library's "
                     "PROVENANCE.json is (cf. 9dbb3d4)"},
-        "library_tests": {name: {k: v for k, v in blk.items() if k != "fit"}
-                          for name, blk in tests.items()},
+        "library_tests": tests,
         "young": young_fit, "field": field_fit, "nonstellar_powerlaw": pl_fit,
         "gravity_classes": gravity,
         "veiling_variant": {"class": stellar_class, "library": lib_best.name,
@@ -362,7 +496,8 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                           "code": stellar_best["spt_best_code"],
                           "interval": stellar_best["spt_interval"],
                           "edge": stellar_best["edge"],
-                          "chi2_red_min": stellar_best["chi2_red_min"]},
+                          "chi2_red_informative": stellar_best["chi2_red_min"],
+                          "representation": "native (Delta-chi2)"},
         "spt_discrepancy_subtypes": spt_disc,
         "n_bins": int(fit_spec.n_bins), "n_eff": float(fit_spec.n_eff),
     }

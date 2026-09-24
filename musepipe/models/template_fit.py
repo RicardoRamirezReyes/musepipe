@@ -74,7 +74,8 @@ def _template_items(library, per_spectrum):
 def fit_templates(fit_spec, library, extinction, *, av_axis, lsf_fwhm_A,
                   veiling=False, veiling_alpha_axis=None, lambda_ref=_LAMBDA_REF_A,
                   chi2red_inflate_threshold=1.5, data_frame=None, target_fwhm_A=None,
-                  per_spectrum=False, exclude=None, prepared=None):
+                  per_spectrum=False, exclude=None, prepared=None,
+                  dchi2_confidence=1.0):
     """Rank every template by chi2 over (A_V, scale[, veiling]); summarize SpT.
 
     The model is degraded/resampled ONCE per template and reddened per A_V
@@ -158,7 +159,8 @@ def fit_templates(fit_spec, library, extinction, *, av_axis, lsf_fwhm_A,
     for r in ranking:  # best spectrum per subtype
         by_code.setdefault(r["spt_code"], r)
     fitted_codes = np.asarray(sorted(by_code), float)
-    within = [c for c in fitted_codes if by_code[c]["chi2"] - chi2_min <= 1.0]
+    within = [c for c in fitted_codes
+              if by_code[c]["chi2"] - chi2_min <= float(dchi2_confidence)]
     if len(within) == len(fitted_codes) and len(fitted_codes) > 1:
         interval = "not_constrained"
     else:
@@ -176,6 +178,9 @@ def fit_templates(fit_spec, library, extinction, *, av_axis, lsf_fwhm_A,
         "chi2_red_min": chi2_red_min, "n_bins": int(fit_spec.n_bins),
         "n_eff": float(fit_spec.n_eff), "ndof": float(ranking[0]["ndof"]),
         "chi2_by_spt": {spt_label(c): float(by_code[c]["chi2"]) for c in fitted_codes},
+        "dchi2_by_spt": {spt_label(c): float(by_code[c]["chi2"] - chi2_min)
+                         for c in fitted_codes},
+        "dchi2_confidence": float(dchi2_confidence),
         "spt_axis": [float(fitted_codes[0]), float(fitted_codes[-1])],
         "edge": edge,
         "inflate": {"applied": bool(inflate),

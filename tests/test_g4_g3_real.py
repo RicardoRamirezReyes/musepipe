@@ -45,7 +45,7 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(mv["m_star_associated"][0], "excludes")     # P(>75)=0
 
 
-def _make_run(tmp, *, syslim):
+def _make_run(tmp, *, syslim, acceptance=None):
     rd = Path(tmp) / "runs" / "syn"
     (rd / "stages").mkdir(parents=True)
     (rd / "tables").mkdir(parents=True)
@@ -58,6 +58,8 @@ def _make_run(tmp, *, syslim):
         w.writerow(["name", "rest_A", "status"])
         w.writerow(["Halpha", "6562.8", "upper_limit"])
     g3 = {"spt": {"gravity_classes": _GRAV}}
+    if acceptance is not None:
+        g3["spt"]["acceptance"] = acceptance
     if syslim:
         g3["systematics_limited"] = {"accepted": True, "reason": "C3",
                                      "robust_results": {"gravity_class": _GRAV}}
@@ -113,6 +115,20 @@ class BuildMatrixTests(unittest.TestCase):
             amb = _ambiguity_quantification(_cfg(), paths, g3)
             self.assertEqual(amb["status"], "computed")
             self.assertAlmostEqual(amb["mass_prob_combined"]["bd_13_75"], 1.0)
+
+    def test_binned_gof_is_the_acceptance_gate_of_the_gravity(self):
+        """2026-09-24: tipo y gravedad del nativo; la puerta es la bondad binada."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_run(tmp, syslim=True, acceptance={"gate": "binned_gof", "pass": False,
+                                                           "chi2_red": 5.0, "threshold": 1.5})
+            matrix, _ = build_matrix(_cfg(), stage_g4_paths("syn", project_root=root))
+            cell = matrix["T3"]["m_star_background"]
+            self.assertEqual(cell["verdict"], "not_available")
+            self.assertIn("binned GOF failed", cell["source"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_run(tmp, syslim=True, acceptance={"gate": "binned_gof", "pass": True})
+            matrix, _ = build_matrix(_cfg(), stage_g4_paths("syn", project_root=root))
+            self.assertEqual(matrix["T3"]["m_star_background"]["verdict"], "excludes")
 
 
 if __name__ == "__main__":

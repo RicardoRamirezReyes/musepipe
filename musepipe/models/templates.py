@@ -23,7 +23,8 @@ from ..constants import spt_code, spt_label
 from .cache import load_spectrum_npz
 from .manifest import verify_manifest
 
-_GRAVITY_CLASSES = ("young", "field")
+#: ``intermediate``: grupos jóvenes de 10–200 Myr (X-SHYNE), ni 1–10 Myr ni campo.
+_GRAVITY_CLASSES = ("young", "intermediate", "field")
 
 
 class EmpiricalTemplateLibrary:
