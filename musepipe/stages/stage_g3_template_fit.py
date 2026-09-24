@@ -226,6 +226,8 @@ def _binned_gof(res_bin, native, threshold):
         "chi2_red_native_best": chi2_red,
         "av_native_best": (row["av_best"] if row is not None else None),
         "threshold": thr, "threshold_source": (threshold or {}).get("source"),
+        "threshold_rule": (threshold or {}).get("rule"),
+        "threshold_n_templates": (threshold or {}).get("n_templates_used"),
         "pass": ok,
         "binned_best_spt": res_bin["spt_best"], "binned_best_object": res_bin["spt_best_object"],
         "binned_spt_interval": res_bin["spt_interval"], "binned_edge": res_bin["edge"],
@@ -302,18 +304,23 @@ def _gof_threshold(cfg, young_lib, inputs, *, lsf, ext, av_axis, dframe, wave_ra
         return {"value": float(declared), "source": "config g3_gof_chi2red_threshold"}, None
     if inputs is None or young_lib is None:
         return {"value": None, "source": "not calibrated (no per-channel data)"}, None
-    from ..models.calibration import calibrate_gof_threshold
+    from ..models.calibration import CALIBRATION_RULES, calibrate_gof_threshold
     cal = calibrate_gof_threshold(
         young_lib, inputs, wave_range=wave_range, n_channels=int(n_gof), lsf_fwhm_A=lsf,
         extinction=ext, av_axis=av_axis, data_frame=dframe,
         n_draws=int(cfg.get("g3_gof_calibration_n_draws", 20)),
         seed=int(cfg.get("g3_seed", 0)),
         percentile=float(cfg.get("g3_gof_calibration_percentile", 95.0)),
-        max_masked_frac=float(cfg.get("g3_fit_bin_max_masked_frac", 0.5)))
+        max_masked_frac=float(cfg.get("g3_fit_bin_max_masked_frac", 0.5)),
+        rule=str(cfg.get("g3_gof_calibration", CALIBRATION_RULES[0])))
     summary = {k: v for k, v in cal.items() if k != "rows"}
     return {"value": cal["threshold_proposed"],
-            "source": f"calibrated in-run on {young_lib.name} (Q1, binned, "
-                      f"p{summary['percentile']:.0f} of {summary['distribution']['n']})",
+            "rule": cal["rule"], "n_templates_used": cal["n_templates_used"],
+            "n_templates_library": cal["n_templates_library"],
+            "source": f"calibrated in-run on {young_lib.name} (Q1, binned, rule "
+                      f"{cal['rule']}, {cal['n_templates_used']}/{cal['n_templates_library']} "
+                      f"templates, p{summary['percentile']:.0f} of "
+                      f"{summary['distribution']['n']})",
             "calibration": summary}, cal
 
 
@@ -407,6 +414,8 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                   "chi2_red": gof_best.get("chi2_red_native_best"),
                   "threshold": gof_best.get("threshold"),
                   "threshold_source": gof_best.get("threshold_source"),
+                  "threshold_rule": gof_best.get("threshold_rule"),
+                  "threshold_n_templates": gof_best.get("threshold_n_templates"),
                   "pass": gof_best.get("pass"),
                   "note": ("acceptance of the template match is judged on the 25 A binned "
                            "fit; the native fit measures the type (Delta-chi2) and has no "
