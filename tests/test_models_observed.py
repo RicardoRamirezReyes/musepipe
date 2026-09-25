@@ -100,6 +100,19 @@ class MaskTests(unittest.TestCase):
             self.assertFalse(mask[np.argmin(np.abs(wave - 6520.0))])  # far channel free
             self.assertEqual(prov["line_windows"]["n_lines"], 1)
 
+    def test_default_telluric_bands_are_o2_only(self):
+        """D9 por defecto (2026-09-24): O2 B y O2 A; H2O 7130-7360 y 8100-8400 libres."""
+        with tempfile.TemporaryDirectory() as tmp:
+            n = 5000
+            rp = _make_run(tmp, n=n, wave0=6300.0, dl=0.5)
+            wave = 6300.0 + 0.5 * np.arange(n)
+            fm = {"use_stage04b_bad_mask": True, "line_window_kms": 300.0}  # sin bandas
+            mask, prov = build_fit_masks(_cfg(g3_fit_masks=fm), wave, rp)
+            at = lambda w: bool(mask[np.argmin(np.abs(wave - w))])
+            self.assertTrue(at(6900.0) and at(7650.0))
+            self.assertFalse(at(7250.0) or at(8190.0))
+            self.assertIn("default D9", prov["telluric_bands"]["source"])
+
     def test_bad_mask_shape_mismatch_parada(self):
         with tempfile.TemporaryDirectory() as tmp:
             rp = _make_run(tmp, n=100)

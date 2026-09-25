@@ -27,7 +27,7 @@ import numpy as np
 from ..config import load_run_config
 from ..models import validate_label
 from ..models.extinction import CCMExtinction
-from ..models.indices import indices_to_spt, measure_indices
+from ..models.indices import indices_to_spt, measure_indices, select_in_range
 from ..models.libraries import (data_frame, gravity_pair, resolve_declaration,
                                 template_library_entries)
 from ..models.manifest import library_root
@@ -423,6 +423,7 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
 
     # indices (per-channel; only if config supplies definitions — D7)
     idx_defs = dict(cfg.get("g3_spt_indices", {}))
+    idx_used, idx_excluded = {}, {}
     idx_cal = dict(cfg.get("g3_spt_indices_calibration", {}))
     indices, idx_skipped = {}, {}
     spt_idx_code, spt_idx_err = float("nan"), float("nan")
@@ -441,8 +442,11 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                 indices.update(measure_indices(pw, pf, pe, {iname: idef}, mask=pmask, seed=seed))
             except RuntimeError as exc:
                 idx_skipped[iname] = str(exc)
-        if indices:
-            spt_idx_code, spt_idx_err = indices_to_spt(indices, idx_cal)
+        # Índices fuera del rango de su calibración: no se usan (decisión
+        # 2026-09-24, docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md §5.2).
+        idx_used, idx_excluded = select_in_range(indices, idx_cal)
+        if idx_used:
+            spt_idx_code, spt_idx_err = indices_to_spt(idx_used, idx_cal)
 
     spt_disc = (abs(stellar_best["spt_best_code"] - spt_idx_code)
                 if np.isfinite(spt_idx_code) else float("nan"))
@@ -471,12 +475,16 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
         _row("spt_indices",
              (float(spt_idx_code) if np.isfinite(spt_idx_code) else ""),
              "empirical_inference" if np.isfinite(spt_idx_code) else "not_constrained",
-             unit="SpT_subtype", method="spectral indices",
+             unit="SpT_subtype",
              calibrations_citations="; ".join(cfg.get("g3_spt_indices_citations", [])),
              err_stat_lo=(spt_idx_err if np.isfinite(spt_idx_err) else ""),
              err_stat_hi=(spt_idx_err if np.isfinite(spt_idx_err) else ""),
+             method=(f"spectral indices in calibration range: {sorted(idx_used)}"
+                     if idx_used else "spectral indices"),
              limitations=("no index definitions in config (D7 transcription pending)"
-                          if not idx_defs else "")),
+                          if not idx_defs else
+                          (f"excluded out of calibration range: {sorted(idx_excluded)}"
+                           if idx_excluded else ""))),
     ]
 
     fit_json = {
@@ -500,7 +508,12 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                             "spt_best": veil_fit["spt_best"],
                             "spt_shift": veiling_spt_shift, "chi2_min": veil_fit["chi2_min"]},
         "indices": indices, "indices_skipped": idx_skipped,
-        "spt_indices": {"code": spt_idx_code, "err": spt_idx_err},
+        "spt_indices": {"code": spt_idx_code, "err": spt_idx_err,
+                        "used": sorted(idx_used), "n_used": len(idx_used),
+                        "excluded_out_of_range": idx_excluded,
+                        "status": ("computed" if idx_used else "not_available"),
+                        "rule": ("indices outside their calibration range are not used "
+                                 "(docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md)")},
         "spt_templates": {"class": stellar_class, "library": lib_best.name,
                           "code": stellar_best["spt_best_code"],
                           "interval": stellar_best["spt_interval"],

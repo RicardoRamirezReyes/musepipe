@@ -25,6 +25,15 @@ G1_COV_FILE = "g1_channel_covariance.npz"
 G2_TABLE = "g2_line_measurements.csv"
 
 
+#: Bandas telúricas enmascaradas EN EL DATO por defecto (D9): solo O2 B y O2 A.
+#: Las dos de H2O (7130–7360, 8100–8400) se quitaron el 2026-09-24: el residuo
+#: telúrico medido allí es compatible con cero (α = −0.01 ± 0.18 y −0.13 ± 0.16
+#: en las primarias) y el sistemático que declara A3 ya va en ``flux_err_total``
+#: (``docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md``). Las máscaras
+#: propias de las bibliotecas sin corrección telúrica no cambian.
+DEFAULT_TELLURIC_BANDS_A = ((6860.0, 6960.0), (7590.0, 7700.0))
+
+
 @dataclass(frozen=True)
 class FitSpectrum:
     """Frozen fit-ready spectrum — the only real-data input to the fits.
@@ -136,12 +145,16 @@ def build_fit_masks(cfg, wave, run_paths) -> tuple[np.ndarray, dict]:
     prov["line_windows"] = {"n_lines": len(lines), "window_kms": kms,
                             "n_added": int(mask.sum()) - before}
 
-    bands = fm.get("telluric_bands_A", [])
+    bands = fm.get("telluric_bands_A", DEFAULT_TELLURIC_BANDS_A)
     before = int(mask.sum())
     for lo, hi in bands:
         mask |= (wave >= float(lo)) & (wave <= float(hi))
     prov["telluric_bands"] = {"bands_A": [list(b) for b in bands],
-                              "n_added": int(mask.sum()) - before}
+                              "n_added": int(mask.sum()) - before,
+                              "source": ("config g3_fit_masks.telluric_bands_A"
+                                         if "telluric_bands_A" in fm else
+                                         "default D9 (O2 B + O2 A; docs/2026-09-24_"
+                                         "residuo_telurico_h2o_y_mascara_d9.md)")}
     prov["n_excluded_total"] = int(mask.sum())
     return mask, prov
 
@@ -414,7 +427,7 @@ def plot_fit_spectrum(out_path, *, wave, flux, mask, fit_spec, wave_range):
 
 
 __all__ = [
-    "DEFAULT_BIN_CHANNELS", "FitSpectrum", "build_fit_masks", "degrade_observed",
+    "DEFAULT_BIN_CHANNELS", "DEFAULT_TELLURIC_BANDS_A", "FitSpectrum", "build_fit_masks", "degrade_observed",
     "fit_spectrum", "fit_spectrum_from_inputs", "load_final_spectrum", "load_fit_inputs",
     "neff_over_n_per_channel", "plot_fit_spectrum", "rebin_for_fit",
 ]

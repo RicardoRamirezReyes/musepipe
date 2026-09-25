@@ -498,6 +498,67 @@ class CalibrationTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# índices fuera de rango de calibración y máscara D9 por defecto (2026-09-24)
+# --------------------------------------------------------------------------- #
+_RIDDICK = {  # Riddick+2007 Tabla A3/A2, como en los configs de publicación
+    "PC3": {"spt_poly": [2.0395, 24.61, -50.292, 39.489], "center": 0.956, "range": "M3-M8"},
+    "VO2": {"spt_poly": [2.6102, -7.9389, -8.3231, -14.66], "center": 0.963, "range": "M3-M8"},
+    "R1": {"spt_poly": [2.8078, 21.085, -53.025, 60.755], "center": 1.044, "range": "M2.5-M8"},
+}
+
+
+class IndexRangeTests(unittest.TestCase):
+    def test_range_maps_through_the_polynomial(self):
+        from musepipe.models.indices import calibration_index_range
+        for name, cal in _RIDDICK.items():
+            r = calibration_index_range(cal)
+            lo, hi = r["index"]
+            coeffs = np.asarray(cal["spt_poly"], float)[::-1]
+            spts = sorted(np.polyval(coeffs, [lo - cal["center"], hi - cal["center"]]))
+            np.testing.assert_allclose(spts, r["spt"], atol=1e-8, err_msg=name)
+        self.assertEqual(calibration_index_range({"spt_poly": [0, 1], "index_range": [2, 1]})
+                         ["index"], [1.0, 2.0])
+        self.assertIsNone(calibration_index_range({"spt_poly": [0, 1]}))
+
+    def test_out_of_range_indices_are_excluded_and_declared(self):
+        from musepipe.models.indices import indices_to_spt, select_in_range
+        # los valores medidos con la máscara D9 nueva (42B b, 2026-09-24)
+        vals = {"PC3": {"value": 2.861, "err": 0.05}, "VO2": {"value": 0.219, "err": 0.02},
+                "R1": {"value": 1.10, "err": 0.01}, "Na_a": {"value": 1.0, "err": 0.01}}
+        used, excl = select_in_range(vals, _RIDDICK)
+        self.assertEqual(sorted(used), ["R1"])
+        self.assertEqual(sorted(excl), ["PC3", "VO2"])
+        self.assertIn("outside calibration range", excl["PC3"]["reason"])
+        self.assertEqual(excl["PC3"]["spt_range"], [3.0, 8.0])
+        self.assertNotIn("Na_a", used)            # sin calibración: no entra en el tipo
+        spt, _ = indices_to_spt(used, _RIDDICK)
+        self.assertTrue(2.5 <= spt <= 8.0)
+        none_used, _ = select_in_range({"PC3": vals["PC3"]}, _RIDDICK)
+        self.assertEqual(none_used, {})
+
+    def test_v3_uses_only_in_range_indices_and_says_how_many(self):
+        from musepipe.stages.stage_g3_assemble import _v3
+        tj = {"spt_templates": {"code": 7.5},
+              "spt_indices": {"code": 7.0, "err": 0.3, "used": ["R1"],
+                              "excluded_out_of_range": {"PC3": {}, "VO2": {}}}}
+        v = _v3(tj)
+        self.assertTrue(v["pass"])
+        self.assertEqual(v["n_indices_used"], 1)
+        self.assertEqual(v["indices_excluded_out_of_range"], ["PC3", "VO2"])
+        tj["spt_indices"] = {"code": float("nan"), "err": float("nan"), "used": [],
+                             "excluded_out_of_range": {"PC3": {}}}
+        v = _v3(tj)
+        self.assertEqual(v["status"], "not_checked")
+        self.assertEqual(v["n_indices_used"], 0)
+        self.assertNotIn("pass", v)
+
+    def test_default_d9_telluric_mask_is_o2_only(self):
+        from musepipe.models.observed import DEFAULT_TELLURIC_BANDS_A
+        self.assertEqual([list(b) for b in DEFAULT_TELLURIC_BANDS_A],
+                         [[6860.0, 6960.0], [7590.0, 7700.0]])
+
+
+# --------------------------------------------------------------------------- #
 # etiquetas desde el disco
 # --------------------------------------------------------------------------- #
 class LabelTests(unittest.TestCase):

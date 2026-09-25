@@ -181,14 +181,21 @@ def _v2(atmo_qc):
 
 
 def _v3(template_json):
+    """|SpT_plantillas − SpT_índices| ≤ 2, con los índices EN RANGO de su
+    calibración solamente (2026-09-24); dice cuántos y cuáles."""
     st = template_json["spt_templates"]["code"]
-    si = template_json["spt_indices"]["code"]
+    idx = template_json["spt_indices"]
+    si = idx["code"]
+    used = idx.get("used")
+    info = {"indices_used": used, "n_indices_used": (len(used) if used is not None else None),
+            "indices_excluded_out_of_range": sorted(idx.get("excluded_out_of_range") or {})}
     if si is None or not np.isfinite(si):
         return {"status": "not_checked", "spt_templates": st,
-                "reason": "spt_indices not constrained"}
+                "reason": ("no spectral index within its calibration range"
+                           if used is not None else "spt_indices not constrained"), **info}
     diff = abs(float(st) - float(si))
     return {"spt_templates": st, "spt_indices": si, "diff_subtypes": diff,
-            "pass": diff <= 2.0}
+            "pass": diff <= 2.0, **info}
 
 
 def _v5(accretion_qc, h03_qc):
@@ -481,7 +488,8 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
     if not v2["pass"]:
         stops.append(f"V2 undeclared 3-sigma edge on axes {v2['undeclared_edges']}")
     if v3.get("pass") is False:
-        stops.append(f"V3 |SpT_templates-SpT_indices|={v3['diff_subtypes']:.1f} > 2 subtypes")
+        stops.append(f"V3 |SpT_templates-SpT_indices|={v3['diff_subtypes']:.1f} > 2 subtypes "
+                     f"(indices in calibration range: {v3.get('indices_used')})")
     if v5.get("pass") is False:
         stops.append("V5 H03 consistency failed")
     zero_cov = [f for f, c in coverage.items() if c <= 0.01]

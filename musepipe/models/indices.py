@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..constants import spt_code
+
 
 def _window_mean(wave, flux, good, windows, name):
     sel = np.zeros(wave.size, dtype=bool)
@@ -91,4 +93,78 @@ def indices_to_spt(index_values, calibration) -> tuple[float, float]:
     return spt, err
 
 
-__all__ = ["indices_to_spt", "measure_indices"]
+def calibration_index_range(cal):
+    """Rango de VALORES del índice en que vale su calibración, o ``None``.
+
+    Decisión del autor 2026-09-24 (``docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md``
+    §5.2): un índice cuyo valor medido cae fuera del rango de su calibración no
+    se usa. La calibración publicada declara el rango en TIPO (``range``:
+    ``"M3-M8"``, Riddick+2007); aquí se convierte a rango de índice resolviendo
+    SpT(x) = extremos sobre la rama monótona del polinomio que contiene el
+    centro (x = índice − center). ``index_range: [lo, hi]`` explícito manda.
+    Devuelve ``{"index": [lo, hi], "spt": [lo, hi] | None, "source": str}``.
+    """
+    if cal.get("index_range") is not None:
+        lo, hi = (float(v) for v in cal["index_range"])
+        return {"index": [min(lo, hi), max(lo, hi)], "spt": None, "source": "index_range"}
+    rng = cal.get("range")
+    if not rng:
+        return None
+    parts = [t.strip() for t in str(rng).replace("–", "-").split("-") if t.strip()]
+    if len(parts) != 2:
+        raise RuntimeError(f"rango de calibración ilegible: {rng!r}")
+    s_lo, s_hi = sorted((spt_code(parts[0]), spt_code(parts[1])))
+    center = float(cal.get("center", 0.0))
+    coeffs = np.asarray(cal["spt_poly"], float)[::-1]
+    deriv = np.polyder(coeffs)
+    # rama monótona que contiene x = 0: entre las raíces reales de la derivada
+    roots = np.sort([r.real for r in np.roots(deriv) if abs(r.imag) < 1e-12]) \
+        if deriv.size > 1 else np.array([])
+    left = max([r for r in roots if r < 0.0], default=-np.inf)
+    right = min([r for r in roots if r > 0.0], default=np.inf)
+    xs = []
+    for target in (s_lo, s_hi):
+        c = coeffs.copy()
+        c[-1] -= target
+        sol = [r.real for r in np.roots(c) if abs(r.imag) < 1e-9
+               and left - 1e-12 <= r.real <= right + 1e-12]
+        if not sol:
+            return {"index": None, "spt": [s_lo, s_hi],
+                    "source": f"range {rng!r}: no solution on the monotonic branch"}
+        xs.append(min(sol, key=abs))
+    lo, hi = sorted(x + center for x in xs)
+    return {"index": [float(lo), float(hi)], "spt": [s_lo, s_hi],
+            "source": f"range {rng!r} mapped through spt_poly (monotonic branch)"}
+
+
+def select_in_range(index_values, calibration):
+    """Separa los índices calibrados en USADOS (valor dentro del rango de su
+    calibración) y EXCLUIDOS (fuera, o rango no determinable), con el motivo.
+
+    Solo mira los índices que tienen calibración (los de gravedad, como Na I,
+    no entran en el tipo). Devuelve ``(usados, excluidos)``; ``excluidos`` es
+    ``{name: {value, index_range, spt_range, reason}}``.
+    """
+    used, excluded = {}, {}
+    for name, cal in calibration.items():
+        if name not in index_values:
+            continue
+        v = float(index_values[name]["value"])
+        rng = calibration_index_range(cal)
+        if rng is None or rng.get("index") is None:
+            excluded[name] = {"value": v, "index_range": None,
+                              "spt_range": (rng or {}).get("spt"),
+                              "reason": ("calibration range not declared" if rng is None
+                                         else rng["source"])}
+            continue
+        lo, hi = rng["index"]
+        if lo <= v <= hi:
+            used[name] = index_values[name]
+        else:
+            excluded[name] = {"value": v, "index_range": [lo, hi], "spt_range": rng["spt"],
+                              "reason": f"value {v:.4f} outside calibration range "
+                                        f"[{lo:.4f}, {hi:.4f}] ({cal.get('range', 'index_range')})"}
+    return used, excluded
+
+
+__all__ = ["calibration_index_range", "indices_to_spt", "measure_indices", "select_in_range"]
