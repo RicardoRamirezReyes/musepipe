@@ -559,6 +559,75 @@ class IndexRangeTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# R por plantilla desde la rendija VIS de la cabecera original (bug 2026-09-25)
+# --------------------------------------------------------------------------- #
+class XshooterHeaderRTests(unittest.TestCase):
+    def _family(self, tmp, specs, *, write_headers=True):
+        """specs: [(npz, source_file, slit | None, extra_meta)]"""
+        from astropy.io import fits
+        fam = Path(tmp) / "templates_young"
+        (fam / "_source" / "CAT").mkdir(parents=True)
+        rels = []
+        for npz, src, slit, extra in specs:
+            write_spectrum_npz(fam / npz, _WAVE, _tflux(5.0),
+                               {"spt": "M5", "object": npz[:-4], "source_file": src, **extra})
+            rels.append(npz)
+            if write_headers and slit is not None:
+                h = fits.Header()
+                h["HIERARCH ESO SEQ ARM"] = "VIS"
+                h["HIERARCH ESO INS OPTI4 NAME"] = slit
+                fits.PrimaryHDU(header=h).writeto(fam / "_source" / "CAT" / src)
+        write_manifest(fam, rels)
+        (fam / PROVENANCE_NAME).write_text(json.dumps({"citation": "Manara+13,17"}))
+        return fam
+
+    def test_map_and_header_parsing(self):
+        from astropy.io import fits
+        from musepipe.models.libraries import XSHOOTER_VIS_R_BY_SLIT, xshooter_vis_R_from_header
+        self.assertEqual(XSHOOTER_VIS_R_BY_SLIT[0.4], 18400.0)
+        self.assertEqual(XSHOOTER_VIS_R_BY_SLIT[0.9], 8900.0)
+        h = fits.Header()
+        h["HIERARCH ESO SEQ ARM"] = "VIS"
+        h["HIERARCH ESO INS OPTI4 NAME"] = "0.4x11"
+        r, w, src = xshooter_vis_R_from_header(h)
+        self.assertEqual((r, w), (18400.0, 0.4))
+        self.assertIn("OPTI4", src)
+        h["HIERARCH ESO SEQ ARM"] = "NIR"
+        self.assertIsNone(xshooter_vis_R_from_header(h))
+        self.assertIsNone(xshooter_vis_R_from_header(fits.Header()))
+
+    def test_per_template_R_comes_from_the_header_and_reaches_the_qc(self):
+        import warnings as _w
+        with tempfile.TemporaryDirectory() as tmp:
+            fam = self._family(tmp, [
+                ("a_M5.npz", "A_V.fit", "0.4x11", {}),      # Manara+2017 a 0.4″
+                ("b_M5.npz", "B_V.fit", "0.9x11", {}),
+                ("c_M5.npz", "C_V.fit", "1.5x11", {}),
+                ("d_M5.npz", "D_V.fit", None, {}),          # sin cabecera
+                ("e_M5.npz", "E_V.fit", "0.4x11", {"R": 6505.0, "R_source": "IDP SPEC_RES"}),
+            ])
+            decl = resolve_declaration({"name": "templates_young", "subdir": "templates_young",
+                                        "gravity_class": "young"}, fam)
+            with _w.catch_warnings(record=True) as caught:
+                _w.simplefilter("always")
+                lib = EmpiricalTemplateLibrary(fam, gravity_class="young", citation="c",
+                                               version="v", declaration=decl)
+            self.assertTrue(any("sin cabecera" in str(c.message) for c in caught))
+            tab = lib.resolution_table()
+            self.assertEqual(tab["a_M5.npz"]["R"], 18400.0)
+            self.assertEqual(tab["b_M5.npz"]["R"], 8900.0)
+            self.assertEqual(tab["c_M5.npz"]["R"], 5000.0)
+            self.assertIn("OPTI4", tab["a_M5.npz"]["source"])
+            self.assertEqual(tab["d_M5.npz"]["R"], 8800.0)     # default declarado, con aviso
+            self.assertIn("header missing", tab["d_M5.npz"]["source"])
+            self.assertEqual(tab["e_M5.npz"]["R"], 6505.0)     # la meta del archivo manda
+            self.assertEqual(tab["e_M5.npz"]["source"], "IDP SPEC_RES")
+            items = {m["object"]: lib.load_entry(c, p, m) for c, p, m in lib.entries()}
+            self.assertEqual(items["a_M5"].meta["declared_resolution_R"], 18400.0)
+            self.assertEqual(items["d_M5"].meta["declared_resolution_R"], 8800.0)
+
+
+# --------------------------------------------------------------------------- #
 # etiquetas desde el disco
 # --------------------------------------------------------------------------- #
 class LabelTests(unittest.TestCase):

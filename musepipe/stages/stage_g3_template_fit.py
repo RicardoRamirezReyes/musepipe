@@ -252,7 +252,8 @@ def _library_test(lib, *, lsf, ext, av_axis, infl, dframe, fs_native, inputs, cf
         res_b["bin_channels"] = int(n_gof)
     native = _native_type(res, sp)
     block = {
-        "provenance": (lib.declaration.to_qc(n_by_spt=lib.n_by_spt())
+        "provenance": ({**lib.declaration.to_qc(n_by_spt=lib.n_by_spt()),
+                        "resolution_by_template": lib.resolution_table()}
                        if lib.declaration is not None else {"name": lib.name}),
         "resolution": sp.resolution("MUSE LSF (template degraded)",
                                     "library resolution (data degraded, Q2)"),

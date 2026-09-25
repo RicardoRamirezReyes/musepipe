@@ -63,6 +63,47 @@ _PROV_KEYS = {
     "age": ("age", "age_myr", "age_note"),
 }
 
+#: Poder resolutivo nominal del brazo VIS de X-shooter por anchura de rendija.
+#: Fuente: página de características del instrumento de ESO
+#: (https://www.eso.org/sci/facilities/paranal/instruments/xshooter/inst.html,
+#: última actualización 2022-08-23, que remite al X-shooter User Manual como
+#: referencia): 0.4″ 18400, 0.7″ 11400, 0.9″ 8900, 1.2″ 6500, 1.5″ 5000.
+#: (El 6700 para 1.2″ que circula en otras versiones del manual no coincide
+#: con esa página; ninguna plantilla de las bibliotecas actuales usa 1.2″.)
+XSHOOTER_VIS_R_BY_SLIT = {0.4: 18400.0, 0.7: 11400.0, 0.9: 8900.0, 1.2: 6500.0, 1.5: 5000.0}
+XSHOOTER_VIS_R_CITATION = ("ESO X-shooter instrument description "
+                           "(eso.org/sci/facilities/paranal/instruments/xshooter/inst.html, "
+                           "2022-08-23; ref. X-shooter User Manual): VIS R por rendija")
+
+
+def xshooter_vis_R_from_header(header):
+    """``(R, slit_arcsec, source)`` del brazo VIS de X-shooter a partir de la
+    cabecera ORIGINAL (``ESO INS OPTI4 NAME`` = rendija VIS, p. ej. ``0.4x11``;
+    ``ESO SEQ ARM`` = VIS), o ``None`` si la cabecera no lo dice."""
+    def get(key):
+        for k in (key, "HIERARCH " + key):
+            if k in header:
+                return header[k]
+        return None
+    arm = get("ESO SEQ ARM")
+    slit = get("ESO INS OPTI4 NAME")
+    if slit is None or (arm is not None and str(arm).strip().upper() != "VIS"):
+        return None
+    try:
+        width = float(str(slit).lower().split("x")[0])
+    except ValueError:
+        return None
+    match = [w for w in XSHOOTER_VIS_R_BY_SLIT if abs(w - width) < 0.01]
+    if not match:
+        return None
+    return (XSHOOTER_VIS_R_BY_SLIT[match[0]], width,
+            f"FITS header ESO INS OPTI4 NAME = {str(slit).strip()!r} -> {XSHOOTER_VIS_R_CITATION}")
+
+
+def is_xshooter(decl) -> bool:
+    return decl is not None and "x-shooter" in str(decl.instrument or "").lower()
+
+
 #: Resolución de las plantillas de Manara+2013 por objeto, de su Tabla 2 (rendija
 #: VIS) y §2.2: R = 17400 / 8800 / 5400 para 0.4″ / 0.9″ / 1.5″.
 _MANARA13_R_BY_OBJECT = {
@@ -93,9 +134,12 @@ DOCUMENTED_DEFAULTS = {
         "resolution_R": 8800.0,
         "resolution_R_by_object": dict(_MANARA13_R_BY_OBJECT),
         "resolution_source": (
-            "Manara et al. 2013 (A&A 551, A107) §2.2 y Tabla 2: VIS R = 17400/8800/5400 "
-            "para rendija 0.4″/0.9″/1.5″, asignada por objeto. Los objetos de Manara "
-            "et al. 2017 (A&A 605, A86) llevan R = 8800 (0.9″) SIN verificar su rendija"),
+            "POR PLANTILLA, de la rendija VIS de su FITS original (_source/, ESO INS "
+            "OPTI4 NAME) con la tabla de ESO (XSHOOTER_VIS_R_BY_SLIT); corregido el "
+            "2026-09-25: antes todos los objetos de Manara et al. 2017 llevaban 8800 y "
+            "13 de 17 son 0.4″ (R = 18400). Solo si falta la cabecera: Manara et al. "
+            "2013 §2.2 y Tabla 2 por objeto (17400/8800/5400 para 0.4″/0.9″/1.5″) o "
+            "8800, con aviso"),
     },
     "templates_field": {
         "kind": "empirical",
@@ -168,7 +212,7 @@ class LibraryDeclaration:
         ``R = inf``.
         """
         meta = spectrum_meta or {}
-        for key in ("resolution_R", "R"):
+        for key in ("resolution_R", "R", "resolution_R_header"):
             if meta.get(key) not in (None, ""):
                 return float(meta[key]), None
         obj = meta.get("object")
@@ -385,6 +429,8 @@ def data_frame(cfg):
 
 
 __all__ = [
+    "XSHOOTER_VIS_R_BY_SLIT", "XSHOOTER_VIS_R_CITATION", "is_xshooter",
+    "xshooter_vis_R_from_header",
     "DATA_FRAME_DEFAULT", "DEFAULT_GRAVITY_PAIR", "DEFAULT_TEMPLATE_ENTRIES",
     "DOCUMENTED_DEFAULTS", "LibraryDeclaration", "data_frame", "gravity_pair",
     "read_provenance", "resolve_declaration", "template_library_entries",

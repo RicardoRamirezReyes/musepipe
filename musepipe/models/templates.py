@@ -14,6 +14,7 @@ can apply the D2 rule (don't degrade a template coarser than the LSF).
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,64 @@ class EmpiricalTemplateLibrary:
         if not self._by_code:
             raise RuntimeError(f"no template spectra under {self.family_dir}")
         self._codes = np.array(sorted(self._by_code), dtype=np.float64)
+        self._resolve_per_template_R()
+
+    def _resolve_per_template_R(self):
+        """R por plantilla de las bibliotecas X-shooter (bug 2026-09-25).
+
+        Si la meta del espectro no trae ``R``/``resolution_R`` (las de Manara no
+        lo traen; las del archivo ESO sí, de SPEC_RES), se lee la rendija VIS de
+        su FITS ORIGINAL (``_source/*/<source_file>``, ``ESO INS OPTI4 NAME``) y
+        se traduce con la tabla de ESO. Sin cabecera, la R declarada por la
+        biblioteca, con aviso. El resultado va a la meta (``resolution_R_header``
+        y ``resolution_R_source``) y a :meth:`resolution_table` para el QC.
+        """
+        from .libraries import is_xshooter, xshooter_vis_R_from_header
+        decl = self.declaration
+        for code, entries in self._by_code.items():
+            for k, (path, meta) in enumerate(entries):
+                meta = dict(meta)
+                if meta.get("R") not in (None, "") or meta.get("resolution_R") not in (None, ""):
+                    meta.setdefault("resolution_R_source",
+                                    meta.get("R_source") or "spectrum meta (R)")
+                elif is_xshooter(decl):
+                    got = None
+                    src = meta.get("source_file")
+                    hits = sorted(self.family_dir.glob(f"_source/*/{src}")) if src else []
+                    if hits:
+                        from astropy.io import fits
+                        got = xshooter_vis_R_from_header(fits.getheader(hits[0]))
+                    if got is not None:
+                        meta["resolution_R_header"] = got[0]
+                        meta["slit_vis_arcsec"] = got[1]
+                        meta["resolution_R_source"] = got[2]
+                    else:
+                        r, _ = decl.resolution_for(meta)
+                        warnings.warn(f"{self.name}/{Path(path).name}: sin cabecera X-shooter "
+                                      f"legible; se usa la R declarada ({r})", RuntimeWarning)
+                        meta["resolution_R_source"] = ("declared default (original header "
+                                                       "missing or unreadable)")
+                entries[k] = (path, meta)
+
+    def resolution_table(self) -> dict:
+        """``{npz: {object, spt, R, source}}`` — la R con la que se degrada cada
+        plantilla y de dónde sale (procedencia del QC)."""
+        out = {}
+        for code in self._codes:
+            for path, meta in self._by_code[code]:
+                r = None
+                if self.declaration is not None:
+                    r, fw = self.declaration.resolution_for(meta)
+                    if r is None:
+                        r = f"FWHM {fw} A"
+                out[Path(path).name] = {
+                    "object": meta.get("object", Path(path).stem), "spt": meta.get("spt"),
+                    "R": (None if r is None else (r if isinstance(r, str) else
+                                                  ("inf" if np.isinf(r) else float(r)))),
+                    "slit_vis_arcsec": meta.get("slit_vis_arcsec"),
+                    "source": meta.get("resolution_R_source",
+                                       "library declaration (by object / library R)")}
+        return out
 
     # -- protocol ---------------------------------------------------------- #
     def grid(self) -> dict:
