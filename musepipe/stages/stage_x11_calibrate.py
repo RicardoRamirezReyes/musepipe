@@ -348,8 +348,11 @@ def _psf_frac_from_qc(qc):
 
 
 def _sky_frac_from_qc(qc):
+    # Sin QC de A2 el termino vale cero, igual que antes, pero ahora lo dice: un
+    # run que no corrio A2 no puede entregar un presupuesto de error que parezca
+    # completo. Mismo criterio que `_psf_frac_from_qc`.
     if not qc:
-        return 0.0, []
+        return 0.0, ["A2 sky QC unavailable; sky term set to zero."]
     for key in ("systematic_frac", "sky_systematic_frac", "residual_systematic_frac"):
         if key in qc:
             return max(float(qc[key]), 0.0), []
@@ -361,8 +364,11 @@ def _sky_frac_from_qc(qc):
 
 
 def _telluric_fracs_from_qc(qc):
+    # Sin QC de A3 el termino telurico queda vacio y lo dice. Callar aqui fue lo
+    # que dejo el D2 de `ROXs12b_invvar` (el cubo de publicacion) del 2026-09-22
+    # sin `sys_telluric` y sin un solo aviso: A3 no se habia corrido sobre ese cubo.
     if not qc:
-        return {}, []
+        return {}, ["A3 telluric QC unavailable; telluric term set to zero."]
     fracs = {}
     explicit = qc.get("telluric_systematic_frac_by_band") or qc.get("systematic_frac_by_band")
     if isinstance(explicit, dict):
