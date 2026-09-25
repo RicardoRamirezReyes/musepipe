@@ -223,6 +223,14 @@ def build_matrix(cfg, paths):
     grav = (g3.get("spt", {}).get("gravity_classes")
             or g3.get("systematics_limited", {}).get("robust_results", {}).get("gravity_class") or {})
     t3_grav = _t3_gravity(grav, excl, disfav)
+    # Puerta de aceptación (2026-09-24): el tipo y la gravedad se miden en el
+    # ajuste nativo (Δχ²), pero la plantilla sólo se acepta si su bondad en bins de
+    # 25 Å pasa el umbral calibrado. Si falla, la gravedad no se usa (no se
+    # castiga: not_available). Sin el bloque (QC anteriores), como antes.
+    acceptance = g3.get("spt", {}).get("acceptance") or {}
+    gof_failed = acceptance.get("pass") is False
+    if gof_failed:
+        t3_grav = {h: ("not_available", None) for h in HYPOTHESES}
     # mass component only if trustworthy (not systematics-limited / deferred)
     mass_ok = grav and not g3_syslim and not g3_deferred
     mass_probs = _mass_probabilities(paths["g3_mass_posterior"], cfg.get("g4_mass_boundaries_mjup", [13.0, 75.0])) if mass_ok else None
@@ -233,6 +241,8 @@ def build_matrix(cfg, paths):
         mvh = t3_mass.get(h) if t3_mass else None
         v, val = _combine_verdicts(gvh, mvh)
         note = "" if mvh else ("; mass systematics-limited" if g3_syslim else "; mass n/a")
+        if gof_failed:
+            note += "; gravity n/a: template binned GOF failed"
         matrix["T3"][h] = _cell(v, val, "g3.gravity_class(dchi2)+mass" + note)
 
     rad = None if (g3_syslim or g3_deferred) else _table_value(paths, "radius")

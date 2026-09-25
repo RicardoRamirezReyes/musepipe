@@ -21,8 +21,8 @@
     "display": "ROXs 12 b",
     "second_epoch_run": "ROXs12b_OB3444577",
     "second_epoch_note": "OB 3444577, 2022-08-31, 7 exposiciones: la noche de peor calidad (seeing 0.84 frente a 0.57, tau0 2.1 frente a 6.6 ms, ruido en Halpha 18.8x peor). No se publica sobre ella; se usa para ensenar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
-    "spt_source_dir": "g3_real_invvar_20260920T095520",
-    "spt_source_note": "Ajuste de plantillas corrido sobre el cubo de publicacion (`invvar`) el 2026-09-20, con el eje de A_V a [0,10] y la LSF que ESE run declara (2.2849). El tipo espectral no se mueve respecto al de la noche buena: M7.5 joven en los dos, indice 6.184+-0.332 contra 6.156+-0.371. El ajuste atmosferico sigue fallando su puerta por chi2 (12.77 aqui contra 11.23 alli, umbral 3.0) y da av=5.5 contra 5.3. Se declara para que la figura no dependa del orden alfabetico de los archivos.",
+    "spt_source_dir": "g3_resolucion_invvar_20260925T005139",
+    "spt_source_note": "G3 a resolucion MUSE con una prueba por biblioteca (tipo por Δχ² en nativo, bondad en bins de 25 Å con umbral same_subtype_neighbour) y D9 reducida a O2 (docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md), corrido 2026-09-25 sobre invvar a 55 px con 4bc84e1 (R de cada plantilla X-shooter desde la rendija VIS de su cabecera). Manara M7.5 joven aceptado (2.91 < 3.34). Sustituye a g3_resolucion_invvar_20260925T000344 (R de Manara+17 fija en 8800; mismos resultados <0.1 %) y a g3_resolucion_invvar_20260924T220548 (cuatro bandas telúricas enmascaradas; no pasaba).",
     "previous_run": "ROXs12b_OB3445598",
     "previous_run_note": "La noche buena sola, run de publicacion hasta el 2026-09-20. Se cita en el paper como control de robustez: el resultado se mantiene descartando la noche ruidosa, con Mdot < 3.0e-14 en vez de 2.7e-14. La Figura 2 congelada (tag fondecyt-fig2-v1) sale de su cosecha de 11 controles, respaldada en stages/e4_11controles_respaldo/."
   }

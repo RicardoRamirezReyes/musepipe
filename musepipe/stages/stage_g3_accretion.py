@@ -23,6 +23,31 @@ from ..models.accretion import combine_accretion, line_lacc, mdot_mc
 from ..models.extinction import CCMExtinction
 from ..paths import RunPaths
 
+
+def template_libraries_label(cfg):
+    """Las bibliotecas de plantillas, LEÍDAS de su PROVENANCE.json.
+
+    ``g3_template_family`` es una cadena de config y se quedó vieja (en
+    ROXs42Bb_realigned decía «Luhman/Bonnefoy young M-L [deferred]» contra el
+    D1, que es Manara): el mismo fallo que tuvo la de BT-Settl (``9dbb3d4``).
+    Sin biblioteca en disco se devuelve lo declarado, marcado como tal.
+    """
+    from ..models.libraries import read_provenance, template_library_entries
+    from ..models.manifest import library_root
+
+    try:
+        root = library_root(cfg, project_root=cfg.get("project_root"))
+    except RuntimeError:
+        root = None
+    out = {}
+    for entry in template_library_entries(cfg):
+        prov = read_provenance(root / entry["subdir"]) if root is not None else None
+        if prov is not None and prov.get("citation"):
+            out[entry["name"]] = prov["citation"]
+    if out:
+        return out
+    return {"declared_in_config_not_verified": cfg.get("g3_template_family")}
+
 TABLE_FIELDS = [
     "property", "value", "err_stat_lo", "err_stat_hi", "err_sys", "unit", "label",
     "data_used", "method", "assumptions", "calibrations_citations", "validity_range",
@@ -227,7 +252,7 @@ def compute_stage_g3_accretion(cfg, paths):
         "libraries": {
             "atmosphere": cfg.get("g3_atmosphere_family", "BT-Settl (deferred)"),
             "tracks": cfg.get("g3_tracks_families", ["BHAC15", "ATMO2020"]),
-            "templates": cfg.get("g3_template_family", "Luhman/Bonnefoy (deferred)"),
+            "templates": template_libraries_label(cfg),
             "accretion_relation": relations.get("Halpha", {}).get("citation"),
         },
         "n_lines_with_relation": len(per_line),
