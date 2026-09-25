@@ -543,7 +543,7 @@ NOMBRE_BIBLIOTECA = {
     "templates_young": "Manara+13,17 (young)",
     "templates_field": "Kesseli+17 (field)",
     "templates_young_lateM_xshooter": "X-shooter young late-M",
-    "templates_xshyne_L_xshooter": "X-SHYNE L (10–150 Myr)",
+    "templates_xshyne_L_xshooter": "X-SHYNE L (10–200 Myr)",
 }
 
 
@@ -786,7 +786,7 @@ def template_comparison(objetos, out: Path, ancho_min_sombra_A=5.0):
                   handlelength=1.3, fontsize=6.5, borderaxespad=0.3, labelspacing=0.2,
                   title="best template, binned GoF vs threshold", title_fontsize=6.5,
                   alignment="left")
-    entradas["excluded from all fits (D9 mask)"] = Patch(color="0.88", lw=0)
+    entradas["excluded from all fits"] = Patch(color="0.88", lw=0)
     entradas["excluded for X-shooter libraries only"] = Patch(facecolor="none", edgecolor="0.6",
                                                                 hatch="////", lw=0)
     fig.legend(list(entradas.values()), list(entradas.keys()), loc="lower center",
