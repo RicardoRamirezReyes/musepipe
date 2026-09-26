@@ -32,6 +32,8 @@ def characterization_paths(run_id, project_root=None):
         "g3_table": tables / "g3_physical_properties.csv",
         "g4_matrix": tables / "g4_evidence_matrix.csv",
         "h03_qc": stages / "stage_h03_qc.json", "h01_qc": stages / "stage_h01_qc.json",
+        "a4_qc": stages / "stage00q_qc.json",
+        "f1_summary": p.run_dir / "report" / "run_summary.json",
         "config": p.run_dir / "config" / "config.json",
     }
 
@@ -88,10 +90,90 @@ def consistency_checks(cp):
                        "g2_status": g2_ha.get("g2_halpha_status"), "h01": h01})
         if not consistent:
             issues.append({"issue": "Halpha category disagrees between G2 and H01/H03.", "priority": "blocking"})
-    # G4 leader vs G3 (SpT deferred → not comparable yet)
     g4 = _read(cp["qc"]["g4"]) or {}
     checks.append({"check": "classification_robustness", "value": (g4.get("final_class") or {}).get("robustness")})
+    # V3: an Mdot derived from an upper-limit L_acc is an upper limit too (G3 labelled it
+    # `empirical_inference` for ROXs 42B b until 2026-09-26).
+    g3 = {r.get("property"): r for r in _read_rows(cp["g3_table"])}
+    lacc, mdot = g3.get("l_acc_combined"), g3.get("mdot")
+    if lacc and mdot:
+        coherent = not (lacc.get("label") == "upper_limit" and mdot.get("label") != "upper_limit")
+        checks.append({"check": "mdot_label_follows_lacc", "consistent": coherent,
+                       "l_acc_combined": lacc.get("label"), "mdot": mdot.get("label")})
+        if not coherent:
+            issues.append({"issue": f"G3 labels Mdot `{mdot.get('label')}` although L_acc_combined is an "
+                                    "upper limit; the Mdot is an upper limit (re-run G3).",
+                           "priority": "blocking"})
     return {"checks": checks, "issues": issues}
+
+
+def _read_rows(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open() as fh:
+        return list(csv.DictReader(fh))
+
+
+def _num(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _canonical_limit(h03):
+    """E3 row of the canonical method (older QCs: the `combined_final` row)."""
+    limits = h03.get("limits") or []
+    canon = h03.get("canonical_method")
+    return (next((r for r in limits if canon and r.get("method") == canon), None)
+            or next((r for r in limits if r.get("row_kind") == "combined_final"), None) or {})
+
+
+def inherited_blocking_issues(cp):
+    """Blocking issues open upstream: F1's gate (A1→E3) and the G0–G4 phase QCs.
+
+    G5 does not judge them; it carries them so that the package does not look closed while
+    they are open (spec §8, §9). The package is provisional exactly when this list is not empty.
+    """
+    out = []
+    f1 = _read(cp["f1_summary"]) or {}
+    for i in f1.get("open_issues") or []:
+        if i.get("priority") == "blocking":
+            out.append({"source": "F1", "stage": i.get("stage"), "issue": i.get("issue")})
+    for phase, path in cp["qc"].items():
+        for i in (_read(path) or {}).get("open_issues") or []:
+            if isinstance(i, dict) and (i.get("priority") or i.get("severity")) == "blocking":
+                out.append({"source": phase.upper(), "stage": phase.upper(),
+                            "issue": i.get("issue") or i.get("message")})
+    return out
+
+
+def headline(cp):
+    """The main results, read from the QCs that own them (nothing computed here)."""
+    h01 = _read(cp["h01_qc"]) or {}
+    h03 = _read(cp["h03_qc"]) or {}
+    g4 = _read(cp["qc"]["g4"]) or {}
+    g3 = {r.get("property"): r for r in _read_rows(cp["g3_table"])}
+    canon = h03.get("canonical_method")
+    lim = _canonical_limit(h03)
+    n_null = (((h01.get("parametric_fap") or {}).get("by_method") or {}).get(canon) or {}).get("n_null")
+    mdot = g3.get("mdot") or {}
+    spt = g3.get("spectral_type") or {}
+    return {
+        "halpha_e1_verdict": (h01.get("verdict") or {}).get("verdict"),
+        "e3_canonical_method": canon,
+        "e3_mdot_99_msun_yr": _num(lim.get("mdot")),
+        "n_control_positions": n_null,
+        "g3_mdot_msun_yr": _num(mdot.get("value")), "g3_mdot_label": mdot.get("label"),
+        "g3_spectral_type": spt.get("value") or None, "g3_spectral_type_label": spt.get("label"),
+        "g4_class": (g4.get("final_class") or {}).get("label"),
+        "g4_robustness": (g4.get("final_class") or {}).get("robustness"),
+    }
+
+
+def _fmt(value, spec=".2e"):
+    return "n/a" if value is None else format(value, spec)
 
 
 def _copy_table(src, dst):
@@ -117,8 +199,8 @@ def _adopted_parameters(cfg):
         row("lacc_lha_relation", f"a={cfg.get('h03_lacc_lha_a')},b={cfg.get('h03_lacc_lha_b')}", cfg.get("h03_relation_scatter_dex"), cfg.get("h03_lacc_lha_citation"), "E3/G3"),
         row("companion_mass_msun", cfg.get("h03_companion_mass_msun"), None, cfg.get("h03_mass_source"), "E3/G3"),
         row("companion_radius_rsun", cfg.get("h03_companion_radius_rsun"), None, cfg.get("h03_radius_source"), "E3/G3"),
-        row("atmosphere_library", cfg.get("g3_atmosphere_family"), None, cfg.get("g3_atmosphere_citation"), "G3(deferred)"),
-        row("evolutionary_tracks", ",".join(cfg.get("g3_tracks_families", [])), None, ";".join(cfg.get("g3_tracks_citations", [])), "G3(deferred)"),
+        row("atmosphere_library", cfg.get("g3_atmosphere_family"), None, cfg.get("g3_atmosphere_citation"), "G3"),
+        row("evolutionary_tracks", ",".join(cfg.get("g3_tracks_families", [])), None, ";".join(cfg.get("g3_tracks_citations", [])), "G3"),
         row("background_density", cfg.get("g4_background_density_per_arcsec2"), None, cfg.get("g4_background_density_source"), "G4"),
     ]
 
@@ -126,13 +208,17 @@ def _adopted_parameters(cfg):
 def _uncertainty_budget(cp, cfg):
     h03 = _read(cp["h03_qc"]) or {}
     g1 = _read(cp["qc"]["g1"]) or {}
+    head = headline(cp)
+    m3 = ((_read(cp["a4_qc"]) or {}).get("m3_flux") or {}).get("status", "absent")
     rows = []
-    lim = next((r for r in (h03.get("limits") or []) if r.get("row_kind") == "combined_final"), {})
-    rows.append({"result": "Mdot_upper_limit", "stat_term": "control tail (7 controls)",
-                 "sys_term": f"relation scatter {cfg.get('h03_relation_scatter_dex')} dex + A_V {cfg.get('h03_av_err')} + flux-cal (M3 unavailable)",
+    lim = _canonical_limit(h03)
+    rows.append({"result": "Mdot_upper_limit",
+                 "stat_term": f"control tail ({head['n_control_positions'] or '?'} controls)",
+                 "sys_term": f"relation scatter {cfg.get('h03_relation_scatter_dex')} dex + A_V {cfg.get('h03_av_err')} + flux-cal (A4/M3 {m3})",
                  "dominant": "L_acc-L_Halpha relation scatter"})
-    rows.append({"result": "throughput_psffit", "stat_term": f"{lim.get('throughput_err','?')}",
-                 "sys_term": "PSF-perturbation no-op (unmeasured); edge-position", "dominant": "position/PSF"})
+    rows.append({"result": f"throughput_{head['e3_canonical_method'] or 'canonical'}",
+                 "stat_term": f"{lim.get('throughput_err', '?')}",
+                 "sys_term": "injection model and control positions (E4)", "dominant": "position/PSF"})
     rows.append({"result": "spectral_covariance", "stat_term": f"corr_len {(g1.get('covariance') or {}).get('corr_length_channels_median')} ch",
                  "sys_term": f"n_eff/n {(g1.get('covariance') or {}).get('n_eff_over_n_median')}", "dominant": "resampling (box3 ~6.5x)"})
     return rows
@@ -178,11 +264,16 @@ def build_characterization(run_id, project_root=None):
     open_issues = list(consist["issues"])
     if trace["broken_chains"]:
         open_issues.append({"issue": f"Traceability: {len(trace['broken_chains'])} broken chain(s) — {[b['link'] for b in trace['broken_chains']]}.", "priority": "major"})
-    # inherit blocking issues awareness from phases (provisional)
-    open_issues.append({"issue": "PROVISIONAL package on the ADP cube; A-block open (alignment, M3 flux, M5 STAT). G3 real fits deferred → SpT/Teff/mass not constrained → G4 ambiguous.", "priority": "blocking"})
+    inherited = inherited_blocking_issues(cp)
+    if inherited:
+        stages = sorted({str(i["stage"]) for i in inherited})
+        open_issues.append({"issue": f"{len(inherited)} blocking issue(s) open upstream ({', '.join(stages)}); "
+                                     "listed in `inherited_blocking_issues`.", "priority": "blocking"})
 
     summary = {
-        "stage": "g5_final_synthesis", "run_id": str(run_id), "provisional": True,
+        "stage": "g5_final_synthesis", "run_id": str(run_id), "provisional": bool(inherited),
+        "headline": headline(cp),
+        "inherited_blocking_issues": inherited,
         "inputs": {"phase_qc_hashes": {k: _sha256(v) for k, v in cp["qc"].items()}},
         "traceability": {"complete": trace["complete"], "broken_chains": trace["broken_chains"], "chains": trace["chains"]},
         "consistency": consist["checks"],
@@ -193,7 +284,7 @@ def build_characterization(run_id, project_root=None):
         "open_issues": open_issues,
     }
     write_json_deterministic(cp["out_dir"] / "characterization_summary.json", summary)
-    _write_assumptions(cp["out_dir"] / "assumptions_and_limitations.md", cfg, trace, g4)
+    _write_assumptions(cp["out_dir"] / "assumptions_and_limitations.md", cfg, cp)
     _render_markdown(cp["out_dir"] / "characterization.md", summary, figures)
     _write_readme(cp["out_dir"] / "README.md", summary, figures)
     # determinism hash over the package (excludes nothing volatile but timestamps)
@@ -210,31 +301,42 @@ def _index_figures(paths):
         ("G5-6_throughput", paths.plot_stage_dir("stage_g1") / "g1_v2_recovered_vs_injected.png"),
         ("G5-6b_covariance", paths.plot_stage_dir("stage_g1") / "g1_v3_covariance.png"),
         ("G5-6c_bias_tornado", paths.plot_stage_dir("stage_g1") / "g1_v4_tornado_bias.png"),
+        # G3 writes its figures at the top of plots/, not in a stage subdirectory
+        ("G5-3_template_fit", paths.plot_dir / "g3_fit_spectrum.png"),
+        ("G5-4_HRD_tracks", paths.plot_dir / "g3_hrd_tracks.png"),
     ]
     out = []
     for name, path in candidates:
         p = Path(path)
         out.append({"name": name, "path": str(p), "present": p.exists()})
-    out.append({"name": "G5-3_template_fit", "path": "deferred(pending_libraries)", "present": False})
-    out.append({"name": "G5-4_HRD_tracks", "path": "deferred(pending_libraries)", "present": False})
-    out.append({"name": "G5-7_evidence_heatmap", "path": "deferred(figure)", "present": False})
+    out.append({"name": "G5-7_evidence_heatmap", "path": "not produced (G4 writes no evidence heatmap)",
+                "present": False})
     return out
 
 
-def _write_assumptions(path, cfg, trace, g4):
+def _write_assumptions(path, cfg, cp):
     lines = ["# Assumptions and limitations (G5)\n",
              "Numbered active assumptions, the phase that introduced them, and estimated effect.\n"]
+    a4 = _read(cp["a4_qc"]) or {}
+    g1 = _read(cp["qc"]["g1"]) or {}
+    templates = (_read(cp["h01_qc"]) or {}).get("templates") or {}
+    n_eff = _num((g1.get("covariance") or {}).get("n_eff_over_n_median"))
+    lsf = _num(templates.get("lsf_fwhm_A"))
+    not_constrained = sorted(r.get("property") for r in _read_rows(cp["g3_table"])
+                             if r.get("label") == "not_constrained")
     items = [
-        ("STAT unreliable (A4/M5 red ~4-6x resampling covariance) → empirical noise used", "A4/G1", "error budget"),
-        ("Spectral channels mildly correlated (G1 n_eff/n~0.69) → per-channel FAPs slightly optimistic", "G1", "significance"),
-        ("Absolute flux uncalibrated (D2 scale=1, M3 unavailable); flux unit = MUSE 1e-20 native", "D2/E3", "L/Mdot absolute scale"),
-        ("Primary variability ~10% → absolute-calibration systematic", "X11", "all absolute fluxes"),
+        (f"Noise from control positions processed like the object (docs/noise_model.md); "
+         f"A4/M5 STAT status {(a4.get('m5_stat') or {}).get('status', 'absent')}", "A4/G1", "error budget"),
+        (f"Spectral channels correlated (G1 n_eff/n = {_fmt(n_eff, '.2f')}) → per-channel FAPs slightly "
+         "optimistic", "G1", "significance"),
+        (f"Absolute flux calibration: A4/M3 status {(a4.get('m3_flux') or {}).get('status', 'absent')}; "
+         f"flux unit source: {cfg.get('h03_flux_unit_source', 'not declared')}", "D2/E3", "L/Mdot absolute scale"),
+        ("Primary variability → absolute-calibration systematic (D2 sys_fluxcal)", "D2", "all absolute fluxes"),
         ("Region age adopted with error (evolutionary mass depends on it)", "G3", "mass/age"),
-        ("LSF from config estimate (A4 M2 unavailable)", "G2", "FWHM/EW"),
-        ("G3 template/atmosphere/track fits deferred (pending external libraries)", "G3", "SpT/Teff/mass/radius not constrained"),
+        (f"LSF {_fmt(lsf, '.3f')} Å from {templates.get('lsf_source', 'not declared')}", "E1/G2", "FWHM/EW"),
+        (f"G3 properties not constrained: {', '.join(not_constrained) or 'none'}", "G3", "SpT/Teff/mass/radius"),
         ("Single astrometric epoch here (Bowler CPM adopted from config)", "G4", "bound-vs-background power"),
-        ("Background density provisional (Besancon placeholder)", "G4", "P(contaminant)"),
-        ("Whole B-F-G chain provisional on the ESO ADP; A-block open", "A/G0", "paper-validity"),
+        (f"Background density source: {cfg.get('g4_background_density_source', 'not declared')}", "G4", "P(contaminant)"),
     ]
     for i, (txt, phase, effect) in enumerate(items, 1):
         lines.append(f"{i}. {txt}  \n   _phase:_ {phase} · _effect:_ {effect}")
@@ -256,20 +358,31 @@ TABLE_DOCS = {
 }
 
 
+def _status_line(summary):
+    inherited = summary.get("inherited_blocking_issues") or []
+    if not inherited:
+        return "> No blocking issue is open upstream (F1 gate and G0–G4).\n"
+    stages = sorted({str(i["stage"]) for i in inherited})
+    return (f"> **Provisional:** {len(inherited)} blocking issue(s) are open upstream "
+            f"({', '.join(stages)}). They are listed at the end of this file.\n")
+
+
 def _write_readme(path, summary, figures):
     fc = summary.get("final_class") or {}
+    hl = summary.get("headline") or {}
     lines = [
         f"# Characterization package — {summary['run_id']}\n",
         "Machine-readable consolidation of phases **G0–G5** (extends the F1 `report/`). "
         "Generated deterministically by `musepipe.characterization.build_characterization`; "
         "**do not edit by hand** (the determinism test would catch it).\n",
-        "> **PROVISIONAL.** Built on the ESO ADP cube while the A-block is open (A1 alignment, "
-        "M3 absolute flux, M5 STAT) and the G3 template/atmosphere/track fits are deferred "
-        "(pending external libraries). Nothing here is paper-valid yet.\n",
+        _status_line(summary),
         "## Headline results\n",
-        f"- **Hα:** non-detection → Ṁ ≲ 5×10⁻¹³ M☉/yr (99%, E3); consistent across H01/H03/G2.",
-        f"- **Source (G4):** real bound companion → class **{fc.get('label')}**, robustness "
-        f"**{fc.get('robustness')}** (planet vs BD vs M undetermined until G3 spectral typing).",
+        f"- **Hα (E1):** `{hl.get('halpha_e1_verdict')}` · 99 % detection threshold on Ṁ (E3, "
+        f"`{hl.get('e3_canonical_method')}`): {_fmt(hl.get('e3_mdot_99_msun_yr'))} M☉/yr · Ṁ (G3): "
+        f"{_fmt(hl.get('g3_mdot_msun_yr'))} M☉/yr, label `{hl.get('g3_mdot_label')}`.",
+        f"- **Spectral type (G3):** {hl.get('g3_spectral_type') or 'not constrained'}"
+        f" (`{hl.get('g3_spectral_type_label')}`).",
+        f"- **Source (G4):** class **{fc.get('label')}**, robustness **{fc.get('robustness')}**.",
         f"- **Lines measured (G2):** {summary['n_lines']}  ·  **physical properties (G3):** "
         f"{summary['n_physical_properties']}.",
         f"- **Traceability:** {'complete' if summary['traceability']['complete'] else 'BROKEN'}  ·  "
@@ -299,13 +412,10 @@ def _write_readme(path, summary, figures):
         "```",
         "Requires the phase products/QCs (G0–G4) and the F1 `report/` package to exist. "
         "Two runs produce byte-identical files (determinism hash in the summary).\n",
-        "## What would make this paper-valid\n",
-        "1. Close the A-block: A1 `muse_exp_align` re-reduction, M3 absolute flux calibration, "
-        f"M5 STAT (see `runs/{summary['run_id']}/PAPER_BLOCKERS.md` o el run raw del objeto).",
-        "2. Run the real G3 fits (BT-Settl / BHAC15+ATMO2020 / Luhman–Bonnefoy) → SpT/Teff/mass "
-        "resolve the G4 classification ambiguity.",
-        "3. A 2nd astrometric epoch and a final background-density source strengthen G4.",
+        "## Blocking issues open upstream\n",
     ]
+    inherited = summary.get("inherited_blocking_issues") or []
+    lines += [f"- **{i['stage']}** ({i['source']}): {i['issue']}" for i in inherited] or ["- None."]
     Path(path).write_text("\n".join(lines) + "\n")
 
 

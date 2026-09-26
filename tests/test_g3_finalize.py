@@ -3,7 +3,7 @@
 import unittest
 
 from musepipe.stages.stage_g3_accretion import TABLE_FIELDS
-from musepipe.stages.stage_g3_assemble import _relabel_systematics_limited
+from musepipe.stages.stage_g3_assemble import _accretion_keys, _relabel_systematics_limited
 
 
 def _row(**kw):
@@ -45,6 +45,28 @@ class RelabelTests(unittest.TestCase):
         out = _relabel_systematics_limited(rows, reason="x", citation="c", mdot_lit=None)
         self.assertTrue(all(validate_label(r["property"], r["label"]) for r in out))
 
+
+
+class AccretionKeysTests(unittest.TestCase):
+    """El QC final de G3 conserva lo que publica la rodaja de acrecion (2026-09-26)."""
+
+    def test_el_mdot_y_su_etiqueta_viajan_al_qc_final(self):
+        acc = {"combined_accretion": {"kind": "upper_limit", "l_acc_lsun": 1.5e-7},
+               "mdot_p50_msun_yr": 1.9e-13, "mdot_mr_source": {"source": "config"}}
+        rows = [_row(property="mdot", value="1.9e-13", label="upper_limit")]
+        k = _accretion_keys(acc, rows)
+        self.assertEqual(k["combined_accretion"]["kind"], "upper_limit")
+        self.assertAlmostEqual(k["mdot_p50_msun_yr"], 1.9e-13)
+        self.assertEqual(k["mdot_label"], "upper_limit")
+        self.assertEqual(k["mdot_mr_source"], {"source": "config"})
+
+    def test_tras_reetiquetar_publica_el_mdot_recalculado(self):
+        rows = [_row(property="l_acc_combined", value="4.5e-6", label="empirical_inference"),
+                _row(property="mdot", value="2.2e-12", label="empirical_inference")]
+        out = _relabel_systematics_limited(rows, reason="r", citation="c",
+                                           mdot_lit={"p50": 1.4e-12, "p16": 0.7e-12, "p84": 3.0e-12})
+        k = _accretion_keys({"mdot_p50_msun_yr": 2.2e-12}, out)
+        self.assertAlmostEqual(k["mdot_p50_msun_yr"], 1.4e-12)
 
 if __name__ == "__main__":
     unittest.main()

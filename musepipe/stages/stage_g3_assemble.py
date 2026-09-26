@@ -47,6 +47,16 @@ NC_ON_SYSTEMATICS = {"spectral_type", "spt_templates", "spt_indices", "teff",
                      "mass", "logg_evol"}
 
 
+def _accretion_keys(accretion_qc, rows):
+    """Lo que la rodaja de acrecion publica y el QC final tiene que conservar."""
+    mdot = next((r for r in rows if r.get("property") == "mdot"), None)
+    return {"combined_accretion": accretion_qc.get("combined_accretion"),
+            "mdot_p50_msun_yr": (float(mdot["value"]) if mdot and mdot.get("value") not in ("", None)
+                                 else accretion_qc.get("mdot_p50_msun_yr")),
+            "mdot_label": mdot.get("label") if mdot else None,
+            "mdot_mr_source": accretion_qc.get("mdot_mr_source")}
+
+
 def _relabel_systematics_limited(rows, *, reason, citation, mdot_lit):
     """Return rows with atmosphere-dependent quantities → not_constrained (the
     railed value preserved in limitations) and Mdot recomputed with literature
@@ -532,6 +542,11 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
         "consistency_pairs": consistency,
         "stops": stops, "open_issues": [],
     }
+    # La rodaja de acrecion escribe en ESTE mismo fichero y este paso lo sobrescribe:
+    # sin copiar sus claves, el Mdot desaparecia del QC final y la figura Mdot-masa del
+    # paper caia en silencio al limite de E3 para ROXs 12 b, que es una deteccion
+    # (2026-09-26). La etiqueta viaja con el valor: un Mdot de una L_acc cota es cota.
+    qc.update(_accretion_keys(accretion_qc, rows))
     # El veredicto se ESTAMPA en el QC del ajuste atmosferico, que es un fichero
     # aparte y que la rodaja de acrecion no sobrescribe. Sin esto, un G3 real que
     # falla sus gates deja `g3_rows_derived.json` en `stages/` y la rodaja lo
@@ -617,6 +632,7 @@ def finalize_systematics_limited(run_id, *, project_root=None):
         "flagged_atmo_fit_values": qc.get("atmo", {}),
     }
     qc["consistency_pairs"] = consistency
+    qc.update(_accretion_keys(accretion_qc, final))  # el Mdot recalculado con M,R de literatura
     qc["open_issues"] = [{"issue": "G3 atmospheric inference systematics-limited (C3 continuum "
                                    "systematic); Teff/A_V/R/mass not_constrained",
                           "priority": "accepted_limitation"}]
