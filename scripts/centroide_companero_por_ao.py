@@ -18,6 +18,10 @@ continuo (mediana en 10-40 Å) restado. Su error sale de los controles: la dispe
 al sumar a la señal cada control combinado, dividida por √2. La significación de un reparto se mide
 por permutación de las exposiciones de la noche, con el mismo tamaño de grupo.
 
+Mecanismo (2026-09-26): la asimetría rojo-menos-azul de la línea, exposición a exposición, contra el
+Strehl, para el compañero y para cada uno de los controles. Si el efecto fuera un residuo del halo de
+la primaria común a toda la corona, los controles lo compartirían.
+
 uso: python scripts/centroide_companero_por_ao.py C7_NPZ COND_JSON [--umbral-strehl 12]
                                                   [--permutaciones 5000] [--json SALIDA]
 """
@@ -76,6 +80,33 @@ class Grupos:
                 "strehl_mediano": float(np.nanmedian(self.strehl[idx])),
                 "tau0_mediano_ms": float(np.nanmedian(self.tau0_s[idx]) * 1e3)}
 
+    def rojo_menos_azul(self, espectro):
+        """Flujo en (6562.8, 6568.8] menos en [6556.8, 6562.8), sobre el continuo: la asimetria."""
+        base = np.nanmedian(espectro[self.continuo])
+        dl = np.gradient(self.wave)
+        rojo = (self.wave > CENTRO_A) & (self.wave <= CENTRO_A + MEDIA_VENTANA_A)
+        azul = (self.wave >= CENTRO_A - MEDIA_VENTANA_A) & (self.wave < CENTRO_A)
+        return float(np.nansum((espectro[rojo] - base) * dl[rojo])
+                     - np.nansum((espectro[azul] - base) * dl[azul]))
+
+    def asimetria_frente_a_strehl(self):
+        """Spearman del rojo-menos-azul con el Strehl, exposicion a exposicion, en la noche buena:
+        el del compañero y el de cada control (misma separacion, mismo procesado)."""
+        from scipy.stats import spearmanr
+        st = self.strehl[self.N1]
+        comp = [self.rojo_menos_azul(self.flux[i]) for i in self.N1]
+        rho_c, p_c = spearmanr(st, comp)
+        controles = []
+        for j in range(self.controles.shape[1]):
+            v = [self.rojo_menos_azul(self.controles[i][j]) for i in self.N1]
+            controles.append(float(spearmanr(st, v)[0]))
+        controles = np.asarray(controles)
+        return {"rho_companero": float(rho_c), "p_companero": float(p_c),
+                "rho_controles": controles.tolist(),
+                "controles_tan_extremos": int(np.sum(controles <= rho_c)) if rho_c < 0
+                else int(np.sum(controles >= rho_c)),
+                "n_controles": int(controles.size)}
+
     def permutacion(self, grupo, n_perm, rng):
         """p de que |Δcentroide| entre `grupo` y el resto de N1 salga igual o mayor al azar."""
         resto = [i for i in self.N1 if i not in grupo]
@@ -117,6 +148,7 @@ def main(argv=None):
     resto = bloques[0] + bloques[2]
     out["bloque2_menos_resto_A"], out["p_bloque2"] = g.permutacion(bloques[1], a.permutaciones, rng)
     out["r_strehl_tiempo"] = float(np.corrcoef(g.strehl[N1], np.arange(len(N1)))[0, 1])
+    out["asimetria_frente_a_strehl"] = asim = g.asimetria_frente_a_strehl()
     for nombre in ("ao_alta", "ao_baja"):
         m = out[nombre]
         print(f"{nombre:8s} n={m['n']:2d}  centroide {m['centroide_A']:.2f} ± {m['error_A']:.2f} Å"
@@ -128,6 +160,10 @@ def main(argv=None):
           f"(posiciones de AO baja: {out['ao_baja_posiciones']})")
     print(f"bloque 2 − resto (n={len(resto)}): {out['bloque2_menos_resto_A']:+.2f} Å, p = {out['p_bloque2']:.4f}")
     print(f"r(Strehl, tiempo) en la noche: {out['r_strehl_tiempo']:+.2f}")
+    rc = np.asarray(asim["rho_controles"])
+    print(f"asimetria rojo-azul contra Strehl: compañero rho = {asim['rho_companero']:+.2f} "
+          f"(p = {asim['p_companero']:.3f}); controles rho {rc.mean():+.2f} ± {rc.std(ddof=1):.2f}, "
+          f"{asim['controles_tan_extremos']}/{asim['n_controles']} tan extremos como el compañero")
     if a.json:
         with open(a.json, "w") as fh:
             json.dump(out, fh, indent=1)

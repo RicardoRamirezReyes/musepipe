@@ -1270,11 +1270,19 @@ def _mdot_de_este_trabajo(obj: Objeto) -> dict:
     masa_mjup = float(cfg["h03_companion_mass_msun"]) * MSUN_A_MJUP
     g3 = obj.qc("stage_g3_qc.json")
     mdot = g3.get("mdot_p50_msun_yr")
-    if mdot is not None:
-        # El error asimetrico sale de la fila `mdot` de la tabla de G3, que es
-        # el percentil del MC; el QC solo publica la mediana.
-        fila = next((r for r in obj.filas("g3_physical_properties.csv")
-                     if r["property"] == "mdot"), None)
+    # El error asimetrico sale de la fila `mdot` de la tabla de G3, que es
+    # el percentil del MC; el QC solo publica la mediana.
+    fila = next((r for r in obj.filas("g3_physical_properties.csv")
+                 if r["property"] == "mdot"), None)
+    # Un Mdot de G3 sacado de una L_acc que es cota es cota: se dibuja el limite de E3.
+    es_cota = "upper_limit" in (g3.get("mdot_label"), (fila or {}).get("label"))
+    veredicto = (obj.qc("stage_h01_qc.json").get("verdict") or {}).get("verdict")
+    if veredicto == "detection" and (mdot is None or es_cota):
+        # Asi fallaba en silencio desde el 2026-09-24: G3 dejo de publicar el Mdot en su
+        # QC final y la deteccion de ROXs 12 b se dibujaba como el limite de E3.
+        raise SystemExit(f"{obj.nombre}: E1 dice `detection` pero G3 no publica un Mdot medido "
+                         f"(mdot_p50={mdot}, etiqueta={g3.get('mdot_label') or (fila or {}).get('label')})")
+    if mdot is not None and not es_cota:
         lo = hi = None
         if fila:
             lo = _o_nan(fila["err_stat_lo"])

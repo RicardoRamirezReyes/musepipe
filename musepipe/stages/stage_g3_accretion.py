@@ -221,7 +221,12 @@ def compute_stage_g3_accretion(cfg, paths):
             mr_source = "config"
         md = mdot_mc(combined["l_acc_lsun"], m_used, me_used, r_used, re_used,
                      scatter, n_mc=n_mc, seed=seed)
-        add("mdot", md["p50"], "empirical_inference", unit="Msun/yr",
+        # Un Mdot sacado de una L_acc que es cota es cota: antes se etiquetaba siempre
+        # `empirical_inference`, y el G3 de ROXs 42B b (no detectado) presentaba su
+        # Mdot como una medida (2026-09-26).
+        add("mdot", md["p50"],
+            "upper_limit" if combined["kind"] == "upper_limit" else "empirical_inference",
+            unit="Msun/yr",
             data_used=f"l_acc_combined + {mr_source} M,R", method="Mdot=1.25 Lacc R/GM (MC)",
             assumptions=assumptions, cite="Alcala+2017; Bowler+2017", depends=depends,
             lo=md["p16"], hi=md["p84"], seed_v=seed)

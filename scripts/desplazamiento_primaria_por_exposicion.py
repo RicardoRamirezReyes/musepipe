@@ -39,6 +39,13 @@ VENTANAS_A = {"6100-6520": (6100.0, 6520.0), "6600-6850": (6600.0, 6850.0),
               "8400-8750": (8400.0, 8750.0)}
 PASOS_A = np.arange(-3.0, 3.0001, 0.01)
 MITAD_CAJA_PX = 3
+C_KMS = 299792.458
+
+#: líneas de actividad/acreción y de cielo dentro de las ventanas; cambian de perfil entre noches y
+#: sesgan el desplazamiento (medido 2026-09-26: el triplete de Ca II movía la ventana roja −12 km/s)
+EMISION_A = {"O I 6300": 6300.3, "O I 6363": 6363.8, "He I 6678": 6678.2, "[S II] 6716": 6716.4,
+             "[S II] 6731": 6730.8, "Ca II 8498": 8498.0, "Ca II 8542": 8542.1, "Ca II 8662": 8662.1}
+MEDIA_MASCARA_A = 6.0
 
 #: nombre corto -> clave de la cabecera primaria del cubo por exposición
 CABECERA = {
@@ -92,6 +99,14 @@ def desplazamiento(wave, espectro, ref, lo, hi, pasos=PASOS_A):
     return float(s0), err
 
 
+def sin_emision(wave, espectro, media_A=MEDIA_MASCARA_A):
+    """El espectro con NaN a ±`media_A` de cada línea de `EMISION_A`."""
+    out = np.array(espectro, dtype=np.float64, copy=True)
+    for centro in EMISION_A.values():
+        out[np.abs(wave - centro) <= media_A] = np.nan
+    return out
+
+
 def centroide_ha(wave, espectro_normalizado):
     """Centroide de la emisión por encima del continuo (=1) en 6556-6570 Å."""
     sel = (wave >= 6556.0) & (wave <= 6570.0)
@@ -140,6 +155,7 @@ def analizar(run_id, ex):
     N1 = [int(i) for i in orden if noche[i] == noches[0]]
     N2 = [int(i) for i in orden if len(noches) > 1 and noche[i] == noches[1]]
     ref = np.nanmedian(nrm[N1], axis=0)
+    ref_sin = sin_emision(wave, ref)
 
     por_exp = []
     for i in range(len(ids)):
@@ -152,6 +168,9 @@ def analizar(run_id, ex):
         fila["media_A"] = float(np.sum(w * s) / np.sum(w))
         fila["media_err_A"] = float(1 / np.sqrt(np.sum(w)))
         fila["condiciones"] = ex["condiciones"][i]
+        esp_sin = sin_emision(wave, nrm[i])
+        fila["sin_emision"] = {n: desplazamiento(wave, esp_sin, ref_sin, lo, hi)
+                               for n, (lo, hi) in VENTANAS_A.items()}
         por_exp.append(fila)
 
     out = {"run": run_id, "primaria_yx": ex["primaria_yx"], "ventanas_A": VENTANAS_A,
@@ -167,11 +186,30 @@ def analizar(run_id, ex):
             "strehl_rtc_mediano": _mediana(por_exp, p, "strehl_rtc"),
             "tau0_mediano_s": _mediana(por_exp, p, "tau0_s"),
         } for p in partes]
+    out["por_ventana_y_noche"] = {}
+    for nombre_noche, idx in (("noche1", N1), ("noche2", N2)):
+        if not idx:
+            continue
+        out["por_ventana_y_noche"][nombre_noche] = {
+            clave: {n: _media_pesada([por_exp[i][clave][n] if clave else por_exp[i][n] for i in idx],
+                                     0.5 * (lo + hi))
+                    for n, (lo, hi) in VENTANAS_A.items()}
+            for clave in ("", "sin_emision")}
     out["noche2"] = {"n": len(N2), "desplazamiento_medio_A": (
         float(np.mean([por_exp[i]["media_A"] for i in N2])) if N2 else None),
         "strehl_rtc_mediano": _mediana(por_exp, N2, "strehl_rtc") if N2 else None,
         "tau0_mediano_s": _mediana(por_exp, N2, "tau0_s") if N2 else None}
     return out
+
+
+def _media_pesada(medidas, lambda_centro_A):
+    """Media pesada por 1/err² de [(desplazamiento, err)], en Å y en km/s, con su dispersión."""
+    s = np.asarray([m[0] for m in medidas])
+    w = 1.0 / np.asarray([m[1] for m in medidas]) ** 2
+    media = float(np.sum(w * s) / np.sum(w))
+    return {"A": media, "err_A": float(1 / np.sqrt(np.sum(w))),
+            "dispersion_A": float(np.std(s, ddof=1)) if len(s) > 1 else None,
+            "kms": media / lambda_centro_A * C_KMS}
 
 
 def _mediana(por_exp, idx, clave):
@@ -198,6 +236,10 @@ def imprimir(out):
             f"{b['desplazamiento_medio_A']:+.3f} Å (sd {b['dispersion_A'] or 0:.3f}; "
             f"Hα {b['centroide_ha_medio_A']:.2f}; Strehl {b['strehl_rtc_mediano']})" for b in bl))
     print(f"noche 2: {out['noche2']}")
+    for noche, d in out["por_ventana_y_noche"].items():
+        for clave, etiqueta in (("", "todo"), ("sin_emision", "sin emisión")):
+            print(f"{noche} ({etiqueta}): " + " · ".join(
+                f"{n} {v['A']:+.3f}±{v['err_A']:.3f} Å = {v['kms']:+.1f} km/s" for n, v in d[clave].items()))
     print("Si el bloque 2 estuviera corrido como el compañero, su media saldría cerca de +1.4 Å.")
 
 

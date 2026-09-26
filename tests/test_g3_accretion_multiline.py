@@ -18,14 +18,14 @@ from musepipe.stages.stage_g3_accretion import (
 REL = {"a": 1.13, "b": 1.74, "scatter_dex": 0.30, "citation": "Alcala+2017", "validity_range": [-5, -1]}
 
 
-def _make_run(tmp, run_id="syn", derived=None):
+def _make_run(tmp, run_id="syn", derived=None, halpha=("upper_limit", "5.0e3", "")):
     rundir = Path(tmp) / "runs" / run_id
     (rundir / "tables").mkdir(parents=True)
     (rundir / "stages").mkdir(parents=True)
     with (rundir / "tables" / "g2_line_measurements.csv").open("w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["name", "rest_A", "status", "flux_upper_limit_5sigma", "flux_direct"])
-        w.writerow(["Halpha", "6562.80", "upper_limit", "5.0e3", ""])
+        w.writerow(["Halpha", "6562.80", *halpha])
     if derived is not None:
         (rundir / "stages" / "g3_rows_derived.json").write_text(json.dumps(derived))
     return Path(tmp)
@@ -111,6 +111,18 @@ class OwnVsConfigMRTests(unittest.TestCase):
             md = mdot_mc(float(lacc), 0.0167, 0.0014, 0.135, 0.017, 0.30, n_mc=500, seed=0)
             self.assertAlmostEqual(float(mdot["value"]), md["p50"], places=12)  # reproduces
             self.assertIn("g3_mdot_config_mr_p50", qc["halpha_h03_consistency_v5"])
+
+    def test_mdot_de_una_cota_es_cota(self):
+        # ROXs 42B b: L_acc era `upper_limit` y su Mdot salia `empirical_inference`.
+        casos = ((("upper_limit", "5.0e3", ""), "upper_limit"),
+                 (("detected", "", "5.0e3"), "empirical_inference"))
+        for halpha, esperada in casos:
+            with self.subTest(halpha=halpha[0]), tempfile.TemporaryDirectory() as tmp:
+                paths = stage_g3_paths("syn", project_root=_make_run(tmp, halpha=halpha))
+                rows, _ = compute_stage_g3_accretion(_cfg(), paths)
+                por = {r["property"]: r["label"] for r in rows}
+                self.assertEqual(por["l_acc_combined"], esperada)
+                self.assertEqual(por["mdot"], esperada)
 
     def test_stage_with_derived_uses_own_mr(self):
         with tempfile.TemporaryDirectory() as tmp:
