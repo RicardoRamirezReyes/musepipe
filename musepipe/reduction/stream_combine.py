@@ -16,8 +16,10 @@ mean under the usual assumption that exposures are independent.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Sequence
 
@@ -46,7 +48,117 @@ class StreamCombineError(RuntimeError):
 # is deliberately wider than the 170 px science crop.
 DEFAULT_CROP_NPIX = 200
 DEFAULT_PAD = 12
+#: Tamaño de trozo de reserva, el que se usó hasta 2026-09-12 y el que se sigue
+#: usando cuando la memoria disponible no se puede leer. Se eligió cuando esta
+#: máquina tenía 62 GB y `muse_exp_combine` moría; con 78 GB es innecesariamente
+#: pequeño, y trocear de más no ahorra memoria -el coste fijo son los cuatro
+#: acumuladores del cubo entero-, solo multiplica el número de vueltas.
 DEFAULT_CHUNK_CHANNELS = 128
+
+#: Bytes por (exposición, vóxel) que el bucle necesita EN EL AIRE, medidos sobre
+#: lo que reserva cada rama:
+#:   sigclip -> data_stack (4) + stat_stack (4) + el temporal de `_sigclip_mask`
+#:              `np.abs(stack - median)` (4) + `keep` (1) + `rejected` (1) = 14
+#:   mean    -> una exposición cada vez: data float64 (8) + stat float32 (4) +
+#:              valid bool (1) + los recortes con `pad` de `_aligned_chunk` (~8)
+#: Se redondea al alza porque el margen barato aquí vale más que apurar.
+BYTES_PER_EXPOSURE_VOXEL = {"sigclip": 16.0, "mean": 24.0}
+
+#: Fracción de la memoria disponible que se deja usar al trozo. Conservadora a
+#: propósito: esta máquina mata procesos que CRECEN aunque quede memoria libre
+#: (ver `docs/2026-09-11_refresco_qc_y_controles_psfsub.md` §4), así que el
+#: objetivo no es apurar la RAM sino dejar de dar 29 vueltas cuando bastan 4.
+DEFAULT_MEMORY_FRACTION = 0.5
+
+#: Suelo y techo del trozo automático. El techo existe para que un cubo pequeño
+#: en una máquina grande no se cargue entero de una vez y convierta el combinado
+#: en lo que este módulo existe para evitar.
+MIN_AUTO_CHUNK_CHANNELS = 32
+MAX_AUTO_CHUNK_CHANNELS = 512
+
+
+def available_memory_bytes() -> int | None:
+    """`MemAvailable` de /proc/meminfo, o None si no se puede leer.
+
+    `MemAvailable` y no `MemFree`: la caché de página es reclamable, y en esta
+    máquina son 62 de los 78 GB. Mirar `MemFree` es lo que hace creer que no hay
+    memoria cuando hay de sobra.
+    """
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def accumulator_bytes(n_channels: int, crop_npix: int) -> int:
+    """Coste FIJO del combinado: no depende del trozo y no se puede trocear.
+
+    Tres acumuladores float64 (suma pesada, suma de pesos, suma de varianzas) y
+    un contador int16, todos del cubo de salida entero.
+    """
+    voxels = int(n_channels) * int(crop_npix) * int(crop_npix)
+    return voxels * (8 * 3 + 2)
+
+
+def chunk_bytes_per_channel(n_exposures: int, crop_npix: int, method: str) -> float:
+    """Lo que cuesta UN canal de trozo, con todas las exposiciones en el aire."""
+    per_voxel = BYTES_PER_EXPOSURE_VOXEL.get(str(method), BYTES_PER_EXPOSURE_VOXEL["sigclip"])
+    if str(method) == "mean":
+        # La rama `mean` procesa una exposición cada vez: no apila.
+        return float(crop_npix) * float(crop_npix) * per_voxel
+    return float(n_exposures) * float(crop_npix) * float(crop_npix) * per_voxel
+
+
+def auto_chunk_channels(
+    *,
+    n_exposures: int,
+    crop_npix: int,
+    n_channels: int,
+    method: str,
+    available_bytes: int | None = None,
+    memory_fraction: float = DEFAULT_MEMORY_FRACTION,
+    floor: int = MIN_AUTO_CHUNK_CHANNELS,
+    cap: int = MAX_AUTO_CHUNK_CHANNELS,
+) -> dict:
+    """Trozo dimensionado a la memoria que hay, con la cuenta declarada.
+
+    Devuelve el número y **cómo se llegó a él**, porque un tamaño de trozo que
+    cambia de una máquina a otra sin dejar rastro haría irreproducible el
+    combinado: el plan guarda el entero ya resuelto, y esto guarda la cuenta.
+    """
+    available = available_memory_bytes() if available_bytes is None else int(available_bytes)
+    fijo = accumulator_bytes(n_channels, crop_npix)
+    por_canal = chunk_bytes_per_channel(n_exposures, crop_npix, method)
+    detalle = {
+        "available_bytes": available,
+        "accumulator_bytes": int(fijo),
+        "bytes_per_channel": float(por_canal),
+        "memory_fraction": float(memory_fraction),
+        "floor": int(floor),
+        "cap": int(cap),
+    }
+    if available is None:
+        detalle.update(chunk_channels=int(DEFAULT_CHUNK_CHANNELS), source="fallback_no_meminfo")
+        return detalle
+    presupuesto = (available - fijo) * float(memory_fraction)
+    if presupuesto <= 0 or por_canal <= 0:
+        # Ni siquiera caben los acumuladores: trocear no lo arregla, pero se
+        # devuelve el suelo y que falle donde de verdad falla.
+        detalle.update(chunk_channels=int(floor), source="floor_no_budget")
+        return detalle
+    bruto = int(presupuesto // por_canal)
+    elegido = max(int(floor), min(int(cap), int(n_channels), bruto))
+    detalle.update(
+        chunk_channels=int(elegido),
+        raw_chunk_channels=int(bruto),
+        source="auto",
+        estimated_peak_bytes=int(fijo + elegido * por_canal),
+    )
+    return detalle
 DEFAULT_COARSE_STRIDE = 25
 DEFAULT_SIGCLIP_K = 3.0
 DEFAULT_SIGCLIP_MIN_N = 5
@@ -123,6 +235,17 @@ class StreamCombinePlan:
     #: Y estando en el plan es procedencia: queda escrito qué T entró en cada
     #: exposición.
     transmission_by_exposure: dict = field(default_factory=dict)
+    #: Cómo se eligió `chunk_channels`: la memoria que se vio, la cuenta y el
+    #: origen (`auto`, `declared`, `fallback_no_meminfo`). El plan guarda el
+    #: ENTERO ya resuelto -así el combinado es reproducible aunque la máquina
+    #: cambie-, y esto guarda de dónde salió.
+    chunk_sizing: dict = field(default_factory=dict)
+    #: De dónde salieron los pesos cuando NO se deducen del cubo (`invvar`): la
+    #: tabla que los declaró, con su sha, la ley y la banda en que se midieron.
+    #: Vacío para `exptime` y `none`, que se leen de las cabeceras. Es procedencia
+    #: por la misma razón que `transmission_by_exposure`: un cubo pesado por
+    #: varianza sin decir QUÉ varianza es un cubo que no se puede reproducir.
+    weight_source: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -134,6 +257,7 @@ class StreamCombinePlan:
             "data_ext": int(self.data_ext),
             "stat_ext": str(self.stat_ext),
             "chunk_channels": int(self.chunk_channels),
+            "chunk_sizing": dict(self.chunk_sizing),
             "method": self.method,
             "sigclip_k": float(self.sigclip_k),
             "sigclip_min_n": int(self.sigclip_min_n),
@@ -147,6 +271,7 @@ class StreamCombinePlan:
             "exposures": [exp.as_dict() for exp in self.exposures],
             "warnings": list(self.warnings),
             "transmission_by_exposure": dict(self.transmission_by_exposure),
+            "weight_source": dict(self.weight_source),
         }
 
 
@@ -404,7 +529,16 @@ def exposure_from_measurement(
     )
 
 
-def _weights(exptimes: Sequence[float], weight_mode: str) -> list[float]:
+WEIGHT_MODES = ("exptime", "none", "invvar")
+
+
+def _weights(
+    exptimes: Sequence[float],
+    weight_mode: str,
+    *,
+    exposure_ids: Sequence[str] | None = None,
+    weight_table: dict | None = None,
+) -> list[float]:
     if weight_mode == "none":
         return [1.0] * len(exptimes)
     if weight_mode == "exptime":
@@ -412,7 +546,143 @@ def _weights(exptimes: Sequence[float], weight_mode: str) -> list[float]:
         if not np.all(np.isfinite(values)) or np.any(values <= 0):
             raise StreamCombineError("exptime weighting needs a positive EXPTIME in every cube")
         return [float(v) for v in values]
+    if weight_mode == "invvar":
+        # La varianza NO se mide aquí: el combinado no sabe dónde está el
+        # compañero ni cuáles son los controles. La mide C7 (por exposición, en
+        # posiciones vacías al radio del compañero, en una banda declarada) y
+        # llega como tabla. Sin tabla no hay ley, y no hay fallback a `exptime`.
+        if weight_table is None or exposure_ids is None:
+            raise StreamCombineError(
+                "invvar weighting needs a per-exposure weight table (see load_weight_table)"
+            )
+        ids = [str(v) for v in exposure_ids]
+        if len(set(ids)) != len(ids):
+            duplicated = sorted({v for v in ids if ids.count(v) > 1})
+            raise StreamCombineError(
+                f"invvar weighting keys the table by exposure_id, and these are not unique: {duplicated}"
+            )
+        missing = [v for v in ids if v not in weight_table]
+        extra = sorted(set(weight_table) - set(ids))
+        if missing or extra:
+            raise StreamCombineError(
+                "the weight table does not describe this set of exposures: "
+                f"{len(missing)} planned exposures without weight (first: {missing[:1]}), "
+                f"{len(extra)} weights without exposure (first: {extra[:1]}). "
+                "A table measured on another harvest is not a table for this cube."
+            )
+        values = np.asarray([weight_table[v] for v in ids], dtype=float)
+        if not np.all(np.isfinite(values)) or np.any(values <= 0):
+            raise StreamCombineError("invvar weighting needs a finite, positive weight for every exposure")
+        return [float(v) for v in values]
     raise ValueError(f"Unknown weight_mode: {weight_mode}")
+
+
+WEIGHT_TABLE_KINDS = {"cube": "weights_cube_normalised", "measurement": "weights_normalised"}
+
+
+def load_weight_table(path, *, aperture: str | None = None, kind: str = "measurement") -> tuple[dict, dict]:
+    """Los pesos por exposición de un QC de C7 (`spec_perexp_qc.json`).
+
+    `kind="measurement"` (por defecto) lee `weights_normalised`, el peso con el
+    que C7 combina sus medidas: 1/sigma_i^2 con la apcorr de cada exposicion
+    dentro. Es tambien el peso que le corresponde al cubo, porque lo que cuenta
+    es la S/N de cada exposicion EN EL COMPANERO, (S_i/sigma_i)^2 = 1/(apcorr_i
+    * sigma_raw_i)^2: una exposicion con mala PSF tiene poco ruido en la caja
+    en unidades de cubo, pero tambien poca senal. `kind="cube"` lee
+    `weights_cube_normalised` (1/sigma^2 de los controles CRUDOS, sin apcorr):
+    se probo el 2026-09-14 (via B ronda 2) con la hipotesis de que la apcorr_i^2
+    castigaba de mas, y lo que hizo fue devolver a la noche mala el 49 % del
+    peso (2.4 % con la tabla de medida) sin recuperar n_eff (15.8 de 29 contra
+    13.9). Queda disponible como diagnostico, no como defecto.
+
+    Devuelve `({exposure_id: peso}, procedencia)`. Exige lo que hace que esos
+    pesos sean los del combinado y no otros: un solo grupo (`--group-by none`;
+    agrupado por noche los pesos se normalizan DENTRO de cada noche y no dicen
+    nada del reparto entre noches) y la ley `invvar` (con otra ley
+    `weights_normalised` es `exptime` o `equal` con otro nombre). La apertura es
+    la primera del QC salvo que se pida otra: los pesos se miden en la banda
+    declarada `weight_band_A`, no en la apertura, así que box3 y box5 difieren
+    poco, pero el QC dice cuál se usó.
+    """
+
+    path = Path(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    convention = payload.get("convention") or {}
+    if str(convention.get("combine")) != "invvar":
+        raise StreamCombineError(
+            f"{path}: its weights follow the law {convention.get('combine')!r}, not 'invvar'"
+        )
+    groups = payload.get("groups") or {}
+    if len(groups) != 1:
+        raise StreamCombineError(
+            f"{path}: expected ONE group (C7 run with --group-by none), found {sorted(groups)}; "
+            "per-night weights are normalised within each night and say nothing about the share between nights"
+        )
+    group_name, group = next(iter(groups.items()))
+    apertures = group.get("apertures") or {}
+    if not apertures:
+        raise StreamCombineError(f"{path}: the group {group_name!r} has no apertures")
+    label = str(aperture or next(iter(apertures)))
+    if label not in apertures:
+        raise StreamCombineError(f"{path}: no aperture {label!r} (has {sorted(apertures)})")
+    if kind not in WEIGHT_TABLE_KINDS:
+        raise ValueError(f"unknown weight table kind: {kind!r} (expected one of {sorted(WEIGHT_TABLE_KINDS)})")
+    field_name = WEIGHT_TABLE_KINDS[kind]
+    table = apertures[label].get(field_name)
+    if not isinstance(table, dict) or not table:
+        raise StreamCombineError(
+            f"{path}: aperture {label!r} carries no `{field_name}`"
+            + (" (C7 QC written before 2026-09-14: re-run C7)" if kind == "cube" else "")
+        )
+    weights = {str(k): float(v) for k, v in table.items()}
+    source = {
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "stage": str(payload.get("stage")),
+        "spec_version": str(payload.get("spec_version")),
+        "run_id": str(payload.get("run_id")),
+        "law": "invvar",
+        "kind": kind,
+        "field": field_name,
+        "group": str(group_name),
+        "aperture": label,
+        "weight_band_A": [float(v) for v in (convention.get("weight_band_A") or ())],
+        # Como se estimo la sigma_i (`x06_sigma_shrink`): un QC anterior a
+        # 2026-09-15 no lo declara y equivale a `none`.
+        "sigma_shrink": str(convention.get("sigma_shrink", "none")),
+        "sigma": str(convention.get("sigma")),
+        "n_exposures": int(len(weights)),
+        "n_eff": apertures[label].get("n_eff_cube" if kind == "cube" else "n_eff"),
+    }
+    return weights, source
+
+
+def reweight_plan(
+    plan: "StreamCombinePlan",
+    weight_mode: str,
+    *,
+    weight_table: dict | None = None,
+    weight_source: dict | None = None,
+) -> "StreamCombinePlan":
+    """El mismo plan con otra ley de pesos: misma geometría, otros `weight`.
+
+    Es la manera de cambiar SOLO los pesos de un combinado: los centroides, las
+    ventanas y los desplazamientos se conservan tal cual, así que la diferencia
+    entre los dos cubos es la ley y nada más. Re-planificar mediría de nuevo los
+    centroides (deterministas, pero no es lo que se quiere aislar).
+    """
+
+    if weight_mode not in WEIGHT_MODES:
+        raise ValueError(f"Unknown weight_mode: {weight_mode}")
+    weights = _weights(
+        [exp.exptime for exp in plan.exposures], weight_mode,
+        exposure_ids=[exp.exposure_id for exp in plan.exposures], weight_table=weight_table,
+    )
+    exposures = tuple(replace(exp, weight=float(w)) for exp, w in zip(plan.exposures, weights))
+    source = dict(weight_source or {}) if weight_mode == "invvar" else {}
+    if weight_mode == "invvar" and not source:
+        raise StreamCombineError("invvar weighting needs its provenance (weight_source)")
+    return replace(plan, weight_mode=str(weight_mode), exposures=exposures, weight_source=source)
 
 
 def _alignment_repeatability(
@@ -510,11 +780,13 @@ def build_stream_combine_plan(
     pad: int = DEFAULT_PAD,
     data_ext: int = 1,
     stat_ext: str = "STAT",
-    chunk_channels: int = DEFAULT_CHUNK_CHANNELS,
+    chunk_channels: int | None = None,
     method: str = "mean",
     sigclip_k: float = DEFAULT_SIGCLIP_K,
     sigclip_min_n: int = DEFAULT_SIGCLIP_MIN_N,
     weight_mode: str = "exptime",
+    weight_table: dict | None = None,
+    weight_source: dict | None = None,
     drop_wave_min_A: float = 5780.0,
     drop_wave_max_A: float = 6050.0,
     centering_method: str = "maoppy",
@@ -528,6 +800,10 @@ def build_stream_combine_plan(
         raise StreamCombineError("need at least two cubes to combine")
     if method not in {"mean", "sigclip"}:
         raise StreamCombineError(f"unknown method: {method}")
+    if weight_mode not in WEIGHT_MODES:
+        raise ValueError(f"Unknown weight_mode: {weight_mode}")
+    if weight_mode == "invvar" and not weight_source:
+        raise StreamCombineError("invvar weighting needs its provenance (weight_source)")
     if int(crop_npix) <= 0:
         raise StreamCombineError("crop_npix must be positive")
 
@@ -576,8 +852,26 @@ def build_stream_combine_plan(
             f"({(crval3_values.max() - crval3_values.min()):.5f} A); combined without spectral resampling"
         )
 
+    # El trozo: declarado manda, si no se dimensiona a la memoria que hay. Es
+    # la misma convención que el resto del repo -el knob declarado gana- y aquí
+    # importa el doble, porque de él depende que el combinado quepa.
+    if chunk_channels is None:
+        sizing = auto_chunk_channels(
+            n_exposures=len(measurements),
+            crop_npix=int(crop_npix),
+            n_channels=int(next(iter(n_wave))),
+            method=str(method),
+        )
+        resolved_chunk = int(sizing["chunk_channels"])
+    else:
+        resolved_chunk = int(chunk_channels)
+        sizing = {"source": "declared", "chunk_channels": resolved_chunk}
+
     half = int(crop_npix) // 2
-    weights = _weights([m["exptime"] for m in measurements], weight_mode)
+    weights = _weights(
+        [m["exptime"] for m in measurements], weight_mode,
+        exposure_ids=[_exposure_id(m["file"]) for m in measurements], weight_table=weight_table,
+    )
 
     exposures = []
     for index, (measurement, weight) in enumerate(zip(measurements, weights)):
@@ -648,7 +942,8 @@ def build_stream_combine_plan(
         pad=int(pad),
         data_ext=int(data_ext),
         stat_ext=str(stat_ext),
-        chunk_channels=int(chunk_channels),
+        chunk_channels=int(resolved_chunk),
+        chunk_sizing=dict(sizing),
         method=str(method),
         sigclip_k=float(sigclip_k),
         sigclip_min_n=int(sigclip_min_n),
@@ -660,6 +955,7 @@ def build_stream_combine_plan(
         wavelength=wavelength,
         exposures=tuple(exposures),
         warnings=tuple(warnings),
+        weight_source=dict(weight_source or {}) if weight_mode == "invvar" else {},
     )
 
 
@@ -707,8 +1003,10 @@ def plan_from_dict(payload: dict) -> StreamCombinePlan:
         reference=dict(payload["reference"]),
         wavelength=dict(payload["wavelength"]),
         exposures=exposures,
+        chunk_sizing=dict(payload.get("chunk_sizing", {})),
         warnings=tuple(payload.get("warnings", [])),
         transmission_by_exposure=dict(payload.get("transmission_by_exposure", {})),
+        weight_source=dict(payload.get("weight_source", {})),
     )
 
 
@@ -907,6 +1205,8 @@ def combine_streaming(plan: StreamCombinePlan, *, progress=None, transform=None)
         "n_exposures": n_exp,
         "method": plan.method,
         "weight_mode": plan.weight_mode,
+        "weight_source": dict(plan.weight_source),
+        "weights_by_exposure": {exp.exposure_id: float(exp.weight) for exp in plan.exposures},
         "sigclip_k": float(plan.sigclip_k) if plan.method == "sigclip" else None,
         "cube_shape": [int(nz), int(npix), int(npix)],
         "voxels_total": int(nz) * int(npix) * int(npix),
@@ -982,6 +1282,9 @@ def write_combined_cube(result: dict, plan: StreamCombinePlan, output, *, bunit=
     primary["ORIGIN"] = "musepipe.stream_combine"
     primary["COMBMETH"] = str(plan.method)
     primary["COMBWGT"] = str(plan.weight_mode)
+    if plan.weight_source:
+        primary["COMBWSRC"] = Path(str(plan.weight_source.get("path", ""))).name
+        primary["COMBWSHA"] = str(plan.weight_source.get("sha256", ""))[:16]
     primary["NEXP"] = len(plan.exposures)
     primary["CROPPIX"] = int(plan.crop_npix)
     primary["CENTER"] = str(plan.centering_method)
@@ -993,7 +1296,8 @@ def write_combined_cube(result: dict, plan: StreamCombinePlan, output, *, bunit=
     for exposure in plan.exposures:
         primary.add_history(
             f"exp {exposure.index:02d} {exposure.exposure_id} "
-            f"t={exposure.exptime:.0f}s shift=({exposure.shift_y:+.3f},{exposure.shift_x:+.3f})"
+            f"t={exposure.exptime:.0f}s w={exposure.weight:.4g} "
+            f"shift=({exposure.shift_y:+.3f},{exposure.shift_x:+.3f})"
         )
 
     wcs_header = build_output_header(plan, bunit=bunit)
@@ -1011,13 +1315,17 @@ __all__ = [
     "ExposureAlignment",
     "StreamCombineError",
     "StreamCombinePlan",
+    "WEIGHT_MODES",
+    "WEIGHT_TABLE_KINDS",
     "build_output_header",
     "build_stream_combine_plan",
     "combine_streaming",
     "exposure_from_measurement",
+    "load_weight_table",
     "measure_primary_center",
     "plan_from_dict",
     "read_window",
+    "reweight_plan",
     "shift_data_chunk",
     "shift_variance_chunk",
     "write_combined_cube",

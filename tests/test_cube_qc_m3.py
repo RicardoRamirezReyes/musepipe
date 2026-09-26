@@ -71,6 +71,27 @@ class CubeQcM3Tests(unittest.TestCase):
             self.assertAlmostEqual(m3["flux_factor"], 1.0, places=6)
             self.assertEqual(m3["status"], "green")
 
+    def test_declared_primary_from_another_frame_is_rejected_for_the_peak(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_passband(tmp, "RP", 6100.0, 9000.0)
+            cfg = _make_config(self.star_flux_native * 1e-20, pb_dir=tmp)
+            # [166, 168] del cubo sin recortar, sobre un cubo donde la primaria
+            # esta en otro sitio: la apertura caeria en el vacio y el factor
+            # saldria ~0 sin que nada protestara.
+            cfg["m3_primary_yx"] = [self.primary[0] + 12, self.primary[1] + 9]
+            m3 = compute_m3_flux(self.cube, self.wave, cfg, aperture_radius_px=5.0)
+            self.assertEqual(m3["primary_yx"], [float(self.primary[0]), float(self.primary[1])])
+            self.assertIn("different frame", m3["primary_yx_source"])
+            self.assertTrue(any(c and c.startswith("m3_primary_yx ignored") for c in m3["caveats"]))
+            self.assertAlmostEqual(m3["flux_factor"], 1.0, places=6)
+            # Una declarada que SI cae sobre el pico se respeta tal cual.
+            cfg["m3_primary_yx"] = [self.primary[0] + 1, self.primary[1]]
+            m3 = compute_m3_flux(self.cube, self.wave, cfg, aperture_radius_px=5.0)
+            self.assertEqual(m3["primary_yx"], [float(self.primary[0] + 1), float(self.primary[1])])
+            self.assertIn("declared", m3["primary_yx_source"])
+
     def test_half_flux_gives_yellow_or_red_factor_half(self):
         import tempfile
 

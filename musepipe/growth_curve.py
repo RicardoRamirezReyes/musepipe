@@ -408,6 +408,32 @@ def measure_growth_curve(
     }
 
 
+def exclude_bands_above(growth_qc, cut_A, *, reason):
+    """Aparta del factor las bandas con `wave_A >= cut_A`, dejandolas escritas.
+
+    Es lo que se hizo a mano en `ROXs12b_OB3445598` el 2026-08-21: la banda mas
+    roja (9062 A, donde viven las lineas de OH y la banda A telurica) rebota
+    sobre el minimo en TODOS los binados y hace saltar el guardian de monotonia
+    de `factor_at_wavelengths`; se recorta la causa, no el binado que pasa.
+    Las bandas apartadas van a `excluded_bands` con su medida y la razon, para
+    que el QC diga que se midieron y por que no cuentan. Halpha tiene que
+    quedar dentro de las retenidas: si no, el corte esta mal puesto.
+    """
+
+    cut = float(cut_A)
+    kept = [row for row in growth_qc["bands"] if float(row["wave_A"]) < cut]
+    dropped = [dict(row, reason=str(reason)) for row in growth_qc["bands"] if float(row["wave_A"]) >= cut]
+    if not dropped:
+        return dict(growth_qc)
+    if not kept or max(float(r["wave_A"]) for r in kept) < 6562.8:
+        raise ValueError(f"exclude_bands_above({cut_A}) would leave Halpha outside the retained bands")
+    out = dict(growth_qc)
+    out["bands"] = kept
+    out["excluded_bands"] = list(growth_qc.get("excluded_bands", [])) + dropped
+    out["exclude_above_A"] = cut
+    return out
+
+
 #: Producto de run donde vive la medida. Lo escribe A2 cuando corre, o
 #: `scripts/measure_growth_curve.py --write-run-product` para los runs donde A2
 #: no corre (perfil `cascade`) o corrio antes de que esto existiera.

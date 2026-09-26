@@ -27,6 +27,7 @@ from ..halosub import (
 )
 from ..io import read_json, resolve_bunit, write_json
 from ..paths import RunPaths
+from ..spectral import resolve_lsf_fwhm_A
 from .stage_x01_aperture import (
     _best_indices_from_stage04b,
     _load_positions,
@@ -330,20 +331,19 @@ def write_halosub_products(product: HalosubStageProduct, cfg, paths, *, method, 
     return {"products": qc["products"], "qc_json": paths["qc_json"], "qc": qc}
 
 
-def lsf_fwhm_A_from_qc_or_config(paths, cfg, default=2.6):
+def lsf_fwhm_A_from_qc_or_config(paths, cfg):
+    """La LSF de C5/C6, por el resolutor COMPARTIDO. Devuelve `(valor, procedencia)`.
+
+    Hasta el 2026-09-10 esto devolvia 2.6 A -un default- en los dos objetos, porque
+    buscaba `lsf.fwhm_A` y `cube.lsf_fwhm_A` en el QC de A4, que escribe
+    `m2_lsf.lsf_fwhm_at_halpha_A`, y luego `lsf_fwhm_A` en el config, que lo declara
+    como `h01_lsf_fwhm_A`. Los dos caminos fallaban sin decir nada, y como la `R` del
+    predictor de autosustraccion es proporcional a la LSF, el numero que publicaban
+    estos QC salia con la LSF equivocada.
+    """
+
     qc00 = _read_optional_json(paths["stage00q_qc_json"])
-    value = None
-    if isinstance(qc00, dict):
-        value = qc00.get("lsf", {}).get("fwhm_A") or qc00.get("cube", {}).get("lsf_fwhm_A")
-    if value is None:
-        value = cfg.get("lsf_fwhm_A", default)
-    try:
-        value = float(value)
-    except Exception:
-        value = float(default)
-    if not np.isfinite(value) or value <= 0:
-        value = float(default)
-    return value
+    return resolve_lsf_fwhm_A(qc00, cfg, stage_key="halosub_lsf_fwhm_A")
 
 
 def expected_scaleref(cfg, *, knob):

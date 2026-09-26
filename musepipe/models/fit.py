@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .prep import prepare_template
+from .prep import apply_extinction, prepare_template, prepare_template_base
 
 
 def _marginalized_interval(axis, marg, confidence=1.0):
@@ -120,11 +120,18 @@ def fit_grid_3d(fit_spec, library, extinction, *, teff_axis, logg_axis, av_axis,
                 lsf_fwhm_A, delta_chi2_confidence=1.0, edge_sigma3=9.0,
                 sys_fluxcal_frac=0.10, chi2red_inflate_threshold=1.5, n_free=4,
                 veiling=False, veiling_alpha_axis=(-2.0, -1.0, 0.0, 1.0, 2.0),
-                lambda_ref=7500.0):
+                lambda_ref=7500.0, template_R=None, template_frame=None,
+                data_frame=None):
     """3-D grid fit (Teff, logg, A_V) with analytic Omega and the V2 maps.
 
     2-D counterpart :func:`fit_grid` is kept for its existing callers/tests.
     Missing library nodes (``library.get`` raising) get chi2 = inf and drop out.
+
+    Each node is framed/degraded/resampled ONCE and reddened per A_V (same
+    numbers as preparing it at every A_V). ``template_R`` / ``template_frame``
+    / ``data_frame`` carry the library DECLARATION (plan 2026-09-23): BT-Settl
+    is declared sharp (``R = inf``) and in vacuum, and is taken to air before
+    degrading. Degrees of freedom: ``fit_spec.dof_base − n_free``.
     """
     wave = np.asarray(fit_spec.wave_bin, float)
     flux = np.asarray(fit_spec.flux_bin, float)
@@ -136,18 +143,26 @@ def fit_grid_3d(fit_spec, library, extinction, *, teff_axis, logg_axis, av_axis,
     A = np.asarray(av_axis, float)
     alpha_axis = np.asarray(veiling_alpha_axis, float)
 
+    prep_kw = {"template_R": template_R, "template_frame": template_frame,
+               "data_frame": data_frame}
+    ext_by_av = [apply_extinction(np.ones_like(wave), wave, extinction, float(av))
+                 for av in A]
+    ext_ok = np.logical_and.reduce([np.isfinite(e) for e in ext_by_av]) if A.size else good
     chi2 = np.full((T.size, G.size, A.size), np.inf)
     scales = np.zeros_like(chi2)
+    used_by_node = {}
     for i, teff in enumerate(T):
         for j, logg in enumerate(G):
             try:
                 tmpl = library.get(teff=float(teff), logg=float(logg))
             except RuntimeError:
                 continue  # missing node -> stays inf
+            base, _ = prepare_template_base(tmpl, wave, lsf_fwhm_A=lsf_fwhm_A, **prep_kw)
+            # mismos bins para todos los A_V de este nodo
+            common = good & ext_ok & np.isfinite(base)
+            used_by_node[(i, j)] = common
             for k, av in enumerate(A):
-                model = prepare_template(tmpl, wave, lsf_fwhm_A=lsf_fwhm_A,
-                                         extinction=extinction, av=float(av), scale=1.0)
-                model = np.where(good, model, np.nan)
+                model = np.where(common, base * ext_by_av[k], np.nan)
                 scale, c2, _, _ = _node_chi2(flux, model, inv_var, wave,
                                              veiling=veiling, alpha_axis=alpha_axis,
                                              lambda_ref=lambda_ref)
@@ -164,15 +179,19 @@ def fit_grid_3d(fit_spec, library, extinction, *, teff_axis, logg_axis, av_axis,
 
     tmpl_best = library.get(teff=float(T[i0]), logg=float(G[j0]))
     model_best = prepare_template(tmpl_best, wave, lsf_fwhm_A=lsf_fwhm_A,
-                                  extinction=extinction, av=float(A[k0]), scale=1.0)
-    model_best = np.where(good, model_best, np.nan)
+                                  extinction=extinction, av=float(A[k0]), scale=1.0,
+                                  **prep_kw)
+    model_best = np.where(used_by_node.get((i0, j0), good), model_best, np.nan)
     swm2 = float(np.nansum(inv_var * model_best ** 2))
     omega_best = float(scales[idx])
     omega_err_stat = float(1.0 / np.sqrt(swm2)) if swm2 > 0 else float("nan")
     omega_err_sys = float(sys_fluxcal_frac) * abs(omega_best)
     omega_err_total = float(np.hypot(omega_err_stat, omega_err_sys))
 
-    ndof = max(1, int(fit_spec.n_bins) - int(n_free))
+    used = used_by_node.get((i0, j0), good)
+    dof_base = (fit_spec.dof_used(used) if hasattr(fit_spec, "dof_used")
+                else float(fit_spec.n_bins) * float(np.sum(used)) / max(1, int(fit_spec.n_bins)))
+    ndof = max(1.0, float(dof_base) - int(n_free))
     chi2_red = chi2_min / ndof
     inflate = chi2_red > float(chi2red_inflate_threshold)
 
@@ -194,6 +213,10 @@ def fit_grid_3d(fit_spec, library, extinction, *, teff_axis, logg_axis, av_axis,
         "av_interval": _marginalized_interval(A, marg_av, delta_chi2_confidence),
         "edge_touch": {"teff": edge(marg_teff), "logg": edge(marg_logg),
                        "av": edge(marg_av)},
+        # the MINIMUM itself on the first/last node of an axis (plan 2026-09-23)
+        "edge": {"teff": bool(T.size > 1 and i0 in (0, T.size - 1)),
+                 "logg": bool(G.size > 1 and j0 in (0, G.size - 1)),
+                 "av": bool(A.size > 1 and k0 in (0, A.size - 1))},
         "interp_error": {"teff": _local_halfstep(T, T[i0]),
                          "logg": _local_halfstep(G, G[j0]),
                          "av": _local_halfstep(A, A[k0])},

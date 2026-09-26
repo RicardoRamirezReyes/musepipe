@@ -16,12 +16,13 @@ sys.path.insert(0, str(ROOT))
 
 from musepipe.config import load_run_config  # noqa: E402
 from musepipe.reduction.stream_combine import (  # noqa: E402
-    DEFAULT_CHUNK_CHANNELS,
     DEFAULT_PAD,
     DEFAULT_SIGCLIP_K,
     DEFAULT_SIGCLIP_MIN_N,
     StreamCombineError,
+    WEIGHT_MODES,
     build_stream_combine_plan,
+    load_weight_table,
 )
 
 
@@ -33,11 +34,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan-json", help="Plan path (default: runs/<RUN_ID>/stages/stream_combine_plan.json)")
     parser.add_argument("--crop-npix", type=int, help="Default: crop_npix from the run config")
     parser.add_argument("--pad", type=int, default=DEFAULT_PAD)
-    parser.add_argument("--chunk-channels", type=int, default=DEFAULT_CHUNK_CHANNELS)
+    parser.add_argument("--chunk-channels", type=int, default=None,
+                        help="canales por trozo; por defecto se dimensiona a la memoria "
+                             "disponible (auto_chunk_channels). Un valor explicito manda.")
     parser.add_argument("--method", choices=("mean", "sigclip"), default="mean")
     parser.add_argument("--sigclip-k", type=float, default=DEFAULT_SIGCLIP_K)
     parser.add_argument("--sigclip-min-n", type=int, default=DEFAULT_SIGCLIP_MIN_N)
-    parser.add_argument("--weight", choices=("exptime", "none"), default="exptime")
+    parser.add_argument("--weight", choices=WEIGHT_MODES, default="exptime")
+    parser.add_argument("--weight-table",
+                        help="Con --weight invvar: el QC de C7 (spec_perexp_qc.json, corrido con "
+                             "--group-by none --combine invvar) que declara el peso de cada exposicion. "
+                             "Obligatorio con invvar, ignorado con las otras leyes.")
+    parser.add_argument("--weight-kind", choices=("measurement", "cube"), default="measurement",
+                        help="que tabla del QC de C7: `measurement` (1/sigma_i^2 con la apcorr de cada "
+                             "exposicion dentro: la S/N de cada una en el companero, y la que le corresponde "
+                             "al cubo) o `cube` (controles crudos sin apcorr; probada el 2026-09-14 y devuelve "
+                             "a la noche mala el 49 %% del peso sin recuperar n_eff: solo diagnostico)")
+    parser.add_argument("--weight-aperture",
+                        help="Con --weight-table: la apertura del QC de la que se leen los pesos "
+                             "(por defecto la primera, box3)")
     parser.add_argument(
         "--centering",
         choices=("peak", "maoppy"),
@@ -65,6 +80,12 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         raise StreamCombineError(f"combined cube already exists: {output}")
 
+    weight_table, weight_source = None, None
+    if args.weight == "invvar":
+        if not args.weight_table:
+            raise StreamCombineError("--weight invvar needs --weight-table <spec_perexp_qc.json>")
+        weight_table, weight_source = load_weight_table(args.weight_table, aperture=args.weight_aperture, kind=args.weight_kind)
+
     def progress(index: int, total: int, path: str) -> None:
         print(f"[{index + 1:2d}/{total}] centroid {Path(path).parent.name}", flush=True)
 
@@ -77,11 +98,13 @@ def main(argv: list[str] | None = None) -> int:
         pad=int(args.pad),
         data_ext=int(config.get("data_ext", 1)),
         stat_ext=str(config.get("stat_ext", "STAT")),
-        chunk_channels=int(args.chunk_channels),
+        chunk_channels=None if args.chunk_channels is None else int(args.chunk_channels),
         method=args.method,
         sigclip_k=float(args.sigclip_k),
         sigclip_min_n=int(args.sigclip_min_n),
         weight_mode=args.weight,
+        weight_table=weight_table,
+        weight_source=weight_source,
         drop_wave_min_A=float(config.get("drop_wave_min_A", 5780.0)),
         drop_wave_max_A=float(config.get("drop_wave_max_A", 6050.0)),
         centering_method=str(args.centering or config.get("centering_method", "maoppy")),
@@ -95,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nPlanned {len(plan.exposures)} exposures -> {output}")
     print(f"  crop {plan.crop_npix} px, primary at pixel index {plan.crop_npix // 2}")
     print(f"  method={plan.method} weight={plan.weight_mode}")
+    if plan.weight_source:
+        print(f"  weights from {plan.weight_source['path']} (sha256 {plan.weight_source['sha256'][:12]}, "
+              f"band {plan.weight_source['weight_band_A']} A, aperture {plan.weight_source['aperture']})")
     print(f"  sub-pixel shifts |dy|<={max(abs(s[0]) for s in shifts):.3f} "
           f"|dx|<={max(abs(s[1]) for s in shifts):.3f}")
     repeatability = plan.reference["alignment_repeatability"]

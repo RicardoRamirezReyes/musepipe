@@ -28,8 +28,21 @@ class ExtinctionTests(unittest.TestCase):
 
     def test_out_of_range_is_nan(self):
         law = CCMExtinction(rv=3.1, citation="Cardelli+1989")
-        # 3.0 um (30000 A) is outside the optical CCM range
-        self.assertTrue(np.isnan(float(law.a_lambda_over_av(30000.0))))
+        # 4.0 um (x = 0.25 um^-1) is outside CCM89 altogether (IR branch: x >= 0.3)
+        self.assertTrue(np.isnan(float(law.a_lambda_over_av(40000.0))))
+
+    def test_ir_branch_covers_the_g3_range(self):
+        """La rama IR de CCM89 (x < 1.1): sin ella, λ > 9091 Å era NaN y los
+        canales 9091–9349.5 Å se caían en silencio de todo modelo con A_V > 0."""
+        law = CCMExtinction(rv=3.1, citation="Cardelli+1989")
+        a = law.a_lambda_over_av(np.array([9200.0, 9349.5, 22000.0]))
+        self.assertTrue(np.all(np.isfinite(a)))
+        # K band (2.2 um): CCM89 A_K/A_V ~ 0.11-0.12 for R_V=3.1
+        self.assertAlmostEqual(float(a[2]), 0.117, delta=0.01)
+        # continuous across x = 1.1 (9090.9 A) within 1 %
+        lo = float(law.a_lambda_over_av(9090.0))
+        hi = float(law.a_lambda_over_av(9092.0))
+        self.assertLess(abs(lo - hi) / lo, 0.01)
 
 
 if __name__ == "__main__":

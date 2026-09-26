@@ -584,13 +584,27 @@ def compute_m3_flux(
         return {"status": "unavailable", "reason": f"passband_file_missing:{pb_file}", "variability_caveat": True}
     pb_wave, pb_resp = load_passband_csv(pb_file)
 
+    # La posicion declarada se COMPRUEBA contra el pico de este cubo, como en
+    # m4m5 (`resolve_primary_yx`): `m3_primary_yx` = [166, 168] de ROXs 12 b es
+    # del cubo sin recortar, y tomarla a ciegas sobre el de 200 px puso la
+    # apertura en el halo y dio un factor de 0.0018 (2026-09-14, ROXs12b_invvar)
+    # sin que nada protestara. Si no coincide, manda el dato y queda escrito.
+    primary_caveat = None
     if primary_yx is None:
         override = config.get("m3_primary_yx")
         if override is not None:
-            primary_yx = (float(override[0]), float(override[1]))
+            checked, primary_source = resolve_primary_yx(data, wave_arr, override)
+            if checked is None:
+                primary_caveat = f"m3_primary_yx ignored: {primary_source}; measured peak used instead"
+                primary_yx = detect_primary_yx(data, wave_arr, band_A=config.get("m3_primary_detect_band_A"))
+            else:
+                primary_yx = checked
         else:
             band_A = config.get("m3_primary_detect_band_A")
             primary_yx = detect_primary_yx(data, wave_arr, band_A=band_A)
+            primary_source = "brightest spaxel of this cube"
+    else:
+        primary_source = "given by the caller"
     if aperture_radius_px is None:
         aperture_radius_px = float(config.get("m3_aperture_radius_px", config.get("psf_norm_radius_px", 25.0)))
     if aperture_correction is None:
@@ -643,6 +657,7 @@ def compute_m3_flux(
         "reference_flux_cgs": reference_cgs,
         "catalog_mag": pb.get("mag"),
         "primary_yx": [float(primary_yx[0]), float(primary_yx[1])],
+        "primary_yx_source": primary_source,
         "aperture_correction": str(aperture_correction),
         "aperture_radius_px": None if effective_radius is None else float(effective_radius),
         "plateau_radius_px": plateau_radius,
@@ -659,6 +674,7 @@ def compute_m3_flux(
         "variability_caveat": True,
         "caveats": [
             config.get("m3_caveat"),
+            primary_caveat,
             ("Aperture flux corrected to the growth-curve plateau (AO halo captured)."
              if aperture_correction == "growth_curve"
              else "Fixed aperture may miss the broad NFM AO halo (factor biased low); use growth_curve."),

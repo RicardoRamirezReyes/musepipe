@@ -15,13 +15,15 @@
   "note": "Primer objeto de la cadena. display_name se usa en la prosa de los informes. `primary_display_name` es la estrella que domina el cubo; `display_name` es el compañero, que es de quien va el run.",
   "primary_display_name": "ROXs 12 A",
   "paper": {
-    "run": "ROXs12b_OB3445598",
+    "run": "ROXs12b_invvar",
     "order": 1,
-    "note": "Se publica sobre una sola noche: en el cubo combinado los controles comparten un modo de emision de la primaria que no se separa de la compañera.",
+    "note": "Cubo `invvar`, combinado por la inversa de la varianza. En el combinado por `exptime` los controles comparten un modo de emision de la primaria que viene de la noche de peor calidad; el cubo `invvar` le da un peso minimo y no lo tiene. Antes se publicaba sobre la noche buena sola.",
     "display": "ROXs 12 b",
     "second_epoch_run": "ROXs12b_OB3444577",
     "second_epoch_note": "Segunda epoca, de peor calidad atmosferica. No se publica sobre ella: se usa para mostrar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
-    "spt_source_dir": "g3_real_avwide_20260904T025945",
-    "spt_source_note": "Reintento con el eje de extincion ensanchado y la LSF corregida. El tipo espectral no cambia y el ajuste atmosferico sigue sin pasar su puerta de bondad de ajuste. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos."
+    "spt_source_dir": "g3_resolucion_invvar_20260925T141314",
+    "spt_source_note": "G3 a la resolucion de MUSE, con una prueba por biblioteca, re-corrido despues de correr la etapa telurica sobre este cubo. El tipo espectral no cambia y el ajuste atmosferico sigue sin pasar su puerta de bondad de ajuste. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos.",
+    "previous_run": "ROXs12b_OB3445598",
+    "previous_run_note": "La noche buena sola, run de publicacion anterior. Se cita como control de robustez: el resultado se mantiene descartando la noche de peor calidad."
   }
 }

@@ -54,8 +54,15 @@ docs/**/*.out
 docs/**/*.toc
 docs/**/*.synctex.gz
 
-# Paper draft: shared via Overleaf, not in this repo (yet)
-paper/
+# Paper draft: shared via Overleaf, not in this repo (yet).
+# `paper/*` en vez de `paper/` para poder re-incluir una subcarpeta: git no deja
+# re-incluir nada cuyo directorio padre este excluido.
+paper/*
+# Excepcion: el archivo literal de politicas editoriales (AAS, y las que se
+# anadan). No es el manuscrito -es material de referencia del que dependen
+# decisiones del envio- y tiene que viajar con el repo para que `git diff` diga
+# que cambio la revista al refrescarlo.
+!paper/policies/
 
 # Internal meeting slides: not part of the published pipeline
 roxs12_reunion.pptx

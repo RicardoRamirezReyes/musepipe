@@ -27,10 +27,12 @@ from ..models.manifest import library_root, verify_manifest
 from ..models.accretion import mdot_mc
 from ..models.observed import FitSpectrum, build_fit_masks, fit_spectrum, load_final_spectrum, plot_fit_spectrum
 from ..models.prep import prepare_template
+from ..models.libraries import data_frame, resolve_declaration, template_library_entries
+from ..models.template_fit import declared_prep_kwargs
 from ..models.templates import EmpiricalTemplateLibrary
 from ..paths import RunPaths
 from .stage_g3_accretion import TABLE_FIELDS, run_stage_g3_accretion
-from .stage_g3_atmo_fit import run_stage_g3_atmo_fit
+from .stage_g3_atmo_fit import _prep_kwargs, atmosphere_declaration, run_stage_g3_atmo_fit
 from .stage_g3_derived import run_stage_g3_derived
 from .stage_g3_template_fit import run_stage_g3_template_fit
 
@@ -145,17 +147,20 @@ def _get(rows, prop):
 # --------------------------------------------------------------------------- #
 def _v1_real_noise(cfg, run_paths, library, ext, lsf, axes, seed):
     fs = fit_spectrum(cfg, run_paths)
+    prep_kw = _prep_kwargs(atmosphere_declaration(cfg), cfg)
     teff_t, logg_t, av_t = 3000.0, 4.0, 1.0
     base = prepare_template(library.get(teff=teff_t, logg=logg_t), fs.wave_bin,
-                            lsf_fwhm_A=lsf, extinction=ext, av=av_t, scale=1.0)
+                            lsf_fwhm_A=lsf, extinction=ext, av=av_t, scale=1.0,
+                            **prep_kw)
     med_obs = float(np.nanmedian(np.abs(fs.flux_bin)))
     med_mod = float(np.nanmedian(np.abs(base)))
     scale = med_obs / med_mod if med_mod > 0 else 1.0
     rng = np.random.default_rng(int(seed) + 101)
     injected = base * scale + rng.normal(0.0, np.abs(fs.err_bin))
-    inj = FitSpectrum(fs.wave_bin, injected, fs.err_bin, fs.n_bins, fs.n_eff, {})
+    inj = FitSpectrum(fs.wave_bin, injected, fs.err_bin, fs.n_bins, fs.n_eff, {},
+                      n_dof=fs.n_dof, bin_channels=fs.bin_channels)
     res = fit_grid_3d(inj, library, ext, teff_axis=axes["teff"], logg_axis=axes["logg"],
-                      av_axis=axes["av"], lsf_fwhm_A=lsf)
+                      av_axis=axes["av"], lsf_fwhm_A=lsf, **prep_kw)
 
     def within(interval, truth):
         if interval in (None, "not_constrained"):
@@ -176,14 +181,21 @@ def _v2(atmo_qc):
 
 
 def _v3(template_json):
+    """|SpT_plantillas − SpT_índices| ≤ 2, con los índices EN RANGO de su
+    calibración solamente (2026-09-24); dice cuántos y cuáles."""
     st = template_json["spt_templates"]["code"]
-    si = template_json["spt_indices"]["code"]
+    idx = template_json["spt_indices"]
+    si = idx["code"]
+    used = idx.get("used")
+    info = {"indices_used": used, "n_indices_used": (len(used) if used is not None else None),
+            "indices_excluded_out_of_range": sorted(idx.get("excluded_out_of_range") or {})}
     if si is None or not np.isfinite(si):
         return {"status": "not_checked", "spt_templates": st,
-                "reason": "spt_indices not constrained"}
+                "reason": ("no spectral index within its calibration range"
+                           if used is not None else "spt_indices not constrained"), **info}
     diff = abs(float(st) - float(si))
     return {"spt_templates": st, "spt_indices": si, "diff_subtypes": diff,
-            "pass": diff <= 2.0}
+            "pass": diff <= 2.0, **info}
 
 
 def _v5(accretion_qc, h03_qc):
@@ -317,22 +329,29 @@ def _build_models(cfg, run_paths, atmo_qc, template_json, ext, lsf):
         best = atmo_qc["best"]
         atmo_model = prepare_template(lib.get(teff=best["teff_best"], logg=best["logg_best"]),
                                       fs.wave_bin, lsf_fwhm_A=lsf, extinction=ext,
-                                      av=best["av_best"], scale=best["omega_best"])
+                                      av=best["av_best"], scale=best["omega_best"],
+                                      **_prep_kwargs(atmosphere_declaration(cfg), cfg))
     except Exception:  # noqa: BLE001
         pass
     tmpl_model = None
     try:
-        cls = template_json["spt_templates"]["class"]
-        rank0 = template_json[cls]["ranking"][0]
-        sub = "templates_young" if cls == "young" else "templates_field"
-        cite = cfg["g3_template_citation"] if cls == "young" else cfg["g3_template_field_citation"]
-        fw = cfg.get("g3_template_young_fwhm_A") if cls == "young" else cfg.get("g3_template_field_fwhm_A")
-        tlib = EmpiricalTemplateLibrary(root / sub, gravity_class=cls, citation=cite,
-                                        version=None, resolution_fwhm_A=fw)
-        tmpl_model = prepare_template(tlib.get(spt=rank0["spt_code"]), fs.wave_bin,
-                                      lsf_fwhm_A=lsf, extinction=ext, av=rank0["av_best"],
-                                      scale=rank0["scale_best"],
-                                      template_fwhm_A=fw)
+        name = template_json["spt_templates"].get("library")
+        entry = next(e for e in template_library_entries(cfg)
+                     if e["name"] == name or (name is None and e.get("gravity_class")
+                                              == template_json["spt_templates"]["class"]))
+        decl = resolve_declaration(entry, root / entry["subdir"])
+        tlib = EmpiricalTemplateLibrary(root / entry["subdir"], gravity_class=decl.gravity_class,
+                                        citation=decl.citation, version=None,
+                                        declaration=decl)
+        rank0 = template_json["library_tests"][decl.name]["native_type"]
+        tmpl = next(tlib.load_entry(c, pth, m) for c, pth, m in tlib.entries()
+                    if m.get("object", Path(pth).stem) == rank0["spt_best_object"])
+        fit0 = template_json[template_json["spt_templates"]["class"]]["ranking"][0]
+        # solo figura: sobre el dato a la LSF de MUSE (la prueba de una biblioteca
+        # más gruesa se hizo sobre el dato degradado; ver library_tests)
+        tmpl_model = prepare_template(tmpl, fs.wave_bin, lsf_fwhm_A=lsf, extinction=ext,
+                                      av=fit0["av_best"], scale=fit0["scale_best"],
+                                      **declared_prep_kwargs(tmpl, data_frame(cfg)))
     except Exception:  # noqa: BLE001
         pass
     return fs, atmo_model, tmpl_model
@@ -447,26 +466,50 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
 
     # 3. STOP conditions (spec §8.2)
     stops = []
-    chi2_red = float(atmo_qc["best"]["chi2_red"])
-    if chi2_red > 3.0:
-        stops.append(f"chi2_red={chi2_red:.2f} > 3 (atmo fit)")
+    # Bondad del ajuste atmosférico: en la variante BINADA (25 Å), que es el
+    # régimen en el que se calibró g3_chi2red_stop = 3.0 (D11). En el nativo cada
+    # canal está dominado por el ruido y χ²_ν ≈ 1 no discrimina (2026-09-24).
+    lt = atmo_qc.get("library_test") or {}
+    sens = (lt.get("sensitivity_binned") or {}).get("result")
+    stop_thr = float(cfg.get("g3_chi2red_stop", 3.0))
+    if sens is not None:
+        chi2_red = float(sens["chi2_red"])
+        if chi2_red > stop_thr:
+            stops.append(f"chi2_red={chi2_red:.2f} > {stop_thr:g} (atmo fit, 25 A bins)")
+    else:
+        chi2_red = float(atmo_qc["best"]["chi2_red"])
+        if chi2_red > stop_thr:
+            stops.append(f"chi2_red={chi2_red:.2f} > {stop_thr:g} (atmo fit)")
+    acc = template_json.get("acceptance") or {}
+    if acc.get("pass") is False:
+        stops.append(f"template binned GOF failed ({acc.get('library')}: chi2_red="
+                     f"{acc.get('chi2_red'):.2f} > {acc.get('threshold'):.2f}, "
+                     f"{acc.get('threshold_source')})")
     if not v2["pass"]:
         stops.append(f"V2 undeclared 3-sigma edge on axes {v2['undeclared_edges']}")
     if v3.get("pass") is False:
-        stops.append(f"V3 |SpT_templates-SpT_indices|={v3['diff_subtypes']:.1f} > 2 subtypes")
+        stops.append(f"V3 |SpT_templates-SpT_indices|={v3['diff_subtypes']:.1f} > 2 subtypes "
+                     f"(indices in calibration range: {v3.get('indices_used')})")
     if v5.get("pass") is False:
         stops.append("V5 H03 consistency failed")
     zero_cov = [f for f, c in coverage.items() if c <= 0.01]
     if zero_cov:
         stops.append(f"mass out of track coverage for {zero_cov} (D5)")
 
-    # 4. libraries provenance
+    # 4. libraries provenance (every declared template library, not a fixed list)
     libs = {}
-    for name, sub in (("bt-settl-cifist", "bt-settl-cifist"), ("templates_young", "templates_young"),
-                      ("templates_field", "templates_field"), ("tracks_bhac15", "tracks_bhac15"),
-                      ("tracks_atmo2020", "tracks_atmo2020")):
+    subs = [("bt-settl-cifist", "bt-settl-cifist")]
+    subs += [(e["name"], e["subdir"]) for e in template_library_entries(cfg)]
+    subs += [("tracks_bhac15", "tracks_bhac15"), ("tracks_atmo2020", "tracks_atmo2020")]
+    for name, sub in subs:
         info = verify_manifest(root / sub)
         libs[name] = {"sha256_of_manifest": info["sha256_of_manifest"], "n_files": info["n_files"]}
+
+    # una prueba por biblioteca (plan 2026-09-23): ninguna cifra las combina
+    library_tests = dict(template_json.get("library_tests", {}))
+    if atmo_qc.get("library_test") is not None:
+        library_tests[atmo_qc["library_test"]["provenance"].get("name", "atmosphere")] = \
+            atmo_qc["library_test"]
 
     qc = {
         "stage": "g3_assemble", "run_id": run_id, "provisional": True,
@@ -477,7 +520,11 @@ def run_stage_g3_all(run_id, *, project_root=None, make_figures=True):
         "atmo_omega": atmo_qc["omega"], "atmo_inflate": atmo_qc["inflate"],
         "atmo_variants": atmo_qc["variants"],
         "spt": {"templates": template_json["spt_templates"], "indices": template_json["spt_indices"],
-                "gravity_classes": template_json["gravity_classes"]},
+                "gravity_classes": template_json["gravity_classes"],
+                "acceptance": template_json.get("acceptance")},
+        "library_tests": library_tests,
+        "type_bin_channels": template_json.get("type_bin_channels"),
+        "gof_bin_channels": template_json.get("gof_bin_channels"),
         "mass_coverage_by_family": coverage,
         "verifications": {"V1_real_noise": v1, "V2_edge": v2, "V3_spt": v3,
                           "V5_h03": v5, "V6_labels": v6,

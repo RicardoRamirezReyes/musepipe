@@ -147,8 +147,26 @@ class RollupGateTests(unittest.TestCase):
         self.assertEqual(status, "red")
 
     def test_the_frozen_policy_is_untouched(self):
-        # El arreglo es del mecanismo, no de la lista de limitaciones.
-        self.assertEqual(ACCEPTED_LIMITATIONS_HASH, "63df641f6073")
+        # Cable trampa: la politica de puerta no puede cambiar en silencio, asi que
+        # tocarla obliga a mover este literal Y a escribir por que.
+        #
+        # 2026-09-10, 63df641f6073 -> bd13caeb9f23: la limitacion de D2 afirmaba
+        # «no affecta a la NO-DETECCION de Halpha», y E1 ya da `detection` en un
+        # objeto y `candidate` en el otro. La frase ahora nombra el MECANISMO -la
+        # linea se mide sobre continuo LOCAL, asi que un sistematico de nivel no la
+        # toca- en vez de un veredicto, que es lo que caduca. No se nombran los
+        # objetos a proposito: esta lista es agnostica del objeto (y
+        # `test_no_hardcoded_target` lo exige).
+        #
+        # 2026-09-12, bd13caeb9f23 -> cdb11b8a5770: la limitacion de D2 nombraba
+        # el par «psffit vs optimal_psfsub ~1.76x», y D2 ya no compara ese par.
+        # El comparador NO es fijo: sale de `primary_pairs` de D1, y al arreglarse
+        # los controles de psfsub (2026-09-11) paso a `aperture` en los tres runs.
+        # Medido el 2026-09-12 con D2 re-corrido: cociente 0.868 / 0.914 / 0.871
+        # -psffit un 9-13 % POR DEBAJO- y correlacion de forma 0.999-1.000 en la
+        # banda roja. El texto ahora dice de donde sale el par, para que la
+        # proxima vez que D1 lo mueva se lea como lo que es y no como un error.
+        self.assertEqual(ACCEPTED_LIMITATIONS_HASH, "cdb11b8a5770")
 
 
 class DeclaredPriorityTests(unittest.TestCase):

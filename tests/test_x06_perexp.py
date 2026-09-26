@@ -10,6 +10,13 @@ camino feliz:
   `docs/2026-08-26_perexp_medido_y_la_noche_mala.md`.
 * **`invvar` pesa por 1/σ² y baja el peso de lo ruidoso.** Es lo único que la
   vía por exposición sabe hacer y el cubo combinado no.
+* **La sigma_i encogida deja la apcorr en paz.** Con 7 controles la sigma de
+  cada exposicion tiene 6 grados de libertad, y 22 exposiciones de igual sigma
+  verdadera dan n_eff ~15 solo por el ruido del estimador (via B, punto 2).
+  `night`/`auto` encogen la parte ruidosa (los controles crudos) hacia la
+  noche; la apcorr de cada exposicion —una medida del modelo, no del ruido—
+  se conserva exacta. `auto` mide cuanto encoger: 1 si la dispersion es la de
+  chi^2_k, ~0 si las sigma verdaderas difieren de verdad.
 * **Las guardias fallan.** Un documento que no es mezcla, un `exposure_id`
   repetido —que NO es único por construcción—, una exposición sin modelo, y una
   ley o agrupación desconocidas.
@@ -33,6 +40,7 @@ from musepipe.stages.stage_x06_perexp import (
     PerExpError,
     combine_measurements,
     group_exposures,
+    shrink_sigma_by_night,
 )
 from test_observations import _exposures, _write_run
 from test_psf_mixture import component, moffat_doc
@@ -76,6 +84,72 @@ class CombinationLawTests(unittest.TestCase):
     def test_an_unusable_weight_set_is_refused(self):
         with self.assertRaises(PerExpError):
             combine_measurements(self.valores, np.zeros(4), self.sigma, "exptime")
+
+
+class SigmaShrinkTests(unittest.TestCase):
+    """La sigma_i encogida hacia su noche: que encoge, que no, y cuanto."""
+
+    def setUp(self):
+        rng = np.random.default_rng(7)
+        self.n_controls = 7
+        self.nights = ["a"] * 22 + ["b"] * 7
+        # Sigma verdadera IGUAL en cada noche; lo que se ve es chi^2_6 / 6.
+        verdadera = np.where(np.asarray(self.nights) == "a", 1.0, 4.0)
+        self.sigma_raw = verdadera * np.sqrt(rng.chisquare(6, 29) / 6.0)
+        # La apcorr efectiva de cada exposicion, deliberadamente dispar.
+        self.apcorr = rng.uniform(3.0, 12.0, 29)
+        self.sigma_peso = self.sigma_raw * self.apcorr
+
+    def test_none_is_the_identity_and_still_publishes_the_diagnostic(self):
+        s, diag = shrink_sigma_by_night(self.sigma_peso, self.sigma_raw, self.nights,
+                                        self.n_controls, "none")
+        np.testing.assert_allclose(s, self.sigma_peso)
+        self.assertEqual(diag["dof"], 6)
+        self.assertEqual(diag["by_night"]["a"]["lambda"], 0.0)
+        self.assertAlmostEqual(diag["by_night"]["a"]["sd_log_var_expected"], 0.6284, places=3)
+        self.assertIsNotNone(diag["by_night"]["a"]["sd_log_var_observed"])
+
+    def test_night_equalises_the_raw_sigma_and_keeps_each_apcorr(self):
+        s, diag = shrink_sigma_by_night(self.sigma_peso, self.sigma_raw, self.nights,
+                                        self.n_controls, "night")
+        self.assertEqual(diag["by_night"]["a"]["lambda"], 1.0)
+        raw_encogida = s / self.apcorr
+        for noche in ("a", "b"):
+            sel = np.asarray(self.nights) == noche
+            np.testing.assert_allclose(raw_encogida[sel], raw_encogida[sel][0], rtol=1e-9)
+        # Entre noches la razon es la de las sigma verdaderas (4x en varianza
+        # 16x), a lo que 7 y 22 muestras permiten.
+        razon = raw_encogida[22] / raw_encogida[0]
+        self.assertTrue(2.5 < razon < 6.5, razon)
+        # Y las apcorr no se han tocado: el cociente sigma/raw es el de entrada.
+        np.testing.assert_allclose(s / raw_encogida, self.apcorr, rtol=1e-9)
+
+    def test_auto_shrinks_fully_when_the_spread_is_only_the_estimator(self):
+        _, diag = shrink_sigma_by_night(self.sigma_peso, self.sigma_raw, self.nights,
+                                        self.n_controls, "auto")
+        # 22 muestras de chi^2_6: la dispersion observada es la esperada a
+        # menos de un 40 %, asi que lambda queda cerca de 1 (o recortado a 1).
+        self.assertGreater(diag["by_night"]["a"]["lambda"], 0.6)
+        self.assertTrue(0.7 < diag["by_night"]["a"]["excess_ratio"] < 1.4)
+
+    def test_auto_barely_shrinks_when_the_true_sigmas_really_differ(self):
+        sigma_raw = self.sigma_raw * np.exp(np.linspace(-2.5, 2.5, 29))
+        s, diag = shrink_sigma_by_night(sigma_raw * self.apcorr, sigma_raw, self.nights,
+                                        self.n_controls, "auto")
+        self.assertLess(diag["by_night"]["a"]["lambda"], 0.35)
+        self.assertGreater(diag["by_night"]["a"]["excess_ratio"], 1.7)
+        # Entre `none` y `auto` con lambda pequeno la sigma se mueve poco.
+        self.assertLess(np.max(np.abs(np.log(s / (sigma_raw * self.apcorr)))), 1.0)
+
+    def test_a_night_with_one_exposure_has_nothing_to_shrink_towards(self):
+        s, diag = shrink_sigma_by_night([2.0, 3.0], [1.0, 1.5], ["a", "b"], 7, "auto")
+        np.testing.assert_allclose(s, [2.0, 3.0])
+        self.assertEqual(diag["by_night"]["a"]["lambda"], 0.0)
+        self.assertIsNone(diag["by_night"]["a"]["sd_log_var_observed"])
+
+    def test_an_unknown_mode_is_refused(self):
+        with self.assertRaises(PerExpError):
+            shrink_sigma_by_night([1.0], [1.0], ["a"], 7, "median")
 
 
 class GroupingTests(unittest.TestCase):
@@ -172,6 +246,11 @@ class GuardTests(unittest.TestCase):
             MOD.compute_stage_x06_products(self._cfg(x06_weight_band_A=[8600.0, 9000.0]))
         self.assertIn("x06_weight_band_A", str(ctx.exception))
 
+    def test_an_unknown_sigma_shrink_is_refused(self):
+        with self.assertRaisesRegex(PerExpError, "x06_sigma_shrink"):
+            MOD.stage_x06_config_from_run("obj", project_root=self.root,
+                                          overrides={"x06_sigma_shrink": "median"})
+
     def test_an_unknown_grouping_is_refused(self):
         with self.assertRaises(PerExpError):
             MOD.stage_x06_config_from_run("obj", project_root=self.root,
@@ -207,6 +286,44 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(int(spec.header["NEXP"]), len(self.obs.exposures))
         self.assertEqual(spec.header["GROUP"], "all")
         self.assertTrue(np.all(np.asarray(spec.apcorr) > 0))
+
+    def test_the_qc_says_how_sigma_was_estimated_and_what_each_mode_would_give(self):
+        out = MOD.run_stage_x06("obj", project_root=self.root)
+        qc = out["qc"]
+        self.assertEqual(qc["convention"]["sigma_shrink"], "none")
+        box = qc["groups"]["all"]["apertures"]["box3"]
+        shrink = box["sigma_shrink"]
+        self.assertEqual(shrink["mode"], "none")
+        self.assertEqual(sorted(shrink["n_eff_by_mode"]), ["auto", "night", "none"])
+        # Con `none` el n_eff del producto ES el de ese modo.
+        self.assertAlmostEqual(shrink["n_eff_by_mode"]["none"], box["n_eff"])
+        # `night` iguala la sigma cruda dentro de la (unica) noche: n_eff sube o
+        # queda igual, nunca baja.
+        self.assertGreaterEqual(shrink["n_eff_by_mode"]["night"], box["n_eff"] - 1e-9)
+        self.assertEqual(set(box["sigma_weight_by_exposure"]), set(box["weights_normalised"]))
+        self.assertEqual(set(box["sigma_raw_weight_by_exposure"]), set(box["weights_normalised"]))
+        # El reparto por noche suma 1 y ningun n_eff dentro de una noche supera
+        # el numero de exposiciones que tiene.
+        filas = shrink["by_night_by_mode"]["none"]
+        self.assertAlmostEqual(sum(f["share"] for f in filas.values()), 1.0)
+        por_noche = group_exposures(self.obs.exposures, "night")
+        self.assertEqual(sorted(filas), sorted(por_noche))
+        for noche, fila in filas.items():
+            self.assertLessEqual(fila["n_eff_within"], len(por_noche[noche]) + 1e-9)
+        destino = MOD.product_path(MOD.stage_x06_paths("obj", project_root=self.root),
+                                   "all", "box3")
+        self.assertEqual(SpectrumProduct.read(destino).header["WSHRINK"], "none")
+
+    def test_night_mode_weights_are_the_night_mode_column_of_the_diagnostic(self):
+        out = MOD.run_stage_x06("obj", project_root=self.root,
+                                overrides={"x06_sigma_shrink": "night"})
+        box = out["qc"]["groups"]["all"]["apertures"]["box3"]
+        self.assertEqual(out["qc"]["convention"]["sigma_shrink"], "night")
+        self.assertAlmostEqual(box["sigma_shrink"]["n_eff_by_mode"]["night"], box["n_eff"])
+        # La tabla de pesos que lee el combinado declara como se estimo la sigma.
+        from musepipe.reduction.stream_combine import load_weight_table
+        _, fuente = load_weight_table(out["written"]["qc_json"])
+        self.assertEqual(fuente["sigma_shrink"], "night")
 
     def test_grouping_by_night_covers_every_exposure_once(self):
         out = MOD.run_stage_x06("obj", project_root=self.root,

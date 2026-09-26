@@ -214,7 +214,7 @@ def compute_stage_x05_products(config, paths=None):
     )
 
     references = np.stack([e.reference for e in exposures], axis=0)
-    lsf_fwhm_A = lsf_fwhm_A_from_qc_or_config(paths, cfg)
+    lsf_fwhm_A, lsf_source = lsf_fwhm_A_from_qc_or_config(paths, cfg)
     diagnostics, diag_coeffs = degree_diagnostics(
         exposures_raw[0], wave, exposures[0].reference, residual, cfg,
         lsf_fwhm_A=lsf_fwhm_A, companion_yx=object_yx,
@@ -236,6 +236,8 @@ def compute_stage_x05_products(config, paths=None):
         "degree": degree,
         "masked_lines_A": [[c, h] for c, h in line_windows],
         "lsf_fwhm_A": float(lsf_fwhm_A),
+        # De donde sale, igual que en C5: hasta el 2026-09-10 era un default silencioso.
+        "lsf_fwhm_A_source": str(lsf_source),
         "condition_number": [float(e.method_info["condition_number"]) for e in exposures],
         "n_slow_spaxels": [int(e.method_info["n_slow_spaxels"]) for e in exposures],
         "slow_fraction_max": float(max(slow_fractions)) if slow_fractions else None,
