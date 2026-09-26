@@ -206,5 +206,35 @@ class InstantaneaTests(unittest.TestCase):
         self.assertIn("fig02 no disponible", salida)
 
 
+class DesplazamientoPrimariaTests(unittest.TestCase):
+    """El estimador que decidió que el bloque 2 de 12 b no está corrido en λ (2026-09-26)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("desplazamiento_primaria_por_exposicion")
+        cls.wave = np.arange(6000.0, 6900.0, 1.25)
+        cls.centros = np.random.default_rng(3).uniform(6010.0, 6890.0, 120)
+
+    def lineas(self, w, d=0.0):
+        """Un espectro normalizado con 120 líneas de absorción, desplazado `d` Å."""
+        return 1.0 - sum(0.2 * np.exp(-0.5 * ((w - c - d) / 1.1) ** 2) for c in self.centros)
+
+    def test_recupera_un_desplazamiento_inyectado(self):
+        ref = self.lineas(self.wave)
+        for d in (-0.7, 0.0, 0.33, 1.40):
+            s, err = self.m.desplazamiento(self.wave, self.lineas(self.wave, d), ref, 6100.0, 6520.0)
+            self.assertAlmostEqual(s, d, delta=0.02)
+            self.assertTrue(np.isfinite(err))
+
+    def test_el_signo_es_al_rojo(self):
+        ref = self.lineas(self.wave)
+        s, _ = self.m.desplazamiento(self.wave, self.lineas(self.wave, 0.5), ref, 6600.0, 6850.0)
+        self.assertGreater(s, 0.0)
+
+    def test_centroide_de_una_emision(self):
+        esp = 1.0 + 0.8 * np.exp(-0.5 * ((self.wave - 6563.0) / 1.2) ** 2)
+        self.assertAlmostEqual(self.m.centroide_ha(self.wave, esp), 6563.0, delta=0.1)
+
+
 if __name__ == "__main__":
     unittest.main()

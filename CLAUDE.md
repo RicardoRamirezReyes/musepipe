@@ -16,7 +16,7 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (1261 tests + 1118 subtests, ~50 min)
+python -m pytest tests/ -q                       # full suite (1580 tests + 1323 subtests, ~75 min)
 python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3.5 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
