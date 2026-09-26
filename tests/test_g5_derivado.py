@@ -64,15 +64,15 @@ class G5DerivadoTests(unittest.TestCase):
             (st / "stage_h03_qc.json").write_text(json.dumps({
                 "canonical_method": "psffit",
                 "limits": [{"method": "aperture", "mdot": 9.9e-14},
-                           {"method": "psffit", "mdot": 2.5e-14, "throughput_err": 0.08}]}))
+                           {"method": "psffit", "mdot": 3.3e-14, "throughput_err": 0.08}]}))
             s = build_characterization(rid, project_root=str(root))
             hl = s["headline"]
             self.assertEqual(hl["halpha_e1_verdict"], "detection")
-            self.assertEqual(hl["e3_mdot_99_msun_yr"], 2.5e-14)
+            self.assertEqual(hl["e3_mdot_99_msun_yr"], 3.3e-14)
             self.assertEqual(hl["n_control_positions"], 33)
             readme = (_out(root, rid) / "README.md").read_text()
             self.assertIn("`detection`", readme)
-            self.assertIn("2.50e-14", readme)
+            self.assertIn("3.30e-14", readme)
             presupuesto = (_out(root, rid) / "uncertainty_budget.csv").read_text()
             self.assertIn("33 controls", presupuesto)
             self.assertIn("throughput_psffit", presupuesto)
