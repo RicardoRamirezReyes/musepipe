@@ -9,10 +9,10 @@ deterministas, pero no es lo que se quiere aislar.
 Uso típico (vía B de `docs/2026-09-14_plan_via_b_recombinar_12b.md`):
 
     python scripts/reweight_stream_combine_plan.py \\
-        --plan /mnt/2TB/.../final/stream_combine_plan.json \\
+        --plan $MUSE_WORK/.../final/stream_combine_plan.json \\
         --weight invvar --weight-table runs/<RUN>/stages/spec_perexp_qc.json \\
-        --run-id ROXs12b_invvar --output /mnt/2TB/.../final_invvar/DATACUBE_FINAL.fits \\
-        --out-plan /mnt/2TB/.../final_invvar/stream_combine_plan.json
+        --run-id ROXs12b_invvar --output $MUSE_WORK/.../final_invvar/DATACUBE_FINAL.fits \\
+        --out-plan $MUSE_WORK/.../final_invvar/stream_combine_plan.json
 
 Imprime el reparto del peso por noche antes y después, que es el número que
 hay que contrastar con el `weight_share_by_night` del QC de C7 antes de
