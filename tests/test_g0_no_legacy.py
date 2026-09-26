@@ -60,5 +60,38 @@ class G0NoLegacyTests(unittest.TestCase):
             ))
 
 
+class G0IssuesDerivadosTests(unittest.TestCase):
+    """G0 dice el estado de A4/M5 y de F1, no el de julio (2026-09-26)."""
+
+    def _qc(self, *, f1, m5):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_minimal_run(root, "R")
+            rd = root / "runs" / "R"
+            rs = json.loads((rd / "report" / "run_summary.json").read_text())
+            rs.update(f1)
+            (rd / "report" / "run_summary.json").write_text(json.dumps(rs))
+            (rd / "stages" / "stage00q_qc.json").write_text(json.dumps({"m5_stat": m5}))
+            return RUN_G0.build_g0("R", project_root=root, no_legacy=True)
+
+    def test_f1_verde_y_stat_verde_no_dejan_bloqueante(self):
+        qc = self._qc(f1={"overall_status": "green"}, m5={"status": "green"})
+        textos = " ".join(i["issue"] for i in qc["open_issues"])
+        self.assertFalse(any(i["priority"] == "blocking" for i in qc["open_issues"]))
+        self.assertNotIn("A-block", textos)
+        self.assertNotIn("STAT", textos)
+
+    def test_f1_rojo_nombra_sus_bloqueantes_y_se_marca_como_repeticion(self):
+        qc = self._qc(f1={"overall_status": "red", "open_issues": [
+            {"issue": "a", "priority": "blocking", "stage": "C2_aperture"},
+            {"issue": "b", "priority": "major", "stage": "C1_psf"}]}, m5={"status": "red"})
+        f1 = [i for i in qc["open_issues"] if i.get("restates") == "F1"]
+        self.assertEqual(len(f1), 1)
+        self.assertEqual(f1[0]["priority"], "blocking")
+        self.assertIn("1 blocking issue(s)", f1[0]["issue"])
+        self.assertIn("C2_aperture", f1[0]["issue"])
+        self.assertNotIn("A-block", f1[0]["issue"])
+        self.assertTrue(any("STAT red" in i["issue"] for i in qc["open_issues"]))
+
 if __name__ == "__main__":
     unittest.main()
