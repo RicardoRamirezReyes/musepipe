@@ -52,8 +52,8 @@ historical run only.
 ### Canonical chain A→G
 
 Stages are lettered blocks, each with a frozen spec in `docs/spec_<ID>_codex_*.md` (read
-the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) and a JSON QC product under
-`runs/<RUN>/stages/`:
+the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`, `spec_G2_v3_*`)
+and a JSON QC product under `runs/<RUN>/stages/`:
 
 - **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5).
   A4 is five subcommands, not one: `check-cube` (which rewrites the WHOLE document and now
@@ -113,12 +113,16 @@ the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`) an
 
 **F1's gate stops at E3.** `STAGE_DEFINITIONS` in `musepipe/report.py` lists A1→E3 and
 nothing from block G, so a `blocking` open issue raised by a G stage never reaches
-`report/run_summary.json`. One of the two is now closed and one is still live (checked 2026-09-08).
-**Closed:** G2's `halpha_reconciliation_v3` reported `consistent: false` while E1 said
-`non_detection` in both objects; E1 now says `detection` for ROXs 12 b (all six methods
-significant) and `candidate` for ROXs 42B b, and the reconciliation is `true` in all three
-runs. The change came from the cycles that corrected the LSF and the throughput, not from
-G2. **Still live:** E1's FAP criterion (< 0.01) is unreachable with 33 controls, whose
+`report/run_summary.json`. One of the two is now closed and one is still live (checked 2026-09-25).
+**Closed:** G2's `halpha_reconciliation_v3` (the V3 check) is `true` in both objects. It has
+fired twice. In August E1 said `non_detection` in both objects while G2 disagreed; the LSF and
+throughput corrections moved E1, not G2. On 2026-09-22, with C1's fit radius at 55 px, E1 for
+ROXs 42B b went from `candidate` to `non_detection` (psffit FAP 0.0083 → 0.0108) while G2 stayed
+`marginal` (z = 3.09 against E1's 2.97: the same signal, the scales still agree). V3 fired only
+because it mapped `marginal` one-to-one onto `candidate`. `spec_G2_v3` (2026-09-25, author's
+decision) makes `marginal` compatible with both `candidate` and `non_detection`; V3 still fires
+on `detected` against `non_detection` and on a limit or a marginal against `detection`.
+**Still live:** E1's FAP criterion (< 0.01) is unreachable with 33 controls, whose
 resolution floor is 1/34 = 0.029 — a frozen scientific decision, not a code bug.
 The review notebooks quote these verdicts in their markdown, so they go stale when the run
 does: 19 of 68 were quoting the pre-change state until 2026-09-08.

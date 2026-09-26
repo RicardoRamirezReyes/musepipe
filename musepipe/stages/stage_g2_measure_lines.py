@@ -196,6 +196,33 @@ def _empirical_scale_block(measurements, control_source):
     return block
 
 
+#: Veredictos de E1 compatibles con cada estado de Hα en G2 (spec G2 v3, §V3).
+#: `marginal` (3 <= z < 5 a λ fija) no tiene par en E1: es local, y `candidate`
+#: exige una FAP global < 0.01 tras buscar en ±500 km/s y en tres plantillas. Una
+#: misma señal de ~3σ cae a un lado u otro de cada umbral (ROXs 42B b, 2026-09-22:
+#: G2 z = 3.09, E1 z = 2.97 y FAP 0.011), así que `marginal` convive con
+#: `candidate` y con `non_detection`. La contradicción que V3 vigila sigue
+#: disparando: detectada frente a no detección, y límite frente a detección.
+V3_COMPATIBLE = {
+    "detected": ("detection",),
+    "marginal": ("candidate", "non_detection"),
+    "upper_limit": ("non_detection",),
+    "not_measurable": ("non_detection",),
+}
+
+
+def halpha_reconciliation_v3(g2_status, h01_verdict):
+    """El chequeo V3: si el estado de Hα en G2 y el veredicto de E1 pueden convivir."""
+    compatibles = V3_COMPATIBLE.get(str(g2_status), ())
+    return {
+        "g2_halpha_status": str(g2_status),
+        "h01_verdict": str(h01_verdict),
+        "consistent": bool(str(h01_verdict) in compatibles),
+        "compatible_h01_verdicts": list(compatibles),
+        "rule": "spec_G2_v3",
+    }
+
+
 def compute_stage_g2(cfg, paths):
     qc00 = _read_optional(paths["stage00q_qc_json"])
     x11 = _read_optional(paths["stage_x11_qc_json"]) or {}
@@ -260,8 +287,7 @@ def compute_stage_g2(cfg, paths):
     h01_verdict = ((h01.get("verdict") or {}).get("verdict"))
     v3 = None
     if ha is not None and h01_verdict is not None:
-        g2_cat = "detection" if ha.status == "detected" else ("non_detection" if ha.status in ("upper_limit", "not_measurable") else "candidate")
-        v3 = {"g2_halpha_status": ha.status, "h01_verdict": h01_verdict, "consistent": bool(g2_cat == h01_verdict)}
+        v3 = halpha_reconciliation_v3(ha.status, h01_verdict)
         if not v3["consistent"]:
             open_issues.append({"issue": f"V3: G2 Halpha status {ha.status!r} vs H01 {h01_verdict!r} — two statistics on the same data disagree.", "priority": "blocking"})
 
