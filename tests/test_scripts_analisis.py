@@ -231,6 +231,13 @@ class DesplazamientoPrimariaTests(unittest.TestCase):
         s, _ = self.m.desplazamiento(self.wave, self.lineas(self.wave, 0.5), ref, 6600.0, 6850.0)
         self.assertGreater(s, 0.0)
 
+    def test_la_mascara_quita_el_triplete_de_calcio_y_nada_mas(self):
+        wave = np.arange(8400.0, 8750.0, 1.25)
+        esp = self.m.sin_emision(wave, np.ones_like(wave))
+        for centro in (8498.0, 8542.1, 8662.1):
+            self.assertTrue(np.all(np.isnan(esp[np.abs(wave - centro) <= 5.0])))
+        self.assertTrue(np.all(np.isfinite(esp[(wave > 8560) & (wave < 8640)])))
+
     def test_centroide_de_una_emision(self):
         esp = 1.0 + 0.8 * np.exp(-0.5 * ((self.wave - 6563.0) / 1.2) ** 2)
         self.assertAlmostEqual(self.m.centroide_ha(self.wave, esp), 6563.0, delta=0.1)
