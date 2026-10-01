@@ -243,7 +243,6 @@ class DesplazamientoPrimariaTests(unittest.TestCase):
         self.assertAlmostEqual(self.m.centroide_ha(self.wave, esp), 6563.0, delta=0.1)
 
 
-
 class PsffitPorExposicionTests(unittest.TestCase):
     """El ajuste en la máscara de `psffit_por_exposicion.py` es el de C4 (2026-09-26)."""
 
@@ -271,6 +270,72 @@ class PsffitPorExposicionTests(unittest.TestCase):
         linea = np.exp(-0.5 * ((wave - 6564.0) / 1.2) ** 2)
         self.assertGreater(self.m.rojo_menos_azul(wave, 10.0 + linea), 0.0)
         self.assertAlmostEqual(self.m.centroide(wave, 10.0 + linea), 6564.0, delta=0.2)
+
+
+class CieloEnHaTests(unittest.TestCase):
+    """La cota del residuo de cielo sobre el rojo − azul del compañero (2026-09-28)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("cielo_en_ha_por_exposicion")
+        cls.w = np.arange(6480.0, 6650.0, 0.3125)
+
+    def linea(self, centro, area=5.0, sigma=1.0, continuo=1.6):
+        return continuo + area / (sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((self.w - centro) / sigma) ** 2)
+
+    def test_encuentra_el_pico_y_su_area(self):
+        f = self.linea(6563.12)
+        self.assertAlmostEqual(self.m.pico_de_cielo(self.w, f), 6563.12, delta=0.32)
+        self.assertAlmostEqual(self.m.integral_de_linea(self.w, f, 6563.12), 5.0, delta=0.05)
+        self.assertAlmostEqual(self.m.cota_caja3(5.0, 6.65), 9 * 5.0 * 6.65)
+
+    def test_rojo_menos_azul_es_el_de_grupos(self):
+        c7 = sys.modules.get("centroide_companero_por_ao") or _carga("centroide_companero_por_ao")
+        w = np.arange(6522.8, 6602.8, 1.25)
+        g = c7.Grupos.__new__(c7.Grupos)
+        g.wave = w
+        g.continuo = np.abs(w - c7.CENTRO_A) >= c7.CONTINUO_A[0]
+        f = 3.0 + 40 * np.exp(-0.5 * ((w - 6564.1) / 1.1) ** 2)
+        self.assertAlmostEqual(self.m.rojo_menos_azul(w, f), g.rojo_menos_azul(f), places=9)
+
+    def test_signo_de_la_asimetria(self):
+        self.assertAlmostEqual(self.m.rojo_menos_azul(self.w, self.linea(6566.3)), 5.0, delta=0.1)
+        self.assertAlmostEqual(self.m.rojo_menos_azul(self.w, self.linea(6559.3)), -5.0, delta=0.1)
+
+    def test_el_desfase_del_cielo_en_el_cubo_lleva_su_signo(self):
+        # cubo de 8x8 con residuos de cielo en λ_topo − 0.8 Å: el desfase tiene que salir −0.8, no +0.8
+        rng = np.random.default_rng(2)
+        centros = rng.uniform(7750.0, 9250.0, 60)
+        ws = np.arange(7600.0, 9400.0, 0.3125)
+        cielo = 2.0 + sum(40 * np.exp(-0.5 * ((ws - c) / 1.0) ** 2) for c in centros)
+        wc = 7600.0 + 1.25 * np.arange(1400)
+        resto = 1.0 + sum(0.5 * np.exp(-0.5 * ((wc - (c - 0.8)) / 1.1) ** 2) for c in centros)
+        cubo = np.broadcast_to(resto[:, None, None], (wc.size, 8, 8)).copy()
+        cubo += rng.normal(0, 0.01, cubo.shape)
+        with tempfile.TemporaryDirectory() as d:
+            h0 = fits.PrimaryHDU()
+            h0.header["BARYCORR"] = -29.5
+            h1 = fits.ImageHDU(cubo.astype(np.float32))
+            h1.header.update({"CRVAL3": 7600.0, "CD3_3": 1.25, "CRPIX3": 1.0})
+            fits.HDUList([h0, h1]).writeto(Path(d) / "cubo.fits")
+            fits.BinTableHDU.from_columns([fits.Column("lambda", "D", array=ws),
+                                           fits.Column("data", "D", array=cielo)]).writeto(Path(d) / "cielo.fits")
+            lag, cc, vb = self.m.desfase_del_cielo_en_el_cubo(Path(d) / "cubo.fits", Path(d) / "cielo.fits",
+                                                               n_espaxeles=10)
+        self.assertAlmostEqual(lag, -0.8, delta=0.1)
+        self.assertGreater(cc, 0.5)
+        self.assertEqual(vb, -29.5)
+
+    def test_un_desplazamiento_no_da_mas_que_la_linea(self):
+        # la línea a caballo del corte: correrla del todo a una ventana deja ~+F allí y −F/2 en cada una
+        f = self.linea(6562.8)
+        d, vmax, _ = self.m.delta_necesario(self.w, f, 1e6, 1.0, 1.0)
+        self.assertIsNone(d)
+        self.assertLessEqual(vmax, 2 * 5.0 + 1e-6)
+        d, _, _ = self.m.delta_necesario(self.w, f, 0.5, 1.0, 1.0)
+        self.assertIsNotNone(d)
+        self.assertLess(d, 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
