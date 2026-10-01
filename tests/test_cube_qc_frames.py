@@ -22,7 +22,16 @@ class CubeQcFrameTests(unittest.TestCase):
         lab = 6300.304
         vbary = 25.0
         expected = expected_skyline_wave(lab, frame="barycentric", vbary_kms=vbary)
-        self.assertAlmostEqual(expected, lab * (1.0 - vbary / C_KMS))
+        self.assertAlmostEqual(expected, lab * (1.0 + vbary / C_KMS))
+
+    def test_con_barycorr_negativo_el_cielo_cae_al_azul(self):
+        # Medido (no derivado de esta función) el 2026-09-28 en los 22 cubos por exposición de la noche
+        # buena de ROXs 12 b, BARYCORR −29.5 km/s: los residuos de cielo del cubo caen al AZUL del
+        # SKY_SPECTRUM topocéntrico en 21 de 22 (mediana −0.62 Å a 7700-9300 Å;
+        # `scripts/cielo_en_ha_por_exposicion.py --marco 22`). El signo viejo, λ·(1 − v/c), los ponía a
+        # +0.84; lo que fija el dato es el signo, no la cifra.
+        esperado = expected_skyline_wave(8500.0, frame="barycentric", vbary_kms=-29.5)
+        self.assertLess(esperado, 8500.0 - 0.5)
 
     def test_header_detection_reads_barycentric_velocity(self):
         header = fits.Header()
