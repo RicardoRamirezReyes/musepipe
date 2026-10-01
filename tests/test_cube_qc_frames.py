@@ -25,13 +25,13 @@ class CubeQcFrameTests(unittest.TestCase):
         self.assertAlmostEqual(expected, lab * (1.0 + vbary / C_KMS))
 
     def test_con_barycorr_negativo_el_cielo_cae_al_azul(self):
-        # Medido (no derivado de esta función) el 2026-09-28 en los 22 cubos por exposición de la noche
-        # buena de ROXs 12 b, BARYCORR −29.5 km/s: los residuos de cielo del cubo caen al AZUL del
-        # SKY_SPECTRUM topocéntrico en 21 de 22 (mediana −0.62 Å a 7700-9300 Å;
-        # `scripts/cielo_en_ha_por_exposicion.py --marco 22`). El signo viejo, λ·(1 − v/c), los ponía a
-        # +0.84; lo que fija el dato es el signo, no la cifra.
+        # Medido (no derivado de esta función) el 2026-10-01 en los 22 cubos por exposición de la noche
+        # buena de ROXs 12 b, BARYCORR −29.5 km/s: las líneas de cielo de la extensión STAT caen a
+        # −0.85 Å (mediana; 22 de 22 al azul, dispersión 0.02) del SKY_SPECTRUM topocéntrico a
+        # 7700-9300 Å (`scripts/cielo_en_ha_por_exposicion.py --marco 22`). La tolerancia es el paso del
+        # retardo de esa medida (0.05 Å). El signo viejo, λ·(1 − v/c), daba +0.84.
         esperado = expected_skyline_wave(8500.0, frame="barycentric", vbary_kms=-29.5)
-        self.assertLess(esperado, 8500.0 - 0.5)
+        self.assertAlmostEqual(esperado - 8500.0, -0.85, delta=0.05)
 
     def test_header_detection_reads_barycentric_velocity(self):
         header = fits.Header()
@@ -48,11 +48,14 @@ class CubeQcFrameTests(unittest.TestCase):
         self.assertIsNone(vbary)
 
     def test_m1_corrects_barycentric_frame(self):
+        # El espectro se fabrica con la física, no con `expected_skyline_wave`: con BARYCORR de ESO
+        # (v_bary = v_obs + BARYCORR) una línea de cielo (v_obs = 0) cae en λ·(1 + BARYCORR/c), que es lo
+        # que se midió en STAT (test de arriba). Si la función usara otro signo, M1 mediría ~±1 Å.
         line = Skyline("OI_6300", 6300.304)
-        vbary = 25.0
-        expected = expected_skyline_wave(line.wave_A, frame="barycentric", vbary_kms=vbary)
-        wave = np.arange(expected - 5.0, expected + 5.0, 0.05)
-        spec = 1.0 + _gaussian(wave, expected, 0.45, 100.0)
+        vbary = -29.5
+        observada = line.wave_A * (1.0 + vbary / C_KMS)
+        wave = np.arange(observada - 8.0, observada + 8.0, 0.05)
+        spec = 1.0 + _gaussian(wave, observada, 0.45, 100.0)
         measurements = measure_skylines(
             wave,
             spec,

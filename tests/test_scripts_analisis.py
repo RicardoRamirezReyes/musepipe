@@ -302,29 +302,36 @@ class CieloEnHaTests(unittest.TestCase):
         self.assertAlmostEqual(self.m.rojo_menos_azul(self.w, self.linea(6566.3)), 5.0, delta=0.1)
         self.assertAlmostEqual(self.m.rojo_menos_azul(self.w, self.linea(6559.3)), -5.0, delta=0.1)
 
-    def test_el_desfase_del_cielo_en_el_cubo_lleva_su_signo(self):
-        # cubo de 8x8 con residuos de cielo en λ_topo − 0.8 Å: el desfase tiene que salir −0.8, no +0.8
+    def test_el_desfase_del_cielo_en_el_cubo_se_mide_en_stat_y_lleva_su_signo(self):
+        # cubo de 8x8: las líneas de cielo de STAT en λ_topo − 0.8 Å y los residuos de DATA en λ_topo − 0.3 Å.
+        # El desfase principal tiene que salir de STAT (−0.8, no +0.8) y el de DATA, aparte (−0.3).
         rng = np.random.default_rng(2)
         centros = rng.uniform(7750.0, 9250.0, 60)
         ws = np.arange(7600.0, 9400.0, 0.3125)
         cielo = 2.0 + sum(40 * np.exp(-0.5 * ((ws - c) / 1.0) ** 2) for c in centros)
         wc = 7600.0 + 1.25 * np.arange(1400)
-        resto = 1.0 + sum(0.5 * np.exp(-0.5 * ((wc - (c - 0.8)) / 1.1) ** 2) for c in centros)
-        cubo = np.broadcast_to(resto[:, None, None], (wc.size, 8, 8)).copy()
-        cubo += rng.normal(0, 0.01, cubo.shape)
+
+        def lineas(desfase, amp):
+            return 1.0 + sum(amp * np.exp(-0.5 * ((wc - (c + desfase)) / 1.1) ** 2) for c in centros)
+
+        def cubo(espectro):
+            c = np.broadcast_to(espectro[:, None, None], (wc.size, 8, 8)).copy()
+            return (c + rng.normal(0, 0.01, c.shape)).astype(np.float32)
+
         with tempfile.TemporaryDirectory() as d:
             h0 = fits.PrimaryHDU()
             h0.header["BARYCORR"] = -29.5
-            h1 = fits.ImageHDU(cubo.astype(np.float32))
+            h1 = fits.ImageHDU(cubo(lineas(-0.3, 0.5)), name="DATA")
             h1.header.update({"CRVAL3": 7600.0, "CD3_3": 1.25, "CRPIX3": 1.0})
-            fits.HDUList([h0, h1]).writeto(Path(d) / "cubo.fits")
+            h2 = fits.ImageHDU(cubo(lineas(-0.8, 5.0)), name="STAT")
+            fits.HDUList([h0, h1, h2]).writeto(Path(d) / "cubo.fits")
             fits.BinTableHDU.from_columns([fits.Column("lambda", "D", array=ws),
                                            fits.Column("data", "D", array=cielo)]).writeto(Path(d) / "cielo.fits")
-            lag, cc, vb = self.m.desfase_del_cielo_en_el_cubo(Path(d) / "cubo.fits", Path(d) / "cielo.fits",
-                                                               n_espaxeles=10)
-        self.assertAlmostEqual(lag, -0.8, delta=0.1)
-        self.assertGreater(cc, 0.5)
-        self.assertEqual(vb, -29.5)
+            m = self.m.desfase_del_cielo_en_el_cubo(Path(d) / "cubo.fits", Path(d) / "cielo.fits", n_espaxeles=10)
+        self.assertAlmostEqual(m["desfase_A"], -0.8, delta=0.1)
+        self.assertGreater(m["correlacion"], 0.5)
+        self.assertAlmostEqual(m["desfase_data_A"], -0.3, delta=0.1)
+        self.assertEqual(m["barycorr_kms"], -29.5)
 
     def test_un_desplazamiento_no_da_mas_que_la_linea(self):
         # la línea a caballo del corte: correrla del todo a una ventana deja ~+F allí y −F/2 en cada una

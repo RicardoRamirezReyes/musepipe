@@ -20,10 +20,12 @@ dipolo, + en una ventana y − en la otra, y llega hasta 2·cota: se calcula apa
 mediano de la noche δ en el marco del cubo, y se busca el δ que haría falta para el cambio observado con
 el caso más favorable a la hipótesis (+δ en las exposiciones de AO baja, −δ en las de AO alta). Se
 compara con el residuo de la solución en λ que mide A4/M1. El marco del cubo es baricéntrico y el del
-`SKY_SPECTRUM` topocéntrico: una línea de cielo cae en el cubo en λ·(1 + BARYCORR/c). `--marco N` lo
-mide en N exposiciones, correlando los residuos de cielo del cubo (7700-9300 Å, mediana de los espaxeles
-más débiles) con el `SKY_SPECTRUM` desplazado; así se encontró el 2026-09-28 que
-`cube_qc.expected_skyline_wave` tenía el signo al revés.
+`SKY_SPECTRUM` topocéntrico (aunque su cabecera diga `SPECSYS=BARYCENT`): una línea de cielo cae en el
+cubo en λ·(1 + BARYCORR/c). `--marco N` lo mide en N exposiciones, correlando las líneas de cielo de la
+extensión STAT del cubo (7700-9300 Å, mediana de los espaxeles más débiles) con el `SKY_SPECTRUM`
+desplazado; así se encontró el 2026-09-28 que `cube_qc.expected_skyline_wave` tenía el signo al revés.
+El residuo de λ de una rebanada se compara con el de A4/M1 (cielo promediado en el campo) y, con
+`--s0-qc`, con el p95 por espaxel del mapa de S0.
 
 Entradas, las mismas de `centroide_companero_por_ao.py` (y su definición de rojo − azul, importada):
 
@@ -32,7 +34,7 @@ Entradas, las mismas de `centroide_companero_por_ao.py` (y su definición de roj
   RUN       para los `SKY_SPECTRUM` que lista el QC de A4 (`m1_wavelength.sky_spectrum_files`)
 
 uso: python scripts/cielo_en_ha_por_exposicion.py RUN C7_NPZ COND_JSON [--umbral-strehl 12] [--marco N]
-                                                    [--json SALIDA]
+                                                    [--s0-qc stageS0_qc.json] [--json SALIDA]
 """
 import argparse
 import json
@@ -105,41 +107,66 @@ def delta_necesario(wave, cielo, objetivo, escala_baja, escala_alta, deltas=np.a
     return (float(deltas[llega[0]]) if llega.size else None), float(vuelco[k]), float(deltas[k])
 
 
-def desfase_del_cielo_en_el_cubo(cubo_fits, sky_fits, banda_A=(7700.0, 9300.0), n_espaxeles=3000,
-                                 desfases_A=np.arange(-2.0, 2.0001, 0.05), semilla=0):
-    """Desfase (Å) de los residuos de cielo del cubo respecto al `SKY_SPECTRUM`, y su correlación.
+#: Triplete de Ca II de la estrella, que cae dentro de la banda del desfase (para la medida secundaria en DATA).
+CA_II_A = (8480.0, 8680.0)
 
-    Residuo = mediana de los espaxeles del 30 % más débil (lejos de la estrella) menos su mediana móvil;
-    plantilla = el cielo topocéntrico con la misma mediana móvil restada, desplazado. Devuelve el desfase
-    de máxima |correlación| (λ_cubo = λ_topo + desfase) y BARYCORR.
-    """
-    from astropy.io import fits
+
+def _desfase(wave, espectro, ws, fs, banda_A, desfases_A, excluir_A=()):
+    """Desfase de máxima |correlación| entre `espectro` y el cielo desplazado, ambos sin su mediana móvil."""
     from scipy.ndimage import median_filter
 
-    from musepipe.qc.cube_qc import read_sky_spectrum_fits
-
-    with fits.open(cubo_fits, memmap=True) as h:
-        hd = h[1].header
-        nz = h[1].shape[0]
-        wave = hd["CRVAL3"] + hd["CD3_3"] * (np.arange(nz) + 1 - hd["CRPIX3"])
-        vbary = float(h[0].header["BARYCORR"])
-        datos = h[1].data
-        img = np.nanmedian(datos[nz // 2 - 50:nz // 2 + 50], axis=0)
-        ok = np.isfinite(img)
-        yy, xx = np.nonzero(ok & (img <= np.nanpercentile(img[ok], 30)))
-        sel = np.random.default_rng(semilla).choice(yy.size, size=min(n_espaxeles, yy.size), replace=False)
-        espectro = np.nanmedian(np.stack([datos[:, yy[k], xx[k]] for k in sel], axis=1), axis=1)
-    ws, fs = read_sky_spectrum_fits(Path(sky_fits))
     banda = (wave > banda_A[0]) & (wave < banda_A[1])
+    fuera = np.zeros(int(banda.sum()), bool)
+    for lo, hi in excluir_A:
+        fuera |= (wave[banda] > lo) & (wave[banda] < hi)
     resto = (espectro - median_filter(espectro, 25))[banda]
     cc = []
     for L in desfases_A:
         t = np.interp(wave[banda] - L, ws, fs)
         t = t - median_filter(t, 25)
-        m = np.isfinite(resto) & np.isfinite(t)
+        m = np.isfinite(resto) & np.isfinite(t) & ~fuera
         cc.append(np.corrcoef(resto[m], t[m])[0, 1])
     k = int(np.nanargmax(np.abs(cc)))
-    return float(desfases_A[k]), float(cc[k]), vbary
+    return float(desfases_A[k]), float(cc[k])
+
+
+def desfase_del_cielo_en_el_cubo(cubo_fits, sky_fits, banda_A=(7700.0, 9300.0), n_espaxeles=3000,
+                                 desfases_A=np.arange(-2.0, 2.0001, 0.05), semilla=0):
+    """Desfase (Å) de las líneas de cielo del cubo respecto al `SKY_SPECTRUM` (λ_cubo = λ_topo + desfase).
+
+    Se mide sobre la extensión **STAT** de los espaxeles del 30 % más débil (lejos de la estrella): la
+    varianza la domina el ruido de Poisson del cielo, así que sus líneas trazan dónde cayó el cielo en la
+    rejilla del cubo. STAT no se usa aquí como σ de nada, solo como trazador de posición. Plantilla: el
+    cielo topocéntrico desplazado; a los dos se les resta su mediana móvil.
+
+    Hasta el 2026-10-01 se medía sobre los residuos de DATA (lo que queda tras restar el cielo): son
+    débiles y se correlan mal (cc 0.08-0.30), y daban −0.62 Å de mediana contra −0.84 predicho. Se
+    conservan como medida secundaria, también sin el triplete de Ca II de la estrella, para ver que lo
+    corto de esa cifra no era el halo. docs/2026-09-28_cielo_en_ha_y_signo_del_marco.md §5.
+    """
+    from astropy.io import fits
+
+    from musepipe.qc.cube_qc import read_sky_spectrum_fits
+
+    with fits.open(cubo_fits, memmap=True) as h:
+        hd = h["DATA"].header
+        nz = h["DATA"].shape[0]
+        wave = hd["CRVAL3"] + hd["CD3_3"] * (np.arange(nz) + 1 - hd["CRPIX3"])
+        vbary = float(h[0].header["BARYCORR"])
+        datos, stat = h["DATA"].data, h["STAT"].data
+        img = np.nanmedian(datos[nz // 2 - 50:nz // 2 + 50], axis=0)
+        ok = np.isfinite(img)
+        yy, xx = np.nonzero(ok & (img <= np.nanpercentile(img[ok], 30)))
+        sel = np.random.default_rng(semilla).choice(yy.size, size=min(n_espaxeles, yy.size), replace=False)
+        espectro = np.nanmedian(np.stack([datos[:, yy[k], xx[k]] for k in sel], axis=1), axis=1)
+        varianza = np.nanmedian(np.stack([stat[:, yy[k], xx[k]] for k in sel], axis=1), axis=1)
+    ws, fs = read_sky_spectrum_fits(Path(sky_fits))
+    lag, cc = _desfase(wave, varianza, ws, fs, banda_A, desfases_A)
+    lag_d, cc_d = _desfase(wave, espectro, ws, fs, banda_A, desfases_A)
+    lag_dc, cc_dc = _desfase(wave, espectro, ws, fs, banda_A, desfases_A, excluir_A=(CA_II_A,))
+    return {"desfase_A": lag, "correlacion": cc, "barycorr_kms": vbary,
+            "desfase_data_A": lag_d, "correlacion_data": cc_d,
+            "desfase_data_sin_ca_ii_A": lag_dc, "correlacion_data_sin_ca_ii": cc_dc}
 
 
 def cota_caja3(integral_por_espaxel, apcorr_ha):
@@ -161,7 +188,10 @@ def main(argv=None):
     ap.add_argument("--umbral-strehl", type=float, default=12.0,
                     help="Strehl del RTC por debajo del cual la exposición es de AO baja (defecto 12)")
     ap.add_argument("--marco", type=int, default=0,
-                    help="mide el desfase del cielo en el cubo en las N primeras exposiciones (~20 s cada una)")
+                    help="mide el desfase del cielo en el cubo en las N primeras exposiciones (~15 s cada una)")
+    ap.add_argument("--s0-qc", default=None,
+                    help="stageS0_qc.json cuyo p95 de |desfase| por espaxel (metrics.p95_abs_offset_A) se usa "
+                         "como δ de una rebanada, además del residuo de A4/M1 (que es del cielo promediado)")
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
 
@@ -218,8 +248,16 @@ def main(argv=None):
            "rho_rojo_menos_azul_cielo": [float(x) for x in spearmanr(R, cielo)],
            "cielo_ao_baja": float(cielo[bajo].mean()), "cielo_ao_alta": float(cielo[~bajo].mean()),
            "residuo_lambda_a4_m1_A": qc00["m1_wavelength"].get("residual_scatter_A"),
+           "residuo_lambda_s0_p95_A": (float(read_json(Path(a.s0_qc))["metrics"]["p95_abs_offset_A"])
+                                       if a.s0_qc else None),
            "barycorr_mediano_kms": vbary, "desplazamiento_de_rebanada": {}}
     apc = np.array([r["apcorr_ha"] for r in filas])
+
+    def vuelco(w_cubo, delta):
+        """+δ en todas las de AO baja y −δ en todas las de AO alta, el caso más favorable."""
+        return (9.0 * apc[bajo].mean() * rojo_menos_azul_de_un_desplazamiento(w_cubo, mediano, delta)
+                - 9.0 * apc[~bajo].mean() * rojo_menos_azul_de_un_desplazamiento(w_cubo, mediano, -delta))
+
     # el marco verificado es el primero; el otro se da para ver que la conclusión no depende de él
     for signo, nombre in ((1.0, "BARYCORR (1 + v/c), medido"), (-1.0, "signo contrario")):
         w_cubo = rejilla * (1.0 + signo * vbary / C_KMS)
@@ -227,15 +265,15 @@ def main(argv=None):
         out["desplazamiento_de_rebanada"][nombre] = {
             "pico_de_cielo_en_el_cubo_A": pico_de_cielo(w_cubo, mediano, (6559.0, 6568.0)),
             "delta_necesario_A": dnec, "vuelco_maximo": vmax, "delta_del_vuelco_maximo_A": dmax,
-            "vuelco_con_delta_igual_al_residuo_a4": (9.0 * apc[bajo].mean() * rojo_menos_azul_de_un_desplazamiento(
-                w_cubo, mediano, out["residuo_lambda_a4_m1_A"] or 0.0) - 9.0 * apc[~bajo].mean()
-                * rojo_menos_azul_de_un_desplazamiento(w_cubo, mediano, -(out["residuo_lambda_a4_m1_A"] or 0.0)))}
+            "vuelco_con_delta_igual_al_residuo_a4": vuelco(w_cubo, out["residuo_lambda_a4_m1_A"] or 0.0)}
+        if out["residuo_lambda_s0_p95_A"] is not None:
+            out["desplazamiento_de_rebanada"][nombre]["vuelco_con_delta_igual_al_p95_de_s0"] = vuelco(
+                w_cubo, out["residuo_lambda_s0_p95_A"])
     if a.marco:
         out["marco"] = []
         for i in g.N1[:a.marco]:
-            lag, cc, vb = desfase_del_cielo_en_el_cubo(cubos[g.ids[i]], cielos[g.ids[i]])
-            out["marco"].append({"id": g.ids[i], "desfase_A": lag, "correlacion": cc, "barycorr_kms": vb,
-                                 "predicho_1_mas_v_c_A": 8500.0 * vb / C_KMS})
+            m = desfase_del_cielo_en_el_cubo(cubos[g.ids[i]], cielos[g.ids[i]])
+            out["marco"].append({"id": g.ids[i], **m, "predicho_1_mas_v_c_A": 8500.0 * m["barycorr_kms"] / C_KMS})
     out["por_exposicion"] = filas
 
     print(f"línea de cielo: pico mediano {out['pico_cielo_mediano_A']:.2f} Å (topocéntrico), "
@@ -254,10 +292,18 @@ def main(argv=None):
                else f"ningún δ ≤ 5 Å llega (máx. {v['vuelco_maximo']:+.0f} con δ = {v['delta_del_vuelco_maximo_A']:.2f} Å)")
         print(f"rebanada con λ corrida, marco {nombre}: cielo en {v['pico_de_cielo_en_el_cubo_A']:.2f} Å; {nec}; "
               f"con δ = ±{out['residuo_lambda_a4_m1_A']:.3f} Å (A4/M1) el vuelco es "
-              f"{v['vuelco_con_delta_igual_al_residuo_a4']:+.0f}")
+              f"{v['vuelco_con_delta_igual_al_residuo_a4']:+.0f}"
+              + (f"; con δ = ±{out['residuo_lambda_s0_p95_A']:.3f} Å (p95 de S0) "
+                 f"{v['vuelco_con_delta_igual_al_p95_de_s0']:+.0f} ({100 * v['vuelco_con_delta_igual_al_p95_de_s0'] / dR:.1f} % de Δ)"
+                 if out["residuo_lambda_s0_p95_A"] is not None else ""))
     for m in out.get("marco", []):
-        print(f"marco {m['id'][-12:]}: residuos de cielo del cubo a {m['desfase_A']:+.2f} Å del SKY_SPECTRUM "
-              f"(cc {m['correlacion']:+.2f}); λ·(1 + BARYCORR/c) predice {m['predicho_1_mas_v_c_A']:+.2f}")
+        print(f"marco {m['id'][-12:]}: cielo en STAT a {m['desfase_A']:+.2f} Å del SKY_SPECTRUM "
+              f"(cc {m['correlacion']:+.2f}; residuos de DATA {m['desfase_data_A']:+.2f}, cc "
+              f"{m['correlacion_data']:+.2f}); λ·(1 + BARYCORR/c) predice {m['predicho_1_mas_v_c_A']:+.2f}")
+    if out.get("marco"):
+        lags = np.array([m["desfase_A"] for m in out["marco"]])
+        print(f"marco, {lags.size} exposiciones: {int((lags < 0).sum())} al azul, mediana {np.median(lags):+.3f} Å, "
+              f"dispersión {np.std(lags, ddof=1) if lags.size > 1 else 0.0:.3f}")
     if a.json:
         with open(a.json, "w") as fh:
             json.dump(out, fh, indent=1, ensure_ascii=False)
