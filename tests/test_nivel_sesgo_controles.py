@@ -1,11 +1,12 @@
 """El estimador del nivel del sesgo de controles de psffit (`scripts/nivel_sesgo_controles.py`).
 
 Es lo que sostiene el r₀ de los dos objetos (docs/2026-09-27_r0_entregado_42bb.md) y vivió fuera del
-repo hasta el 2026-09-28. Las tres primeras clases no tocan `runs/`: fijan las propiedades de las que
-dependen las cifras -la geometría de los controles de C4, el emparejado y la lectura del cruce en su
-tramo-. `CifrasPublicadasTests` sí lee `runs/` (solo lectura, < 1 s) y comprueba las cifras de los
-docs del 09-21 y del 09-27 a media unidad del último dígito publicado. Son copias de trabajo que se
-pueden borrar para liberar disco: si falta alguna, su caso se salta, no falla.
+repo hasta el 2026-09-28. Las cuatro primeras clases no tocan `runs/`: fijan las propiedades de las que
+dependen las cifras -la geometría de los controles de C4, el emparejado, la lectura del cruce en su
+tramo y el bootstrap-. `CifrasPublicadasTests` sí lee `runs/` (solo lectura, ~5 s por el bootstrap) y
+comprueba las cifras de los docs del 09-21, 09-27 y 09-28 a media unidad del último dígito publicado.
+Son copias de trabajo que se pueden borrar para liberar disco: si falta alguna, su caso se salta, no
+falla (como los demás tests que leen `runs/`; `external_data` es para las bibliotecas de G3).
 """
 import importlib.util
 import math
@@ -68,6 +69,7 @@ class AjusteTests(unittest.TestCase):
         obj = np.array([10.0, np.nan, 10.0, 10.0])
         ctl = np.array([[1.0, 1e9, 1.0, 1.0], [-2.0, -1e9, -2.0, -2.0]])
         np.testing.assert_allclose(self.m.sesgos_de(obj, ctl), [10.0, -20.0])
+        np.testing.assert_allclose(self.m.sesgos_de(obj, ctl, absoluto=True), [1.0, -2.0])
 
     def test_el_ajuste_es_lineal_en_b(self):
         # A(b2 - b1) = A2 - A1 exactamente: r0 no depende del extremo del tramo
@@ -122,18 +124,89 @@ class CruceTests(unittest.TestCase):
         self.assertIn("EXTRAPOLADO", c["nota"])
         self.assertAlmostEqual(c["r0_px"], 55.0 - 1.57 / ((14.19 - 1.57) / 23.0), places=6)
 
-    def test_el_error_de_r0_es_sigma_del_nivel_sobre_la_pendiente(self):
-        # con ruido comun, mas radios no lo bajan: lo fija sigma(A_ref)
-        _, _, niveles, tramos = self._radios({45.0: -9.6, 55.0: 2.4, 78.0: 13.9}, ruido=6.0)
+    def test_el_error_de_r0_es_sigma_del_nivel_de_referencia_sobre_la_pendiente(self):
+        # Cada radio con su propio ruido (proyectado fuera de 1, cos, sin: los niveles salen exactos), así
+        # que σ(A) es distinta en cada radio: el error tiene que salir de la del extremo más cercano al
+        # cruce (55), no de la del otro extremo del tramo (45). Hasta el 2026-10-01 el ruido era el mismo
+        # en los tres radios y el test pasaba con cualquiera de las dos.
+        rng = np.random.default_rng(7)
+        phi = _phi()
+        X = np.c_[np.ones_like(phi), np.cos(phi), np.sin(phi)]
+        fuera = lambda v: v - X @ np.linalg.lstsq(X, v, rcond=None)[0]  # noqa: E731
+        comun = fuera(rng.normal(0, 6.0, phi.size))
+        ruido = {45.0: 9.0, 55.0: 1.0, 78.0: 3.0}
+        datos = [(A + comun + fuera(rng.normal(0, ruido[r], phi.size)), r)
+                 for r, A in sorted({45.0: -9.6, 55.0: 2.4, 78.0: 13.9}.items())]
+        niveles = [self.m.resumen("", b, phi, r) for b, r in datos]
+        tramos = [self.m.emparejado(datos[i][0], datos[i + 1][0], phi, datos[i][1], datos[i + 1][1])
+                  for i in range(2)]
         c = self.m.cruce(niveles, tramos)
-        eA55 = niveles[1]["eA"]
-        self.assertAlmostEqual(c["e_r0_px"], eA55 / tramos[0]["pendiente"], delta=0.05 * c["e_r0_px"])
+        s, es = tramos[0]["pendiente"], tramos[0]["e_pendiente"]
+        self.assertEqual(c["referencia_px"], 55.0)
+        self.assertAlmostEqual(c["e_r0_px"], math.hypot(niveles[1]["eA"] / s, niveles[1]["A"] * es / s ** 2),
+                               places=9)
+        # el test distingue: con la σ(A) del otro extremo saldría otra cosa
+        self.assertGreater(abs(niveles[0]["eA"] / s - c["e_r0_px"]), 0.3 * c["e_r0_px"])
 
     def test_la_curvatura_emparejada(self):
         phi, datos, _, _ = self._radios({45.0: -9.6, 55.0: 2.4, 78.0: 13.9}, ruido=6.0)
         (b1, r1), (b2, r2), (b3, r3) = datos
         c = self.m.curvatura(b1, b2, b3, phi, r1, r2, r3)
         self.assertAlmostEqual(c["pendiente_alta_menos_baja"], 11.5 / 23.0 - 12.0 / 10.0, places=10)
+
+    def test_el_error_de_la_curvatura_esta_calibrado(self):
+        # Ruido común grande (lo quita el emparejado) más uno propio de cada radio: la dispersión de la
+        # curvatura entre realizaciones tiene que ser la que dice su error, ni mayor ni menor.
+        rng = np.random.default_rng(11)
+        phi = _phi()
+        cs, es = [], []
+        for _ in range(600):
+            comun = rng.normal(0, 6.0, phi.size)
+            b = [A + comun + rng.normal(0, 1.0, phi.size) for A in (-9.6, 2.4, 13.9)]
+            c = self.m.curvatura(*b, phi, 45.0, 55.0, 78.0)
+            cs.append(c["pendiente_alta_menos_baja"])
+            es.append(c["e"])
+        self.assertAlmostEqual(np.std(cs, ddof=1) / np.mean(es), 1.0, delta=0.1)
+
+
+class BootstrapTests(unittest.TestCase):
+    """El error de r₀ cuando el cruce puede caer a cualquier lado del radio de referencia (2026-10-01)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("nivel_sesgo_controles")
+
+    def _semi_anchos(self, niveles_por_radio):
+        rng = np.random.default_rng(4)
+        phi = _phi()
+        rs = sorted(niveles_por_radio)
+        X = np.c_[np.ones_like(phi), np.cos(phi), np.sin(phi)]
+        comun = rng.normal(0, 6.0, phi.size)
+        comun -= X @ np.linalg.lstsq(X, comun, rcond=None)[0]   # A55 sale ≈ 0, no desplazado por el ruido
+        bs = [niveles_por_radio[r] + comun + rng.normal(0, 0.5, phi.size) for r in rs]
+        x = self.m.bootstrap_r0(bs, phi, rs, n=1500, semilla=1)
+        r0 = self.m.analiza(bs, phi, rs)["cruce"]["r0_px"]
+        res = self.m.resumen_bootstrap(x, r0)
+        return res["menos_68"], res["mas_68"]
+
+    def test_con_curvatura_y_a_ref_cerca_de_cero_el_error_es_asimetrico(self):
+        # pendiente 1.2 %/px por debajo de 55 y 0.5 por encima, A55 ≈ 0: las muestras con A55 < 0
+        # cruzan en el tramo de arriba, 2.4 veces más tendido (medido: ~2.1 veces más ancho por arriba)
+        menos, mas = self._semi_anchos({45.0: -12.0, 55.0: 0.0, 78.0: 11.5})
+        self.assertGreater(mas, 1.5 * menos)
+
+    def test_sin_curvatura_es_simetrico(self):
+        menos, mas = self._semi_anchos({45.0: -10.5, 55.0: 0.0, 78.0: 24.15})
+        self.assertAlmostEqual(mas / menos, 1.0, delta=0.25)
+
+    def test_la_cola_va_del_lado_de_la_hipotesis(self):
+        x = np.random.default_rng(2).normal(50.0, 5.0, 200_000)
+        res = self.m.resumen_bootstrap(x, 50.0, hipotesis=(40.0, 55.0))
+        self.assertAlmostEqual(res["hipotesis"]["40"]["fraccion"], 0.02275, delta=0.002)
+        self.assertAlmostEqual(res["hipotesis"]["40"]["sigma_una_cola"], 2.0, delta=0.03)
+        self.assertAlmostEqual(res["hipotesis"]["55"]["fraccion"], 0.1587, delta=0.003)
+        self.assertAlmostEqual(res["menos_68"], 5.0, delta=0.1)
+        self.assertAlmostEqual(res["mas_68"], 5.0, delta=0.1)
 
 
 #: (run, cifras del doc del 09-21) — mediana, media, nivel A ± σ, dipolo.
@@ -155,17 +228,29 @@ CIFRAS_0927 = [
 #: §5.2 del 09-27: alcance combinado, pendientes por tramo y r₀ en el tramo que encierra el cruce.
 TRAMOS_0927 = [
     (("ROXs12b_comb40_20260921", "ROXs12b_comb55_20260921", "ROXs12b_comb78_20260921"),
-     {"pendientes": [(0.3171, 0.0066), (0.1965, 0.0047)], "tol": 0.00005, "r0_px": 62.2, "e_r0_px": 2.8, "tramo_px": [55.0, 78.0]}),
+     {"pendientes": [(0.3171, 0.0066), (0.1965, 0.0047)], "tol": 0.00005, "r0_px": 62.2, "e_r0_px": 2.8,
+      "tramo_px": [55.0, 78.0], "curvatura": (-0.1206, 0.0029)}),
     (("ROXs42Bb_comb45_20260921", "ROXs42Bb_comb60_20260921", "ROXs42Bb_comb78_20260921"),
-     {"pendientes": [(1.266, 0.110), (0.536, 0.059)], "tol": 0.0005, "r0_px": 59.1, "e_r0_px": 4.6, "tramo_px": [45.0, 60.0]}),
+     {"pendientes": [(1.266, 0.110), (0.536, 0.059)], "tol": 0.0005, "r0_px": 59.1, "e_r0_px": 4.6,
+      "tramo_px": [45.0, 60.0], "curvatura": (-0.730, 0.051)}),
 ]
 #: docs/2026-09-28_r0_entregado_42bb_tres_radios.md §2: el entregado de 42B b con el cruce encerrado.
 TRES_RADIOS_0928 = (("ROXs42Bb_r45_20260928", "ROXs42Bb_realigned", "ROXs42Bb_r78_20260927"),
-                    {"A45": (-11.52, 7.21), "pendiente_baja": (1.310, 0.108), "curvatura": (-0.761, 0.049),
-                     "r0_px": 53.8, "e_r0_px": 4.7})
+                    {"A45": (-11.52, 7.21), "dipolo45": 37.0, "mediana45": -15.91,
+                     "tramos": [(13.10, 1.08, 1.310, 0.108), (12.61, 1.37, 0.548, 0.059)],
+                     "curvatura": (-0.761, 0.049), "r0_px": 53.8, "e_r0_px": 4.7,
+                     # §2: en flujo absoluto, sin dividir por la mediana del objeto
+                     "mediana_objeto": (100.8, 119.6, 156.3), "curvatura_abs": (-0.467, 0.0075), "r0_abs_px": 53.6,
+                     # §2-§3: bootstrap de 10 000 con semilla 0; percentiles 15.9 y 84.1, y por hipótesis la
+                     # fracción de muestras más allá
+                     "bootstrap_68": (48.4, 62.7), "bootstrap_95": (41.2, 70.3),
+                     "hipotesis": {55.0: 0.4217, 53.1: 0.4210, 48.0: 0.1449, 46.6: 0.1000, 39.0: 0.0126, 36.0: 0.0060}})
+#: §3 del 09-28: distancia gaussiana (r₀ − predicho)/σ(r₀) con cada predicción tomada como exacta.
+DISTANCIAS_0928 = {55.0: -0.26, 53.1: +0.15, 48.0: +1.24, 46.6: +1.54, 39.0: +3.16, 36.0: +3.80}
 R0_0927 = [
-    (("ROXs42Bb_realigned", "ROXs42Bb_r78_20260927"), {"r0_px": 52.1, "e_r0_px": 11.2}),
-    (("ROXs12b_r55_20260921", "ROXs12b_r64_20260921"), {"r0_px": 55.0, "e_r0_px": 4.1}),
+    (("ROXs42Bb_realigned", "ROXs42Bb_r78_20260927"), {"r0_px": 52.1, "e_r0_px": 11.2}, False),
+    # 12 b: A55 = +0.004 ± 0.55, el cruce está en 55 pero ningún tramo lo encierra (extrapolado desde 55 → 64)
+    (("ROXs12b_r55_20260921", "ROXs12b_r64_20260921"), {"r0_px": 55.0, "e_r0_px": 4.1}, False),
 ]
 
 
@@ -188,11 +273,12 @@ class CifrasPublicadasTests(unittest.TestCase):
                     self.assertAlmostEqual(res[k], v, delta=(0.05 if k == "dipolo" else 0.005) + 1e-9, msg=k)
 
     def test_r0_del_0927(self):
-        for pareja, doc in R0_0927:
+        for pareja, doc, encierra in R0_0927:
             with self.subTest(runs=pareja):
                 if not _hay(*pareja):
                     self.skipTest(f"{pareja} no está en runs/")
                 c = self.m.radios(pareja)["cruce"]
+                self.assertIs(c["encierra_el_cruce"], encierra)
                 for k, v in doc.items():
                     self.assertAlmostEqual(c[k], v, delta=0.05 + 1e-9, msg=k)
 
@@ -210,18 +296,27 @@ class CifrasPublicadasTests(unittest.TestCase):
                 self.assertEqual(r["cruce"]["tramo_px"], doc["tramo_px"])
                 self.assertAlmostEqual(r["cruce"]["r0_px"], doc["r0_px"], delta=0.05 + 1e-9)
                 self.assertAlmostEqual(r["cruce"]["e_r0_px"], doc["e_r0_px"], delta=0.05 + 1e-9)
-
+                # la nota de §5.2 (añadida el 09-28): curvatura emparejada, control a control
+                c = r["curvatura"][0]
+                self.assertAlmostEqual(c["pendiente_alta_menos_baja"], doc["curvatura"][0], delta=doc["tol"] + 1e-12)
+                self.assertAlmostEqual(c["e"], doc["curvatura"][1], delta=doc["tol"] + 1e-12)
 
     def test_tres_radios_entregados_del_0928(self):
         trio, doc = TRES_RADIOS_0928
         if not _hay(*trio):
             self.skipTest(f"{trio} no está en runs/")
-        r = self.m.radios(trio)
+        bs, phi, rs, nombres = self.m.sesgos_por_radio(trio)
+        r = self.m.analiza(bs, phi, rs, nombres)
         n45 = r["niveles"][0]
         self.assertAlmostEqual(n45["A"], doc["A45"][0], delta=0.005 + 1e-9)
         self.assertAlmostEqual(n45["eA"], doc["A45"][1], delta=0.005 + 1e-9)
-        self.assertAlmostEqual(r["tramos"][0]["pendiente"], doc["pendiente_baja"][0], delta=0.0005 + 1e-12)
-        self.assertAlmostEqual(r["tramos"][0]["e_pendiente"], doc["pendiente_baja"][1], delta=0.0005 + 1e-12)
+        self.assertAlmostEqual(n45["dipolo"], doc["dipolo45"], delta=0.05 + 1e-9)
+        self.assertAlmostEqual(n45["mediana"], doc["mediana45"], delta=0.005 + 1e-9)
+        for t, (dA, edA, s, es) in zip(r["tramos"], doc["tramos"]):
+            self.assertAlmostEqual(t["dA"], dA, delta=0.005 + 1e-9)
+            self.assertAlmostEqual(t["e_dA"], edA, delta=0.005 + 1e-9)
+            self.assertAlmostEqual(t["pendiente"], s, delta=0.0005 + 1e-12)
+            self.assertAlmostEqual(t["e_pendiente"], es, delta=0.0005 + 1e-12)
         c = r["curvatura"][0]
         self.assertAlmostEqual(c["pendiente_alta_menos_baja"], doc["curvatura"][0], delta=0.0005 + 1e-12)
         self.assertAlmostEqual(c["e"], doc["curvatura"][1], delta=0.0005 + 1e-12)
@@ -230,6 +325,30 @@ class CifrasPublicadasTests(unittest.TestCase):
         self.assertEqual(x["tramo_px"], [45.0, 55.0])
         self.assertAlmostEqual(x["r0_px"], doc["r0_px"], delta=0.05 + 1e-9)
         self.assertAlmostEqual(x["e_r0_px"], doc["e_r0_px"], delta=0.05 + 1e-9)
+        for h, d in DISTANCIAS_0928.items():
+            self.assertAlmostEqual((x["r0_px"] - h) / x["e_r0_px"], d, delta=0.005 + 1e-9, msg=f"distancia a {h}")
+        # el geométrico en el marco entregado, con el error de su predicción: 46.6 · (55.0 ± 4.1) / 71.2
+        self.assertAlmostEqual((x["r0_px"] - 36.0) / math.hypot(x["e_r0_px"], 4.1 * 46.6 / 71.2), 3.30,
+                               delta=0.005 + 1e-9)
+
+        ra = self.m.radios(trio, absoluto=True)
+        # la mediana del objeto es el cociente entre los dos modos, la misma para todos los controles
+        for b, babs, med in zip(bs, self.m.sesgos_por_radio(trio, absoluto=True)[0], doc["mediana_objeto"]):
+            self.assertAlmostEqual(float(np.median(100.0 * babs / b)), med, delta=0.05 + 1e-9)
+        ca = ra["curvatura"][0]
+        self.assertAlmostEqual(ca["pendiente_alta_menos_baja"], doc["curvatura_abs"][0], delta=0.0005 + 1e-12)
+        self.assertAlmostEqual(ca["e"], doc["curvatura_abs"][1], delta=0.00005 + 1e-12)
+        self.assertAlmostEqual(ra["cruce"]["r0_px"], doc["r0_abs_px"], delta=0.05 + 1e-9)
+
+        bt = self.m.resumen_bootstrap(self.m.bootstrap_r0(bs, phi, rs, n=10000, semilla=0), x["r0_px"],
+                                      hipotesis=tuple(doc["hipotesis"]))
+        p = bt["percentiles"]
+        self.assertAlmostEqual(p["p15.9"], doc["bootstrap_68"][0], delta=0.05 + 1e-9)
+        self.assertAlmostEqual(p["p84.1"], doc["bootstrap_68"][1], delta=0.05 + 1e-9)
+        self.assertAlmostEqual(p["p2.3"], doc["bootstrap_95"][0], delta=0.05 + 1e-9)
+        self.assertAlmostEqual(p["p97.7"], doc["bootstrap_95"][1], delta=0.05 + 1e-9)
+        for h, f in doc["hipotesis"].items():
+            self.assertAlmostEqual(bt["hipotesis"][f"{h:g}"]["fraccion"], f, delta=1e-9, msg=f"hipótesis {h}")
 
 
 if __name__ == "__main__":
