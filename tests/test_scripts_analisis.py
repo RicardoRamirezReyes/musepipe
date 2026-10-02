@@ -243,5 +243,34 @@ class DesplazamientoPrimariaTests(unittest.TestCase):
         self.assertAlmostEqual(self.m.centroide_ha(self.wave, esp), 6563.0, delta=0.1)
 
 
+
+class PsffitPorExposicionTests(unittest.TestCase):
+    """El ajuste en la máscara de `psffit_por_exposicion.py` es el de C4 (2026-09-26)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("psffit_por_exposicion")
+
+    def test_ajuste_en_la_mascara_es_el_de_c4(self):
+        from musepipe.extraction.psffit import fit_psffit_cube
+        from tests.test_optimal_analytic import constant_model_doc
+        from tests.test_parallel_equivalence import _scene
+        model = constant_model_doc()
+        wave = np.linspace(6540.0, 6580.0, 9)
+        star, comp = (30.0, 26.0), (30.0, 40.0)
+        cube, var = _scene(model, wave, star, comp)
+        ref = fit_psffit_cube(cube, var, wave, star, comp, model, star_radius_px=10.0, comp_radius_px=6.0)
+        from musepipe.extraction.psffit import fit_region_mask
+        mask = fit_region_mask(cube.shape[1:], star, comp, star_radius_px=10.0, comp_radius_px=6.0)
+        for z in range(wave.size):
+            coef = self.m.ajuste_en_la_mascara(cube[z], var[z], wave[z], star, comp, model, mask)
+            np.testing.assert_allclose(coef, ref.coeffs[z], rtol=1e-9, atol=1e-9)
+
+    def test_rojo_menos_azul_y_centroide(self):
+        wave = np.arange(6520.0, 6605.0, 1.25)
+        linea = np.exp(-0.5 * ((wave - 6564.0) / 1.2) ** 2)
+        self.assertGreater(self.m.rojo_menos_azul(wave, 10.0 + linea), 0.0)
+        self.assertAlmostEqual(self.m.centroide(wave, 10.0 + linea), 6564.0, delta=0.2)
+
 if __name__ == "__main__":
     unittest.main()
