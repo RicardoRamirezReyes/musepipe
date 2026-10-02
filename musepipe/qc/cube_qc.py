@@ -122,12 +122,21 @@ def detect_wavelength_frame(header: fits.Header) -> tuple[str, float | None]:
 
 
 def expected_skyline_wave(lab_wave_A: float, *, frame: str, vbary_kms: float | None) -> float:
-    """Expected observed skyline position in the cube wavelength frame."""
+    """Expected observed skyline position in the cube wavelength frame.
+
+    ``vbary_kms`` es la ``BARYCORR`` de ESO (v_bary = v_obs + BARYCORR): una línea de cielo (v_obs = 0)
+    cae en λ·(1 + BARYCORR/c). Hasta el 2026-09-28 esto decía λ·(1 − v/c), y el test fijaba ese mismo
+    signo contra la propia función. Medido ese día en los 22 cubos por exposición de la noche buena de
+    ROXs 12 b (BARYCORR −29.5 km/s): los residuos de cielo caen al AZUL del `SKY_SPECTRUM` topocéntrico
+    en 21 de 22, mediana −0.62 Å a 7700-9300 Å (este signo predice −0.84; el viejo, +0.84). Ningún run
+    llegaba aquí: A4/M1 mide en `SKY_SPECTRUM` con ``frame="topocentric"``.
+    docs/2026-09-28_cielo_en_ha_y_signo_del_marco.md.
+    """
 
     if frame == "barycentric":
         if vbary_kms is None:
             raise RuntimeError("Barycentric wavelength frame requires vbary_kms.")
-        return float(lab_wave_A) * (1.0 - float(vbary_kms) / C_KMS)
+        return float(lab_wave_A) * (1.0 + float(vbary_kms) / C_KMS)
     if frame == "topocentric":
         return float(lab_wave_A)
     raise RuntimeError("Wavelength frame is unknown; do not assume topocentric/barycentric.")

@@ -243,5 +243,106 @@ class DesplazamientoPrimariaTests(unittest.TestCase):
         self.assertAlmostEqual(self.m.centroide_ha(self.wave, esp), 6563.0, delta=0.1)
 
 
+class PsffitPorExposicionTests(unittest.TestCase):
+    """El ajuste en la máscara de `psffit_por_exposicion.py` es el de C4 (2026-09-26)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("psffit_por_exposicion")
+
+    def test_ajuste_en_la_mascara_es_el_de_c4(self):
+        from musepipe.extraction.psffit import fit_psffit_cube
+        from tests.test_optimal_analytic import constant_model_doc
+        from tests.test_parallel_equivalence import _scene
+        model = constant_model_doc()
+        wave = np.linspace(6540.0, 6580.0, 9)
+        star, comp = (30.0, 26.0), (30.0, 40.0)
+        cube, var = _scene(model, wave, star, comp)
+        ref = fit_psffit_cube(cube, var, wave, star, comp, model, star_radius_px=10.0, comp_radius_px=6.0)
+        from musepipe.extraction.psffit import fit_region_mask
+        mask = fit_region_mask(cube.shape[1:], star, comp, star_radius_px=10.0, comp_radius_px=6.0)
+        for z in range(wave.size):
+            coef = self.m.ajuste_en_la_mascara(cube[z], var[z], wave[z], star, comp, model, mask)
+            np.testing.assert_allclose(coef, ref.coeffs[z], rtol=1e-9, atol=1e-9)
+
+    def test_rojo_menos_azul_y_centroide(self):
+        wave = np.arange(6520.0, 6605.0, 1.25)
+        linea = np.exp(-0.5 * ((wave - 6564.0) / 1.2) ** 2)
+        self.assertGreater(self.m.rojo_menos_azul(wave, 10.0 + linea), 0.0)
+        self.assertAlmostEqual(self.m.centroide(wave, 10.0 + linea), 6564.0, delta=0.2)
+
+
+class CieloEnHaTests(unittest.TestCase):
+    """La cota del residuo de cielo sobre el rojo − azul del compañero (2026-09-28)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("cielo_en_ha_por_exposicion")
+        cls.w = np.arange(6480.0, 6650.0, 0.3125)
+
+    def linea(self, centro, area=5.0, sigma=1.0, continuo=1.6):
+        return continuo + area / (sigma * np.sqrt(2 * np.pi)) * np.exp(-0.5 * ((self.w - centro) / sigma) ** 2)
+
+    def test_encuentra_el_pico_y_su_area(self):
+        f = self.linea(6563.12)
+        self.assertAlmostEqual(self.m.pico_de_cielo(self.w, f), 6563.12, delta=0.32)
+        self.assertAlmostEqual(self.m.integral_de_linea(self.w, f, 6563.12), 5.0, delta=0.05)
+        self.assertAlmostEqual(self.m.cota_caja3(5.0, 6.65), 9 * 5.0 * 6.65)
+
+    def test_rojo_menos_azul_es_el_de_grupos(self):
+        c7 = sys.modules.get("centroide_companero_por_ao") or _carga("centroide_companero_por_ao")
+        w = np.arange(6522.8, 6602.8, 1.25)
+        g = c7.Grupos.__new__(c7.Grupos)
+        g.wave = w
+        g.continuo = np.abs(w - c7.CENTRO_A) >= c7.CONTINUO_A[0]
+        f = 3.0 + 40 * np.exp(-0.5 * ((w - 6564.1) / 1.1) ** 2)
+        self.assertAlmostEqual(self.m.rojo_menos_azul(w, f), g.rojo_menos_azul(f), places=9)
+
+    def test_signo_de_la_asimetria(self):
+        self.assertAlmostEqual(self.m.rojo_menos_azul(self.w, self.linea(6566.3)), 5.0, delta=0.1)
+        self.assertAlmostEqual(self.m.rojo_menos_azul(self.w, self.linea(6559.3)), -5.0, delta=0.1)
+
+    def test_el_desfase_del_cielo_en_el_cubo_se_mide_en_stat_y_lleva_su_signo(self):
+        # cubo de 8x8: las líneas de cielo de STAT en λ_topo − 0.8 Å y los residuos de DATA en λ_topo − 0.3 Å.
+        # El desfase principal tiene que salir de STAT (−0.8, no +0.8) y el de DATA, aparte (−0.3).
+        rng = np.random.default_rng(2)
+        centros = rng.uniform(7750.0, 9250.0, 60)
+        ws = np.arange(7600.0, 9400.0, 0.3125)
+        cielo = 2.0 + sum(40 * np.exp(-0.5 * ((ws - c) / 1.0) ** 2) for c in centros)
+        wc = 7600.0 + 1.25 * np.arange(1400)
+
+        def lineas(desfase, amp):
+            return 1.0 + sum(amp * np.exp(-0.5 * ((wc - (c + desfase)) / 1.1) ** 2) for c in centros)
+
+        def cubo(espectro):
+            c = np.broadcast_to(espectro[:, None, None], (wc.size, 8, 8)).copy()
+            return (c + rng.normal(0, 0.01, c.shape)).astype(np.float32)
+
+        with tempfile.TemporaryDirectory() as d:
+            h0 = fits.PrimaryHDU()
+            h0.header["BARYCORR"] = -29.5
+            h1 = fits.ImageHDU(cubo(lineas(-0.3, 0.5)), name="DATA")
+            h1.header.update({"CRVAL3": 7600.0, "CD3_3": 1.25, "CRPIX3": 1.0})
+            h2 = fits.ImageHDU(cubo(lineas(-0.8, 5.0)), name="STAT")
+            fits.HDUList([h0, h1, h2]).writeto(Path(d) / "cubo.fits")
+            fits.BinTableHDU.from_columns([fits.Column("lambda", "D", array=ws),
+                                           fits.Column("data", "D", array=cielo)]).writeto(Path(d) / "cielo.fits")
+            m = self.m.desfase_del_cielo_en_el_cubo(Path(d) / "cubo.fits", Path(d) / "cielo.fits", n_espaxeles=10)
+        self.assertAlmostEqual(m["desfase_A"], -0.8, delta=0.1)
+        self.assertGreater(m["correlacion"], 0.5)
+        self.assertAlmostEqual(m["desfase_data_A"], -0.3, delta=0.1)
+        self.assertEqual(m["barycorr_kms"], -29.5)
+
+    def test_un_desplazamiento_no_da_mas_que_la_linea(self):
+        # la línea a caballo del corte: correrla del todo a una ventana deja ~+F allí y −F/2 en cada una
+        f = self.linea(6562.8)
+        d, vmax, _ = self.m.delta_necesario(self.w, f, 1e6, 1.0, 1.0)
+        self.assertIsNone(d)
+        self.assertLessEqual(vmax, 2 * 5.0 + 1e-6)
+        d, _, _ = self.m.delta_necesario(self.w, f, 0.5, 1.0, 1.0)
+        self.assertIsNotNone(d)
+        self.assertLess(d, 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()
