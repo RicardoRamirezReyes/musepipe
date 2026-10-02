@@ -25,5 +25,49 @@
     "spt_source_note": "Mismo G3 que g3_resolucion_invvar_20260925T005139, re-corrido 2026-09-25 con b270b1d tras correr A3 por primera vez sobre invvar (docs/2026-09-25_a3_invvar_d2_g3.md): D2 suma ahora sys_telluric en O2 A y en las dos bandas de H2O, que antes valia 0. Manara M7.5 joven aceptado (2.90 < 3.32); el ajuste atmosferico nativo pasa de 2700 K / log g 4.0 / A_V 5.0 a 2800 / 3.5 / 5.6 (el punto que ya daba la variante binada) y sigue sin pasar. Antes: G3 a resolucion MUSE con una prueba por biblioteca (tipo por Δχ² en nativo, bondad en bins de 25 Å con umbral same_subtype_neighbour) y D9 reducida a O2 (docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md), corrido 2026-09-25 sobre invvar a 55 px con 4bc84e1 (R de cada plantilla X-shooter desde la rendija VIS de su cabecera). Manara M7.5 joven aceptado (2.91 < 3.34). Aquella sustituia a g3_resolucion_invvar_20260925T000344 (R de Manara+17 fija en 8800; mismos resultados <0.1 %) y a g3_resolucion_invvar_20260924T220548 (cuatro bandas telúricas enmascaradas; no pasaba).",
     "previous_run": "ROXs12b_OB3445598",
     "previous_run_note": "La noche buena sola, run de publicacion hasta el 2026-09-20. Se cita en el paper como control de robustez: el resultado se mantiene descartando la noche ruidosa, con Mdot < 3.0e-14 en vez de 2.7e-14. La Figura 2 congelada (tag fondecyt-fig2-v1) sale de su cosecha de 11 controles, respaldada en stages/e4_11controles_respaldo/."
+  },
+  "ir_spectra": {
+    "note": "Espectros J/H/K publicados del compañero en el catálogo CDS J/A+A/708/A312 (Hayoz+2026), observados (sin desenrojecer). Los usa scripts/tipo_ir_indices.py (docs/2026-10-02_tipo_ir_42bb.md); G3 no los usa. 'published_types' son los tipos publicados con esos mismos datos: el control del script. Su fotometría y el escalado de estos espectros son los de la terciaria (Kraus+2014): bajos x2 en J, x1.6 en H; los índices de una sola banda no lo notan.",
+    "spectra": {
+      "NIFS_J": {
+        "file": "roxs12b_spectrum_Bowler2017_NIFS_J_calib.dat",
+        "band": "J",
+        "instrument": "Gemini/NIFS",
+        "ref": "Bowler+2017"
+      },
+      "OSIRIS_J": {
+        "file": "roxs12b_spectrum_Bowler2017_OSIRIS_J_calib.dat",
+        "band": "J",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2017"
+      },
+      "OSIRIS_H": {
+        "file": "roxs12b_spectrum_Bowler2017_OSIRIS_H_calib.dat",
+        "band": "H",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2017"
+      },
+      "OSIRIS_K": {
+        "file": "roxs12b_spectrum_Bowler2017_OSIRIS_K_calib.dat",
+        "band": "K",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2017"
+      }
+    },
+    "published_types": [
+      {
+        "ref": "Bowler+2017",
+        "method": "visual",
+        "spt": 10.0,
+        "err": 2.0,
+        "av": 1.8,
+        "spectra": [
+          "NIFS_J",
+          "OSIRIS_J",
+          "OSIRIS_H",
+          "OSIRIS_K"
+        ]
+      }
+    ]
   }
 }

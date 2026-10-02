@@ -31,5 +31,65 @@
     "display": "ROXs 42B b",
     "spt_source_dir": ".",
     "spt_source_note": "El G3 de este objeto no esta archivado en un subdirectorio: vive en la raiz de stages/ (corrida del 2026-09-03 sobre el espectro calibrado del 08-31, con la LSF 2.297 del config, que es la que mide A4/M2: 2.2969). Se declara el punto para que la figura no dependa del orden alfabetico ni imprima un aviso."
+  },
+  "ir_spectra": {
+    "note": "Espectros J/H/K publicados del compañero en el catálogo CDS J/A+A/708/A312 (Hayoz+2026), observados (sin desenrojecer). Los usa scripts/tipo_ir_indices.py (docs/2026-10-02_tipo_ir_42bb.md); G3 no los usa. 'published_types' son los tipos publicados con esos mismos datos: el control del script.",
+    "spectra": {
+      "NIFS_J": {
+        "file": "roxs42bb_spectrum_Bowler2014_NIFS_J_calib.dat",
+        "band": "J",
+        "instrument": "Gemini/NIFS",
+        "ref": "Bowler+2014"
+      },
+      "NIFS_H": {
+        "file": "roxs42bb_spectrum_Bowler2014_NIFS_H_calib.dat",
+        "band": "H",
+        "instrument": "Gemini/NIFS",
+        "ref": "Bowler+2014"
+      },
+      "OSIRIS_K": {
+        "file": "roxs42bb_spectrum_Bowler2014_OSIRIS_K_calib.dat",
+        "band": "K",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2014"
+      },
+      "OSIRIS_H": {
+        "file": "roxs42bb_spectrum_Currie2014_OSIRIS_H_calib.dat",
+        "band": "H",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Currie+2014 (atribución del catálogo; probablemente KOA N134O, 2015)"
+      },
+      "SINFONI_K": {
+        "file": "roxs42bb_spectrum_Currie2014_SINFONI_K_calib.dat",
+        "band": "K",
+        "instrument": "VLT/SINFONI",
+        "ref": "Currie+2014"
+      }
+    },
+    "published_types": [
+      {
+        "ref": "Bowler+2014",
+        "method": "visual",
+        "spt": 11.0,
+        "err": 1.0,
+        "av": 1.7,
+        "spectra": [
+          "NIFS_J",
+          "NIFS_H",
+          "OSIRIS_K"
+        ]
+      },
+      {
+        "ref": "Currie+2014b",
+        "method": "H2O-2",
+        "index": 0.87,
+        "tol": 0.02,
+        "av": 1.9,
+        "spectra": [
+          "SINFONI_K"
+        ],
+        "note": "El 0.87 no sale de ninguna versión de sus datos (0.89-0.91 en F_lambda, 0.82 en F_nu): docs/2026-10-02_tipo_ir_42bb.md"
+      }
+    ]
   }
 }
