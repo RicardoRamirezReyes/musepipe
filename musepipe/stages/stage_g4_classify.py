@@ -3,7 +3,9 @@
 Transparent classification (spec G4 §1.1): the product is the matrix. Each cell
 records verdict + value + source (re-derivable). Frozen thresholds live in
 config and their hash is stamped in the QC (§1.2 / V5 anti-bias). Deferred G3
-fits leave T3/T4/T6 `not_available` (they do not score).
+fits leave T3/T4/T6 `not_available` (they do not score), and so does an
+atmospheric fit that is not usable (see `_atmo_fit_verdict`): then T3 keeps
+only its gravity component.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from ..classify import (
 from ..config import load_run_config
 from ..constants import MSUN_OVER_MJUP
 from ..paths import RunPaths
+from .stage_g3_accretion import _ajuste_atmosferico_utilizable
 
 CORRELATED_GROUPS = [("T3", "T4", "T6")]  # share the spectrum + A_V fit (spec §4.1)
 
@@ -64,6 +67,33 @@ def _read(path):
 
 def _cell(verdict, value, source):
     return {"verdict": verdict, "value": value, "source": source}
+
+
+def _atmo_fit_verdict(cfg, paths, g3):
+    """`(utilizable, motivo)` de lo que G3 deriva del ajuste atmosferico: la
+    masa (componente de masa de T3 y la ambiguedad), el radio (T4) y la A_V (T6).
+
+    Basta una de tres para descartarlo:
+
+    - el QC de G3 trae `systematics_limited.accepted`
+      (`stage_g3_assemble.finalize_systematics_limited`);
+    - el run DECLARA `g3_atmosphere_systematics_limited` (decision humana del
+      2026-07-16). El bloque de arriba tenia que llevarla, pero el paso que lo
+      escribe no esta en ningun camino de lanzamiento: en los runs del 2026-09-26
+      la marca estaba en el config y no en el QC, y G4 clasificaba con la masa, el
+      radio y la A_V de un ajuste que habia fallado sus puertas, con rc=0;
+    - el propio ajuste fallo sus condiciones de parada: el sello
+      `usable_for_downstream` de `g3_atmo_fit_qc.json`, el mismo que lee la
+      rodaja de acrecion, y con la misma regla (sin sello, no consta que las
+      pasara).
+    """
+    syslim = g3.get("systematics_limited", {})
+    if syslim.get("accepted"):
+        return False, "systematics-limited"
+    if cfg.get("g3_atmosphere_systematics_limited"):
+        return False, "systematics-limited (declared in config)"
+    ok, why = _ajuste_atmosferico_utilizable(paths["paths"].stage_dir)
+    return ok, (None if ok else f"atmospheric fit not usable: {why}")
 
 
 def _table_value(paths, prop):
@@ -150,15 +180,16 @@ def _combine_verdicts(*parts):
 def _ambiguity_quantification(cfg, paths, g3):
     """P(m<13 / 13-75 / >75 M_Jup) per family + combined vs the frozen mass
     boundaries — the quantitative resolution of the G4 ambiguity. Reports
-    not_available (with the gravity Δχ²) when the mass is systematics-limited."""
+    not_available (with the gravity Δχ²) when the atmospheric fit the mass comes
+    from is not usable (`_atmo_fit_verdict`)."""
     syslim = g3.get("systematics_limited", {})
     grav = (g3.get("spt", {}).get("gravity_classes")
             or syslim.get("robust_results", {}).get("gravity_class") or {})
     dchi2 = grav.get("dchi2_by_class")
     boundaries = cfg.get("g4_mass_boundaries_mjup", [13.0, 75.0])
-    if syslim.get("accepted"):
-        return {"status": "not_available",
-                "reason": syslim.get("reason", "mass systematics-limited"),
+    atmo_ok, atmo_why = _atmo_fit_verdict(cfg, paths, g3)
+    if not atmo_ok:
+        return {"status": "not_available", "reason": atmo_why,
                 "dchi2_gravity_classes": dchi2}
     probs = _mass_probabilities(paths["g3_mass_posterior"], boundaries)
     if probs is None:
@@ -217,7 +248,7 @@ def build_matrix(cfg, paths):
     # is not_available (spec: never punish for not measuring).
     g3 = _read(paths["stage_g3_qc_json"]) or {}
     g3_deferred = any("pending_libraries" in str(i.get("issue", "")) for i in (g3.get("open_issues") or []))
-    g3_syslim = bool(g3.get("systematics_limited", {}).get("accepted"))
+    atmo_ok, atmo_why = _atmo_fit_verdict(cfg, paths, g3)
     excl = float(cfg.get("g4_t3_dchi2_excl", 9.0))
     disfav = float(cfg.get("g4_t3_dchi2_disfavor", 4.0))
     grav = (g3.get("spt", {}).get("gravity_classes")
@@ -231,8 +262,8 @@ def build_matrix(cfg, paths):
     gof_failed = acceptance.get("pass") is False
     if gof_failed:
         t3_grav = {h: ("not_available", None) for h in HYPOTHESES}
-    # mass component only if trustworthy (not systematics-limited / deferred)
-    mass_ok = grav and not g3_syslim and not g3_deferred
+    # mass component only if trustworthy (usable atmospheric fit, not deferred)
+    mass_ok = grav and atmo_ok and not g3_deferred
     mass_probs = _mass_probabilities(paths["g3_mass_posterior"], cfg.get("g4_mass_boundaries_mjup", [13.0, 75.0])) if mass_ok else None
     t3_mass = _mass_verdicts(mass_probs, cfg.get("g4_mass_prob_verdicts", {}))
     matrix["T3"] = {}
@@ -240,14 +271,14 @@ def build_matrix(cfg, paths):
         gvh = t3_grav.get(h) if t3_grav else None
         mvh = t3_mass.get(h) if t3_mass else None
         v, val = _combine_verdicts(gvh, mvh)
-        note = "" if mvh else ("; mass systematics-limited" if g3_syslim else "; mass n/a")
+        note = "" if mvh else (f"; mass n/a: {atmo_why}" if not atmo_ok else "; mass n/a")
         if gof_failed:
             note += "; gravity n/a: template binned GOF failed"
         matrix["T3"][h] = _cell(v, val, "g3.gravity_class(dchi2)+mass" + note)
 
-    rad = None if (g3_syslim or g3_deferred) else _table_value(paths, "radius")
+    rad = None if (not atmo_ok or g3_deferred) else _table_value(paths, "radius")
     if rad is None:
-        note = " (systematics-limited)" if g3_syslim else " (deferred)" if g3_deferred else " (not_constrained)"
+        note = f" ({atmo_why})" if not atmo_ok else " (deferred)" if g3_deferred else " (not_constrained)"
         matrix["T4"] = {h: _cell("not_available", None, "g3.radius(Omega,d)" + note) for h in HYPOTHESES}
     else:
         r, _ = rad
@@ -256,9 +287,9 @@ def build_matrix(cfg, paths):
         matrix["T4"] = {h: _cell(vb if h in _BOUND_HYP else "neutral", round(r, 3),
                                  "g3.radius(Omega,d)") for h in HYPOTHESES}
 
-    av = None if (g3_syslim or g3_deferred) else _table_value(paths, "a_v_spectral")
+    av = None if (not atmo_ok or g3_deferred) else _table_value(paths, "a_v_spectral")
     if av is None:
-        note = " (systematics-limited)" if g3_syslim else " (deferred)" if g3_deferred else " (not_constrained)"
+        note = f" ({atmo_why})" if not atmo_ok else " (deferred)" if g3_deferred else " (not_constrained)"
         matrix["T6"] = {h: _cell("not_available", None, "g3.a_v_spectral" + note) for h in HYPOTHESES}
     else:
         a, ae = av
@@ -308,6 +339,27 @@ def build_matrix(cfg, paths):
     return matrix, p_bg
 
 
+_SUBSTELLAR_HYP = ("planet_forming", "substellar_companion", "brown_dwarf")
+
+
+def _combined_label(tied):
+    """La etiqueta de un empate en cabeza (spec G4 §4.5, 2026-10-10); None si hay lider.
+
+    D13 decia «top-2 dentro del margen y ambas subestelares», pero el top-2 de un
+    empate de tres o cuatro lo elige el orden de la tupla: en ROXs 42B b, sin masa,
+    empatan subestelar, enana marron y M asociada, y el top-2 daba
+    `companion_substellar_or_planetary` dejando fuera a la estrella. La etiqueta
+    mira el conjunto entero.
+    """
+    if len(tied) < 2:
+        return None
+    if set(tied) <= set(_SUBSTELLAR_HYP):
+        return "companion_substellar_or_planetary"
+    if set(tied) <= set(_BOUND_HYP):
+        return "bound_companion_mass_unresolved"
+    return "unresolved"
+
+
 def compute_stage_g4(cfg, paths):
     thresholds = dict(cfg.get("g4_thresholds", {
         "secure_bg_prob_max": 0.01, "probable_bg_prob_max": 0.10, "secure_min_supports": 3}))
@@ -317,27 +369,22 @@ def compute_stage_g4(cfg, paths):
     for row in ranking:
         row["dominant_tests"] = dominant_tests(matrix, row["hypothesis"], weights=weights)
     p_bg_val = p_bg if p_bg is not None else 1.0
+    margin = float(cfg.get("g4_combined_class_margin", 0.5))
     final = classify(matrix, background_prob=p_bg_val, thresholds=thresholds,
-                     groups=CORRELATED_GROUPS, weights=weights)
+                     groups=CORRELATED_GROUPS, weights=weights, tie_margin=margin)
 
     # D13 combined class + ambiguity quantification from the real G3 QC.
     g3 = _read(paths["stage_g3_qc_json"]) or {}
     ambiguity = _ambiguity_quantification(cfg, paths, g3)
-    substellar = {"planet_forming", "substellar_companion", "brown_dwarf"}
-    margin = float(cfg.get("g4_combined_class_margin", 0.5))
-    tied_at_top = [r["hypothesis"] for r in ranking if abs(r["log_l_rel"]) < margin]
-    combined_label = None
-    if len(ranking) >= 2:
-        if (abs(ranking[0]["log_l_rel"] - ranking[1]["log_l_rel"]) < margin
-                and ranking[0]["hypothesis"] in substellar and ranking[1]["hypothesis"] in substellar):
-            combined_label = "companion_substellar_or_planetary"
+    tied_at_top = final["tied_at_top"]
+    combined_label = _combined_label(tied_at_top)
 
     available = [t for t, per in matrix.items() if any(c["verdict"] != "not_available" for c in per.values())]
     unavailable = [t for t in matrix if t not in available]
     open_issues = []
     if unavailable:
-        why = ("G3 atmospheric inference systematics-limited (C3 continuum); T5 no detected lines"
-               if g3.get("systematics_limited", {}).get("accepted")
+        atmo_ok, atmo_why = _atmo_fit_verdict(cfg, paths, g3)
+        why = (f"G3 {atmo_why}; T5 no detected lines" if not atmo_ok
                else "G3 real fits deferred / no detected lines")
         open_issues.append({"issue": f"Tests {unavailable} not_available ({why}). Robustness reflects the reduced evidence.", "priority": "major"})
     if ambiguity.get("status") != "computed":

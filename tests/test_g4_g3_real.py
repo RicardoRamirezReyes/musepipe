@@ -10,7 +10,7 @@ import numpy as np
 
 from musepipe.constants import MSUN_OVER_MJUP
 from musepipe.stages.stage_g4_classify import (
-    _ambiguity_quantification, _combine_verdicts, _mass_probabilities,
+    _ambiguity_quantification, _combine_verdicts, _combined_label, _mass_probabilities,
     _mass_verdicts, _t3_gravity, build_matrix, compute_stage_g4, stage_g4_paths,
 )
 
@@ -45,10 +45,12 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(mv["m_star_associated"][0], "excludes")     # P(>75)=0
 
 
-def _make_run(tmp, *, syslim, acceptance=None):
+def _make_run(tmp, *, syslim, acceptance=None, atmo_qc=None):
     rd = Path(tmp) / "runs" / "syn"
     (rd / "stages").mkdir(parents=True)
     (rd / "tables").mkdir(parents=True)
+    if atmo_qc is not None:
+        (rd / "stages" / "g3_atmo_fit_qc.json").write_text(json.dumps(atmo_qc))
     (rd / "stages" / "stage01c_qc.json").write_text(json.dumps(
         {"astrometry": {"expected_sep_arcsec": 0.1, "sep_deviation_sigma": 1.0},
          "companion": {"snr_detection": 20.0}}))
@@ -129,6 +131,91 @@ class BuildMatrixTests(unittest.TestCase):
             root = _make_run(tmp, syslim=True, acceptance={"gate": "binned_gof", "pass": True})
             matrix, _ = build_matrix(_cfg(), stage_g4_paths("syn", project_root=root))
             self.assertEqual(matrix["T3"]["m_star_background"]["verdict"], "excludes")
+
+
+class AtmoFitNotUsableTests(unittest.TestCase):
+    """2026-10-10: G4 usaba la masa, el radio y la A_V de un ajuste atmosferico
+    que habia fallado sus puertas. La marca `systematics_limited` estaba en el
+    config de los dos runs del paper, pero no en el QC de G3 (solo la escribe
+    `finalize_systematics_limited`, que ningun lanzamiento llama), y G4 solo
+    miraba el QC. Tampoco leia el sello `usable_for_downstream` del ajuste.
+
+    En cada caso el QC de G3 NO trae el bloque `systematics_limited` y la tabla
+    trae radio y A_V con valor, como en los runs del 2026-09-26: lo unico que
+    puede apagar T4/T6 y la masa es la declaracion o el sello.
+    """
+
+    def _assert_atmo_off(self, cfg, atmo_qc, motivo):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_run(tmp, syslim=False, atmo_qc=atmo_qc)
+            paths = stage_g4_paths("syn", project_root=root)
+            matrix, _ = build_matrix(cfg, paths)
+            # sin masa, T3 es solo la gravedad: joven -> supports, aunque la masa (~21 M_Jup) la excluiria
+            self.assertEqual(matrix["T3"]["substellar_companion"]["verdict"], "supports")
+            self.assertIn(motivo, matrix["T3"]["substellar_companion"]["source"])
+            for t in ("T4", "T6"):
+                self.assertEqual(matrix[t]["substellar_companion"]["verdict"], "not_available", t)
+                self.assertIn(motivo, matrix[t]["substellar_companion"]["source"], t)
+            g3 = json.loads((root / "runs" / "syn" / "stages" / "stage_g3_qc.json").read_text())
+            amb = _ambiguity_quantification(cfg, paths, g3)
+            self.assertEqual(amb["status"], "not_available")
+            self.assertIn(motivo, amb["reason"])
+            _, qc = compute_stage_g4(cfg, paths)
+            self.assertIn(motivo, " ".join(i["issue"] for i in qc["open_issues"]))
+
+    def test_config_declaration_alone_switches_it_off(self):
+        cfg = dict(_cfg(), g3_atmosphere_systematics_limited=True)
+        self._assert_atmo_off(cfg, None, "declared in config")
+
+    def test_failed_seal_alone_switches_it_off(self):
+        atmo = {"stops": ["chi2_red=12.26 > 3 (atmo fit, 25 A bins)"], "usable_for_downstream": False}
+        self._assert_atmo_off(_cfg(), atmo, "chi2_red=12.26")
+
+    def test_atmo_qc_without_seal_is_not_usable(self):
+        """La misma regla que la rodaja de acrecion: sin sello, no consta que pasara."""
+        self._assert_atmo_off(_cfg(), {"best": {"chi2_red": 1.0}}, "sin el sello")
+
+    def test_declaration_false_and_passed_seal_keep_the_mass(self):
+        cfg = dict(_cfg(), g3_atmosphere_systematics_limited=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_run(tmp, syslim=False, atmo_qc={"stops": [], "usable_for_downstream": True})
+            paths = stage_g4_paths("syn", project_root=root)
+            matrix, _ = build_matrix(cfg, paths)
+            self.assertEqual(matrix["T3"]["substellar_companion"]["verdict"], "excludes")  # P(<13)=0
+            self.assertEqual(matrix["T4"]["substellar_companion"]["verdict"], "supports")
+            self.assertNotEqual(matrix["T6"]["substellar_companion"]["verdict"], "not_available")
+            g3 = json.loads((root / "runs" / "syn" / "stages" / "stage_g3_qc.json").read_text())
+            self.assertEqual(_ambiguity_quantification(cfg, paths, g3)["status"], "computed")
+
+
+class CombinedLabelTests(unittest.TestCase):
+    """2026-10-10 (spec G4 §4.5): la etiqueta de un empate mira el conjunto, no el top-2."""
+
+    def test_labels(self):
+        self.assertIsNone(_combined_label(["brown_dwarf"]))
+        self.assertEqual(_combined_label(["substellar_companion", "brown_dwarf"]),
+                         "companion_substellar_or_planetary")
+        self.assertEqual(_combined_label(["planet_forming", "substellar_companion", "brown_dwarf"]),
+                         "companion_substellar_or_planetary")
+        # ROXs 42B b sin masa: el top-2 son subestelares, pero la M asociada tambien empata
+        self.assertEqual(_combined_label(["substellar_companion", "brown_dwarf", "m_star_associated"]),
+                         "bound_companion_mass_unresolved")
+        self.assertEqual(_combined_label(["m_star_associated", "m_star_background"]), "unresolved")
+
+    def test_stage_without_mass_reports_the_bound_tie(self):
+        """Sin masa, la gravedad joven no separa a las ligadas: empate y `ambiguous`."""
+        cfg = dict(_cfg(), g3_atmosphere_systematics_limited=True, g4_combined_class_margin=0.5,
+                   g4_background_density_per_arcsec2=1e-4)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_run(tmp, syslim=False)
+            _, qc = compute_stage_g4(cfg, stage_g4_paths("syn", project_root=root))
+            fc = qc["final_class"]
+            self.assertEqual(fc["label"], "bound_companion_mass_unresolved")
+            self.assertIsNone(fc["leader"])
+            # Halpha es upper_limit en el fixture: T8 deja a planet_forming en −1, como en 42B b
+            self.assertEqual(set(fc["tied_at_top"]), {"substellar_companion", "brown_dwarf",
+                                                      "m_star_associated"})
+            self.assertEqual(fc["robustness"], "ambiguous")
 
 
 if __name__ == "__main__":
