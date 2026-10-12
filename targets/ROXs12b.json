@@ -25,5 +25,49 @@
     "spt_source_note": "G3 a la resolucion de MUSE, con una prueba por biblioteca, re-corrido despues de correr la etapa telurica sobre este cubo. El tipo espectral no cambia y el ajuste atmosferico sigue sin pasar su puerta de bondad de ajuste. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos.",
     "previous_run": "ROXs12b_OB3445598",
     "previous_run_note": "La noche buena sola, run de publicacion anterior. Se cita como control de robustez: el resultado se mantiene descartando la noche de peor calidad."
+  },
+  "ir_spectra": {
+    "note": "Espectros J/H/K publicados del compañero en el catálogo CDS J/A+A/708/A312 (Hayoz+2026), observados (sin desenrojecer). Los usa scripts/tipo_ir_indices.py (docs/2026-10-02_tipo_ir_42bb.md); G3 no los usa. 'published_types' son los tipos publicados con esos mismos datos: el control del script. Su fotometría y el escalado de estos espectros son los de la terciaria (Kraus+2014): bajos x2 en J, x1.6 en H; los índices de una sola banda no lo notan.",
+    "spectra": {
+      "NIFS_J": {
+        "file": "roxs12b_spectrum_Bowler2017_NIFS_J_calib.dat",
+        "band": "J",
+        "instrument": "Gemini/NIFS",
+        "ref": "Bowler+2017"
+      },
+      "OSIRIS_J": {
+        "file": "roxs12b_spectrum_Bowler2017_OSIRIS_J_calib.dat",
+        "band": "J",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2017"
+      },
+      "OSIRIS_H": {
+        "file": "roxs12b_spectrum_Bowler2017_OSIRIS_H_calib.dat",
+        "band": "H",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2017"
+      },
+      "OSIRIS_K": {
+        "file": "roxs12b_spectrum_Bowler2017_OSIRIS_K_calib.dat",
+        "band": "K",
+        "instrument": "Keck/OSIRIS",
+        "ref": "Bowler+2017"
+      }
+    },
+    "published_types": [
+      {
+        "ref": "Bowler+2017",
+        "method": "visual",
+        "spt": 10.0,
+        "err": 2.0,
+        "av": 1.8,
+        "spectra": [
+          "NIFS_J",
+          "OSIRIS_J",
+          "OSIRIS_H",
+          "OSIRIS_K"
+        ]
+      }
+    ]
   }
 }

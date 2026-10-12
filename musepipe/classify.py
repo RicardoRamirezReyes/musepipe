@@ -116,24 +116,50 @@ def leave_one_out_leader(matrix, *, groups=(), weights=None):
     return full, loo
 
 
-def classify(matrix, *, background_prob, thresholds, groups=(), weights=None):
-    """Final class + robustness (spec §6 frozen rules)."""
-    leader, loo = leave_one_out_leader(matrix, groups=groups, weights=weights)
-    loo_stable = all(v == leader for v in loo.values())
-    n_supp = n_independent_supports(matrix, leader, groups=groups)
-    excluded = has_exclusion_against(matrix, leader)
+def tied_at_top(matrix, *, groups=(), weights=None, margin=1e-9):
+    """Hypotheses within ``margin`` of the top log-likelihood, in HYPOTHESES order.
+
+    One element = a leader. More than one = a tie, and in a tie the first one of
+    ``combine_evidence``'s ranking is only the first one of the HYPOTHESES tuple
+    (the sort is stable): it is not a leader."""
+    log_l, _ = combine_evidence(matrix, groups=groups, weights=weights)
+    top = max(log_l.values())
+    return tuple(h for h in HYPOTHESES if top - log_l[h] < margin)
+
+
+def classify(matrix, *, background_prob, thresholds, groups=(), weights=None, tie_margin=1e-9):
+    """Final class + robustness (spec §6 frozen rules).
+
+    A tie at the top (``tied_at_top`` with ``tie_margin``) has no leader: the
+    label is None and the robustness ``ambiguous`` (spec §8: report all the tied
+    hypotheses, do not force one). Before 2026-10-10 the tuple order broke the
+    tie, and leave-one-out could not see it because every omission broke it the
+    same way: in ROXs 12 b, without a usable mass, four bound hypotheses tied and
+    the first of the tuple came out ``secure``. Leave-one-out now compares the
+    tied SET: an omission that splits or widens it changes the leader."""
+    tied = tied_at_top(matrix, groups=groups, weights=weights, margin=tie_margin)
+    loo = {omit: tied_at_top({t: v for t, v in matrix.items() if t != omit},
+                             groups=groups, weights=weights, margin=tie_margin)
+           for omit in matrix}
+    loo_stable = all(v == tied for v in loo.values())
+    leader = tied[0] if len(tied) == 1 else None
+    n_supp = min(n_independent_supports(matrix, h, groups=groups) for h in tied)
+    excluded = any(has_exclusion_against(matrix, h) for h in tied)
     p_bg = float(background_prob)
     secure_p = float(thresholds.get("secure_bg_prob_max", 0.01))
     probable_p = float(thresholds.get("probable_bg_prob_max", 0.10))
     min_supp = int(thresholds.get("secure_min_supports", 3))
 
-    if n_supp >= min_supp and not excluded and loo_stable and p_bg < secure_p:
+    if leader is None:
+        robustness = "ambiguous"
+    elif n_supp >= min_supp and not excluded and loo_stable and p_bg < secure_p:
         robustness = "secure"
     elif loo_stable and not excluded and p_bg < probable_p:
         robustness = "probable"
     else:
         robustness = "ambiguous"
-    return {"label": leader, "robustness": robustness, "leave_one_out_stable": bool(loo_stable),
+    return {"label": leader, "tied_at_top": list(tied), "robustness": robustness,
+            "leave_one_out_stable": bool(loo_stable),
             "n_independent_supports": int(n_supp), "exclusion_against_leader": bool(excluded),
             "background_prob": p_bg}
 
@@ -141,5 +167,5 @@ def classify(matrix, *, background_prob, thresholds, groups=(), weights=None):
 __all__ = [
     "DEFAULT_WEIGHTS", "HYPOTHESES", "VERDICTS", "background_probability",
     "classify", "combine_evidence", "dominant_tests", "frozen_thresholds_hash",
-    "has_exclusion_against", "leave_one_out_leader", "n_independent_supports",
+    "has_exclusion_against", "leave_one_out_leader", "n_independent_supports", "tied_at_top",
 ]

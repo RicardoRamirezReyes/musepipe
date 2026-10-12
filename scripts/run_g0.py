@@ -147,9 +147,22 @@ def build_g0(run_id, project_root=None, legacy_run=None, pytest_after=None, no_l
     open_issues = [
         {"issue": "Run reproduced retroactively via scripts/run_g0.py + run_g1.py over an existing stage-* run (not a fresh phase-g0 branch); G0 fulfilled in substance.", "priority": "major"},
         legacy_issue,
-        {"issue": "A4 M5 STAT red -> empirical noise used across X01-X11 (repo plan B).", "priority": "major"},
-        {"issue": f"F1 overall_status={rs.get('overall_status')}; provisional until A-block closed.", "priority": "blocking"},
     ]
+    # Leido de A4/M5 y de F1, no escrito: hasta el 2026-09-26 decia siempre «STAT red» y
+    # «provisional until A-block closed» (texto de julio; el bloque A se cerro el 07-19),
+    # aunque F1 estuviera en verde.
+    if not stat_verdict["usable"]:
+        open_issues.append({"issue": f"A4 M5 STAT {stat_verdict['status'] or 'absent'} -> empirical noise used across X01-X11 (repo plan B).", "priority": "major"})
+    f1_status = rs.get("overall_status")
+    if f1_status != "green":
+        f1_blocking = [i for i in rs.get("open_issues") or [] if i.get("priority") == "blocking"]
+        stages = sorted({str(i.get("stage")) for i in f1_blocking})
+        open_issues.append({
+            "issue": (f"F1 overall_status={f1_status}: {len(f1_blocking)} blocking issue(s) in the F1 gate"
+                      + (f" ({', '.join(stages)})" if stages else "") + " (spec G0 V2)."),
+            "priority": "blocking",
+            # Repite el estado de F1: G5 hereda los de F1 directamente y no lo cuenta dos veces.
+            "restates": "F1"})
 
     if pytest_after is None:
         pytest_after = {"passed": None, "failed": None, "note": "not captured by this reproduction runner."}

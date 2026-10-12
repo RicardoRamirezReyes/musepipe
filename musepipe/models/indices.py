@@ -3,8 +3,19 @@
 An index is a ratio of mean flux over numerator vs denominator wavelength
 windows. Window definitions and the SpT calibrations come ONLY from config
 (decision D7, transcribed from the cited paper — never from memory); a window
-outside coverage or >50% masked is a hard error, not a silent guess. Errors are
-propagated by a seeded Gaussian Monte Carlo on the per-channel flux.
+outside coverage or >50% masked is a hard error, not a silent guess.
+
+The error of an index comes from the control spectra when they are given: the
+half-width p16–p84 of the index measured on ``flux + control_i``, with the
+controls processed identically to the object (CLAUDE.md, noise invariant).
+Without controls it falls back to a seeded Gaussian Monte Carlo on ``err`` and
+says so in ``err_method``. On a calibrated spectrum ``flux_err_total`` is
+dominated by ``sys_psf``, a level term that cancels in a ratio of nearby
+windows, while the halo residual that the controls carry is missing from it.
+The Monte Carlo therefore gets the error of a narrow index wrong in both
+directions: up to 8× too large in ROXs 12 b (R1: ±0.70 subtypes against ±0.27
+from the controls) and up to 3× too small where the residual dominates
+(ROXs 42B b; ``docs/2026-10-11_sigma_indices_g3_controles.md``).
 """
 
 from __future__ import annotations
@@ -34,11 +45,15 @@ def _window_mean(wave, flux, good, windows, name):
     return usable
 
 
-def measure_indices(wave, flux, err, definitions, *, mask=None, seed=0, n_mc=500) -> dict:
-    """Measure each index and its MC error.
+def measure_indices(wave, flux, err, definitions, *, mask=None, seed=0, n_mc=500,
+                    controls=None) -> dict:
+    """Measure each index and its error.
 
     ``definitions``: ``{name: {numerator:[[lo,hi],...], denominator:[[lo,hi],...],
-    citation: str}}``. Returns ``{name: {value, err, citation}}``.
+    citation: str}}``. ``controls``: ``(N, n_channels)`` control spectra in the
+    units of ``flux``. Returns ``{name: {value, err, err_method, citation}}``;
+    with controls also ``n_controls`` and ``err_propagated_mc`` (the Monte Carlo
+    error, kept only to show how far it is from the measured one).
     """
     wave = np.asarray(wave, float)
     flux = np.asarray(flux, float)
@@ -47,6 +62,11 @@ def measure_indices(wave, flux, err, definitions, *, mask=None, seed=0, n_mc=500
     if mask is not None:
         good &= ~np.asarray(mask, dtype=bool)
     rng = np.random.default_rng(int(seed))
+    if controls is not None:
+        controls = np.atleast_2d(np.asarray(controls, float))
+        if controls.shape[1] != flux.size:
+            raise ValueError(f"controls have {controls.shape[1]} channels and the spectrum "
+                             f"{flux.size}")
 
     out = {}
     for name, d in definitions.items():
@@ -58,9 +78,18 @@ def measure_indices(wave, flux, err, definitions, *, mask=None, seed=0, n_mc=500
 
         value = ratio(flux)
         pert = flux[None, :] + rng.normal(0.0, np.where(good, err, 0.0), size=(int(n_mc), flux.size))
-        samples = np.array([ratio(pert[k]) for k in range(int(n_mc))])
-        out[name] = {"value": value, "err": float(np.std(samples)),
-                     "citation": d.get("citation")}
+        err_mc = float(np.std([ratio(pert[k]) for k in range(int(n_mc))]))
+        entry = {"value": value, "err": err_mc, "err_method": "mc_flux_err",
+                 "citation": d.get("citation")}
+        if controls is not None:
+            vals = np.array([ratio(flux + c) for c in controls])
+            vals = vals[np.isfinite(vals)]
+            if vals.size < 2:
+                raise RuntimeError(f"index {name}: fewer than 2 finite control measurements")
+            p16, p84 = np.percentile(vals, [16.0, 84.0])
+            entry.update(err=float((p84 - p16) / 2.0), err_method="controls_p16_p84",
+                         n_controls=int(vals.size), err_propagated_mc=err_mc)
+        out[name] = entry
     return out
 
 

@@ -143,6 +143,8 @@ def inherited_blocking_issues(cp):
             out.append({"source": "F1", "stage": i.get("stage"), "issue": i.get("issue")})
     for phase, path in cp["qc"].items():
         for i in (_read(path) or {}).get("open_issues") or []:
+            if isinstance(i, dict) and i.get("restates") == "F1":
+                continue  # G0 repeats F1's state; F1's own issues are already listed above
             if isinstance(i, dict) and (i.get("priority") or i.get("severity")) == "blocking":
                 out.append({"source": phase.upper(), "stage": phase.upper(),
                             "issue": i.get("issue") or i.get("message")})

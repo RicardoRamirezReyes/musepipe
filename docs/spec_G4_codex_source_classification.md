@@ -121,6 +121,23 @@ búsqueda = la región REALMENTE explorada (honestidad look-elsewhere espacial).
 4. Sensibilidad: repetir el ranking excluyendo una prueba a la vez
    (leave-one-out); si el líder cambia, la clasificación es `ambiguous` por
    definición (regla congelada).
+5. **Empates en cabeza (enmienda 2026-10-10, decisión del autor).** Las
+   hipótesis a menos de `g4_combined_class_margin` del máximo forman el
+   conjunto empatado (`final_class.tied_at_top`). Con más de una, **no hay
+   líder** (`leader = null`) y la robustez es `ambiguous`: el orden de la tupla
+   de hipótesis no rompe empates. El leave-one-out compara el conjunto empatado,
+   no un líder. La etiqueta mira el conjunto entero, no el top-2 de D13:
+   - todas subestelares → `companion_substellar_or_planetary` (la de §4.2);
+   - todas ligadas (subestelares o `m_star_associated`) →
+     `bound_companion_mass_unresolved`;
+   - cualquier otro empate → `unresolved`.
+
+   Motivo: sin una masa utilizable (ajuste atmosférico que falla sus puertas o
+   declarado `systematics-limited`), la gravedad joven no separa a las
+   hipótesis ligadas. Antes de la enmienda, en ROXs 12 b empataban las cuatro
+   ligadas y salía `planet_forming` como `secure`, solo por ir primera en la
+   tupla.
+   Ver `docs/2026-10-10_g4_sello_atmosferico_y_empates.md`.
 
 ## 5. Esquema de salidas
 

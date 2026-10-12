@@ -53,6 +53,20 @@ class G5DerivadoTests(unittest.TestCase):
             self.assertIn("anillo", readme)
             self.assertNotIn("menor", readme)
 
+    def test_no_cuenta_dos_veces_el_aviso_de_g0_que_repite_a_f1(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            rid = make_run(root)
+            rd = root / "runs" / rid
+            (rd / "report").mkdir(parents=True, exist_ok=True)
+            (rd / "report" / "run_summary.json").write_text(json.dumps({"open_issues": [
+                {"issue": "anillo", "priority": "blocking", "stage": "C1_psf"}]}))
+            (rd / "stages" / "stage_g0_qc.json").write_text(json.dumps({"open_issues": [
+                {"issue": "F1 overall_status=red: 1 blocking issue(s)", "priority": "blocking",
+                 "restates": "F1"}]}))
+            s = build_characterization(rid, project_root=str(root))
+            self.assertEqual([i["stage"] for i in s["inherited_blocking_issues"]], ["C1_psf"])
+
     def test_el_titular_sale_de_e1_e3_y_g3(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

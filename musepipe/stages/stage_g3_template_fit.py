@@ -37,7 +37,25 @@ from ..models.observed import (DEFAULT_BIN_CHANNELS, build_fit_masks, fit_spectr
 from ..models.template_fit import classify_gravity, fit_powerlaw, fit_templates
 from ..models.templates import EmpiricalTemplateLibrary
 from ..paths import RunPaths
+from .stage_g2_measure_lines import _load_controls
 from .stage_g3_accretion import TABLE_FIELDS
+
+
+def _index_controls(run_paths, n_wave):
+    """Controles calibrados de D2 del método del espectro final, para el error de
+    los índices: ``(array (N, n_wave), procedencia)`` o ``(None, motivo)``.
+
+    Los mismos que usan E1 y G2, con la misma regla (``_load_controls``): que
+    falten es un motivo que se declara; que estén sin sello de D2 o más viejos
+    que el objeto, para.
+    """
+    from astropy.io import fits
+
+    spectrum = Path(run_paths.stage_dir) / "spec_final_object.fits"
+    method = fits.getheader(spectrum, "SPECTRUM").get("METHOD")
+    if not method:
+        return None, f"{spectrum.name} no declara METHOD"
+    return _load_controls(run_paths.stage_dir, method, n_wave, object_path=spectrum)
 
 
 def stage_g3_template_fit_paths(run_id, project_root=None):
@@ -326,13 +344,16 @@ def _gof_threshold(cfg, young_lib, inputs, *, lsf, ext, av_axis, dframe, wave_ra
 
 
 def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None,
-                                  libraries=None, fit_inputs=None):
+                                  libraries=None, fit_inputs=None, index_controls=None):
     """Una prueba por biblioteca: TIPO en el ajuste nativo (Δχ² entre subtipos) y
     BONDAD en la variante binada de 25 Å contra un umbral calibrado (2026-09-24).
 
     ``libraries``: lista de :class:`EmpiricalTemplateLibrary` con declaración
     (por defecto, las de ``g3_template_libraries``). ``fit_spec``/``fit_inputs``
-    permiten inyectar el dato (tests); sin ellos se lee el run.
+    permiten inyectar el dato (tests); sin ellos se lee el run. ``index_controls``:
+    espectros de control para el error de los índices; sin ellos, y sin
+    ``per_channel``, se leen los controles calibrados de D2 del método del
+    espectro final.
     """
     lsf = float(cfg["h01_lsf_fwhm_A"])
     av_axis = _axis(cfg["g3_atmo_av_axis"])
@@ -428,19 +449,24 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
     idx_cal = dict(cfg.get("g3_spt_indices_calibration", {}))
     indices, idx_skipped = {}, {}
     spt_idx_code, spt_idx_err = float("nan"), float("nan")
+    idx_ctrl_source = "injected" if index_controls is not None else "not loaded"
     if idx_defs:
         if per_channel is None:
             spec = load_final_spectrum(paths["paths"],
                                        err_column=cfg.get("g3_fit_err_column", "flux_err_total"))
             pmask, _ = build_fit_masks(cfg, spec["wave_A"], paths["paths"])
             per_channel = (spec["wave_A"], spec["flux"], spec["flux_err"], pmask)
+            if index_controls is None:
+                index_controls, idx_ctrl_source = _index_controls(paths["paths"],
+                                                                  spec["wave_A"].size)
         pw, pf, pe, pmask = per_channel
         seed = int(cfg.get("g3_seed", 0))
         # measure per index so an unusable one (out of coverage / >50% masked,
         # D7) is skipped and recorded, not fatal to the stage.
         for iname, idef in idx_defs.items():
             try:
-                indices.update(measure_indices(pw, pf, pe, {iname: idef}, mask=pmask, seed=seed))
+                indices.update(measure_indices(pw, pf, pe, {iname: idef}, mask=pmask, seed=seed,
+                                               controls=index_controls))
             except RuntimeError as exc:
                 idx_skipped[iname] = str(exc)
         # Índices fuera del rango de su calibración: no se usan (decisión
@@ -448,6 +474,18 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
         idx_used, idx_excluded = select_in_range(indices, idx_cal)
         if idx_used:
             spt_idx_code, spt_idx_err = indices_to_spt(idx_used, idx_cal)
+
+    err_methods = sorted({v.get("err_method") for v in indices.values()})
+    indices_err = {"method": err_methods[0] if len(err_methods) == 1 else err_methods,
+                   "controls": idx_ctrl_source,
+                   "n_controls": (int(np.atleast_2d(index_controls).shape[0])
+                                  if index_controls is not None else 0),
+                   "rule": ("half-width p16-p84 of the index on flux + each control, controls "
+                            "processed identically to the object (CLAUDE.md); Monte Carlo on "
+                            "the propagated error only without controls, and labelled so")}
+    idx_err_note = ("" if not indices or err_methods == ["controls_p16_p84"] else
+                    f"index errors from a Monte Carlo on the propagated error, not from "
+                    f"controls ({idx_ctrl_source})")
 
     spt_disc = (abs(stellar_best["spt_best_code"] - spt_idx_code)
                 if np.isfinite(spt_idx_code) else float("nan"))
@@ -484,8 +522,9 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
                      if idx_used else "spectral indices"),
              limitations=("no index definitions in config (D7 transcription pending)"
                           if not idx_defs else
-                          (f"excluded out of calibration range: {sorted(idx_excluded)}"
-                           if idx_excluded else ""))),
+                          "; ".join(x for x in (
+                              (f"excluded out of calibration range: {sorted(idx_excluded)}"
+                               if idx_excluded else ""), idx_err_note) if x))),
     ]
 
     fit_json = {
@@ -508,7 +547,7 @@ def compute_stage_g3_template_fit(cfg, paths, *, fit_spec=None, per_channel=None
         "veiling_variant": {"class": stellar_class, "library": lib_best.name,
                             "spt_best": veil_fit["spt_best"],
                             "spt_shift": veiling_spt_shift, "chi2_min": veil_fit["chi2_min"]},
-        "indices": indices, "indices_skipped": idx_skipped,
+        "indices": indices, "indices_skipped": idx_skipped, "indices_err": indices_err,
         "spt_indices": {"code": spt_idx_code, "err": spt_idx_err,
                         "used": sorted(idx_used), "n_used": len(idx_used),
                         "excluded_out_of_range": idx_excluded,

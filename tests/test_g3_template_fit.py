@@ -142,6 +142,38 @@ class IndicesTests(unittest.TestCase):
                             {"bad": {"numerator": [[9000, 9100]],
                                      "denominator": [[7200, 7300]]}})
 
+    def test_error_from_controls(self):
+        # σ = semiancho p16-p84 del índice sobre flux + control_i, y no depende del
+        # error propagado: el MC sobre `err` es justo lo que la regla de CLAUDE.md prohíbe
+        wave, flux, err = self._spectrum()
+        defs = {"idx": {"numerator": [[8000, 8100]], "denominator": [[7200, 7300]]}}
+        rng = np.random.default_rng(3)
+        controls = rng.normal(0.0, 0.05, size=(33, wave.size))
+        num, den = (wave >= 8000) & (wave <= 8100), (wave >= 7200) & (wave <= 7300)
+        vals = [np.mean((flux + c)[num]) / np.mean((flux + c)[den]) for c in controls]
+        p16, p84 = np.percentile(vals, [16.0, 84.0])
+        res = measure_indices(wave, flux, err, defs, seed=0, n_mc=50, controls=controls)["idx"]
+        self.assertEqual(res["err_method"], "controls_p16_p84")
+        self.assertEqual(res["n_controls"], 33)
+        self.assertAlmostEqual(res["err"], (p84 - p16) / 2.0, places=12)
+        res100 = measure_indices(wave, flux, 100.0 * err, defs, seed=0, n_mc=50,
+                                 controls=controls)["idx"]
+        self.assertAlmostEqual(res100["err"], res["err"], places=12)
+        self.assertGreater(res100["err_propagated_mc"], 10.0 * res["err_propagated_mc"])
+
+    def test_without_controls_the_mc_is_labelled(self):
+        wave, flux, err = self._spectrum()
+        defs = {"idx": {"numerator": [[8000, 8100]], "denominator": [[7200, 7300]]}}
+        res = measure_indices(wave, flux, err, defs, seed=0, n_mc=50)["idx"]
+        self.assertEqual(res["err_method"], "mc_flux_err")
+        self.assertNotIn("n_controls", res)
+
+    def test_controls_with_other_channels_raise(self):
+        wave, flux, err = self._spectrum()
+        defs = {"idx": {"numerator": [[8000, 8100]], "denominator": [[7200, 7300]]}}
+        with self.assertRaises(ValueError):
+            measure_indices(wave, flux, err, defs, controls=np.zeros((5, wave.size - 1)))
+
     def test_centered_calibration_polynomial(self):
         # Riddick-style relation SpT = c0 + c1*(x-center)+... (value 0.5, center 0.5)
         wave, flux, err = self._spectrum()
@@ -192,6 +224,36 @@ class PowerlawAndStageTests(unittest.TestCase):
             self.assertEqual(spt_idx["label"], "not_constrained")
             written = write_stage_g3_template_fit(rows, fj, paths)
             self.assertTrue(Path(written["fit_json"]).exists())
+
+    def test_stage_index_error_source_is_declared(self):
+        # con controles, el error de los índices sale de ellos; sin controles, el QC
+        # y la fila spt_indices dicen que es el Monte Carlo del error propagado
+        from musepipe.stages.stage_g3_template_fit import (
+            compute_stage_g3_template_fit, stage_g3_template_fit_paths)
+        with tempfile.TemporaryDirectory() as tmp:
+            young = _make_library(tmp, "templates_young", range(0, 9), gravity="young",
+                                  declare=True)
+            field = _make_library(tmp, "templates_field", range(0, 9), gravity="field",
+                                  declare=True)
+            fs, _ = _observed(5.0, 1.0, seed=5)
+            flux = _template_flux(5.0)
+            per_channel = (_WAVE, flux, 0.01 * flux, None)
+            controls = np.random.default_rng(1).normal(0.0, 0.01, size=(33, _WAVE.size))
+            cfg = {"h01_lsf_fwhm_A": 2.383, "g3_atmo_av_axis": [0.0, 3.0, 0.5],
+                   "h03_extinction_law_citation": "c", "g3_seed": 0,
+                   "g3_nonstellar_alpha_axis": [-3.0, 3.0, 1.0], "run_id": "syn",
+                   "g3_spt_indices": {"band": {"numerator": [[8150, 8210]],
+                                               "denominator": [[8400, 8460]]}}}
+            paths = stage_g3_template_fit_paths("syn", project_root=tmp)
+            for ctrl, method in ((controls, "controls_p16_p84"), (None, "mc_flux_err")):
+                rows, fj = compute_stage_g3_template_fit(
+                    cfg, paths, fit_spec=fs, libraries=(young, field),
+                    per_channel=per_channel, index_controls=ctrl)
+                self.assertEqual(fj["indices"]["band"]["err_method"], method)
+                self.assertEqual(fj["indices_err"]["method"], method)
+                spt_idx = next(r for r in rows if r["property"] == "spt_indices")
+                self.assertEqual("Monte Carlo" in spt_idx["limitations"], ctrl is None)
+            self.assertEqual(fj["indices_err"]["n_controls"], 0)
 
 
 if __name__ == "__main__":
