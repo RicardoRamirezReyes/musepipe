@@ -93,3 +93,36 @@ class TestMdotDeLaFigura(unittest.TestCase):
     def test_deteccion_sin_mdot_de_g3_no_cae_en_silencio_al_limite(self):
         with self.assertRaises(SystemExit):
             self.pf._mdot_de_este_trabajo(_ObjetoFalso("detection", {}, None))
+
+
+class TestEntradaDeLaFiguraDeExtincion(unittest.TestCase):
+    """La Fig. de extincion decide deteccion o limite con la MISMA regla que la Mdot-masa.
+
+    Antes bastaba con que G3 publicara `mdot_p50_msun_yr`. Desde el 2026-09-26 G3
+    lo publica tambien para una cota (etiqueta `upper_limit`), asi que la figura
+    tomaba el limite de ROXs 42B b por una deteccion y su anclaje fallaba.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pf = _modulo()
+
+    def _objeto(self, veredicto, g3_qc, fila):
+        obj = _ObjetoFalso(veredicto, g3_qc, fila)
+        obj.config = {"h03_companion_mass_msun": 0.0086, "h03_flux_unit_cgs": 1e-20}
+        obj._qc["stage_h03_qc.json"] = {
+            "canonical_method": "psffit",
+            "limits": [{"method": "psffit", "f_lim_observed": 2.65e-18, "mdot": 4.5e-14}],
+        }
+        return obj
+
+    def test_una_cota_de_g3_entra_como_limite_de_e3(self):
+        from unittest import mock
+
+        fila = {"property": "mdot", "label": "upper_limit", "err_stat_lo": "", "err_stat_hi": ""}
+        obj = self._objeto("non_detection", {"mdot_p50_msun_yr": 1.9e-13, "mdot_label": "upper_limit"}, fila)
+        with mock.patch("musepipe.stages.stage_h03_limits.physical_inputs_from_config", return_value={}):
+            d = self.pf._entrada_extincion(obj)
+        self.assertTrue(d["limite"])
+        self.assertAlmostEqual(d["mdot_pub"], 4.5e-14)
+        self.assertAlmostEqual(d["f_mf"], 2.65e-18)
