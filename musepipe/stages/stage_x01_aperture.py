@@ -29,6 +29,34 @@ class StageX01Product:
     qc: dict
 
 
+@dataclass(frozen=True)
+class X01ExtractionInputs:
+    """Lo que C2 le pasa a `extract_aperture_products`, en un solo sitio.
+
+    Existe para que E4 extraiga sus inyecciones con la MISMA llamada que el
+    producto entregado (spec E4 §1.4: «los extractores se llaman con su
+    configuración de producción EXACTA»). E4 copiaba la llamada a mano y la
+    copia se quedó en el residuo de 04b cuando C2 pasó al cubo crudo con
+    anillo (d688a64, 2026-07-09): el throughput de `aperture` se medía sobre
+    otro fondo que el del espectro al que se aplica
+    (`docs/2026-10-12_e4_extractores_de_produccion.md`).
+
+    ``kwargs`` son todos los argumentos con nombre de la llamada; ``cube``,
+    ``wave`` y ``object_yx`` son los tres posicionales.
+    """
+
+    cube: np.ndarray
+    wave: np.ndarray
+    object_yx: tuple[float, float]
+    star_yx: tuple[float, float]
+    cube_path: object
+    positions_path: object
+    stat_state: str
+    wings_intact: bool
+    kwargs: dict
+    open_issues: list
+
+
 def stage_x01_paths(run_id, project_root=None):
     root = Path(project_root or Path.cwd()).resolve()
     paths = RunPaths.from_project_root(run_id, root)
@@ -454,6 +482,26 @@ def compute_stage_x01_products(config, paths=None):
             "Run Stage04b first or set x01_reuse_stage04b=false."
         )
 
+    inputs = x01_extraction_inputs(cfg, paths)
+    extractions = extract_aperture_products(inputs.cube, inputs.wave, inputs.object_yx, **inputs.kwargs)
+    qc = _aperture_qc(extractions, cfg, paths, inputs.positions_path, inputs.cube_path,
+                      inputs.stat_state, inputs.open_issues)
+    return StageX01Product(extractions=extractions, qc=qc)
+
+
+def x01_extraction_inputs(config, paths=None) -> X01ExtractionInputs:
+    """Los argumentos con los que C2 llama a `extract_aperture_products`.
+
+    No ejecuta 04b ni comprueba que exista: eso es de `compute_stage_x01_products`.
+    E4 la llama para extraer sus inyecciones exactamente igual (ver
+    `X01ExtractionInputs`).
+    """
+
+    cfg = dict(config)
+    run_id = cfg["run_id"]
+    root = Path(cfg.get("project_root") or Path.cwd()).resolve()
+    paths = stage_x01_paths(run_id, root) if paths is None else paths
+
     object_yx, star_yx, positions_path, _positions_qc = _load_positions(paths, cfg)
     cube, wave, good_mask, bad_mask, cube_path, bunit = _load_residual_cube(paths, cfg)
     stat_cube, stat_state = _load_stat_cube(paths, cfg, cube.shape)
@@ -495,10 +543,7 @@ def compute_stage_x01_products(config, paths=None):
     growth_curve, flux_convention = resolve_flux_convention(
         cfg, paths["paths"].stage_dir, knob="x01_flux_convention"
     )
-    extractions = extract_aperture_products(
-        cube,
-        wave,
-        object_yx,
+    kwargs = dict(
         run_id=run_id,
         input_cube_path=cube_path,
         apertures=cfg.get("x01_apertures", default_apertures()),
@@ -522,8 +567,11 @@ def compute_stage_x01_products(config, paths=None):
         exclude_angle_deg=float(cfg.get("x01_control_exclude_angle_deg", 25.0)),
         annulus_bkg_px=annulus_bkg,
     )
-    qc = _aperture_qc(extractions, cfg, paths, positions_path, cube_path, stat_state, open_issues)
-    return StageX01Product(extractions=extractions, qc=qc)
+    return X01ExtractionInputs(
+        cube=cube, wave=wave, object_yx=object_yx, star_yx=star_yx,
+        cube_path=cube_path, positions_path=positions_path, stat_state=stat_state,
+        wings_intact=annulus_bkg is not None, kwargs=kwargs, open_issues=open_issues,
+    )
 
 
 def write_stage_x01_products(product: StageX01Product, config, paths):
@@ -607,11 +655,13 @@ def main(argv=None):
 
 __all__ = [
     "StageX01Product",
+    "X01ExtractionInputs",
     "compute_stage_x01_products",
     "run_stage_x01",
     "stage_x01_config_from_run",
     "stage_x01_paths",
     "write_stage_x01_products",
+    "x01_extraction_inputs",
 ]
 
 
