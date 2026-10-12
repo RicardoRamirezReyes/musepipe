@@ -13,7 +13,7 @@ says so in ``err_method``. On a calibrated spectrum ``flux_err_total`` is
 dominated by ``sys_psf``, a level term that cancels in a ratio of nearby
 windows, while the halo residual that the controls carry is missing from it.
 The Monte Carlo therefore gets the error of a narrow index wrong in both
-directions: up to 7× too large in ROXs 12 b (R1: ±0.70 subtypes against ±0.27
+directions: up to 8× too large in ROXs 12 b (R1: ±0.70 subtypes against ±0.27
 from the controls) and up to 3× too small where the residual dominates
 (ROXs 42B b; ``docs/2026-10-11_sigma_indices_g3_controles.md``).
 """
