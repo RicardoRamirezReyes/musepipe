@@ -43,6 +43,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from musepipe.models.case_b import case_b_ratio  # noqa: E402
+
 #: raiz del proyecto que CONTIENE `runs/`. Es el repo salvo que se dibuje desde
 #: un worktree, que no lleva los runs: `--project-root` la apunta al clon que si.
 PROYECTO = ROOT
@@ -55,10 +57,12 @@ ANCHO_DOBLE_IN = 180.0 / 25.4
 HALPHA_A = 6562.8
 #: Hbeta en reposo, en aire; el mismo que el catalogo de lineas de G2.
 HBETA_A = 4861.33
-#: razon intrinseca Halpha/Hbeta del caso B (Osterbrock & Ferland 2006,
-#: T = 10^4 K, n_e = 10^4 cm^-3). Es una SUPOSICION, no una medida: se dibuja
-#: para ensenar donde caeria Hbeta sin extincion diferencial, y va rotulada.
-CASO_B_HA_HB = 2.86
+#: razon intrinseca Halpha/Hbeta del caso B, de la tabla de Storey & Hummer
+#: (1995) que versiona `musepipe/models/case_b_sh95.json`, en el nodo
+#: T = 10^4 K, n_e = 10^2 cm^-3 (2.863). Es una SUPOSICION, no una medida: se
+#: dibuja para ensenar donde caeria Hbeta sin extincion diferencial, y va
+#: rotulada. Hasta el 2026-10-12 era un literal 2.86 atribuido a otro nodo.
+CASO_B_HA_HB = case_b_ratio("Halpha", "Hbeta", temperature_K=1.0e4, density_cm3=1.0e2)
 
 #: un color por objeto, asignado por el orden declarado en `targets/`.
 COLOR_OBJETO = ("#1f77b4", "#d62728")
@@ -935,7 +939,11 @@ def hbeta_limit(objetos, out: Path, metodo="psffit", media_ventana_A=45.0):
 
         ha = _linea_g2(obj, "Halpha")
         if ha.get("status") == "detected" and np.isfinite(lim) and lim > 0:
-            f_ha = float(ha.get("flux_fit") or ha.get("flux_direct"))
+            # el flujo de integracion directa: es el estimador del limite a 5
+            # sigma de G2 contra el que se compara, y el de las cotas de A_V de
+            # `scripts/paper_cifras_extincion.py`. Hasta el 2026-10-12 era el del
+            # ajuste gaussiano, un 5 % menor en ROXs 12 b.
+            f_ha = float(ha["flux_direct"])
             esperado = f_ha / CASO_B_HA_HB
             perfil = base + _gaussiana(w[cerca], centro, esperado * escala * 1e18, lsf)
             ax.plot(w[cerca], perfil, color="#d62728", lw=1.0,
@@ -1571,9 +1579,14 @@ def _entrada_extincion(obj: Objeto) -> dict:
     escala = float(cfg["h03_flux_unit_cgs"])
     h03 = obj.qc("stage_h03_qc.json")
     canonico = h03["canonical_method"]
-    g3 = obj.qc("stage_g3_qc.json")
-    mdot_pub = g3.get("mdot_p50_msun_yr")
-    if mdot_pub is not None:
+    # Deteccion o limite lo decide la MISMA regla que la figura Mdot-masa. Antes
+    # bastaba con que G3 publicara `mdot_p50_msun_yr`, y desde el 2026-09-26 G3
+    # lo publica tambien para ROXs 42B b, con etiqueta `upper_limit` (su propio
+    # limite de G2, no el de E3): la figura trataba el limite como deteccion y
+    # su anclaje fallaba, asi que no se podia regenerar.
+    propio = _mdot_de_este_trabajo(obj)
+    if not propio["limite"]:
+        mdot_pub = propio["mdot"]
         # DOS flujos, a proposito. `f_obs` es el que consume G3 (integracion
         # directa de G2) y es el unico con el que la curva de Mdot cae sobre el
         # numero publicado. `f_mf` es el del filtro adaptado de E1, que es el
@@ -1658,18 +1671,19 @@ def extinction(objetos, out: Path, av_max=6.0, dav_max=2.0):
     ax = axes[1]
     dav = np.linspace(0.0, dav_max, 121)
     a, b = datos  # el orden lo fija `paper.order` en targets/
-    # el ancla es el numero PUBLICADO, no el de la cadena: en la deteccion los
-    # dos difieren un 1.2 % porque el publicado es la mediana del Monte Carlo, y
-    # ese 1.2 % movia el cruce de 0.92 a 0.93 mag, o sea la figura contra la tabla
-    mdot_a = a["mdot_pub"]
-    mdot_b = b["mdot_pub"] * np.array(
-        [_cadena_mdot(b["phys"], b["f_obs"], b["phys"]["av"] + x)[2]
-         / _cadena_mdot(b["phys"], b["f_obs"], b["phys"]["av"])[2] for x in dav])
+    # El contraste de Mdot usa el MISMO estimador en los dos lados: el filtro
+    # adaptado, que es en el que se mide el limite del otro objeto. Hasta el
+    # 2026-10-12 la deteccion entraba con el Mdot de la Tabla 5, que sale de la
+    # integracion directa (26 % mas flujo en ROXs 12 b), y el contraste mezclaba
+    # estimadores aunque el pie de la tabla decia lo contrario. Los dos lados van
+    # por la cadena de las etapas (`_cadena_mdot`), sin el Monte Carlo de G3.
+    mdot_a = _cadena_mdot(a["phys"], a["f_mf"], a["phys"]["av"])[2]
+    mdot_b = np.array([_cadena_mdot(b["phys"], b["f_mf"], b["phys"]["av"] + x)[2] for x in dav])
     contraste_mdot = np.log10(mdot_a / mdot_b)
     contraste_flujo = math.log10(a["f_mf"] / b["f_mf"])
 
     ax.plot(dav, contraste_mdot, color="#d62728", lw=1.1,
-            label=r"$\Delta\log\dot{M}_{\rm acc}$ (detection vs limit)")
+            label=r"$\Delta\log\dot{M}_{\rm acc}$ (matched filter on both)")
     ax.axhline(contraste_flujo, color="0.20", lw=1.1, ls="-.",
                label=r"$\Delta\log F(\mathrm{H}\alpha)$, observed")
     ax.axhline(0.0, color="0.5", lw=0.6, ls=":")

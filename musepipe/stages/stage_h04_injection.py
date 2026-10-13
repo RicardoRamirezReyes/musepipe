@@ -2046,7 +2046,25 @@ def compute_stage_h04_products(config, paths=None, *, extractors=None, base_cube
         continuum_info,
         null_reference,
     )
+    qc["extractor_substrates"] = extractor_substrates(extractors, methods)
     return StageH04Product(rows=_json_ready(rows), qc=_json_ready(qc))
+
+
+def extractor_substrates(extractors, methods):
+    """De qué cubo y con qué llamada extrae aquí cada método, por lo que el extractor declara.
+
+    Hasta el 2026-10-12 `aperture` y `optimal_ls` extraían de otro fondo que sus
+    productos de C2 y C3, y nada lo decía: había que leer dos módulos para verlo
+    (`docs/2026-10-12_e4_extractores_de_produccion.md`). Un extractor que no se
+    declara sale `None`, no se adivina.
+    """
+
+    out = {}
+    for method in methods:
+        extractor = extractors.get(method) if isinstance(extractors, dict) else extractors
+        declared = getattr(extractor, "substrate", None)
+        out[method] = dict(declared) if isinstance(declared, dict) else None
+    return out
 
 
 def clone_run_for_case(config, case, *, project_root=None):
@@ -2507,6 +2525,7 @@ __all__ = [
     "null_distribution_diagnostics",
     "null_scale",
     "psfsub_substrate_check",
+    "extractor_substrates",
     "close_runtime_budget",
     "decision_column",
     "estimate_runtime_budget",

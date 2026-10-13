@@ -45,6 +45,15 @@ ORDEN = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 #: unidad nativa del cubo; el flujo de linea de E1/G2 viaja en ella.
 ESCALA_CUBO = 1e-20
 
+#: columna `Val.`: el veredicto de G1 (`method_verdicts`), con el asterisco de la
+#: nota (c). Se escribia a mano y se quedo atras cuando E4 paso a extraer como C2
+#: y C3: el optimal_ls de ROXs 42B b dejo de ser `validated_with_bias`.
+VEREDICTO_TEX = {
+    "validated": "ok",
+    "validated_with_bias": "ok\\(^{\\ast}\\)",
+    "rejected": "rej.",
+}
+
 #: lo que no cuadra entre productos, recogido al generar y volcado a stderr.
 AVISOS: list[str] = []
 
@@ -171,13 +180,32 @@ def _terminos_error(obj: Objeto):
     return por_metodo, inter, calib
 
 
+def _validacion(obj: Objeto) -> dict[str, str]:
+    """`{metodo: celda}` de la columna `Val.`, desde `method_verdicts` de G1.
+
+    La nota (c) del paper dice que ningun metodo se rechaza: si G1 rechaza uno,
+    la celda lo dice y queda un aviso, porque esa nota pasaria a ser falsa.
+    """
+    veredictos = obj.qc("stage_g1_qc.json")["method_verdicts"]
+    celdas = {}
+    for m, v in veredictos.items():
+        if v not in VEREDICTO_TEX:
+            raise ValueError(f"{obj.nombre}/{m}: veredicto de G1 desconocido `{v}`")
+        if v == "rejected":
+            AVISOS.append(f"{obj.nombre}/{m}: G1 lo RECHAZA; la nota (c) de tab:lines "
+                          "dice que no se rechaza ninguno.")
+        celdas[m] = VEREDICTO_TEX[v]
+    return celdas
+
+
 def tabla_lines(objetos) -> str:
-    """Filas de `tab:lines`: z, las dos FAP, y flujo medido o limite."""
+    """Filas de `tab:lines`: veredicto de G1, z, las dos FAP, y flujo medido o limite."""
     out = []
     for obj in objetos:
         det, par = _e1(obj)
         lims, avisos = _limites(obj)
         AVISOS.extend(avisos)
+        val = _validacion(obj)
         pixel, inter, calib = _terminos_error(obj)
         if calib is None:
             AVISOS.append(f"{obj.nombre}: A4/M3 no midio la escala absoluta en este "
@@ -201,6 +229,7 @@ def tabla_lines(objetos) -> str:
                    f"\\({pixel[m]:.1f}/{inter:.1f}/" +
                    (f"{calib}\\)" if calib else "\\mathrm{n.m.}\\)"))
             out.append(f"{tex_nombre(obj):<11}& \\ha & {METODO_TEX[m]:<25}"
+                       f"& {val[m]:<4} "
                        f"& \\({z:.2f}\\) & \\({fap_e:.3f}\\) & \\({potencia(fap_p, 1)}\\) "
                        f"& {flujo} & {err} \\\\")
     return "\n".join(out)
