@@ -115,6 +115,26 @@ class AjusteTests(unittest.TestCase):
         np.testing.assert_allclose(fac, (1.0, 0.25, 2.0), rtol=0.25)
 
 
+class CurvasPorBibliotecaTests(unittest.TestCase):
+    """Lo que dibujan `companion_type_nir` y `companion_type_combined` (la Fig. 5 con el IR)."""
+
+    def test_cada_biblioteca_respecto_de_su_minimo(self):
+        tp = _carga("tipo_ir_plantillas")
+        pls = [dict(lib="a", spt=s) for s in ("M7", "M8", "M8", "M9")] + [dict(lib="b", spt=s) for s in ("L0", "L1")]
+        chi2 = [30.0, 12.0, 10.0, 10.5, 50.0, 70.0]
+        res = {i: dict(chi2=c) for i, c in enumerate(chi2)}
+        out = tp.curvas_por_biblioteca(pls, res, escala=2.0)
+        self.assertEqual(out["a"]["dchi2_by_spt"], {"M7": 10.0, "M8": 0.0, "M9": 0.25})
+        self.assertEqual((out["a"]["spt_best"], out["a"]["spt_interval"], out["a"]["edge"]), ("M8", [8.0, 9.0], False))
+        self.assertEqual(out["b"]["dchi2_by_spt"], {"L0": 0.0, "L1": 10.0})
+        self.assertTrue(out["b"]["edge"])
+
+    def test_figuras_registradas(self):
+        pf = _carga("paper_figures")
+        self.assertIs(pf.FIGURAS["companion_type_nir"], pf.companion_type_nir)
+        self.assertIs(pf.FIGURAS["companion_type_combined"], pf.companion_type_combined)
+
+
 class QualTests(unittest.TestCase):
     def test_el_bit_benigno_solo_quita_atipicos(self):
         tp = _carga("tipo_ir_plantillas")

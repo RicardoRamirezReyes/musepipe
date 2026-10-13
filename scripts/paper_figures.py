@@ -1789,6 +1789,68 @@ def nir_spectra(objetos, out: Path, paso=0.75):
 
 
 # --------------------------------------------------------------------------
+# Figs. companion_type_nir y companion_type_combined — la Fig. 5 con el IR
+# --------------------------------------------------------------------------
+
+def _companion_type_plantillas(objetos, out: Path, modo: str, etiqueta_y: str, xlim=(-1.0, 14.5)):
+    """La Fig. 5 (`companion_type`) para el ajuste de plantillas de `scripts/tipo_ir_plantillas.py` a la A_V
+    adoptada (la del apéndice B y la Tabla B.1): una curva por biblioteca, con su Δχ² respecto de su propio
+    mínimo dividido por el χ²_ν mínimo del ajuste conjunto. El ajuste se rehace aquí con la misma función
+    que fija la Tabla B.1 (`ajuste`, comprobada por `tests/test_tipo_ir_plantillas.py`), no se copia."""
+    from musepipe.constants import spt_code as _codigo
+    from scripts import tipo_ir_plantillas as tp
+
+    n = len(objetos)
+    fig, axes = plt.subplots(1, n, figsize=(ANCHO_DOBLE_IN, 2.35), sharey=True, squeeze=False)
+    axes = axes[0]
+    for i, obj in enumerate(objetos):
+        r = tp.ajuste(obj.slug, modo, av_fija=True)
+        ax = axes[i]
+        for j, (lib, prueba) in enumerate(r["bibliotecas"].items()):
+            familia = tp.FAMILIAS[lib]
+            c = _color_bib(familia, j)
+            mk = MARCA_BIBLIOTECA.get(familia, "o")
+            pares = sorted((_codigo(sp), float(v)) for sp, v in prueba["dchi2_by_spt"].items())
+            x = np.array([q[0] for q in pares]); y = np.array([q[1] for q in pares])
+            ax.plot(x, y, color=c, lw=0.8, marker=mk, ms=2.6, mew=0, zorder=3)
+            for xb in {float(x.min()), float(x.max())}:
+                if xlim[0] <= xb <= xlim[1]:
+                    yb = float(y[np.argmin(np.abs(x - xb))])
+                    ax.plot([xb], [yb], ls="none", marker=mk, ms=6.0, mfc="white", mec=c, mew=0.9, zorder=4)
+            iv = prueba["spt_interval"]
+            ax.plot([iv[0], iv[1]], [0, 0], color=c, lw=2.2, solid_capstyle="butt", zorder=5)
+            ax.plot([prueba["spt_best_code"]], [0], ls="none", marker=mk, ms=5.0, color=c, mec="white",
+                    mew=0.5, zorder=6)
+            etq = f"{_nombre_bib(familia)}: {prueba['spt_best']}" + (" (edge)" if prueba["edge"] else "")
+            ax.plot([], [], color=c, marker=mk, ms=3.0, lw=0.8, label=etq)
+        ax.set_yscale("symlog", linthresh=10.0, linscale=0.6)
+        ax.set_ylim(-1.0, 3e6)               # techo más alto que la Fig. 5: la leyenda va arriba
+        ax.axhline(1.0, color="0.55", lw=0.5, ls=":", zorder=1)
+        ax.set_xlim(*xlim)
+        ticks = [0, 2, 4, 6, 8, 10, 12, 14]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(["M0", "M2", "M4", "M6", "M8", "L0", "L2", "L4"])
+        ax.set_xlabel("Spectral type")
+        ax.set_title(f"{obj.nombre}: best {r['tipo']['spt']}", pad=3)
+        # solo las bibliotecas: los marcadores huecos y la línea de Δχ² = 1 los explica el pie
+        ax.legend(loc="upper left", handlelength=1.4, fontsize=6.5, labelspacing=0.25, borderaxespad=0.3)
+    axes[0].set_ylabel(etiqueta_y)
+    fig.subplots_adjust(wspace=0.06)
+    fig.savefig(out, pad_inches=0.04)
+    plt.close(fig)
+
+
+def companion_type_nir(objetos, out: Path):
+    """La Fig. 5 con los espectros J/H/K publicados solos."""
+    _companion_type_plantillas(objetos, out, "ir", r"$\Delta\chi^2/\chi^2_{\nu,\min}$ (near-IR)")
+
+
+def companion_type_combined(objetos, out: Path):
+    """La Fig. 5 con MUSE y los espectros J/H/K publicados juntos."""
+    _companion_type_plantillas(objetos, out, "combinado", r"$\Delta\chi^2/\chi^2_{\nu,\min}$ (MUSE + near-IR)")
+
+
+# --------------------------------------------------------------------------
 
 #: nombre del PDF -> funcion, en el orden en que aparecen en el paper.
 FIGURAS = {
@@ -1808,6 +1870,8 @@ FIGURAS = {
     "psf_chromatic": psf_chromatic,
     "extinction": extinction,
     "nir_spectra": nir_spectra,
+    "companion_type_nir": companion_type_nir,
+    "companion_type_combined": companion_type_combined,
 }
 
 

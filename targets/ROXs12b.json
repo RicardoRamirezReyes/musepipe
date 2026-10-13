@@ -68,6 +68,16 @@
           "OSIRIS_K"
         ]
       }
-    ]
+    ],
+    "colour_excess": {
+      "bands": [
+        "K"
+      ],
+      "k_rescale_mag": {
+        "catalogue": 14.32,
+        "adopted": 14.14
+      },
+      "note": "Exceso de color (scripts/av_exceso_color.py, docs/2026-10-13_av_exceso_color.md): la J y la H no valen (escaladas a la fotometría de la terciaria, ver 'note'); solo MUSE − K. El K del catálogo está escalado a la Kp de Kraus+2014 (14.32) y se reescala a la Ks de Bowler+2017 (14.14 ± 0.03; ERIS da 14.11 ± 0.04, ~/muse_sesion_20260927/eris/INFORME.md)."
+    }
   }
 }

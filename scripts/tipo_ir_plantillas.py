@@ -338,9 +338,31 @@ def tipo(pls, res, n_puntos, n_escalas):
     i_mejor = por_tipo[mejor][1]
     return dict(spt=spt_label(mejor), codigo=mejor, intervalo=[spt_label(min(dentro)), spt_label(max(dentro))],
                 borde=bool(mejor in (codigos[0], codigos[-1])), chi2nu_min=chi_min / ndof, ndof=ndof,
+                escala_chi2=escala,
                 mejor_plantilla=f"{pls[i_mejor]['lib']}:{pls[i_mejor]['objeto']} ({pls[i_mejor]['spt']})",
                 av=res[i_mejor]["av"],
                 curva={spt_label(c): round((por_tipo[c][0] - por_tipo[mejor][0]) / escala, 2) for c in codigos})
+
+
+def curvas_por_biblioteca(pls, res, escala):
+    """Como la Fig. 5 (`companion_type`): por biblioteca, Δχ² de su mejor plantilla de cada subtipo respecto
+    de SU mínimo, dividido por `escala` (el χ²_ν mínimo del ajuste conjunto); su mejor subtipo, el
+    intervalo Δχ² ≤ 1 y si el mínimo cae en su primer o último subtipo (`borde`)."""
+    out = {}
+    for lib in dict.fromkeys(t["lib"] for t in pls):
+        por_tipo = {}
+        for i, r in res.items():
+            if pls[i]["lib"] == lib:
+                c = spt_code(pls[i]["spt"])
+                por_tipo[c] = min(por_tipo.get(c, np.inf), r["chi2"])
+        codigos = sorted(por_tipo)
+        mejor = min(codigos, key=por_tipo.get)
+        d = {c: (por_tipo[c] - por_tipo[mejor]) / escala for c in codigos}
+        dentro = [c for c in codigos if d[c] <= 1.0]
+        out[lib] = dict(dchi2_by_spt={spt_label(c): round(v, 3) for c, v in d.items()}, spt_best=spt_label(mejor),
+                        spt_best_code=mejor, spt_interval=[min(dentro), max(dentro)],
+                        edge=bool(mejor in (codigos[0], codigos[-1])))
+    return out
 
 
 def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo_binado=False,
@@ -366,12 +388,13 @@ def ajuste(slug, modo, *, equilibrio=True, escala_comun_ir=False, **kw):
     fac = factores_equilibrio(p["segs"], p["bases"], p["av_axis"]) if equilibrio else None
     res, n = ajusta(p["segs"], p["bases"], p["av_axis"], fac, escala_comun_ir=escala_comun_ir)
     t = tipo(p["pls"], res, n, len(grupos(p["segs"], escala_comun_ir)))
+    bibliotecas = curvas_por_biblioteca(p["pls"], res, t["escala_chi2"])
     orden = sorted(res, key=lambda i: res[i]["chi2"])[:6]
     return dict(slug=slug, run=p["run"], modo=modo, equilibrio=fac is not None, escala_comun_ir=escala_comun_ir,
                 opciones=kw, n_plantillas=len(p["pls"]),
                 segmentos=[dict(nombre=s["nombre"], n=nk, factor_sigma=(fac[k] if fac else 1.0))
                            for k, (s, nk) in enumerate(zip(p["segs"], n))],
-                tipo=t,
+                tipo=t, bibliotecas=bibliotecas,
                 mejores=[dict(plantilla=f"{p['pls'][i]['lib']}:{p['pls'][i]['objeto']}", spt=p["pls"][i]["spt"],
                               chi2=round(res[i]["chi2"], 1), av=res[i]["av"]) for i in orden])
 
