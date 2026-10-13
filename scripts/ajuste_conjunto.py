@@ -23,8 +23,13 @@ M5–L4. El χ² incluye el del prior. Perfiles: mínimo sobre los demás parám
 dividir por el χ²_ν mínimo. El error que se cita es el de `--calibra` (dejando una plantilla fuera, con θ
 inyectado conocido).
 
+**Con BT-Settl** (`--btsettl DIR`): los modelos CIFIST2011 de SVO (npz de 4000–25500 Å, T_eff 2000–3200 K,
+log g 2.5–4.5) en lugar de las plantillas, de modo que T_eff y log g son parámetros. `--calibra` con BT-Settl
+ajusta las plantillas de tipo conocido (como datos, con la S/N del compañero y A_V = 2) con la rejilla de
+modelos: da la T_eff y el log g que BT-Settl asigna a cada tipo y el sesgo en A_V.
+
 uso: python scripts/ajuste_conjunto.py SLUG [--orden-ir 0] [--bibliotecas ...] [--sin-h2o-muse]
-                                       [--calibra] [--json SALIDA]
+                                       [--btsettl DIR] [--calibra] [--json SALIDA]
 """
 from __future__ import annotations
 
@@ -201,13 +206,108 @@ def resumen(pls, cubos, ndof, rejilla=REJILLA):
                 chi2nu_min=chi_min / ndof, ndof=ndof, curva_tipo=curva_tipo, perfiles=perfiles)
 
 
-def preparar(slug, orden_ir=0, bibliotecas=("manara", "lateM", "xshyne"), h2o_muse=True, tipos=(5.0, 14.0)):
+def modelos_btsettl(dir_npz, teff=(2000.0, 3200.0), logg=(2.5, 4.5), paso_A=1.0):
+    """Los modelos BT-Settl como «plantillas» (`vis`/`nir` como tipo_ir_plantillas), rebinados a `paso_A` antes de
+    degradar (a R = 500 la FWHM es ≥ 13 Å, así que 1 Å no pierde nada y abarata la convolución)."""
+    out = []
+    for f in sorted(Path(dir_npz).glob("teff*_logg*.npz")):
+        w, fl, meta = tp._npz(f)
+        if not (teff[0] <= meta["teff_k"] <= teff[1] and logg[0] <= meta["logg"] <= logg[1]):
+            continue
+        g = np.arange(w[0] + paso_A, w[-1] - paso_A, paso_A)
+        fg = tp.media_en_intervalos(w, fl, g - paso_A / 2, g + paso_A / 2)
+        out.append(dict(lib="btsettl", objeto=f"T{int(meta['teff_k'])}_g{meta['logg']:.1f}", spt="M9",
+                        teff=float(meta["teff_k"]), logg=float(meta["logg"]),
+                        vis=(g[g < 10500], fg[g < 10500]), nir=(g[g > 9500], fg[g > 9500])))
+    if not out:
+        raise SystemExit(f"no hay modelos BT-Settl en {dir_npz}")
+    return out
+
+
+def preparar(slug, orden_ir=0, bibliotecas=("manara", "lateM", "xshyne"), h2o_muse=True, tipos=(5.0, 14.0),
+             btsettl=None):
     p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=bibliotecas, h2o_muse=h2o_muse)
     segs = segmentos_cgs(slug, p)
+    if btsettl:
+        p["pls"] = modelos_btsettl(btsettl)
+        p["bases"] = tp.modelos_base(p["pls"], segs)
     fac = tp.factores_equilibrio(segs, p["bases"], [p["av_tabla"]])
     conj = Conjunto(segs, p["bases"], orden_ir, fac)
-    indices = [i for i, t in enumerate(p["pls"]) if tipos[0] <= spt_code(t["spt"]) <= tipos[1]]
+    indices = (list(range(len(p["pls"]))) if btsettl else
+               [i for i, t in enumerate(p["pls"]) if tipos[0] <= spt_code(t["spt"]) <= tipos[1]])
     return p, conj, indices
+
+
+def resumen_btsettl(pls, cubos, ndof, rejilla=REJILLA):
+    """Mejor (T_eff, log g, A_V, R_V, r_K, T_d), perfiles de T_eff y log g y el mapa Δχ²(T_eff, log g)."""
+    chi_min = min(float(np.min(c)) for c in cubos.values())
+    esc = max(chi_min / ndof, 1e-12)
+    mejor_i = min(cubos, key=lambda i: float(np.min(cubos[i])))
+    idx = np.unravel_index(int(np.argmin(cubos[mejor_i])), cubos[mejor_i].shape)
+    mapa = {}
+    for i, c in cubos.items():
+        mapa[(pls[i]["teff"], pls[i]["logg"])] = (float(np.min(c)) - chi_min) / esc
+    teffs = sorted({k[0] for k in mapa}); loggs = sorted({k[1] for k in mapa})
+    perf = lambda eje, vals: {v: min(d for k, d in mapa.items() if k[eje] == v) for v in vals}
+    pt, pg = perf(0, teffs), perf(1, loggs)
+    intervalo = lambda d: [min(v for v, x in d.items() if x <= 1.0), max(v for v, x in d.items() if x <= 1.0)]
+    todos = np.stack([cubos[i] for i in cubos])
+    perfiles = {}
+    for eje, nombre in ((1, "av"), (2, "rv"), (3, "rk"), (4, "td")):
+        prof = (np.min(todos, axis=tuple(j for j in range(5) if j != eje)) - chi_min) / esc
+        valores = np.asarray(rejilla[nombre], float)
+        perfiles[nombre] = dict(mejor=float(valores[int(np.argmin(prof))]),
+                                intervalo=[float(valores[prof <= 1.0].min()), float(valores[prof <= 1.0].max())])
+    t = pls[mejor_i]
+    return dict(mejor=dict(teff=t["teff"], logg=t["logg"], av=float(rejilla["av"][idx[0]]),
+                           rv=float(rejilla["rv"][idx[1]]), rk=float(rejilla["rk"][idx[2]]),
+                           td=float(rejilla["td"][idx[3]])),
+                chi2nu_min=chi_min / ndof, ndof=ndof,
+                perfil_teff={int(k): round(v, 1) for k, v in pt.items()}, teff_intervalo=intervalo(pt),
+                perfil_logg={k: round(v, 1) for k, v in pg.items()}, logg_intervalo=intervalo(pg),
+                perfiles=perfiles,
+                mapa=[dict(teff=k[0], logg=k[1], dchi2=round(v, 1)) for k, v in sorted(mapa.items())])
+
+
+def ajusta_btsettl(slug, dir_npz, orden_ir=0, h2o_muse=True):
+    p, conj, indices = preparar(slug, orden_ir, ("manara",), h2o_muse, btsettl=dir_npz)
+    cubos = explora(conj, p["bases"], indices)
+    r = resumen_btsettl(p["pls"], cubos, conj.n - conj.n_lineal - 6)
+    r.update(slug=slug, orden_ir=orden_ir, h2o_muse=h2o_muse, n_modelos=len(indices))
+    return r
+
+
+def calibra_btsettl(slug, dir_npz, av_inyectada=2.0, orden_ir=0, semilla=0):
+    """Plantillas de tipo conocido (Manara M6.5–M9.5 y X-SHYNE L0–L1) como datos (S/N del compañero, A_V inyectada)
+    ajustadas con BT-Settl: la T_eff, el log g y la A_V que les asigna el modelo."""
+    rej = dict(av=np.round(np.arange(0.0, 6.0001, 0.2), 2), rv=(3.1,), rk=(0.0,), td=(1500.0,))
+    p, conj, _ = preparar(slug, orden_ir)
+    bt = modelos_btsettl(dir_npz)
+    bases_bt = tp.modelos_base(bt, conj.segs)
+    rng = np.random.default_rng(semilla)
+    filas = []
+    for i, t in enumerate(p["pls"]):
+        if t["lib"] not in ("manara", "xshyne") or not 6.5 <= spt_code(t["spt"]) <= 11.0:
+            continue
+        m = p["bases"][i]
+        falsos = []
+        for k, s in enumerate(conj.segs):
+            ext = 10 ** (-0.4 * np.asarray(CCMExtinction(3.1, citation="CCM89").a_lambda_over_av(s["w"]), float) * av_inyectada)
+            f = m[k] * ext * float(np.nanmedian(s["f"][s["bueno"]]) / np.nanmedian((m[k] * ext)[s["bueno"]]))
+            snr = np.abs(s["f"]) / s["e"]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                e = np.abs(f) / np.where(snr > 0, snr, np.nan)
+            falsos.append({**s, "f": f + rng.normal(0, np.nan_to_num(e)), "e": e,
+                           "bueno": s["bueno"] & np.isfinite(f) & np.isfinite(e) & (e > 0)})
+        cf = Conjunto(falsos, bases_bt, orden_ir)
+        cubos = explora(cf, bases_bt, list(bases_bt), rej)
+        j = min(cubos, key=lambda q: float(np.min(cubos[q])))
+        idx = np.unravel_index(int(np.argmin(cubos[j])), cubos[j].shape)
+        filas.append(dict(plantilla=f"{t['lib']}:{t['objeto']}", spt=t["spt"], teff=bt[j]["teff"], logg=bt[j]["logg"],
+                          av=float(rej["av"][idx[0]])))
+    dav = np.array([f["av"] - av_inyectada for f in filas])
+    return dict(av_inyectada=av_inyectada, n=len(filas), sesgo_av=float(np.median(dav)),
+                rms_av=float(np.sqrt(np.mean(dav ** 2))), filas=filas)
 
 
 def ajusta(slug, orden_ir=0, bibliotecas=("manara", "lateM", "xshyne"), h2o_muse=True):
@@ -269,10 +369,26 @@ def main(argv=None):
     ap.add_argument("--bibliotecas", nargs="+", default=list(tp.FAMILIAS), choices=list(tp.FAMILIAS))
     ap.add_argument("--sin-h2o-muse", action="store_true", help="sin la máscara de H2O de MUSE (entra el Na I 8183/8195)")
     ap.add_argument("--calibra", action="store_true")
+    ap.add_argument("--btsettl", type=Path, help="directorio con los npz de BT-Settl (T_eff y log g como parámetros)")
     ap.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
     warnings.simplefilter("ignore", RuntimeWarning)
-    if a.calibra:
+    if a.btsettl and a.calibra:
+        out = calibra_btsettl(a.slug, a.btsettl, orden_ir=a.orden_ir)
+        print(f"{a.slug} plantillas con BT-Settl (A_V inyectada {out['av_inyectada']}): sesgo A_V {out['sesgo_av']:+.2f}, "
+              f"rms {out['rms_av']:.2f}")
+        for f in out["filas"]:
+            print(f"   {f['plantilla']:<34s} {f['spt']:<5s} T_eff {f['teff']:.0f}  log g {f['logg']}  A_V {f['av']}")
+    elif a.btsettl:
+        out = ajusta_btsettl(a.slug, a.btsettl, a.orden_ir, not a.sin_h2o_muse)
+        m = out["mejor"]
+        print(f"{a.slug} BT-Settl: T_eff {m['teff']:.0f} K  log g {m['logg']}  A_V {m['av']}  R_V {m['rv']}  r_K {m['rk']}  "
+              f"T_d {m['td']:.0f}  χ²_ν {out['chi2nu_min']:.2f} (ν {out['ndof']})")
+        print(f"  T_eff: Δχ² ≤ 1 en {out['teff_intervalo']}; perfil {out['perfil_teff']}")
+        print(f"  log g: Δχ² ≤ 1 en {out['logg_intervalo']}; perfil {out['perfil_logg']}")
+        for n, pr in out["perfiles"].items():
+            print(f"  {n}: mejor {pr['mejor']}, Δχ² ≤ 1 en {pr['intervalo']}")
+    elif a.calibra:
         out = calibra(a.slug, orden_ir=a.orden_ir)
         print(f"{a.slug} calibración (θ {out['theta']}, n {out['n']}): rms tipo {out['rms_tipo']:.2f}, "
               f"A_V rms {out['rms_av']:.2f} (sesgo {out['sesgo_av']:+.2f}), r_K rms {out['rms_rk']:.2f} (sesgo {out['sesgo_rk']:+.2f})")

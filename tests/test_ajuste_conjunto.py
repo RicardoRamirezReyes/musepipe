@@ -76,6 +76,24 @@ class ConjuntoTests(unittest.TestCase):
         self.assertLess(chi, 4.0 + 1e-6)
 
 
+class ModelosBtSettlTests(unittest.TestCase):
+    def test_filtra_por_teff_y_logg_y_conserva_el_flujo(self):
+        import tempfile
+        from musepipe.models.cache import write_spectrum_npz
+        aj = _carga("ajuste_conjunto")
+        w = np.arange(4000.0, 25500.0, 0.25)
+        with tempfile.TemporaryDirectory() as tmp:
+            for teff, logg in ((2600, 3.5), (2600, 5.0), (3500, 3.5)):
+                write_spectrum_npz(Path(tmp) / f"teff{teff}_logg{logg:.1f}.npz", w, 2.0 + np.sin(w / 300.0),
+                                   {"teff_k": float(teff), "logg": logg}, wave_lo=4000.0, wave_hi=25500.0)
+            ms = aj.modelos_btsettl(tmp)
+        self.assertEqual([(m["teff"], m["logg"]) for m in ms], [(2600.0, 3.5)])
+        g, f = ms[0]["vis"]
+        np.testing.assert_allclose(f, 2.0 + np.sin(g / 300.0), atol=2e-6)
+        self.assertLess(g.max(), 10500.0)
+        self.assertGreater(ms[0]["nir"][0].min(), 9500.0)
+
+
 def _hay_datos():
     return (_carga("tipo_ir_indices").DEFAULT_CDS.is_dir() and _carga("tipo_ir_plantillas").DEFAULT_NIR.is_dir()
             and (ROOT / "runs" / "ROXs12b_invvar" / "stages").is_dir()
