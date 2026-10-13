@@ -115,6 +115,35 @@ class AjusteTests(unittest.TestCase):
         np.testing.assert_allclose(fac, (1.0, 0.25, 2.0), rtol=0.25)
 
 
+class EstructuraTests(unittest.TestCase):
+    """El ajuste solo de estructuras: plantilla × polinomio de Legendre por segmento."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tp = _carga("tipo_ir_plantillas")
+        cls.w = np.linspace(6300.0, 9300.0, 200)
+        banda = lambda c, a: 1 - a * np.exp(-0.5 * ((cls.w - c) / 60.0) ** 2)
+        cls.base = {0: [banda(7100, 0.3) * banda(8400, 0.1)], 1: [banda(7100, 0.1) * banda(8400, 0.3)],
+                    2: [banda(7600, 0.3) * banda(8400, 0.2)]}
+
+    def _seg(self, f):
+        return [_seg("V", "vis", self.w, f, 0.01 * f)]
+
+    def test_un_polinomio_multiplicativo_no_cambia_nada(self):
+        poli = 2.0 + 0.3 * (self.w / 7800 - 1) - 0.5 * (self.w / 7800 - 1) ** 2
+        res, _ = self.tp.ajusta_estructura(self._seg(self.base[1][0] * poli), self.base, {"vis": 2, "nir": 1})
+        self.assertEqual(min(res, key=lambda k: res[k]["chi2"]), 1)
+        self.assertLess(res[1]["chi2"], 1e-10)
+
+    def test_el_enrojecimiento_no_cambia_el_tipo(self):
+        e = 10 ** (-0.4 * self.tp.EXT.a_lambda_over_av(self.w) * 4.0)
+        res, _ = self.tp.ajusta_estructura(self._seg(self.base[2][0] * e), self.base, {"vis": 2, "nir": 1})
+        self.assertEqual(min(res, key=lambda k: res[k]["chi2"]), 2)
+        # el orden 2 no absorbe del todo CCM a A_V = 4 (residuo ~1 %, χ²_ν 1.6 con σ del 1 %), pero queda muy por
+        # debajo de cualquier plantilla equivocada
+        self.assertLess(res[2]["chi2"], 0.05 * min(res[0]["chi2"], res[1]["chi2"]))   # medido: 0.025
+
+
 class CurvasPorBibliotecaTests(unittest.TestCase):
     """Lo que dibujan `companion_type_nir` y `companion_type_combined` (la Fig. 5 con el IR)."""
 
@@ -189,6 +218,13 @@ class CifrasDelPaperTests(unittest.TestCase):
         self.assertEqual(self._tipo("ROXs12b", "combinado", av_fija=True)["spt"], "M9")
         self.assertEqual(self._tipo("ROXs42Bb", "combinado", av_fija=True)["spt"], "M9.5")
         self.assertEqual(self._tipo("ROXs12b", "muse", av_fija=True)["spt"], "M9")
+
+    def test_solo_estructuras_en_muse(self):
+        pol = {"vis": 2, "nir": 1}
+        self.assertEqual(self._tipo("ROXs12b", "muse", av_fija=True, polinomio=pol)["spt"], "M8")
+        self.assertEqual(self._tipo("ROXs42Bb", "muse", av_fija=True, polinomio=pol)["spt"], "M9.5")
+        c = self.tp.calibra("ROXs12b", "muse", av_fija=True, polinomio=pol)
+        self.assertAlmostEqual(c["rms"], 0.64, delta=0.01)
 
     def test_el_error_dejando_una_fuera(self):
         c = self.tp.calibra("ROXs42Bb", "combinado", av_fija=True)

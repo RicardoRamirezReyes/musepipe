@@ -67,6 +67,17 @@ class BandasDeclaradasTests(unittest.TestCase):
         self.assertEqual(list(out), ["K"])
         self.assertAlmostEqual(out["K"][0][1], 0.1 * 10 ** (-0.4 * (14.14 - 14.32)), places=12)
 
+    def test_r_k_divide_el_flujo_en_k(self):
+        m = _carga("av_exceso_color")
+        w_um = np.linspace(1.1, 2.45, 2000)
+        perfil = {"ir_spectra": {"spectra": {"A_K": {"file": "k", "band": "K"}, "A_H": {"file": "h", "band": "H"}},
+                                 "colour_excess": {"bands": ["H", "K"]}}}
+        with mock.patch.object(m.tir, "perfil", return_value=perfil), \
+                mock.patch.object(m.tir, "load", return_value=(w_um, np.ones(w_um.size), np.ones(w_um.size))):
+            out = m.bandas_del_companero("x", r_k=0.25)
+        self.assertAlmostEqual(out["K"][0][1], 0.1 / 1.25, places=12)
+        self.assertAlmostEqual(out["H"][0][1], 0.1, places=12)
+
     def test_sin_declaracion_para(self):
         m = _carga("av_exceso_color")
         with mock.patch.object(m.tir, "perfil", return_value={"ir_spectra": {"spectra": {}}}):
@@ -96,6 +107,13 @@ class CifrasDelPaperTests(unittest.TestCase):
         self.assertAlmostEqual(r["H-K"]["mediana"], 4.63, delta=0.01)
         self.assertAlmostEqual(r["MUSE-K psffit"]["mediana"], 3.33, delta=0.01)
         self.assertAlmostEqual(e["cota_superior"], 5.17, delta=0.01)
+
+    def test_con_k_corregida_por_veiling(self):
+        e = self.m.estimacion("ROXs42Bb", r_k=0.19)
+        self.assertAlmostEqual(e["resumen"]["J-K"]["mediana"], 2.68, delta=0.01)
+        self.assertAlmostEqual(e["resumen"]["H-K"]["mediana"], 1.84, delta=0.01)
+        e12 = self.m.estimacion("ROXs12b", r_k=0.44)
+        self.assertAlmostEqual(e12["resumen"]["MUSE-K psffit"]["mediana"], 4.20, delta=0.01)
 
     def test_12b_con_el_tipo_de_los_indices_y_con_m9(self):
         e = self.m.estimacion("ROXs12b")

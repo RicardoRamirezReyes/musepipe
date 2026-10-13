@@ -311,6 +311,51 @@ def ajusta(segs, bases, av_axis, factores=None, escala_comun_ir=False):
     return res, [int(c.sum()) for c in comun]
 
 
+def ajusta_estructura(segs, bases, ordenes, factores=None):
+    """Solo las estructuras: por segmento, plantilla × polinomio de Legendre de orden `ordenes[brazo]` (lineal en
+    sus coeficientes). El polinomio absorbe el enrojecimiento y la calibración de flujo, así que el tipo sale de
+    las bandas y no depende de la A_V (sugerencia de un colega del autor, 2026-10-13: la degeneración A_V–T es la
+    del continuo, no la de las bandas). Mismos píxeles para todas las plantillas."""
+    comun = [s["bueno"].copy() for s in segs]
+    for m in bases.values():
+        for k, mk in enumerate(m):
+            comun[k] &= np.isfinite(mk)
+    fac = factores or [1.0] * len(segs)
+    leg = []
+    for k, s in enumerate(segs):
+        w = s["w"][comun[k]]
+        x = 2.0 * (w - w.min()) / (w.max() - w.min()) - 1.0
+        leg.append(np.polynomial.legendre.legvander(x, int(ordenes[s["brazo"]])))
+    res = {}
+    for i, m in bases.items():
+        chi, por_seg = 0.0, []
+        for k, s in enumerate(segs):
+            c = comun[k]
+            d, sw = s["f"][c], 1.0 / (s["e"][c] * fac[k])
+            a = m[k][c][:, None] * leg[k]
+            coef, *_ = np.linalg.lstsq(a * sw[:, None], d * sw, rcond=None)
+            r = (d - a @ coef) * sw
+            por_seg.append(float(r @ r))
+            chi += por_seg[-1]
+        res[i] = dict(chi2=chi, av=float("nan"), chi2_seg=por_seg)
+    return res, [int(c.sum()) for c in comun]
+
+
+def factores_equilibrio_estructura(segs, bases, ordenes):
+    if len(segs) < 2:
+        return None
+    fac = []
+    for k in range(len(segs)):
+        r, n = ajusta_estructura([segs[k]], {i: [m[k]] for i, m in bases.items()}, ordenes)
+        fac.append(math.sqrt(min(x["chi2"] for x in r.values()) / max(n[0] - ordenes[segs[k]["brazo"]] - 1, 1)))
+    return fac
+
+
+def _libres_estructura(segs, ordenes):
+    """Coeficientes libres del ajuste de estructuras, menos 1 (`tipo` resta además uno por la A_V)."""
+    return sum(int(ordenes[s["brazo"]]) + 1 for s in segs) - 1
+
+
 def factores_equilibrio(segs, bases, av_axis):
     """√(χ²_ν mínimo de cada segmento ajustado solo); None con un solo segmento."""
     if len(segs) < 2:
@@ -383,15 +428,21 @@ def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo
                 av_axis=av_axis, av_tabla=av_tabla)
 
 
-def ajuste(slug, modo, *, equilibrio=True, escala_comun_ir=False, **kw):
+def ajuste(slug, modo, *, equilibrio=True, escala_comun_ir=False, polinomio=None, **kw):
+    """`polinomio` = {'vis': orden, 'nir': orden}: ajuste solo de estructuras (`ajusta_estructura`)."""
     p = preparar(slug, modo, **kw)
-    fac = factores_equilibrio(p["segs"], p["bases"], p["av_axis"]) if equilibrio else None
-    res, n = ajusta(p["segs"], p["bases"], p["av_axis"], fac, escala_comun_ir=escala_comun_ir)
-    t = tipo(p["pls"], res, n, len(grupos(p["segs"], escala_comun_ir)))
+    if polinomio:
+        fac = factores_equilibrio_estructura(p["segs"], p["bases"], polinomio) if equilibrio else None
+        res, n = ajusta_estructura(p["segs"], p["bases"], polinomio, fac)
+        t = tipo(p["pls"], res, n, _libres_estructura(p["segs"], polinomio))
+    else:
+        fac = factores_equilibrio(p["segs"], p["bases"], p["av_axis"]) if equilibrio else None
+        res, n = ajusta(p["segs"], p["bases"], p["av_axis"], fac, escala_comun_ir=escala_comun_ir)
+        t = tipo(p["pls"], res, n, len(grupos(p["segs"], escala_comun_ir)))
     bibliotecas = curvas_por_biblioteca(p["pls"], res, t["escala_chi2"])
     orden = sorted(res, key=lambda i: res[i]["chi2"])[:6]
     return dict(slug=slug, run=p["run"], modo=modo, equilibrio=fac is not None, escala_comun_ir=escala_comun_ir,
-                opciones=kw, n_plantillas=len(p["pls"]),
+                polinomio=polinomio, opciones=kw, n_plantillas=len(p["pls"]),
                 segmentos=[dict(nombre=s["nombre"], n=nk, factor_sigma=(fac[k] if fac else 1.0))
                            for k, (s, nk) in enumerate(zip(p["segs"], n))],
                 tipo=t, bibliotecas=bibliotecas,
@@ -412,8 +463,9 @@ def falsos(segs, base_t, av, rng):
     return out
 
 
-def calibra(slug, modo, *, semilla=0, escala_comun_ir=False, **kw):
-    """Dejando una fuera: cada plantilla M5–L4 hace de dato y se ajusta con las demás."""
+def calibra(slug, modo, *, semilla=0, escala_comun_ir=False, polinomio=None, **kw):
+    """Dejando una fuera: cada plantilla M5–L4 hace de dato y se ajusta con las demás (con `polinomio`, solo
+    las estructuras)."""
     p = preparar(slug, modo, **kw)
     rng = np.random.default_rng(semilla)
     filas = []
@@ -423,13 +475,17 @@ def calibra(slug, modo, *, semilla=0, escala_comun_ir=False, **kw):
             continue
         datos = falsos(p["segs"], p["bases"][i], p["av_tabla"], rng)
         resto = {j: m for j, m in p["bases"].items() if j != i}
-        fac = factores_equilibrio(datos, resto, p["av_axis"])
-        res, _ = ajusta(datos, resto, p["av_axis"], fac, escala_comun_ir=escala_comun_ir)
+        if polinomio:
+            fac = factores_equilibrio_estructura(datos, resto, polinomio)
+            res, _ = ajusta_estructura(datos, resto, polinomio, fac)
+        else:
+            fac = factores_equilibrio(datos, resto, p["av_axis"])
+            res, _ = ajusta(datos, resto, p["av_axis"], fac, escala_comun_ir=escala_comun_ir)
         j = min(res, key=lambda k: res[k]["chi2"])
         filas.append(dict(plantilla=f"{t['lib']}:{t['objeto']}", verdad=t["spt"], ajustado=p["pls"][j]["spt"],
                           delta=spt_code(p["pls"][j]["spt"]) - verdad, av=res[j]["av"]))
     d = np.array([f["delta"] for f in filas])
-    return dict(slug=slug, modo=modo, opciones=kw, n=int(d.size), mediana=float(np.median(d)),
+    return dict(slug=slug, modo=modo, opciones=kw, polinomio=polinomio, n=int(d.size), mediana=float(np.median(d)),
                 rms=float(np.sqrt(np.mean(d ** 2))), p16_p84=[float(np.percentile(d, 16)), float(np.percentile(d, 84))],
                 frac_1=float(np.mean(np.abs(d) <= 1.0)), filas=filas)
 
@@ -445,6 +501,8 @@ def main(argv=None):
         q.add_argument("--escala-comun-ir", action="store_true",
                        help="una sola escala para todo el IR (solo si su fotometría es la del compañero)")
         q.add_argument("--json", type=Path)
+        q.add_argument("--polinomio", nargs=2, type=int, metavar=("VIS", "NIR"),
+                       help="solo estructuras: orden del polinomio multiplicativo en MUSE y en cada banda IR")
         if nombre == "ajuste":
             q.add_argument("--sin-equilibrio", action="store_true")
             q.add_argument("--sin-telurico-ir", action="store_true")
@@ -455,7 +513,8 @@ def main(argv=None):
             q.add_argument("--semilla", type=int, default=0)
     a = ap.parse_args(argv)
     if a.cmd == "ajuste":
-        out = ajuste(a.slug, a.modo, equilibrio=not a.sin_equilibrio, escala_comun_ir=a.escala_comun_ir,
+        pol = dict(vis=a.polinomio[0], nir=a.polinomio[1]) if a.polinomio else None
+        out = ajuste(a.slug, a.modo, equilibrio=not a.sin_equilibrio, escala_comun_ir=a.escala_comun_ir, polinomio=pol,
                      av_fija=a.av_fija, telurico_ir=not a.sin_telurico_ir, h2o_muse=not a.sin_h2o_muse,
                      solo_binado=a.solo_binado, bibliotecas=tuple(a.bibliotecas))
         t = out["tipo"]
@@ -465,7 +524,9 @@ def main(argv=None):
         print("  segmentos:", ", ".join(f"{s['nombre']} n={s['n']} ×{s['factor_sigma']:.2f}" for s in out["segmentos"]))
         print("  Δχ² por subtipo:", t["curva"])
     else:
-        out = calibra(a.slug, a.modo, semilla=a.semilla, escala_comun_ir=a.escala_comun_ir, av_fija=a.av_fija)
+        pol = dict(vis=a.polinomio[0], nir=a.polinomio[1]) if a.polinomio else None
+        out = calibra(a.slug, a.modo, semilla=a.semilla, escala_comun_ir=a.escala_comun_ir, av_fija=a.av_fija,
+                      polinomio=pol)
         print(f"{a.slug} {a.modo}{' A_V fija' if a.av_fija else ''}: n {out['n']}, Δ mediana {out['mediana']:+.1f}, "
               f"rms {out['rms']:.2f}, p16–p84 {out['p16_p84']}, |Δ| ≤ 1 en {out['frac_1']:.0%}")
     if a.json:

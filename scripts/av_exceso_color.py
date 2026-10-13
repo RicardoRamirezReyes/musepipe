@@ -78,8 +78,9 @@ def av_que_iguala(wa, fa, va, wb, fb, vb, r_obs, lo=-5.0, hi=20.0):
     return float(brentq(g, lo, hi))
 
 
-def bandas_del_companero(slug):
-    """{banda: [(espectro, F_λ medio en erg/s/cm²/Å)]} de las bandas que declara `colour_excess`."""
+def bandas_del_companero(slug, r_k=0.0):
+    """{banda: [(espectro, F_λ medio en erg/s/cm²/Å)]} de las bandas que declara `colour_excess`. Con `r_k`, el
+    flujo en K se corrige por un exceso no fotosférico: K_fot = K_obs/(1 + r_K) (`scripts/veiling.py co`)."""
     ir = tir.perfil(slug)["ir_spectra"]
     ce = ir.get("colour_excess")
     if not ce:
@@ -94,7 +95,7 @@ def bandas_del_companero(slug):
         w_um, f, _ = tir.load(tir.DEFAULT_CDS, spec["file"])
         m = media(w_um * 1e4, f, VENTANAS[spec["band"]]) * W_PER_M2_UM_A_CGS
         if spec["band"] == "K":
-            m *= k_fac
+            m *= k_fac / (1.0 + r_k)
         if np.isfinite(m):
             out.setdefault(spec["band"], []).append((nombre, m))
     return out
@@ -115,8 +116,9 @@ def _ordena(w, f):
     return w[o], f[o]
 
 
-def estimacion(slug, tipo=None, ventana=1.0):
-    """A_V por plantilla y color, y el resumen de las plantillas a ±`ventana` subtipos del tipo."""
+def estimacion(slug, tipo=None, ventana=1.0, r_k=0.0):
+    """A_V por plantilla y color, y el resumen de las plantillas a ±`ventana` subtipos del tipo (con K corregida
+    por un veiling `r_k` si se da)."""
     perfil = tir.perfil(slug)
     run = perfil["paper"]["run"]
     cfg = load_run_config(run, project_root=ROOT).config
@@ -126,7 +128,7 @@ def estimacion(slug, tipo=None, ventana=1.0):
         origen = "índices de agua"
     else:
         tipo_code, origen = spt_code(tipo), "declarado"
-    bandas = bandas_del_companero(slug)
+    bandas = bandas_del_companero(slug, r_k)
     muse = {m: flujo_muse(run, m) for m in METODOS_MUSE}
     filas = []
     for t in tp.plantillas(cfg):
@@ -151,7 +153,7 @@ def estimacion(slug, tipo=None, ventana=1.0):
         if v.size:
             resumen[c] = dict(n=int(v.size), mediana=float(np.median(v)), min=float(v.min()), max=float(v.max()))
     cota = max(r["max"] for r in resumen.values()) if resumen else np.nan
-    return dict(slug=slug, run=run, av_adoptada=float(cfg["h03_av"]), tipo=tir.spt_label(tipo_code),
+    return dict(slug=slug, run=run, av_adoptada=float(cfg["h03_av"]), tipo=tir.spt_label(tipo_code), r_k=r_k,
                 tipo_codigo=float(tipo_code), tipo_origen=origen, ventana=ventana,
                 plantillas_cerca=[f["plantilla"] for f in cerca], resumen=resumen, cota_superior=cota,
                 muse_flujo=muse, bandas={b: [n for n, _ in v] for b, v in bandas.items()}, filas=filas)
@@ -162,11 +164,12 @@ def main(argv=None):
     ap.add_argument("slug")
     ap.add_argument("--tipo", help="tipo de las plantillas (por defecto, el de los índices de agua)")
     ap.add_argument("--ventana", type=float, default=1.0, help="subtipos alrededor del tipo")
+    ap.add_argument("--r-k", type=float, default=0.0, help="veiling en K con que se corrige el flujo en K")
     ap.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        out = estimacion(a.slug, a.tipo, a.ventana)
+        out = estimacion(a.slug, a.tipo, a.ventana, a.r_k)
     print(f"{a.slug}: tipo {out['tipo']} ({out['tipo_origen']}) ± {a.ventana}; A_V adoptada {out['av_adoptada']}; "
           f"plantillas: {', '.join(out['plantillas_cerca'])}")
     for c, r in out["resumen"].items():
