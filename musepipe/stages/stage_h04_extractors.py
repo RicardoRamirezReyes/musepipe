@@ -9,15 +9,29 @@ spectra follow the production extraction to the extent noted below.
 Fidelity caveats (documented; this is the in-memory path chosen for the
 PROVISIONAL ROXs12b_B_adp run, spec E4 option B):
 
-* Each method feeds its production input cube: aperture and optimal-ls use the
-  stage04b local-surface residual of the injected cube; optimal-psfsub uses
-  ``stage02 - fit_primary_psf_model_cube``; psffit fits star+companion on the
-  injected stage02 cube. This mirrors ``compute_stage_x0N_products``.
-* The stage04b knobs, aperture list, window radii, fit radii and STAT handling
-  are pulled from ``stage_xNN_config_from_run`` / ``stage04b_config_from_run`` so
-  they equal production.
-* The x01 "wings-intact" aperture-correction refinement (which reloads the raw
-  cube from disk) is NOT reproduced; apcorr uses the PSF growth curve directly.
+* aperture and optimal-ls are extracted with the EXACT call of the delivered
+  product: the keyword arguments come from ``x01_extraction_inputs`` (C2) and
+  ``x02_extraction_inputs`` (C3), the same functions those stages use, so the two
+  cannot drift apart again. With the wings-intact treatment (the default of
+  both stages) that is the raw stage02 cube plus the annulus background; with
+  it switched off, the stage04b local-surface residual of the injected cube.
+  Only four things change, all on purpose: the position (the case's), no
+  control apertures, a single aperture (box3), and no empirical growth curve
+  (``growth_curve=None``), so the flux stays in the NORMRAD convention in which
+  E4 injects; the growth-curve factor is a fixed per-channel scale and cancels
+  in the throughput. Until 2026-10-12 these two were hand copies that still
+  extracted from the stage04b residual (plus the annulus, for optimal-ls), a
+  background treatment C2 dropped on 2026-07-09 (d688a64) and C3 on 2026-07-26
+  (a124718); their throughput was 1.3-3.8 % low at the E3 threshold
+  (``docs/2026-10-12_e4_extractores_de_produccion.md``). The builder checks that
+  E4 injects into the same cube the stages extract from, and stops otherwise.
+* optimal-psfsub uses ``stage02 - fit_primary_psf_model_cube``, a single model
+  on the combined cube, while C3 consumes C1b's per-observation cube when it
+  exists; the mismatch is declared in the QC (``psfsub_substrate``). psffit fits
+  star+companion on the injected stage02 cube, as C4 does.
+* The stage04b knobs, window radii, fit radii and STAT handling of psfsub and
+  psffit are pulled from ``stage_xNN_config_from_run`` /
+  ``stage04b_config_from_run`` so they equal production.
 * The builders' internal control apertures are disabled (``n_controls=0``); E4
   characterises positions through its own grid (real + 3 controls), not through
   the per-extraction control ring.
@@ -39,7 +53,12 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from ..extraction.aperture import aperture_label, default_apertures, make_aperture_product
+from ..extraction.aperture import (
+    aperture_label,
+    default_apertures,
+    extract_aperture_products,
+    make_aperture_product,
+)
 from ..extraction.optimal import fit_primary_psf_model_cube, make_optimal_product
 from ..extraction.psffit import make_psffit_products
 from ..halosub import lpm_subtract, reference_spectrum, select_reference_spaxels, sgf_subtract
@@ -51,8 +70,9 @@ from .stage_x01_aperture import (
     _stat_metadata as _x01_stat_metadata,
     stage_x01_config_from_run,
     stage_x01_paths,
+    x01_extraction_inputs,
 )
-from .stage_x02_optimal import stage_x02_config_from_run
+from .stage_x02_optimal import stage_x02_config_from_run, stage_x02_paths, x02_extraction_inputs
 from .stage_x03_psffit import stage_x03_config_from_run
 from .stage_x04_sgf import stage_x04_config_from_run
 from .stage_x05_lpm import masked_line_windows, stage_x05_config_from_run
@@ -249,6 +269,58 @@ def _x03_with_overrides(x03_cfg, config):
     return {**x03_cfg, **dict(overrides)}
 
 
+def _same_cube_or_stop(production_cube, base_cube, stage):
+    """E4 tiene que inyectar en el cubo del que extrae la etapa, o no mide su throughput."""
+
+    if np.shape(production_cube) != np.shape(base_cube) or not np.array_equal(
+        np.asarray(production_cube, dtype=np.float64), base_cube, equal_nan=True
+    ):
+        raise RuntimeError(
+            f"E4 injects into a different cube from the one {stage} extracts from "
+            f"({np.shape(base_cube)} vs {np.shape(production_cube)}): the throughput would "
+            "not apply to the delivered spectrum. Point h04_stage02_cube_fits at the cube "
+            f"{stage} reads."
+        )
+
+
+def _same_wave_or_stop(production_wave, wave, stage):
+    if np.shape(production_wave) != np.shape(wave) or not np.allclose(
+        production_wave, wave, rtol=0.0, atol=1e-6
+    ):
+        raise RuntimeError(f"E4 and {stage} use different wavelength axes.")
+
+
+def production_aperture_call(x01_cfg, x01_paths, *, base_cube, wave_A):
+    """`(wave, kwargs, wings_intact)` of C2's call, for one box3 aperture in NORMRAD.
+
+    The kwargs are C2's own (`x01_extraction_inputs`); only the position, the
+    controls, the aperture list and the growth curve change (module docstring).
+    """
+
+    inputs = x01_extraction_inputs(x01_cfg, x01_paths)
+    if inputs.wings_intact:
+        _same_cube_or_stop(inputs.cube, base_cube, "C2")
+    _same_wave_or_stop(inputs.wave, wave_A, "C2")
+    box3 = [ap for ap in inputs.kwargs["apertures"] if aperture_label(ap) == "box3"]
+    if not box3:
+        raise RuntimeError("C2 declares no box3 aperture; E4 measures box3.")
+    kwargs = dict(inputs.kwargs, apertures=box3[:1], n_controls=0, growth_curve=None,
+                  input_cube_path="h04:inmemory")
+    return np.asarray(inputs.wave, dtype=np.float64), kwargs, bool(inputs.wings_intact)
+
+
+def production_optimal_ls_call(x02_cfg, x02_paths, *, base_cube, wave_A):
+    """`(wave, psf_model, kwargs, from_stage02)` of C3's `ls` call, in NORMRAD."""
+
+    inputs = x02_extraction_inputs(x02_cfg, x02_paths)
+    if inputs.ls_from_stage02:
+        _same_cube_or_stop(inputs.ls_cube, base_cube, "C3 (ls)")
+    _same_wave_or_stop(inputs.wave, wave_A, "C3 (ls)")
+    kwargs = dict(inputs.common, n_controls=0, growth_curve=None, n_jobs=1)
+    return (np.asarray(inputs.wave, dtype=np.float64), inputs.psf_model, kwargs,
+            bool(inputs.ls_from_stage02))
+
+
 def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=None):
     """Return {method: callable} adapting C2/C3/C4/C5/C6 to the H04 extractor contract."""
 
@@ -296,43 +368,53 @@ def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=N
         )
         return np.asarray(residual, dtype=np.float64)
 
+    def _load_base_cube():
+        path = Path(config.get("h04_stage02_cube_fits", paths["stage02_cube_fits"]))
+        with fits.open(path, memmap=False) as hdul:
+            cube = np.asarray(hdul["CUBES"].data if "CUBES" in hdul else hdul[0].data, dtype=np.float64)
+        if cube.ndim == 4:
+            if cube.shape[0] != 1:
+                raise RuntimeError("halosub extractors expect a single combined cube.")
+            cube = cube[0]
+        return cube
+
+    base = np.asarray(base_cube if base_cube is not None else _load_base_cube(), dtype=np.float64)
+
+    # aperture y optimal_ls: la llamada EXACTA de C2 y C3 (docstring del modulo).
+    ap_wave, ap_kwargs, ap_raw = production_aperture_call(
+        x01_cfg, x01_paths, base_cube=base, wave_A=wave)
+    ap_label = aperture_label(ap_kwargs["apertures"][0])
+    ls_wave, ls_psf, ls_kwargs, ls_raw = production_optimal_ls_call(
+        x02_cfg, stage_x02_paths(run_id, root), base_cube=base, wave_A=wave)
+
     def aperture_extractor(cube, wave_A, case, method, config):  # noqa: ARG001
         comp_yx = (float(case.position_y), float(case.position_x))
-        resid = _residual(cube, comp_yx)
-        ext = make_aperture_product(
-            resid, wave, comp_yx, box3,
-            run_id=run_id, input_cube_path="h04:inmemory", star_yx=star_yx,
-            stat_zyx=_stat_for(resid), stat_factor=stat_factor,
-            covariance_factor=covariance_factor, stat_status=stat_status,
-            error_mode=x01_cfg.get("x01_error_mode", "auto"),
-            psf_model=psf_model,
-            aperture_correction=x01_cfg.get("x01_aperture_correction", "auto"),
-            bad_windows_A=x01_cfg.get("x01_bad_windows_A", []),
-            skyline_windows_A=x01_cfg.get("x01_skyline_windows_A", []),
-            interpolated_windows_A=x01_cfg.get("x01_interpolated_windows_A", []),
-            n_controls=0,
-        )
-        return ext.product
+        source = np.asarray(cube, dtype=np.float64) if ap_raw else _residual(cube, comp_yx)
+        return extract_aperture_products(source, ap_wave, comp_yx, **ap_kwargs)[ap_label].product
 
     def optimal_ls_extractor(cube, wave_A, case, method, config):  # noqa: ARG001
         comp_yx = (float(case.position_y), float(case.position_x))
-        resid = _residual(cube, comp_yx)
+        source = np.asarray(cube, dtype=np.float64) if ls_raw else _residual(cube, comp_yx)
         ext = make_optimal_product(
-            resid, wave, comp_yx, psf_model,
-            run_id=run_id, input_cube_path="h04:inmemory", variant="ls",
-            star_yx=star_yx, variance_zyx=_stat_for(resid),
-            stat_factor_spaxel=stat_factor, covariance_factor_box3=covariance_factor,
-            stat_status=stat_status, error_mode=x02_cfg.get("x02_error_mode", "auto"),
-            window_radius_px=float(x02_cfg.get("x02_window_radius_px", 8.0)),
-            clip_sigma=float(x02_cfg.get("x02_clip_sigma", 4.0)),
-            clip_max_iter=int(x02_cfg.get("x02_clip_max_iter", 2)),
-            bad_windows_A=x02_cfg.get("x02_bad_windows_A", []),
-            skyline_windows_A=x02_cfg.get("x02_skyline_windows_A", []),
-            interpolated_windows_A=x02_cfg.get("x02_interpolated_windows_A", []),
-            n_controls=0,
-            local_bkg_annulus_px=x02_cfg.get("x02_local_bkg_annulus_px"),
+            source, ls_wave, comp_yx, ls_psf,
+            input_cube_path="h04:inmemory", variant="ls", **ls_kwargs,
         )
         return ext.product
+
+    aperture_extractor.substrate = {
+        "call": "stage_x01_aperture.x01_extraction_inputs",
+        "cube": ("stage02 (raw, wings intact) + annulus background" if ap_raw
+                 else "stage04b local-surface residual of the injected cube"),
+        "annulus_bkg_px": ap_kwargs.get("annulus_bkg_px"),
+        "flux_convention": "normrad (growth_curve=None)",
+    }
+    optimal_ls_extractor.substrate = {
+        "call": "stage_x02_optimal.x02_extraction_inputs",
+        "cube": ("stage02 (raw, wings intact) + annulus background" if ls_raw
+                 else "stage04b local-surface residual of the injected cube + annulus background"),
+        "annulus_bkg_px": ls_kwargs.get("local_bkg_annulus_px"),
+        "flux_convention": "normrad (growth_curve=None)",
+    }
 
     def optimal_psfsub_extractor(cube, wave_A, case, method, config):  # noqa: ARG001
         comp_yx = (float(case.position_y), float(case.position_x))
@@ -379,18 +461,8 @@ def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=N
         )
         return prods.companion
 
-    def _load_base_cube():
-        path = Path(config.get("h04_stage02_cube_fits", paths["stage02_cube_fits"]))
-        with fits.open(path, memmap=False) as hdul:
-            cube = np.asarray(hdul["CUBES"].data if "CUBES" in hdul else hdul[0].data, dtype=np.float64)
-        if cube.ndim == 4:
-            if cube.shape[0] != 1:
-                raise RuntimeError("halosub extractors expect a single combined cube.")
-            cube = cube[0]
-        return cube
-
     halosub = build_halosub_extractors(
-        base_cube=base_cube if base_cube is not None else _load_base_cube(),
+        base_cube=base,
         wave_A=wave,
         star_yx=star_yx,
         companion_yx=object_yx,
@@ -414,4 +486,9 @@ def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=N
     }
 
 
-__all__ = ["build_halosub_extractors", "build_production_extractors"]
+__all__ = [
+    "build_halosub_extractors",
+    "build_production_extractors",
+    "production_aperture_call",
+    "production_optimal_ls_call",
+]

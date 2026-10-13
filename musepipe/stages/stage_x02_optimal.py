@@ -42,6 +42,41 @@ class StageX02Product:
     psfsub_model_meta: dict
 
 
+@dataclass(frozen=True)
+class X02ExtractionInputs:
+    """Lo que C3 le pasa a `make_optimal_product` para la variante `ls`.
+
+    Como `X01ExtractionInputs` para C2: E4 extrae sus inyecciones de `optimal_ls`
+    con esta MISMA llamada (spec E4 §1.4). Su copia a mano seguía en el residuo de
+    04b más el anillo —el doble fondo que C3 dejó el 2026-07-26 (`a124718`)—
+    (`docs/2026-10-12_e4_extractores_de_produccion.md`).
+
+    ``ls_cube`` es el cubo del que sale `ls` y ``ls_from_stage02`` dice si es el
+    crudo (alas intactas) o el residuo de 04b. ``common`` son los argumentos con
+    nombre que comparten `ls` y `psfsub`.
+    """
+
+    object_yx: tuple[float, float]
+    star_yx: tuple[float, float]
+    psf_model: object
+    psf_model_path: object
+    wave: np.ndarray
+    common: dict
+    ls_cube: np.ndarray
+    ls_from_stage02: bool
+    stage02_cube: np.ndarray
+    stage02_wave: np.ndarray
+    stage02_path: object
+    stage02_bunit: object
+    bunit: object
+    stat_cube: object
+    stat_state: str
+    stat_factor: object
+    covariance_factor: object
+    stat_status: object
+    open_issues: list
+
+
 def stage_x02_paths(run_id, project_root=None):
     root = Path(project_root or Path.cwd()).resolve()
     paths = RunPaths.from_project_root(run_id, root)
@@ -445,7 +480,13 @@ def _qc_payload(extractions, cfg, paths, stat_state, psf_model_path, psfsub_mode
     }
 
 
-def compute_stage_x02_products(config, paths=None):
+def x02_extraction_inputs(config, paths=None) -> X02ExtractionInputs:
+    """Los argumentos con los que C3 extrae `ls` (y la base común de `psfsub`).
+
+    E4 la llama para extraer sus inyecciones exactamente igual (ver
+    `X02ExtractionInputs`).
+    """
+
     cfg = dict(config)
     run_id = cfg["run_id"]
     root = Path(cfg.get("project_root") or Path.cwd()).resolve()
@@ -531,6 +572,32 @@ def compute_stage_x02_products(config, paths=None):
             "fits a surface around the object. Set x02_wings_intact_ls=false for the historical "
             "behaviour."
         )
+    return X02ExtractionInputs(
+        object_yx=object_yx, star_yx=star_yx, psf_model=psf_model,
+        psf_model_path=psf_model_path, wave=wave, common=common, ls_cube=ls_cube_used,
+        ls_from_stage02=ls_cube_used is stage02_cube, stage02_cube=stage02_cube,
+        stage02_wave=stage02_wave, stage02_path=stage02_path, stage02_bunit=stage02_bunit,
+        bunit=bunit, stat_cube=stat_cube, stat_state=stat_state, stat_factor=stat_factor,
+        covariance_factor=covariance_factor, stat_status=stat_status, open_issues=open_issues,
+    )
+
+
+def compute_stage_x02_products(config, paths=None):
+    cfg = dict(config)
+    run_id = cfg["run_id"]
+    root = Path(cfg.get("project_root") or Path.cwd()).resolve()
+    paths = stage_x02_paths(run_id, root) if paths is None else paths
+
+    inputs = x02_extraction_inputs(cfg, paths)
+    object_yx, star_yx = inputs.object_yx, inputs.star_yx
+    psf_model, psf_model_path = inputs.psf_model, inputs.psf_model_path
+    wave, common, ls_cube_used = inputs.wave, inputs.common, inputs.ls_cube
+    stage02_cube, stage02_wave = inputs.stage02_cube, inputs.stage02_wave
+    stage02_path, stage02_bunit, bunit = inputs.stage02_path, inputs.stage02_bunit, inputs.bunit
+    stat_cube, stat_state = inputs.stat_cube, inputs.stat_state
+    stat_factor, covariance_factor, stat_status = (inputs.stat_factor, inputs.covariance_factor,
+                                                   inputs.stat_status)
+    open_issues = inputs.open_issues
     ls = make_optimal_product(
         ls_cube_used,
         wave,
@@ -700,11 +767,13 @@ def main(argv=None):
 
 __all__ = [
     "StageX02Product",
+    "X02ExtractionInputs",
     "compute_stage_x02_products",
     "run_stage_x02",
     "stage_x02_config_from_run",
     "stage_x02_paths",
     "write_stage_x02_products",
+    "x02_extraction_inputs",
 ]
 
 
