@@ -1703,6 +1703,92 @@ def extinction(objetos, out: Path, av_max=6.0, dav_max=2.0):
 
 
 # --------------------------------------------------------------------------
+# Fig. nir_spectra — espectros J/H/K publicados y ventanas de los indices de agua
+# --------------------------------------------------------------------------
+
+#: intervalo (µm) de cada panel. El indice de agua de cada banda y sus ventanas
+#: salen de `scripts/tipo_ir_indices.py` (`BAND_INDEX`, `INDICES`), no se copian.
+BANDAS_NIR = {"J": (1.15, 1.36), "H": (1.47, 1.81), "K": (1.95, 2.45)}
+#: como se escribe cada indice en la figura.
+INDICE_TEX = {"H2O": r"H$_2$O", "H2O-1": r"H$_2$O-1", "H2O-2": r"H$_2$O-2", "H2OD": r"H$_2$OD"}
+
+
+def normaliza_nir(w_um, flux, indice: str) -> float:
+    """Escala que lleva `flux` a media 1 en la ventana del DENOMINADOR de `indice`.
+
+    Con ella, la media del espectro escalado en la ventana del numerador ES el
+    indice: la figura deja leer el valor que entra en el tipo IR. La media es
+    `tipo_ir_indices.window_mean` (espectro interpolado), la misma del calculo.
+    """
+    from scripts import tipo_ir_indices as tir
+
+    return 1.0 / tir.window_mean(w_um, flux, *tir.INDICES[indice]["den"])
+
+
+def nir_spectra(objetos, out: Path, paso=0.75):
+    """Espectros J/H/K publicados de los companeros, con las ventanas de los indices.
+
+    Son los del catalogo CDS J/A+A/708/A312 (Hayoz+2026) que declara cada
+    `targets/<slug>.json` -> `ir_spectra`: no son producto de la cadena. Se
+    desenrojecen con la A_V del run del paper (`h03_av`, la de la Tabla 1, igual
+    que `tipo_ir_indices.py lectura`) y se normalizan con `normaliza_nir`. Un
+    panel por banda y un espectro por objeto e instrumento, desplazados `paso`.
+    """
+    from musepipe.targets import load_target
+    from scripts import tipo_ir_indices as tir
+
+    cds = tir.DEFAULT_CDS
+    if not cds.is_dir():
+        raise SystemExit(f"falta {cds}: el catalogo CDS J/A+A/708/A312 no esta en disco")
+    con_ir = []
+    for obj in objetos:
+        perfil = load_target(obj.slug, project_root=ROOT) or {}
+        if "ir_spectra" in perfil:
+            con_ir.append((obj, perfil["ir_spectra"]["spectra"], float(obj.config["h03_av"])))
+    if not con_ir:
+        raise SystemExit("ningun objeto del paper declara `ir_spectra` en targets/")
+
+    fig, axes = plt.subplots(1, len(BANDAS_NIR), figsize=(ANCHO_DOBLE_IN, 3.0))
+    for ax, (banda, (lo, hi)) in zip(axes, BANDAS_NIR.items()):
+        indice = tir.BAND_INDEX[banda]
+        ventanas = tir.INDICES[indice]
+        ax.axvspan(*ventanas["den"], color="0.88", lw=0, zorder=0)
+        ax.axvspan(*ventanas["num"], color="0.70", lw=0, zorder=0)
+        curvas = [(i, obj, spec, av) for i, (obj, specs, av) in enumerate(con_ir)
+                  for spec in specs.values() if spec["band"] == banda]
+        # el primer objeto del paper arriba, como en el resto de figuras
+        techo = -np.inf
+        for k, (i, obj, spec, av) in enumerate(curvas):
+            w, f, e = tir.load(cds, spec["file"])
+            fd, ed = tir.deredden(w, f, av), tir.deredden(w, e, av)
+            escala = normaliza_nir(w, fd, indice)
+            dy = (len(curvas) - 1 - k) * paso
+            y, ey = fd * escala + dy, ed * escala
+            ax.fill_between(w, y - ey, y + ey, color=_color(i), alpha=0.25, lw=0)
+            ax.plot(w, y, color=_color(i), lw=0.8)
+            # el rotulo sobre el maximo del tramo que ocupa, para no pisar la curva
+            izq = (w >= lo) & (w <= lo + 0.55 * (hi - lo))
+            # solo el instrumento («Gemini/NIFS» -> «NIFS»); el pie da los telescopios
+            ax.annotate(f"{obj.nombre}, {spec['instrument'].split('/')[-1]}",
+                        (lo + 0.02 * (hi - lo), float(np.max(y[izq])) + 0.03),
+                        fontsize=6, color=_color(i), va="bottom")
+            techo = max(techo, float(np.max(y + ey)))
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(top=techo + 0.22)
+        for rotulo, ventana in (("den", ventanas["den"]), ("num", ventanas["num"])):
+            ax.annotate(rotulo, (0.5 * sum(ventana), 1.0), xycoords=("data", "axes fraction"),
+                        xytext=(0, -3), textcoords="offset points", ha="center", va="top",
+                        fontsize=5.5, color="0.3")
+        ax.set_title(f"{banda} band: {INDICE_TEX.get(indice, indice)}", loc="left")
+        ax.set_xlabel(r"wavelength ($\mu$m)")
+    axes[0].set_ylabel(r"$F_\lambda$ / $\langle F_\lambda\rangle_{\rm den}$ + offset")
+
+    fig.tight_layout(pad=0.3)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
 
 #: nombre del PDF -> funcion, en el orden en que aparecen en el paper.
 FIGURAS = {
@@ -1721,6 +1807,7 @@ FIGURAS = {
     "contrast_curves": contrast_curves,
     "psf_chromatic": psf_chromatic,
     "extinction": extinction,
+    "nir_spectra": nir_spectra,
 }
 
 

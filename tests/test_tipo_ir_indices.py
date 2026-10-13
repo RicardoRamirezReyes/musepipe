@@ -1,6 +1,7 @@
 """El tipo espectral IR por índices de agua (`scripts/tipo_ir_indices.py`).
 
-Da la cifra «M9.9 ± 1.0» de ROXs 42B b en el paper (docs/2026-10-02_tipo_ir_42bb.md) y vivió fuera
+Da las cifras «M9.9 ± 1.0» de ROXs 42B b y «M7.5 ± 1.0» de ROXs 12 b en el paper
+(docs/2026-10-02_tipo_ir_42bb.md) y vivió fuera
 del repo hasta el 2026-10-02. Las tres primeras clases no leen nada de disco: fijan la escala de los
 polinomios de Allers & Liu, el signo del desenrojecimiento y cómo se combinan los índices.
 `CifrasPublicadasTests` lee el catálogo CDS J/A+A/708/A312 en /mnt/2TB (solo lectura, ~1 s), con los
@@ -169,6 +170,15 @@ class CifrasPublicadasTests(unittest.TestCase):
         self.assertLess(r["chi2nu"], 1.0)                          # «the three indices give consistent types»
         self.assertEqual(sorted(r["used"]), ["H2O", "H2O-1", "H2O-2"])
 
+    def test_la_lectura_de_12b_da_la_cifra_del_paper(self):
+        r = self.m.lectura(self.cds, self.p12["ir_spectra"]["spectra"], 1.8, 0.5)
+        self.assertAlmostEqual(r["spt"], 7.5, delta=0.05)           # «M7.5»
+        self.assertAlmostEqual(r["sigma_total"], 1.0, delta=0.05)  # «± 1.0»
+        self.assertAlmostEqual(r["formal"], 0.6, delta=0.05)       # «formal error 0.6 subtypes»
+        self.assertAlmostEqual(r["sigma_av_sys"], 0.1, delta=0.05)  # «0.1 subtype»
+        self.assertLess(r["chi2nu"], 1.0)
+        self.assertEqual(sorted(r["used"]), ["H2O", "H2O-1", "H2O-2"])
+
     def test_el_control_reproduce_el_doc(self):
         c42 = self.m.control(self.cds, self.p42)
         pub = {p["ref"]: p for p in c42["publicados"]}
@@ -188,6 +198,10 @@ class CifrasPublicadasTests(unittest.TestCase):
     @unittest.skipUnless((ROOT / "runs" / "ROXs42Bb_realigned" / "config" / "config.json").exists(), "run no disponible")
     def test_la_av_es_la_del_run_y_la_de_la_tabla_1(self):
         self.assertEqual(self.m.av_del_run("ROXs42Bb_realigned"), (1.9, 0.3))
+
+    @unittest.skipUnless((ROOT / "runs" / "ROXs12b_invvar" / "config" / "config.json").exists(), "run no disponible")
+    def test_la_av_de_12b_es_la_del_run_y_la_de_la_tabla_1(self):
+        self.assertEqual(self.m.av_del_run("ROXs12b_invvar"), (1.8, 0.5))
 
 
 if __name__ == "__main__":

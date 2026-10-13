@@ -2,9 +2,10 @@
 """Tipo espectral en el infrarrojo con los índices de agua de Allers & Liu (2013) sobre los espectros
 J/H/K publicados de los dos compañeros (catálogo CDS J/A+A/708/A312, Hayoz+2026).
 
-Solo lectura y fuera de la cadena: G3 tipifica con MUSE y no usa nada de esto. Da la cifra del paper
-«M9.9 ± 1.0» de ROXs 42B b (`lectura`) y el control que la sostiene (`control`); los dos están
-contados en docs/2026-10-02_tipo_ir_42bb.md. Vivió fuera del repo hasta el 2026-10-02
+Solo lectura y fuera de la cadena: G3 tipifica con MUSE y no usa nada de esto. Da las cifras del paper
+«M9.9 ± 1.0» de ROXs 42B b y «M7.5 ± 1.0» de ROXs 12 b (`lectura`) y el control que las sostiene
+(`control`); están contados en docs/2026-10-02_tipo_ir_42bb.md. La figura del apéndice B
+(`scripts/paper_figures.py`, `nir_spectra`) lee los espectros con las funciones de aquí. Vivió fuera del repo hasta el 2026-10-02
 (`~/muse_sesion_20261002/indices_ir/`). `tests/test_tipo_ir_indices.py` fija las propiedades y, si el
 catálogo está en disco, las cifras publicadas.
 
