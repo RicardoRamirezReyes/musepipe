@@ -90,6 +90,14 @@
         ],
         "note": "El 0.87 no sale de ninguna versión de sus datos (0.89-0.91 en F_lambda, 0.82 en F_nu): docs/2026-10-02_tipo_ir_42bb.md"
       }
-    ]
+    ],
+    "colour_excess": {
+      "bands": [
+        "J",
+        "H",
+        "K"
+      ],
+      "note": "Exceso de color para la A_V propia (scripts/av_exceso_color.py, docs/2026-10-13_av_exceso_color.md): los tres espectros están escalados a la fotometría del compañero (Kraus+2014, Currie+2014), así que sus cocientes entre bandas son sus colores."
+    }
   }
 }
