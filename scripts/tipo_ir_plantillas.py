@@ -192,19 +192,22 @@ def plantillas_eso(lib_root, etiqueta, nir=DEFAULT_NIR):
         if etiqueta == "lateM" and o["object"].upper().startswith("TWA26"):
             continue                                    # la misma observación que la de Manara
         ids = sorted({r["nir_dp_id"] for r in filas if r["family"] == familia and r["object"] == o["object"]})
-        partes = []
+        partes, normas = [], []
         for i in ids:
             w, f = _adp(Path(nir) / "eso_adp" / f"{i}.fits")
             norma = np.nanmedian(f[(w > 15500) & (w < 17500)])
             if np.isfinite(norma) and norma > 0:
                 partes.append(f / norma)
+                normas.append(norma)
         if not partes:
             print(f"  sin NIR útil: {familia} {o['object']}", file=sys.stderr)
             continue
         wv, fv, _ = _npz(Path(lib_root) / familia / o["file"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)   # columnas sin ninguna época válida
-            media = np.nanmean(np.vstack(partes), axis=0)
+            # media de las épocas normalizadas, devuelta a la escala absoluta media (las épocas difieren en
+            # pérdidas de rendija; los ajustes con escala libre no ven este factor, el conjunto sí)
+            media = np.nanmean(np.vstack(partes), axis=0) * float(np.mean(normas))
         out.append(dict(lib=etiqueta, objeto=o["object"], spt=o["spt"], vis=(wv, fv), nir=(w, media),
                         n_epocas_nir=len(partes)))
     return out
