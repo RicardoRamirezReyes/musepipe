@@ -8,7 +8,7 @@ and products in `runs/<RUN_ID>/`.
 
 ## Sources of Truth
 
-- Use `README.es.md` for the general architecture (`README.md` is the public one-page summary).
+- Use `README.md` for the general architecture.
 - Read the latest `docs/spec_*.md` version for the affected stage.
 - Follow `docs/noise_model.md` for noise, significance, and control handling.
 - Treat root-level notebooks and dated plans or reports as historical snapshots.
@@ -18,7 +18,7 @@ and products in `runs/<RUN_ID>/`.
 ## Safety
 
 - Inspect `git status` before editing and preserve unrelated changes.
-- Do not modify raw data, `runs/`, the external work directory (`$MUSE_WORK`), external libraries,
+- Do not modify raw data, `runs/`, `/mnt/2TB`, external libraries,
   calibrations, reports, or `paper/` unless explicitly requested.
 - Before running a stage, check active processes and
   `runs/<RUN>/config/config.json`.
