@@ -31,7 +31,7 @@ from ..models.libraries import data_frame, resolve_declaration, template_library
 from ..models.template_fit import declared_prep_kwargs
 from ..models.templates import EmpiricalTemplateLibrary
 from ..paths import RunPaths
-from .stage_g3_accretion import TABLE_FIELDS, run_stage_g3_accretion
+from .stage_g3_accretion import TABLE_FIELDS, mr_citation, run_stage_g3_accretion
 from .stage_g3_atmo_fit import _prep_kwargs, atmosphere_declaration, run_stage_g3_atmo_fit
 from .stage_g3_derived import run_stage_g3_derived
 from .stage_g3_template_fit import run_stage_g3_template_fit
@@ -57,7 +57,7 @@ def _accretion_keys(accretion_qc, rows):
             "mdot_mr_source": accretion_qc.get("mdot_mr_source")}
 
 
-def _relabel_systematics_limited(rows, *, reason, citation, mdot_lit):
+def _relabel_systematics_limited(rows, *, reason, citation, mdot_lit, mr_cite="literature"):
     """Return rows with atmosphere-dependent quantities → not_constrained (the
     railed value preserved in limitations) and Mdot recomputed with literature
     M,R. Continuum-independent accretion rows and age_used are kept."""
@@ -76,7 +76,7 @@ def _relabel_systematics_limited(rows, *, reason, citation, mdot_lit):
             row = dict(r)
             row.update(value=mdot_lit["p50"], err_stat_lo=mdot_lit["p16"],
                        err_stat_hi=mdot_lit["p84"], data_used="l_acc_combined + literature M,R",
-                       assumptions="M,R from literature (Bowler+2017); G3-derived M,R "
+                       assumptions=f"M,R from literature ({mr_cite}); G3-derived M,R "
                                    "systematics-limited", depends_on="[lacc_relation]")
             out.append(row)
         else:
@@ -269,7 +269,7 @@ def _consistency(cfg, rows, template_json, mass_post_path):
     lit_me = float(cfg.get("h03_companion_mass_err_msun", 0.0014)) * MSUN_OVER_MJUP
     if mass:
         out.append(consistency_row("mass_G3", mass[0], mass[1], "mass_literature",
-                                   lit_m, lit_me, "Bowler+2017 hot-start; M_Jup"))
+                                   lit_m, lit_me, f"{mr_citation(cfg)}; M_Jup"))
     else:
         out.append(not_computed_row("mass_G3", "mass_literature", "mass not constrained"))
 
@@ -286,7 +286,7 @@ def _consistency(cfg, rows, template_json, mass_post_path):
     lit_re = float(cfg.get("h03_companion_radius_err_rsun", 0.02)) * r2j
     if rad:
         out.append(consistency_row("radius_G3", rad[0], rad[1], "radius_literature",
-                                   lit_r, lit_re, "Bowler+2017; R_Jup"))
+                                   lit_r, lit_re, f"{mr_citation(cfg)}; R_Jup"))
     else:
         out.append(not_computed_row("radius_G3", "radius_literature", "radius not constrained"))
     return out
@@ -617,7 +617,7 @@ def finalize_systematics_limited(run_id, *, project_root=None):
             n_mc=int(cfg.get("g3_n_mc", 4000)), seed=int(cfg.get("g3_seed", 0)))
 
     final = _relabel_systematics_limited(rows, reason=reason, citation=citation,
-                                         mdot_lit=mdot_lit)
+                                         mdot_lit=mdot_lit, mr_cite=mr_citation(cfg))
     consistency = _consistency(cfg, final, template_json, paths["mass_posterior"])
 
     qc["systematics_limited"] = {

@@ -26,6 +26,18 @@
     "previous_run": "ROXs12b_OB3445598",
     "previous_run_note": "La noche buena sola, run de publicacion anterior. Se cita como control de robustez: el resultado se mantiene descartando la noche de peor calidad."
   },
+  "fisica": {
+    "log_lbol": -2.81,
+    "log_lbol_err": 0.1,
+    "log_lbol_fuente": "Xuan et al. 2024 (ApJ 970, 71), Tabla 1, con la paralaje de Gaia DR3",
+    "teff_k": 2500,
+    "teff_err_k": 140,
+    "teff_fuente": "Xuan et al. 2024, Tabla 4 (T_eff recuperada, modelo sin nubes)",
+    "teff_alternativas_k": {
+      "Bowler et al. 2017, correlacion cruzada (ellos la dan por mas caliente de lo esperado)": 3100
+    },
+    "nota": "Para el test cromosferico de Manara et al. 2013 (scripts/suelo_cromosferico.py). La cadena NO lee esta clave: el radio y la masa del Mdot salen del config del run (h03_companion_*). Las dos T_eff publicadas acotan el intervalo 2500-3100 K del paper. docs/2026-10-13_correcciones_literatura.md"
+  },
   "ir_spectra": {
     "note": "Espectros J/H/K publicados del compañero en el catálogo CDS J/A+A/708/A312 (Hayoz+2026), observados (sin desenrojecer). Los usa scripts/tipo_ir_indices.py (docs/2026-10-02_tipo_ir_42bb.md); G3 no los usa. 'published_types' son los tipos publicados con esos mismos datos: el control del script. Su fotometría y el escalado de estos espectros son los de la terciaria (Kraus+2014): bajos x2 en J, x1.6 en H; los índices de una sola banda no lo notan.",
     "spectra": {

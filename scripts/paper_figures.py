@@ -1605,7 +1605,7 @@ def _entrada_extincion(obj: Objeto) -> dict:
             "mdot_pub": float(fila["mdot"]), "limite": True, "tol": 1e-6}
 
 
-def extinction(objetos, out: Path, av_max=6.0, dav_max=2.0):
+def extinction(objetos, out: Path, av_max=6.0, dav_max=3.0):
     """Que cuesta la extincion supuesta, y que afirmacion del par le sobrevive.
 
     La extincion es la segunda palanca del Mdot y NADA de estos datos la mide: se
@@ -1692,6 +1692,11 @@ def extinction(objetos, out: Path, av_max=6.0, dav_max=2.0):
         ax.axvline(cruce, color="#d62728", lw=0.6, ls="--")
         ax.annotate(f"{cruce:.2f} mag", (cruce, 0.0), textcoords="offset points",
                     xytext=(4, 7), fontsize=6.5, color="#d62728")
+    elif contraste_mdot[-1] > 0.0:
+        # Con dav_max=2.0 el cruce de la decision B (2.05 mag, 2026-10-14) quedaba
+        # fuera del eje y la figura salia sin el sin decir nada.
+        print(f"AVISO: el contraste de Mdot no llega a cero antes de {dav_max} mag "
+              f"(queda en {contraste_mdot[-1]:.3f} dex); sube dav_max.", file=sys.stderr)
     ax.set_xlim(0.0, dav_max)
     ax.set_xlabel("differential " r"$A_V$ toward " f"{objetos[1].nombre} (mag)")
     ax.set_ylabel("pair contrast (dex)")

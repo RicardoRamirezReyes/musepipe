@@ -5,6 +5,6 @@ notebooks. Stage-specific behavior will move here gradually, preserving the
 existing products in ``runs/`` during the migration.
 """
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 
 __all__ = ["__version__"]
