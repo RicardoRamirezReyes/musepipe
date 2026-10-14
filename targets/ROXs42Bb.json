@@ -27,10 +27,19 @@
   "paper": {
     "run": "ROXs42Bb_realigned",
     "order": 2,
-    "note": "Cubo combinado; sus limites de la etapa de cotas superiores se reverificaron validos.",
+    "note": "cubo combinado; sus limites de E3 del 08-31 se verificaron validos el 09-03 (verifica_e3.json)",
     "display": "ROXs 42B b",
     "spt_source_dir": ".",
-    "spt_source_note": "El G3 de este objeto no esta archivado en un subdirectorio: vive en la raiz de stages/, con la LSF que declara el config. Se declara el punto para que la figura no dependa del orden alfabetico ni imprima un aviso."
+    "spt_source_note": "El G3 de este objeto no esta archivado en un subdirectorio: vive en la raiz de stages/ (corrida del 2026-09-03 sobre el espectro calibrado del 08-31, con la LSF 2.297 del config, que es la que mide A4/M2: 2.2969). Se declara el punto para que la figura no dependa del orden alfabetico ni imprima un aviso."
+  },
+  "fisica": {
+    "log_lbol": -3.0,
+    "log_lbol_err": 0.1,
+    "log_lbol_fuente": "Xuan et al. 2024 (ApJ 970, 71), Tabla 1, con la paralaje de Gaia DR3",
+    "teff_k": 2270,
+    "teff_err_k": 155,
+    "teff_fuente": "Xuan et al. 2024, Tabla 4 (T_eff recuperada, modelo sin nubes; +170/-140 K)",
+    "nota": "Para el test cromosferico de Manara et al. 2013 (scripts/suelo_cromosferico.py). La cadena NO lee esta clave. 2270 K queda por debajo del intervalo de la relacion (2500-4000 K): la comparacion es una extrapolacion. docs/2026-10-13_correcciones_literatura.md"
   },
   "ir_spectra": {
     "note": "Espectros J/H/K publicados del compañero en el catálogo CDS J/A+A/708/A312 (Hayoz+2026), observados (sin desenrojecer). Los usa scripts/tipo_ir_indices.py (docs/2026-10-02_tipo_ir_42bb.md); G3 no los usa. 'published_types' son los tipos publicados con esos mismos datos: el control del script.",

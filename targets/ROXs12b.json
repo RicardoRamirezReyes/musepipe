@@ -17,14 +17,26 @@
   "paper": {
     "run": "ROXs12b_invvar",
     "order": 1,
-    "note": "Cubo `invvar`, combinado por la inversa de la varianza. En el combinado por `exptime` los controles comparten un modo de emision de la primaria que viene de la noche de peor calidad; el cubo `invvar` le da un peso minimo y no lo tiene. Antes se publicaba sobre la noche buena sola.",
+    "note": "cubo `invvar` (2026-09-20, decision del usuario). Antes se publicaba sobre `ROXs12b_OB3445598` -la noche buena sola- porque en el combinado por `exptime` los 33 controles tienen modo comun de +2.7 sigma, el halo de Halpha de la primaria repartido por el anillo (docs/2026-09-03_handoff.md §2). Medido el 2026-09-20: ese modo comun es de la NOCHE MALA (+4.2 sigma ella sola) y el cubo `invvar`, que le da el 3.5 % del peso (stages/stream_combine_plan.json: 0.9651 / 0.0349; el 0.5 % de docs/2026-09-20_invvar_pasa_a_publicacion.md era una errata), NO lo tiene: controles -12 +-283, -0.24 sigma, razon compañera/controles 180 contra 130 de la noche buena. Ademas el limite baja un 9.4 % (2.747e-14 contra 3.033e-14) y la FAP de aperture mejora 12x. Con v0.2.3 (2026-10-13) el limite baja un 6.7 %: 2.52e-14 contra 2.70e-14, las cifras del paper. docs/2026-09-20_invvar_contra_noche_buena.md y docs/2026-09-20_invvar_pasa_a_publicacion.md",
     "display": "ROXs 12 b",
     "second_epoch_run": "ROXs12b_OB3444577",
-    "second_epoch_note": "Segunda epoca, de peor calidad atmosferica. No se publica sobre ella: se usa para mostrar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
+    "second_epoch_note": "OB 3444577, 2022-08-31, 7 exposiciones: la noche de peor calidad (seeing 0.84 frente a 0.57, tau0 2.1 frente a 6.6 ms, ruido en Halpha 18.8x peor). No se publica sobre ella; se usa para ensenar la variabilidad de la primaria y para declarar que no tiene sensibilidad a la linea de la compañera.",
     "spt_source_dir": "g3_resolucion_invvar_20260925T141314",
-    "spt_source_note": "G3 a la resolucion de MUSE, con una prueba por biblioteca, re-corrido despues de correr la etapa telurica sobre este cubo. El tipo espectral no cambia y el ajuste atmosferico sigue sin pasar su puerta de bondad de ajuste. Se declara aqui para que la figura no dependa del orden alfabetico de los archivos.",
+    "spt_source_note": "Mismo G3 que g3_resolucion_invvar_20260925T005139, re-corrido 2026-09-25 con b270b1d tras correr A3 por primera vez sobre invvar (docs/2026-09-25_a3_invvar_d2_g3.md): D2 suma ahora sys_telluric en O2 A y en las dos bandas de H2O, que antes valia 0. Manara M7.5 joven aceptado (2.90 < 3.32); el ajuste atmosferico nativo pasa de 2700 K / log g 4.0 / A_V 5.0 a 2800 / 3.5 / 5.6 (el punto que ya daba la variante binada) y sigue sin pasar. Antes: G3 a resolucion MUSE con una prueba por biblioteca (tipo por Δχ² en nativo, bondad en bins de 25 Å con umbral same_subtype_neighbour) y D9 reducida a O2 (docs/2026-09-24_residuo_telurico_h2o_y_mascara_d9.md), corrido 2026-09-25 sobre invvar a 55 px con 4bc84e1 (R de cada plantilla X-shooter desde la rendija VIS de su cabecera). Manara M7.5 joven aceptado (2.91 < 3.34). Aquella sustituia a g3_resolucion_invvar_20260925T000344 (R de Manara+17 fija en 8800; mismos resultados <0.1 %) y a g3_resolucion_invvar_20260924T220548 (cuatro bandas telúricas enmascaradas; no pasaba).",
     "previous_run": "ROXs12b_OB3445598",
-    "previous_run_note": "La noche buena sola, run de publicacion anterior. Se cita como control de robustez: el resultado se mantiene descartando la noche de peor calidad."
+    "previous_run_note": "La noche buena sola, run de publicacion hasta el 2026-09-20. Se cita en el paper como control de robustez: el resultado se mantiene descartando la noche ruidosa, con Mdot < 2.7e-14 en vez de 2.5e-14 (v0.2.3, 2026-10-13; el 09-20 eran 3.0e-14 y 2.7e-14). La Figura 2 congelada (tag fondecyt-fig2-v1) sale de su cosecha de 11 controles, respaldada en stages/e4_11controles_respaldo/."
+  },
+  "fisica": {
+    "log_lbol": -2.81,
+    "log_lbol_err": 0.1,
+    "log_lbol_fuente": "Xuan et al. 2024 (ApJ 970, 71), Tabla 1, con la paralaje de Gaia DR3",
+    "teff_k": 2500,
+    "teff_err_k": 140,
+    "teff_fuente": "Xuan et al. 2024, Tabla 4 (T_eff recuperada, modelo sin nubes)",
+    "teff_alternativas_k": {
+      "Bowler et al. 2017, correlacion cruzada (ellos la dan por mas caliente de lo esperado)": 3100
+    },
+    "nota": "Para el test cromosferico de Manara et al. 2013 (scripts/suelo_cromosferico.py). La cadena NO lee esta clave: el radio y la masa del Mdot salen del config del run (h03_companion_*). Las dos T_eff publicadas acotan el intervalo 2500-3100 K del paper. docs/2026-10-13_correcciones_literatura.md"
   },
   "ir_spectra": {
     "note": "Espectros J/H/K publicados del compañero en el catálogo CDS J/A+A/708/A312 (Hayoz+2026), observados (sin desenrojecer). Los usa scripts/tipo_ir_indices.py (docs/2026-10-02_tipo_ir_42bb.md); G3 no los usa. 'published_types' son los tipos publicados con esos mismos datos: el control del script. Su fotometría y el escalado de estos espectros son los de la terciaria (Kraus+2014): bajos x2 en J, x1.6 en H; los índices de una sola banda no lo notan.",
