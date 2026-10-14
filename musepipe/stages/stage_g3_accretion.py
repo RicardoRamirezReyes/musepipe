@@ -48,6 +48,26 @@ def template_libraries_label(cfg):
         return out
     return {"declared_in_config_not_verified": cfg.get("g3_template_family")}
 
+
+def mr_citation(cfg) -> str:
+    """La fuente de la masa y el radio del config, en corto («Xuan et al. 2024»).
+
+    Se escribía fija como «Bowler+2017» en las filas y en los pares de
+    consistencia, también en ROXs 42B b (masa de Currie) y después de adoptar
+    Xuan et al. 2024 para los dos (2026-10-14). Se corta en el primer paréntesis
+    o dos puntos de ``h03_mass_source``/``h03_radius_source``.
+    """
+    citas = []
+    for key in ("h03_mass_source", "h03_radius_source"):
+        texto = str(cfg.get(key) or "").strip()
+        for sep in (" (", ":"):
+            texto = texto.split(sep, 1)[0]
+        texto = texto.strip()
+        if texto and texto not in citas:
+            citas.append(texto)
+    return "; ".join(citas) or "config (source not declared)"
+
+
 TABLE_FIELDS = [
     "property", "value", "err_stat_lo", "err_stat_hi", "err_sys", "unit", "label",
     "data_used", "method", "assumptions", "calibrations_citations", "validity_range",
@@ -217,7 +237,7 @@ def compute_stage_g3_accretion(cfg, paths):
         else:
             m_used, me_used, r_used, re_used = mass, mass_err, radius, radius_err
             depends = "[atmospheric_model(deferred), evolutionary_model(deferred), lacc_relation]"
-            assumptions = "M,R from config (Bowler+2017 hot-start; deferred G3 tracks)"
+            assumptions = f"M,R from config ({mr_citation(cfg)}; deferred G3 tracks)"
             mr_source = "config"
         md = mdot_mc(combined["l_acc_lsun"], m_used, me_used, r_used, re_used,
                      scatter, n_mc=n_mc, seed=seed)
@@ -228,7 +248,9 @@ def compute_stage_g3_accretion(cfg, paths):
             "upper_limit" if combined["kind"] == "upper_limit" else "empirical_inference",
             unit="Msun/yr",
             data_used=f"l_acc_combined + {mr_source} M,R", method="Mdot=1.25 Lacc R/GM (MC)",
-            assumptions=assumptions, cite="Alcala+2017; Bowler+2017", depends=depends,
+            assumptions=assumptions,
+            cite=f"Alcala+2017; {mr_citation(cfg)}" if mr_source == "config" else "Alcala+2017",
+            depends=depends,
             lo=md["p16"], hi=md["p84"], seed_v=seed)
         # V5 variant: always config M,R (same inputs as H03) for the consistency check
         md_cfg = mdot_mc(combined["l_acc_lsun"], mass, mass_err, radius, radius_err,

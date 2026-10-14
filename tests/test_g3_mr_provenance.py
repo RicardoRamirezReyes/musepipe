@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from musepipe.stages.stage_g3_accretion import _ajuste_atmosferico_utilizable
+from musepipe.stages.stage_g3_accretion import _ajuste_atmosferico_utilizable, mr_citation
 from musepipe.stages.stage_g3_assemble import _sella_ajuste_atmosferico
 
 
@@ -106,6 +106,28 @@ class GuardaDeLaRodajaTests(unittest.TestCase):
             ok, motivo = _ajuste_atmosferico_utilizable(d)
             self.assertFalse(ok)
             self.assertIn("ilegible", motivo)
+
+
+class CitaDeMasaYRadioTests(unittest.TestCase):
+    """`mr_citation`: la fuente de M y R sale del config, no de un «Bowler+2017» fijo.
+
+    Las filas de G3 y sus pares de consistencia decían Bowler+2017 también en ROXs 42B b
+    (masa de Currie) y después de adoptar Xuan et al. 2024 (2026-10-14).
+    """
+
+    def test_xuan_en_los_dos(self):
+        cfg = {"h03_mass_source": "Xuan et al. 2024 (ApJ 970, 71; doi:x), Tabla 1: 19 +/- 5 MJup",
+               "h03_radius_source": "Xuan et al. 2024 (ApJ 970, 71; doi:x), Tabla 1: 2.2 +/- 0.35 RJup"}
+        self.assertEqual(mr_citation(cfg), "Xuan et al. 2024")
+
+    def test_fuentes_distintas_se_juntan(self):
+        cfg = {"h03_mass_source": "Currie et al. 2014 (9 +5/-3 MJup, log L/Lsun=-3.07)",
+               "h03_radius_source": "2.84 +/- 0.02 RJup, retrieval de Inglis et al. 2024 (AJ 167, 218)"}
+        self.assertEqual(mr_citation(cfg),
+                         "Currie et al. 2014; 2.84 +/- 0.02 RJup, retrieval de Inglis et al. 2024")
+
+    def test_sin_fuente_lo_dice(self):
+        self.assertEqual(mr_citation({}), "config (source not declared)")
 
 
 if __name__ == "__main__":

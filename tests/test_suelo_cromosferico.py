@@ -112,9 +112,11 @@ class CifrasDelPaperTests(unittest.TestCase):
     def test_42bb_cota_06_dex_por_debajo_y_extrapolada(self):
         out = self._corre("ROXs42Bb")
         self.assertEqual(out["lacc_tipo"], "upper_limit")
-        self.assertAlmostEqual(out["log_lacc_lbol"], -4.46, delta=0.01)
+        # Decision B (2026-10-14): con la distancia de Gaia DR3 (146.45 pc en vez de 143.6) la L_acc
+        # limite sube x1.045 (d^2.26) y la cota pasa de -4.46 a -4.45; sigue 0.6 dex bajo el suelo.
+        self.assertAlmostEqual(out["log_lacc_lbol"], -4.45, delta=0.01)
         (fila,) = out["filas"]
-        self.assertAlmostEqual(fila["margen_dex"], -0.63, delta=0.01)
+        self.assertAlmostEqual(fila["margen_dex"], -0.61, delta=0.01)
         self.assertTrue(fila["extrapolada"])
 
 
