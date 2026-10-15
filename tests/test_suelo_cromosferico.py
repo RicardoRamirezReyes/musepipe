@@ -2,7 +2,10 @@
 
 Da las cifras del paper sobre el nivel cromosférico: ROXs 12 b en log(L_acc/L_bol) = −3.62, en el suelo a
 2500 K y 0.6 dex por debajo a 3100 K; la cota de ROXs 42B b 0.6 dex por debajo, extrapolada
-(docs/2026-10-13_correcciones_literatura.md). Las primeras clases no leen runs: la relación, el margen, la
+(docs/2026-10-13_correcciones_literatura.md). Desde el 2026-10-14 el paper ya no compara con las T_eff publicadas
+sino con la de su propio ajuste, muestra a muestra (`scripts/teff_bayes.py`, tests/test_teff_bayes.py); de aquí
+quedan el −3.62, el −4.45 y, para 42B b con la L_bol publicada, el 0.5–0.7 dex a 2200–2350 K (−0.61 a 2270 K).
+Las primeras clases no leen runs: la relación, el margen, la
 marca de extrapolación y la clave `fisica` de `targets/`. `CifrasDelPaperTests` lee los QC de los runs del
 paper; si faltan se salta, no falla.
 """
