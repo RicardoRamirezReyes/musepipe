@@ -16,6 +16,7 @@ from musepipe.stages.stage_h03_limits import (
     R_SUN_CM,
     YR_S,
     compute_stage_h03_products,
+    extinction_ladder_warning,
     limit_conversion_chain,
     resolve_tail_estimator,
     stage_h03_paths,
@@ -60,6 +61,44 @@ def h03_physical_config(run_id, root):
                                 "citation": "Aoyama et al. 2021", "validity_range": "planetary"}
         },
     }
+
+
+def seed_h03_inputs(paths):
+    """Los productos de E1, E2 y E4 que H03 lee, minimos y sinteticos."""
+    paths["paths"].ensure_base_dirs()
+    paths["stage_h01_qc_json"].write_text(
+        json.dumps(
+            {
+                "verdict": {"verdict": "non_detection"},
+                # E1 siempre declara con que cola decide, y H03 toma de
+                # ahi el umbral del 99 % si el run no lo declara aparte.
+                "criterion": {"fap_estimator": "empirical"},
+                "line": {"rest_A": 6562.8, "rv_sys_kms": 0.0},
+                "templates": {"lsf_fwhm_A": 2.5},
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["stage_h02_qc_json"].write_text(json.dumps({"overall": "survives"}), encoding="utf-8")
+    paths["stage_h04_qc_json"].write_text(
+        json.dumps({"regression_historic": {"verdict": "pass"}, "throughput": {"psf_perturbation_pct": 0.0}}),
+        encoding="utf-8",
+    )
+    null_maxima = np.linspace(-1.0, 2.5, 120)
+    np.savez(paths["h01_null_maxima_npz"], psffit_null_maxima=null_maxima)
+    with paths["halpha_detection_csv"].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["method", "template_factor", "matched_sigma"])
+        writer.writeheader()
+        writer.writerow({"method": "psffit", "template_factor": 1.0, "matched_sigma": 2.0e-17})
+    with paths["injection_throughput_csv"].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["method", "template_factor", "snr", "throughput", "throughput_err"],
+        )
+        writer.writeheader()
+        for factor in (1.0, 2.0):
+            writer.writerow({"method": "psffit", "template_factor": factor, "snr": 1.0, "throughput": 0.4, "throughput_err": 0.04})
+            writer.writerow({"method": "psffit", "template_factor": factor, "snr": 5.0, "throughput": 0.8, "throughput_err": 0.08})
 
 
 class H03ChainTests(unittest.TestCase):
@@ -162,40 +201,7 @@ class H03ChainTests(unittest.TestCase):
             root = Path(tmp)
             run_id = "synthetic_h03"
             paths = stage_h03_paths(run_id, project_root=root)
-            paths["paths"].ensure_base_dirs()
-            paths["stage_h01_qc_json"].write_text(
-                json.dumps(
-                    {
-                        "verdict": {"verdict": "non_detection"},
-                        # E1 siempre declara con que cola decide, y H03 toma de
-                        # ahi el umbral del 99 % si el run no lo declara aparte.
-                        "criterion": {"fap_estimator": "empirical"},
-                        "line": {"rest_A": 6562.8, "rv_sys_kms": 0.0},
-                        "templates": {"lsf_fwhm_A": 2.5},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            paths["stage_h02_qc_json"].write_text(json.dumps({"overall": "survives"}), encoding="utf-8")
-            paths["stage_h04_qc_json"].write_text(
-                json.dumps({"regression_historic": {"verdict": "pass"}, "throughput": {"psf_perturbation_pct": 0.0}}),
-                encoding="utf-8",
-            )
-            null_maxima = np.linspace(-1.0, 2.5, 120)
-            np.savez(paths["h01_null_maxima_npz"], psffit_null_maxima=null_maxima)
-            with paths["halpha_detection_csv"].open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=["method", "template_factor", "matched_sigma"])
-                writer.writeheader()
-                writer.writerow({"method": "psffit", "template_factor": 1.0, "matched_sigma": 2.0e-17})
-            with paths["injection_throughput_csv"].open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=["method", "template_factor", "snr", "throughput", "throughput_err"],
-                )
-                writer.writeheader()
-                for factor in (1.0, 2.0):
-                    writer.writerow({"method": "psffit", "template_factor": factor, "snr": 1.0, "throughput": 0.4, "throughput_err": 0.04})
-                    writer.writerow({"method": "psffit", "template_factor": factor, "snr": 5.0, "throughput": 0.8, "throughput_err": 0.08})
+            seed_h03_inputs(paths)
 
             cfg = h03_physical_config(run_id, root)
             product = compute_stage_h03_products(cfg, paths)
@@ -215,6 +221,64 @@ class H03ChainTests(unittest.TestCase):
                 written["qc"]["physical_inputs"]["lacc_aoyama21_relation"]
             )
             self.assertTrue(all("mdot_aoyama21" in lim for lim in written["qc"]["limits"]))
+
+
+class H03ExtinctionLadderWarningTests(unittest.TestCase):
+    """El aviso de que E3 tiro la escalera de S7b, y que no se pierda al re-correr.
+
+    E3 reescribe su QC entero y S7b le anade `extinction_ladder` despues. El
+    primer re-run lo cambiaba por `extinction_ladder_stale`; el segundo ya no
+    encontraba el bloque y tiraba tambien el aviso (2026-10-15, dos runs de
+    42B b). S7b filtra el open issue por la frase, asi que la frase es contrato.
+    """
+
+    LADDER = {"adopted_mdot_msun_yr": 1.8e-13, "adopted_av": 1.8}
+    ISSUE = "extinction_ladder was dropped"
+
+    def test_a_fresh_ladder_becomes_the_warning(self):
+        aviso = extinction_ladder_warning({"extinction_ladder": self.LADDER})
+        self.assertEqual(aviso["previous_adopted_mdot_msun_yr"], 1.8e-13)
+        self.assertIn("s7b_mdot_vs_extinction.py", aviso["rerun"])
+
+    def test_an_existing_warning_is_inherited_unchanged(self):
+        previo = extinction_ladder_warning({"extinction_ladder": self.LADDER})
+        self.assertEqual(extinction_ladder_warning({"extinction_ladder_stale": previo}), previo)
+
+    def test_no_ladder_and_no_warning_means_nothing(self):
+        for previo in (None, {}, {"limits": []}):
+            with self.subTest(previo=previo):
+                self.assertIsNone(extinction_ladder_warning(previo))
+
+    def test_the_warning_survives_two_consecutive_reruns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "synthetic_h03"
+            paths = stage_h03_paths(run_id, project_root=root)
+            seed_h03_inputs(paths)
+            cfg = h03_physical_config(run_id, root)
+            product = compute_stage_h03_products(cfg, paths)
+            paths["stage_h03_qc_json"].write_text(
+                json.dumps({"extinction_ladder": self.LADDER}), encoding="utf-8")
+            for corrida in (1, 2):
+                with self.subTest(corrida=corrida):
+                    write_stage_h03_products(product, cfg, paths)
+                    qc = json.loads(paths["stage_h03_qc_json"].read_text(encoding="utf-8"))
+                    self.assertNotIn("extinction_ladder", qc)
+                    self.assertEqual(qc["extinction_ladder_stale"]["previous_adopted_mdot_msun_yr"], 1.8e-13)
+                    self.assertEqual(sum(self.ISSUE in str(i) for i in qc.get("open_issues", [])), 1)
+
+    def test_a_run_that_never_had_a_ladder_gets_no_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "synthetic_h03"
+            paths = stage_h03_paths(run_id, project_root=root)
+            seed_h03_inputs(paths)
+            cfg = h03_physical_config(run_id, root)
+            product = compute_stage_h03_products(cfg, paths)
+            for _ in range(2):
+                written = write_stage_h03_products(product, cfg, paths)
+            self.assertNotIn("extinction_ladder_stale", written["qc"])
+            self.assertFalse(any(self.ISSUE in str(i) for i in written["qc"].get("open_issues", [])))
 
 
 class H03TailEstimatorTests(unittest.TestCase):
