@@ -10,6 +10,10 @@
 que un fallo de una no se lleva por delante a las demás ni deja el intérprete
 con estado a medias.
 
+Se niega, antes de lanzar nada, a re-correr un run `legacy` y un run que enlace
+productos de otro (un enlace simbolico que sale del run): las etapas escriben a
+traves del enlace, en el otro run.
+
 Escribe `rerun_log.json` en el directorio del run (`runs/<RUN>/logs/`): por
 etapa, `rc`, segundos y si el QC se reescribió — que es la única prueba de que
 la etapa hizo algo. La bitácora se **acumula** entre invocaciones. Para parar
@@ -151,6 +155,56 @@ def comprueba_run(run_dir: Path, run_id: str) -> None:
             " que significa.")
 
 
+#: Donde escriben las etapas (y este conductor, su bitacora).
+CARPETAS_ESCRITAS = ("stages", "tables", "plots", "report", "logs")
+
+
+def enlaces_hacia_fuera(run_dir: Path) -> list[tuple[str, str]]:
+    """Los enlaces simbolicos del run que apuntan FUERA de el: (ruta relativa, destino).
+
+    Las etapas escriben con `open(..., "w")`, `write_text` o `savez`, y todos
+    siguen el enlace: re-correr una etapa en un run que enlaza los productos de
+    otro reescribe los de ese otro. Paso el 2026-10-15: los runs de prueba
+    `ROXs12b_fondo_barrido_20260911` y `ROXs42Bb_memtest_20260911` enlazan 124
+    productos cada uno de su run padre, y su G4 quedo escrito en
+    `ROXs42Bb_realigned`, el run del paper. Lo deshizo de casualidad la cadena
+    del padre, que corrio despues.
+
+    Que `runs/<RUN>` sea el mismo un enlace (a `/mnt/2TB`) es lo normal y no
+    cuenta: se compara contra el run ya resuelto. Un enlace que se queda dentro
+    del run tampoco.
+    """
+    real = run_dir.resolve()
+    fuera = []
+    for sub in CARPETAS_ESCRITAS:
+        carpeta = run_dir / sub
+        if carpeta.is_symlink():
+            candidatos = [carpeta]
+        elif carpeta.is_dir():
+            candidatos = sorted(carpeta.rglob("*"))
+        else:
+            continue
+        for p in candidatos:
+            if not p.is_symlink():
+                continue
+            destino = p.resolve()
+            if destino != real and real not in destino.parents:
+                fuera.append((str(p.relative_to(run_dir)), str(destino)))
+    return fuera
+
+
+def comprueba_enlaces(run_dir: Path, run_id: str) -> None:
+    """Un run que enlaza productos de otro no se re-corre: parar ANTES de lanzar nada."""
+    fuera = enlaces_hacia_fuera(run_dir)
+    if fuera:
+        ejemplos = "; ".join(f"{rel} -> {destino}" for rel, destino in fuera[:3])
+        raise SystemExit(
+            f"{run_id} tiene {len(fuera)} enlaces simbolicos que salen del run ({ejemplos}"
+            f"{'; ...' if len(fuera) > 3 else ''}). Una etapa corrida aqui escribiria a traves"
+            " de ellos en los productos de OTRO run. Sustituye los enlaces por copias, o corre"
+            " la etapa en un run que no enlace nada fuera de si.")
+
+
 def bitacora_previa(logs: Path) -> list[dict]:
     """Las filas que dejaron invocaciones anteriores, si las hay.
 
@@ -207,6 +261,7 @@ def main(argv=None) -> int:
     run_dir = raiz / "runs" / args.run_id
     sel = selecciona(args.desde, args.hasta, args.solo)
     comprueba_run(run_dir, args.run_id)
+    comprueba_enlaces(run_dir, args.run_id)
 
     logs = run_dir / "logs"
     parar = logs / "PARAR"
