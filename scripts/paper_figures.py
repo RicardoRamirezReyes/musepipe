@@ -20,6 +20,10 @@ datos del primero (ver `tests/test_no_hardcoded_target.py`).
 (`--literature`, por defecto `paper/literature_mdot.csv`): sin ella dibuja solo
 las dos restricciones de este trabajo y lo avisa, porque inventar los puntos de
 literatura seria inventar la comparacion que la figura existe para hacer.
+
+`teff_corner` necesita los directorios de `scripts/teff_bayes.py ajusta` con las
+cadenas (`--teff-chains DIR`, repetible: uno por rejilla). No son productos de la
+cadena y no viven en runs/, asi que no hay directorio por defecto: sin ellos para.
 """
 from __future__ import annotations
 
@@ -1856,6 +1860,89 @@ def companion_type_combined(objetos, out: Path):
 
 
 # --------------------------------------------------------------------------
+# Fig. teff_corner — las cadenas de la T_eff del apéndice B
+# --------------------------------------------------------------------------
+
+#: color y trazo por rejilla de atmósferas. El par pasa el validador de daltonismo; el trazo distingue las
+#: rejillas también sin color.
+ESTILO_REJILLA = {"btsettl": ("#1f77b4", "-"), "drift": ("#ff7f0e", "--")}
+#: los parámetros del corner: columna de las muestras (None = Δ, derivado por muestra) y etiqueta
+PARAMETROS_CORNER = (("teff", r"$T_{\rm eff}$ (K)"), ("logg", r"$\log g$"), ("r_rj", r"$R$ ($R_{\rm Jup}$)"),
+                     ("av", r"$A_V$ (mag)"), ("rk", r"$r_K$"), (None, r"$\Delta$ (dex)"))
+
+
+def _series_corner(cadenas, slug):
+    """Rejilla -> muestras (n, 6) del ajuste de `slug` con el prior en A_V: T_eff, log g, R, A_V, r_K y Δ. Δ sale
+    de `teff_bayes.margen_de_corrida`, el mismo cálculo que da la Tabla B.5."""
+    from scripts import teff_bayes as tb
+
+    entrada = tb.entrada_margen(slug)
+    series = {}
+    for d in tb._carga(cadenas):
+        if d["slug"] != slug or not tb._de_la_tabla(d) or d.get("av_fija") is not None:
+            continue
+        rejilla = d.get("rejilla", "btsettl")
+        if rejilla in series:
+            raise SystemExit(f"dos cadenas con prior de {slug} y {rejilla} en {cadenas}: pasa una sola muestra")
+        z = np.load(d["_npz"])
+        nombres = list(z["nombres"])
+        columnas = [z["muestras"][:, nombres.index(p)] for p, _ in PARAMETROS_CORNER if p]
+        series[rejilla] = np.column_stack(columnas + [tb.margen_de_corrida(d, entrada)])
+    if not series:
+        raise SystemExit(f"no hay cadenas de {slug} con el prior en A_V en {cadenas}")
+    return series
+
+
+def _rangos_corner(series, cola=0.002, margen=0.10):
+    """Por parámetro, el rango que cubre todas las rejillas: del cuantil `cola` al `1 - cola` de la unión, más un
+    `margen` relativo. Sin él, `corner` toma el de cada serie y la segunda recorta la primera."""
+    todas = np.vstack(list(series.values()))
+    lo, hi = np.quantile(todas, [cola, 1 - cola], axis=0)
+    pad = margen * (hi - lo)
+    return [(float(a - p), float(b + p)) for a, b, p in zip(lo, hi, pad)]
+
+
+def _dibuja_corner(fig, series, titulo):
+    """Un corner en `fig` (figura o subfigura) con una serie por rejilla: contornos que encierran el 68 y el 95 %
+    de las muestras e histogramas de cada parámetro, con el mismo rango para todas. Los histogramas van
+    normalizados a área unidad: las cadenas tienen distinto número de muestras."""
+    import corner
+    from scripts import teff_bayes as tb
+
+    rangos = _rangos_corner(series)
+    for rejilla, muestras in series.items():
+        color, trazo = ESTILO_REJILLA[rejilla]
+        corner.corner(muestras, fig=fig, range=rangos, bins=30, smooth=1.0, levels=(0.68, 0.95), color=color,
+                      plot_datapoints=False, plot_density=False, fill_contours=False, max_n_ticks=3,
+                      labels=[e for _, e in PARAMETROS_CORNER], label_kwargs=dict(fontsize=7), labelpad=0.12,
+                      contour_kwargs=dict(linewidths=0.8, linestyles=trazo),
+                      hist_kwargs=dict(lw=0.8, ls=trazo, density=True))
+    # `corner` fija el alto de cada histograma con la ULTIMA serie, que recortaba a las anteriores
+    n = len(PARAMETROS_CORNER)
+    for i in range(n):
+        ax = fig.axes[i * (n + 1)]
+        ax.set_ylim(0, 1.1 * max(float(pt.get_path().vertices[:, 1].max()) for pt in ax.patches))
+    for ax in fig.axes:
+        ax.tick_params(labelsize=5.5, length=2.0)
+    fig.suptitle(titulo, fontsize=8)
+    fig.legend(handles=[Line2D([], [], color=ESTILO_REJILLA[r][0], ls=ESTILO_REJILLA[r][1], lw=0.9,
+                               label=tb.NOMBRE_REJILLA[r]) for r in series],
+               loc="upper right", bbox_to_anchor=(0.97, 0.88))
+
+
+def teff_corner(objetos, out: Path, cadenas):
+    """Las distribuciones posteriores del ajuste de la T_eff con el prior en A_V (apéndice B, Tabla B.5): un
+    corner por compañero, con BT-Settl y DRIFT-PHOENIX superpuestos. Las cadenas son las de `teff_bayes.py
+    ajusta` en los directorios `cadenas`; no son productos de la cadena y no viven en runs/."""
+    fig = plt.figure(figsize=(ANCHO_DOBLE_IN, 0.56 * ANCHO_DOBLE_IN))
+    subfiguras = fig.subfigures(1, len(objetos), wspace=0.03, squeeze=False)[0]
+    for sub, obj in zip(subfiguras, objetos):
+        _dibuja_corner(sub, _series_corner(cadenas, obj.slug), obj.nombre)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
 
 #: nombre del PDF -> funcion, en el orden en que aparecen en el paper.
 FIGURAS = {
@@ -1877,6 +1964,7 @@ FIGURAS = {
     "nir_spectra": nir_spectra,
     "companion_type_nir": companion_type_nir,
     "companion_type_combined": companion_type_combined,
+    "teff_corner": teff_corner,
 }
 
 
@@ -1889,6 +1977,8 @@ def main(argv=None) -> int:
                     help="dibuja solo esta figura (repetible); por defecto todas")
     ap.add_argument("--literature", default=str(ROOT / "paper" / "literature_mdot.csv"),
                     help="CSV de la compilacion de literatura para mdot_mass_plane")
+    ap.add_argument("--teff-chains", type=Path, action="append", default=None,
+                    help="directorio de `teff_bayes.py ajusta` para teff_corner (repetible: uno por rejilla)")
     ap.add_argument("--project-root", default=None,
                     help="raiz que contiene runs/ (por defecto la del repo; "
                          "necesaria al dibujar desde un worktree)")
@@ -1917,6 +2007,11 @@ def main(argv=None) -> int:
         fn = FIGURAS[nombre]
         if nombre == "mdot_mass_plane":
             fn(objetos, destino, literatura=Path(args.literature))
+        elif nombre == "teff_corner":
+            if not args.teff_chains:
+                raise SystemExit("teff_corner necesita las cadenas de `teff_bayes.py ajusta`: --teff-chains DIR"
+                                 " (repetible). No viven en runs/, asi que no hay un directorio por defecto.")
+            fn(objetos, destino, cadenas=args.teff_chains)
         else:
             fn(objetos, destino)
         print(f"{nombre:<22} -> {destino}")
