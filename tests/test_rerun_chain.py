@@ -121,6 +121,51 @@ class SafetyTests(unittest.TestCase):
             self.assertIn("legacy", str(caja.exception))
             corre.assert_not_called()
 
+    def test_a_run_linking_another_runs_products_is_refused_before_launching_anything(self):
+        """El caso del 2026-10-15: el G4 de un run de prueba escrito en el run del paper."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            padre = Path(tmp) / "padre" / "stages"
+            padre.mkdir(parents=True)
+            (padre / "stage_g4_classification.json").write_text('{"run_id": "PADRE"}', encoding="utf-8")
+            (run_dir / "stages").mkdir()
+            (run_dir / "stages" / "stage_g4_classification.json").symlink_to(
+                padre / "stage_g4_classification.json")
+            with mock.patch.object(RC.subprocess, "run") as corre:
+                with self.assertRaises(SystemExit) as caja:
+                    RC.main(["--run-id", "RUN_X", "--project-root", tmp, "--solo", "G4"])
+            self.assertIn("stages/stage_g4_classification.json", str(caja.exception))
+            corre.assert_not_called()
+            self.assertEqual((padre / "stage_g4_classification.json").read_text(encoding="utf-8"),
+                             '{"run_id": "PADRE"}')
+
+    def test_a_whole_folder_linked_out_of_the_run_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp)
+            fuera = Path(tmp) / "otro_report"
+            fuera.mkdir()
+            (run_dir / "report").symlink_to(fuera, target_is_directory=True)
+            self.assertEqual([rel for rel, _d in RC.enlaces_hacia_fuera(run_dir)], ["report"])
+
+    def test_links_that_stay_inside_the_run_are_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = _run_falso(tmp, qcs=("stages/stage_e01_qc.json",))
+            (run_dir / "stages" / "alias_qc.json").symlink_to(run_dir / "stages" / "stage_e01_qc.json")
+            self.assertEqual(RC.enlaces_hacia_fuera(run_dir), [])
+
+    def test_a_run_that_is_itself_a_link_is_the_normal_case(self):
+        """`runs/<RUN>` apunta a `/mnt/2TB`: lo de dentro es del run, no de fuera."""
+        with tempfile.TemporaryDirectory() as tmp:
+            disco = _run_falso(Path(tmp) / "disco", qcs=("stages/stage_e01_qc.json",))
+            (disco / "stages" / "alias_qc.json").symlink_to(disco / "stages" / "stage_e01_qc.json")
+            (Path(tmp) / "runs").mkdir()
+            (Path(tmp) / "runs" / "RUN_X").symlink_to(disco, target_is_directory=True)
+            self.assertEqual(RC.enlaces_hacia_fuera(Path(tmp) / "runs" / "RUN_X"), [])
+            with mock.patch.object(RC.subprocess, "run") as corre:
+                rc = RC.main(["--run-id", "RUN_X", "--project-root", tmp, "--dry-run"])
+            self.assertEqual(rc, 0)
+            corre.assert_not_called()
+
     def test_dry_run_launches_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             _run_falso(tmp)
