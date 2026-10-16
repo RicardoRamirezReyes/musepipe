@@ -41,6 +41,9 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift] [--modo 
                                        [--tracks ATMO2020] [--av libre|primaria] [--av-fija AV] [--nlive 500]
                                        [--semilla 0] [--inyecta-bt ...] [--plantilla ...] --salida DIR
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
+     python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
+
+El corner plot de las mismas cadenas lo dibuja `scripts/paper_figures.py --figure teff_corner --teff-chains DIR`.
 """
 from __future__ import annotations
 
@@ -590,6 +593,63 @@ def resume(dirs, salida=None):
     return res
 
 
+#: nombre de cada rejilla en las tablas y figuras del paper
+NOMBRE_REJILLA = {"btsettl": "BT-Settl", "drift": "DRIFT-PHOENIX"}
+
+
+def _pm(p, nd=0, f=None, signo=False):
+    """`$m^{+a}_{-b}$` (LaTeX): la mediana y el intervalo 16–84 % de un dict de `percentiles`; `f` transforma los
+    percentiles antes (monótona creciente, así que conserva el orden); `signo` escribe el + de la mediana."""
+    f = f or (lambda x: x)
+    m, lo, hi = (f(p[k]) for k in ("p50", "p16", "p84"))
+    t = f"{{:.{nd}f}}"
+    tm = f"{{:{'+' if signo else ''}.{nd}f}}"
+    return f"${tm.format(m)}^{{+{t.format(hi - m)}}}_{{-{t.format(m - lo)}}}$"
+
+
+def _de_la_tabla(d):
+    """Una corrida sobre los datos (no plantilla ni inyección), `libre`, con la A_V fija o con el prior."""
+    return d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
+
+
+def filas_tabla(corridas, deltas, nombres):
+    """El cuerpo LaTeX de la tabla de las cadenas del apéndice B: por compañero (en el orden de `nombres`,
+    slug -> nombre en el texto), por rejilla y con A_V 1.8, 3.0 y con prior, la mediana y el 16–84 % de T_eff,
+    log g, R, A_V, r_K, el error de modelo en MUSE y Δ, y ln Z relativo al mejor ajuste del compañero. `deltas`:
+    etiqueta -> `percentiles` del margen. Solo las corridas `libre` con A_V fija o con prior; una A_V fija va
+    sin intervalo; las plantillas e inyecciones (`verdad`) no entran."""
+    filas = []
+    for slug, nombre in nombres.items():
+        suyas = [d for d in corridas if d["slug"] == slug and _de_la_tabla(d)]
+        if not suyas:
+            continue
+        lnz_max = max(d["logz"] for d in suyas)
+        filas.append(rf"\multicolumn{{9}}{{l}}{{{nombre}}} \\")
+        orden = lambda d: (list(NOMBRE_REJILLA).index(d.get("rejilla", "btsettl")),
+                           math.inf if d.get("av_fija") is None else d["av_fija"])
+        for d in sorted(suyas, key=orden):
+            P = d["posterior"]
+            av = (f"${d['av_fija']:.1f}$" if d.get("av_fija") is not None else _pm(P["av"], 2))
+            celdas = [NOMBRE_REJILLA[d.get("rejilla", "btsettl")], _pm(P["teff"]), _pm(P["logg"], 2),
+                      _pm(P["r_rj"], 2), av, _pm(P["rk"], 2), _pm(P["lnf_vis"], 1, lambda x: 100 * math.exp(x)),
+                      _pm(deltas[d["etiqueta"]], 2, signo=True), f"${d['logz'] - lnz_max:.1f}$"]
+            filas.append("\\quad " + " & ".join(celdas) + r" \\")
+    return filas
+
+
+def tabla(dirs):
+    """Imprime `filas_tabla` para las corridas de `dirs`, con el margen de cada muestra (como `resume`)."""
+    from scripts import tipo_ir_indices as tir
+    todos = [d for d in _carga(dirs) if _de_la_tabla(d)]
+    slugs = sorted({d["slug"] for d in todos})
+    nombres = {s: tir.perfil(s)["paper"]["display"].replace(" ", "~") for s in slugs}
+    entradas = {s: entrada_margen(s) for s in slugs}
+    deltas = {d["etiqueta"]: percentiles(margen_de_corrida(d, entradas[d["slug"]])) for d in todos}
+    filas = filas_tabla(todos, deltas, nombres)
+    print("\n".join(filas))
+    return filas
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="orden", required=True)
@@ -611,9 +671,14 @@ def main(argv=None):
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`")
     ar.add_argument("dirs", type=Path, nargs="+")
     ar.add_argument("--json", type=Path)
+    at = sub.add_parser("tabla", help="cuerpo LaTeX de la tabla de las cadenas del apéndice B del paper")
+    at.add_argument("dirs", type=Path, nargs="+")
     a = ap.parse_args(argv)
     if a.orden == "ajusta":
         return ajusta(a)
+    if a.orden == "tabla":
+        tabla(a.dirs)
+        return 0
     resume(a.dirs, a.json)
     return 0
 

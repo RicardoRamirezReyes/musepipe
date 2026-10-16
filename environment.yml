@@ -16,3 +16,4 @@ dependencies:
       - ipykernel==6.29.5
       - maoppy==1.7.1
       - dynesty==3.1.0
+      - corner==2.2.3
