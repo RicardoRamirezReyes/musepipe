@@ -150,7 +150,6 @@ def _hay_runs():
     return True
 
 
-@unittest.skipUnless(_hay_runs(), "sin los QC de los runs del paper")
 class TablaDeLasCadenasTests(unittest.TestCase):
     """El cuerpo LaTeX de la tabla de las cadenas del apéndice B (`filas_tabla`), sin leer nada de disco."""
 
@@ -200,6 +199,7 @@ class TablaDeLasCadenasTests(unittest.TestCase):
         self.assertEqual(self.tb.filas_tabla([], {}, {"X": "Obj~X"}), [])
 
 
+@unittest.skipUnless(_hay_runs(), "sin los QC de los runs del paper")
 class UmbralDelPaperTests(unittest.TestCase):
     """El umbral cromosférico y la pendiente del margen, desde los runs del paper."""
 
