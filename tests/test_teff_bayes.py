@@ -150,6 +150,55 @@ def _hay_runs():
     return True
 
 
+class TablaDeLasCadenasTests(unittest.TestCase):
+    """El cuerpo LaTeX de la tabla de las cadenas del apéndice B (`filas_tabla`), sin leer nada de disco."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tb = _carga("teff_bayes")
+
+    @staticmethod
+    def _p(m, lo, hi):
+        return dict(p16=lo, p50=m, p84=hi)
+
+    def _corrida(self, etiqueta, rejilla, av_fija, logz, modo="libre", av="primaria", verdad=None):
+        p = self._p
+        return dict(etiqueta=etiqueta, slug="X", modo=modo, av=av, av_fija=av_fija, rejilla=rejilla, logz=logz,
+                    verdad=verdad, posterior=dict(
+                        teff=p(2500.0, 2480.0, 2530.0), logg=p(4.0, 3.9, 4.1), r_rj=p(1.5, 1.4, 1.6),
+                        av=p(2.5, 2.3, 2.6), rk=p(0.5, 0.4, 0.6),
+                        lnf_vis=p(math.log(0.15), math.log(0.13), math.log(0.17))))
+
+    def test_mediana_e_intervalo_16_84(self):
+        self.assertEqual(self.tb._pm(self._p(2712.0, 2689.0, 2748.0)), "$2712^{+36}_{-23}$")
+        self.assertEqual(self.tb._pm(self._p(0.17, 0.12, 0.22), 2, signo=True), "$+0.17^{+0.05}_{-0.05}$")
+        self.assertEqual(self.tb._pm(self._p(-0.27, -0.31, -0.24), 2, signo=True), "$-0.27^{+0.03}_{-0.04}$")
+        # `f` transforma los percentiles antes de restar: el error de modelo en %, desde ln f
+        en_pct = lambda x: 100 * math.exp(x)
+        self.assertEqual(self.tb._pm(self._p(math.log(0.15), math.log(0.13), math.log(0.17)), 1, en_pct),
+                         "$15.0^{+2.0}_{-2.0}$")
+
+    def test_orden_av_fija_sin_intervalo_y_lnz_relativo(self):
+        corridas = [self._corrida("d-prior", "drift", None, 90.0), self._corrida("bt-3", "btsettl", 3.0, 100.0),
+                    self._corrida("bt-prior", "btsettl", None, 97.5), self._corrida("bt-1.8", "btsettl", 1.8, 80.0),
+                    # no entran: una plantilla, el modo evolutivo y la A_V libre, aunque tengan mejor ln Z
+                    self._corrida("pl", "btsettl", None, 120.0, verdad={"plantilla": "TWA26"}),
+                    self._corrida("evo", "btsettl", None, 130.0, modo="evo"),
+                    self._corrida("libre", "btsettl", None, 140.0, av="libre")]
+        deltas = {d["etiqueta"]: self._p(0.1, 0.05, 0.15) for d in corridas}
+        filas = self.tb.filas_tabla(corridas, deltas, {"X": "Obj~X"})
+        self.assertEqual(filas[0], r"\multicolumn{9}{l}{Obj~X} \\")
+        celdas = [f.split(" & ") for f in filas[1:]]
+        self.assertEqual([len(c) for c in celdas], [9] * 4)
+        self.assertEqual([c[0] for c in celdas], [r"\quad BT-Settl"] * 3 + [r"\quad DRIFT-PHOENIX"])
+        self.assertEqual([c[4] for c in celdas], ["$1.8$", "$3.0$", "$2.50^{+0.10}_{-0.20}$", "$2.50^{+0.10}_{-0.20}$"])
+        self.assertEqual([c[7] for c in celdas], ["$+0.10^{+0.05}_{-0.05}$"] * 4)
+        self.assertEqual([c[-1] for c in celdas], [r"$-20.0$ \\", r"$0.0$ \\", r"$-2.5$ \\", r"$-10.0$ \\"])
+
+    def test_un_companero_sin_corridas_no_deja_cabecera(self):
+        self.assertEqual(self.tb.filas_tabla([], {}, {"X": "Obj~X"}), [])
+
+
 @unittest.skipUnless(_hay_runs(), "sin los QC de los runs del paper")
 class UmbralDelPaperTests(unittest.TestCase):
     """El umbral cromosférico y la pendiente del margen, desde los runs del paper."""
