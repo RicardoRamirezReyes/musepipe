@@ -11,6 +11,11 @@ docs/2026-09-25_cifras_por_noche_a_55px.md.
   del 09-02 (6.7e5, 4.1e5, 2.7e2, 5.4e3) y los flujos al 1-3 %.
 - Controles del cubo analizado: el método identificado el 09-20 (continuo entre 20 y 80 Å),
   sobre `control_spectra` de `spec_calibrated_psffit_controls.npz`.
+- Criterios de acreción de White & Basri (2003) para la primaria (añadido 2026-10-16): el ancho
+  a 10 % del pico (mismo estimador que el FWHM) y su versión sin la LSF de la noche, restada en
+  cuadratura con el ancho a 10 % de una gaussiana (`h01_lsf_fwhm_A` del config de cada run); y
+  la EW sobre 6540-6590 Å con el continuo lineal de 6470-6530 y 6600-6660 Å, el estimador del
+  notebook D2_primary_star_debug, que cuenta las alas que la ventana de ±6 Å deja fuera.
 
 Los runs salen de `targets/<slug>.json`: `paper.previous_run` (la noche buena),
 `paper.second_epoch_run` (la segunda) y `paper.run` (el cubo analizado).
@@ -50,14 +55,26 @@ def error_integrado(e, lin, dl):
     return float(np.sqrt(np.nansum((e[lin] * dl[lin]) ** 2)))
 
 
-def fwhm_kms(w, f, *, centro=HA_A, ventana_A=10.0, cont_A=(10.0, 40.0)):
+#: ancho a 10 % del pico de una gaussiana en unidades de su FWHM: sqrt(ln 10 / ln 2)
+ANCHO10_GAUSS = float(np.sqrt(np.log(10.0) / np.log(2.0)))
+#: el estimador de EW de notebooks/<obj>/debug/D2_primary_star_debug.ipynb
+LINEA_ANCHA_A = (6540.0, 6590.0)
+LATERALES_A = ((6470.0, 6530.0), (6600.0, 6660.0))
+
+
+def fwhm_kms(w, f, **kw):
     """FWHM por cruce del medio máximo (interpolado), el mismo estimador para los dos objetos."""
+    return ancho_kms(w, f, fraccion=0.5, **kw)
+
+
+def ancho_kms(w, f, *, fraccion, centro=HA_A, ventana_A=10.0, cont_A=(10.0, 40.0)):
+    """Ancho completo a `fraccion` del pico, por cruce interpolado a cada lado del pico."""
     d = np.abs(w - centro)
     c0 = np.nanmedian(f[(d >= cont_A[0]) & (d <= cont_A[1])])
     sel = d <= ventana_A
     x, y = w[sel], f[sel] - c0
     i = int(np.nanargmax(y))
-    m = y[i] / 2
+    m = y[i] * fraccion
     j = i
     while j > 0 and y[j] > m:
         j -= 1
@@ -65,18 +82,46 @@ def fwhm_kms(w, f, *, centro=HA_A, ventana_A=10.0, cont_A=(10.0, 40.0)):
     k = i
     while k < len(y) - 1 and y[k] > m:
         k += 1
+    if y[j] > m or y[k] > m:
+        return float("nan")  # la línea no baja a `fraccion` dentro de la ventana
     der = x[k - 1] + (m - y[k - 1]) * (x[k] - x[k - 1]) / (y[k] - y[k - 1])
     return C_KMS * float(der - izq) / float(x[i])
 
 
-def noche(stages):
+def ew_ancha(w, f, *, linea_A=LINEA_ANCHA_A, laterales_A=LATERALES_A):
+    """EW (Å, < 0 en emisión) sobre `linea_A`, con un continuo lineal ajustado en `laterales_A`."""
+    lat = np.zeros(w.shape, dtype=bool)
+    for lo, hi in laterales_A:
+        lat |= (w >= lo) & (w <= hi)
+    ok = lat & np.isfinite(f)
+    cont = np.polyval(np.polyfit(w[ok], f[ok], 1), w)
+    nuc = (w >= linea_A[0]) & (w <= linea_A[1])
+    dl = np.gradient(w)
+    return -float(np.nansum(((f - cont) / cont)[nuc] * dl[nuc]))
+
+
+def sin_lsf_kms(ancho10_kms, lsf_fwhm_A, *, centro=HA_A):
+    """El ancho a 10 % sin el instrumental: resta en cuadratura el de una gaussiana de FWHM `lsf_fwhm_A`."""
+    inst = ANCHO10_GAUSS * C_KMS * lsf_fwhm_A / centro
+    return float(np.sqrt(ancho10_kms ** 2 - inst ** 2)) if ancho10_kms > inst else float("nan")
+
+
+def lsf_del_run(run):
+    """`h01_lsf_fwhm_A` del config del run: la LSF medida en esa noche (A4/M2)."""
+    return float(json.loads((ROOT / "runs" / run / "config" / "config.json").read_text())["config"]["h01_lsf_fwhm_A"])
+
+
+def noche(stages, lsf_fwhm_A=None):
     ws, fs, es = leer(stages / "spec_calibrated_psffit_star.fits")
     fp, cp, lin, dl = integrado(ws, fs)
     wo, fo, eo = leer(stages / "spec_calibrated_psffit_object.fits")
     fc, _, lino, dlo = integrado(wo, fo)
+    a10 = ancho_kms(ws, fs, fraccion=0.1)
     return {"F_prim": fp, "F_prim_err": error_integrado(es, lin, dl), "EW_prim_A": -fp / cp,
             "F_comp": fc, "F_comp_err": error_integrado(eo, lino, dlo),
-            "fwhm_prim_kms": fwhm_kms(ws, fs), "fwhm_comp_kms": fwhm_kms(wo, fo)}
+            "fwhm_prim_kms": fwhm_kms(ws, fs), "fwhm_comp_kms": fwhm_kms(wo, fo),
+            "ancho10_prim_kms": a10, "EW_prim_ancha_A": ew_ancha(ws, fs), "lsf_fwhm_A": lsf_fwhm_A,
+            "ancho10_prim_sin_lsf_kms": sin_lsf_kms(a10, lsf_fwhm_A) if lsf_fwhm_A else None}
 
 
 def controles_del_analizado(stages):
@@ -105,7 +150,7 @@ def main(argv=None):
     a.analizado = a.analizado or paper["run"]
     s1 = Path(a.stages_noche1) if a.stages_noche1 else ROOT / "runs" / a.noche1 / "stages"
     s2 = Path(a.stages_noche2) if a.stages_noche2 else ROOT / "runs" / a.noche2 / "stages"
-    n1, n2 = noche(s1), noche(s2)
+    n1, n2 = noche(s1, lsf_del_run(a.noche1)), noche(s2, lsf_del_run(a.noche2))
     r = n2["F_prim"] / n1["F_prim"]
     r_err = r * np.hypot(n1["F_prim_err"] / n1["F_prim"], n2["F_prim_err"] / n2["F_prim"])
     pred = n1["F_comp"] / n1["F_prim"] * n2["F_prim"]
@@ -116,6 +161,10 @@ def main(argv=None):
     print(f"compañero: noche1 {n1['F_comp']:.0f} ± {n1['F_comp_err']:.0f}, noche2 {n2['F_comp']:.0f} ± {n2['F_comp_err']:.0f}")
     print(f"fuga: predicción noche2 {pred:.3g} -> {out['fuga_z']:.2f}σ")
     print(f"FWHM noche1: compañero {n1['fwhm_comp_kms']:.0f}, primaria {n1['fwhm_prim_kms']:.0f} km/s")
+    for nombre, n in (("noche1", n1), ("noche2", n2)):
+        print(f"primaria {nombre} (White & Basri 2003): ancho a 10 % {n['ancho10_prim_kms']:.0f} km/s, sin la LSF "
+              f"de {n['lsf_fwhm_A']:.3f} Å {n['ancho10_prim_sin_lsf_kms']:.0f} km/s; FWHM {n['fwhm_prim_kms']:.0f} km/s; "
+              f"EW {n['EW_prim_A']:+.2f} Å (±6 Å), {n['EW_prim_ancha_A']:+.2f} Å (6540-6590 Å)")
     c = out["controles_analizado"]
     print(f"{a.analizado}: compañero {c['comp']:.0f}; controles {c['media']:.0f} ± {c['sd']:.0f} (n={c['n']}); "
           f"compañero/sd {c['comp_sobre_sd']:.2f}; media {c['media_en_sigmas']:+.2f}σ")
