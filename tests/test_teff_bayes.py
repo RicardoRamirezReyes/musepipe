@@ -83,6 +83,59 @@ class AuxiliaresTests(unittest.TestCase):
         self.assertEqual((bt["teff"], bt["logg"]), ((2000.0, 100.0, 13), (2.5, 0.5, 5)))
         self.assertEqual((dr["teff"], dr["logg"]), ((2000.0, 100.0, 11), (3.0, 0.5, 7)))
 
+    def test_rejillas_nuevas_con_ejes_y_nombre(self):
+        for clave, r in self.tb.REJILLAS.items():
+            with self.subTest(clave):
+                self.assertEqual(len(r["teff"]), 3)
+                self.assertEqual(len(r["logg"]), 3)
+                self.assertTrue(r["nombre"])
+        # Diamondback llega a 2400 K; BT-Dusty empieza en 2600 K
+        self.assertEqual(self.tb.REJILLAS["diamondback_f2"]["teff"], (2000.0, 100.0, 5))
+        # la ampliada baja a 1600 K desde su propio directorio (los nodos fríos con nubes, con tolerancia de flujo
+        # mayor, no se mezclan con los de `npz/`)
+        self.assertEqual(self.tb.REJILLAS["diamondback1600_f2"]["teff"], (1600.0, 100.0, 9))
+        self.assertEqual(self.tb.REJILLAS["diamondback1600_f2"]["dir"].parent.name, "npz_1600")
+        self.assertEqual(self.tb.REJILLAS["diamondback_f2"]["dir"].parent.name, "npz")
+        self.assertEqual(self.tb.REJILLAS["bt_dusty"]["teff"][0], 2600.0)
+        # SPHINX va sola en el modo R = 250; las demás solo si se pide
+        self.assertTrue(self.tb._r250("sphinx"))
+        self.assertFalse(self.tb._r250("btsettl"))
+        self.assertTrue(self.tb._r250("btsettl", forzado=True))
+
+    def test_empareja_junta_pixeles_contiguos_de_a_dos(self):
+        w = np.array([10.0, 12.0, 14.0, 16.0, 30.0, 32.0, 34.0])   # hueco entre 16 y 30, entre dos pares
+        lo, hi = w - 1.0, w + 1.0
+        s = dict(nombre="X", brazo="nir", w=w, lo=lo, hi=hi, f=np.arange(7.0), e=np.full(7, 2.0),
+                 bueno=np.array([True, True, True, False, True, True, True]))
+        r = self.tb._empareja(s)
+        np.testing.assert_array_equal(r["w"], [11.0, 15.0, 31.0])          # el 34 queda suelto
+        np.testing.assert_array_equal(r["lo"], [9.0, 13.0, 29.0])
+        np.testing.assert_array_equal(r["hi"], [13.0, 17.0, 33.0])
+        np.testing.assert_array_equal(r["f"], [0.5, 2.5, 4.5])
+        np.testing.assert_allclose(r["e"], np.full(3, 2.0 / math.sqrt(2)))
+        np.testing.assert_array_equal(r["bueno"], [True, False, True])     # un píxel malo invalida el par
+        s2 = dict(s, w=np.array([10.0, 12.0, 30.0, 32.0]), lo=np.array([9.0, 11.0, 29.0, 31.0]),
+                  hi=np.array([11.0, 13.0, 31.0, 33.0]), f=np.zeros(4), e=np.ones(4), bueno=np.ones(4, bool))
+        self.assertEqual(self.tb._empareja(s2)["w"].tolist(), [11.0, 31.0])
+        s3 = dict(s2, w=np.array([10.0, 30.0]), lo=np.array([9.0, 29.0]), hi=np.array([11.0, 31.0]),
+                  f=np.zeros(2), e=np.ones(2), bueno=np.ones(2, bool))
+        self.assertEqual(self.tb._empareja(s3)["w"].size, 0)               # no contiguos: no se juntan
+
+    def test_bases_nativas_interpolan_sin_degradar(self):
+        wm = np.linspace(5000.0, 9000.0, 81)
+        pls = [dict(vis=(wm, 2.0 * wm), nir=(wm, wm))]
+        segs = [dict(brazo="vis", w=np.array([4000.0, 6025.0, 8000.0])), dict(brazo="nir", w=np.array([7000.0]))]
+        (b,) = self.tb._bases_nativas(pls, segs).values()
+        self.assertTrue(np.isnan(b[0][0]))                                 # fuera de cobertura
+        np.testing.assert_allclose(b[0][1:], [12050.0, 16000.0])
+        np.testing.assert_allclose(b[1], [7000.0])
+
+    def test_datos_separa_los_dos_brazos(self):
+        vis, nir = {"brazo": "vis"}, {"brazo": "nir"}
+        self.assertEqual([self.tb._entra(s, "todo") for s in (vis, nir)], [True, True])
+        self.assertEqual([self.tb._entra(s, "muse") for s in (vis, nir)], [True, False])
+        self.assertEqual([self.tb._entra(s, "ir") for s in (vis, nir)], [False, True])
+
 
 def _modelo_sintetico(tb):
     """Un `Modelo` sin leer disco: una banda K y una rejilla 3×2 con log F lineal en T_eff, log g y λ."""
@@ -138,6 +191,20 @@ class ModeloFisicoTests(unittest.TestCase):
         self.assertEqual((teff, logg), (2200.0, 3.5))
         self.assertAlmostEqual(r_cm, 2.1 * RJUP_CM)
         self.assertAlmostEqual(lbol, 4 * math.pi * r_cm ** 2 * SIGMA_SB_CGS * 2200.0 ** 4 / LSUN_ERG_S, places=15)
+
+    def test_sin_ir_r_k_sale_de_los_parametros(self):
+        from musepipe.constants import PC_CM, RJUP_CM
+        m, logf = _modelo_sintetico(self.tb)
+        m.d_pc, m.d_err, m.av_fija, m.av_modo, m.av0, m.av_err = 140.0, 5.0, None, "primaria", 1.8, 0.3
+        m._prepara_priores()
+        self.assertIn("rk", m.nombres)
+        m.segs[0]["banda"], m.bandas = "vis", ["vis"]   # el mismo segmento como si fuera MUSE (`--datos muse`)
+        m._prepara_priores()
+        self.assertEqual(m.nombres, ["teff", "logg", "r_rj", "d_pc", "av", "s_K", "lnf_vis"])
+        (out,) = m.modelos(np.array([2130.0, 3.2, 2.0, 140.0, 1.5, 1.1, math.log(0.05)]))
+        om = (2.0 * RJUP_CM / (140.0 * PC_CM)) ** 2
+        esperado = 1.1 * om * 10 ** logf(2130.0, 3.2, m.segs[0]["w"]) * 10 ** (-0.4 * 0.12 * 1.5)
+        np.testing.assert_allclose(out, esperado, rtol=1e-12)   # sin el término del polvo
 
 
 def _hay_runs():
@@ -198,6 +265,18 @@ class TablaDeLasCadenasTests(unittest.TestCase):
     def test_un_companero_sin_corridas_no_deja_cabecera(self):
         self.assertEqual(self.tb.filas_tabla([], {}, {"X": "Obj~X"}), [])
 
+    def test_las_corridas_con_parte_de_los_datos_no_entran(self):
+        solo = [dict(self._corrida(f"solo-{x}", "btsettl", None, 150.0), datos=x) for x in ("muse", "ir")]
+        self.assertEqual(self.tb.filas_tabla(solo, {}, {"X": "Obj~X"}), [])
+        self.assertTrue(self.tb._de_la_tabla(dict(self._corrida("todo", "btsettl", None, 0.0), datos="todo")))
+        self.assertTrue(self.tb._de_la_tabla(self._corrida("anterior", "btsettl", None, 0.0)))  # json sin `datos`
+        # las rejillas que no están en el paper tampoco (no tienen nombre en la tabla)
+        self.assertFalse(self.tb._de_la_tabla(self._corrida("otra", "ames_dusty", None, 0.0)))
+        self.assertEqual(self.tb.filas_tabla([self._corrida("otra", "diamondback_f2", None, 0.0)], {},
+                                             {"X": "Obj~X"}), [])
+        # ni BT-Settl en el modo R = 250 (el control de SPHINX)
+        self.assertFalse(self.tb._de_la_tabla(dict(self._corrida("r250", "btsettl", None, 0.0), r_analisis=250)))
+
 
 @unittest.skipUnless(_hay_runs(), "sin los QC de los runs del paper")
 class UmbralDelPaperTests(unittest.TestCase):
@@ -230,7 +309,7 @@ def _hay_datos():
     ti = _carga("tipo_ir_indices")
     rej = _carga("teff_bayes").REJILLAS
     return (_hay_runs() and ti.DEFAULT_CDS.exists() and tp.DEFAULT_NIR.exists()
-            and all(r["dir"].exists() for r in rej.values()))
+            and all(rej[k]["dir"].exists() for k in ("btsettl", "drift")))   # las dos que usan estas pruebas
 
 
 @pytest.mark.slow
@@ -262,6 +341,24 @@ class MaquinariaTests(unittest.TestCase):
             otro = th.copy()
             otro[P["teff"]] += dt
             self.assertGreater(verdad, m.loglike(otro), dt)
+
+    def test_muse_e_ir_parten_el_ajuste_conjunto(self):
+        """`--datos`: los mismos píxeles que el conjunto, y su verosimilitud es la suma de las dos partes."""
+        todo, muse, ir = (self.tb.Modelo("ROXs12b", av_fija=1.8, datos=d) for d in ("todo", "muse", "ir"))
+        n = lambda m: {s["nombre"]: int(s["d"].size) for s in m.segs}
+        self.assertEqual(list(n(muse)), ["MUSE"])
+        self.assertEqual({**n(ir), **n(muse)}, n(todo))
+        self.assertNotIn("rk", muse.pos)
+        self.assertEqual((ir.bandas, muse.bandas), (["H", "J", "K"], ["vis"]))
+        valores = dict(teff=2500.0, logg=3.5, r_rj=2.0, d_pc=todo.d_pc, av=1.8, rk=0.3)
+
+        def th(m):
+            v = np.empty(m.ndim)
+            for k, i in m.pos.items():
+                v[i] = valores.get(k, 1.0 if k.startswith("s_") else math.log(0.1))
+            return v
+        total = todo.loglike(th(todo))
+        self.assertAlmostEqual(total, muse.loglike(th(muse)) + ir.loglike(th(ir)), delta=1e-9 * abs(total))
 
 
 if __name__ == "__main__":
