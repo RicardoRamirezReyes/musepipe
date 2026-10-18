@@ -82,9 +82,10 @@ from musepipe.models.extinction import CCMExtinction  # noqa: E402
 
 #: rejillas de atmósferas: directorio de npz (formato de `musepipe.models.cache`) y ejes (inicio, paso, n).
 #: DRIFT-PHOENIX es la segunda rejilla, para el sistemático de modelo; ATMO 2020 se descartó porque sus autores
-#: la dan por válida solo bajo 2000 K (`/mnt/2TB/IR_Data/atmo2020/README.md`).
+#: la dan por válida solo bajo 2000 K (`/mnt/2TB/IR_Data/atmo2020/README.md`). BT-Settl llega a log g 5.0 desde
+#: 2026-10-17 (decisión del autor): con 2.5–4.5, la posterior de 12 b tocaba el techo de 4.5.
 REJILLAS = {"btsettl": dict(dir=Path("/mnt/2TB/IR_Data/btsettl_cifist/npz"), teff=(2000.0, 100.0, 13),
-                            logg=(2.5, 0.5, 5), nombre="BT-Settl CIFIST2011"),
+                            logg=(2.5, 0.5, 6), nombre="BT-Settl CIFIST2011"),
             "drift": dict(dir=Path("/mnt/2TB/IR_Data/drift_phoenix/npz"), teff=(2000.0, 100.0, 11),
                           logg=(3.0, 0.5, 7), nombre="DRIFT-PHOENIX")}
 #: más rejillas (pedido del autor 2026-10-16, reunión con Claudio: «probar con más modelos»). Las tres de SVO son
@@ -491,6 +492,8 @@ def ajusta(a):
             post[f"der_{k}"] = percentiles(der[:, i] / (RJUP_CM if k == "r_cm" else 1.0))
         out = dict(etiqueta=et, slug=a.slug, run=mod.run, modo=a.modo, av=a.av, av_fija=a.av_fija,
                    rejilla=a.rejilla, datos=a.datos, r_analisis=mod.r_analisis, nodos_interpolados=mod.rellenados,
+                   # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
+                   ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
                    ndim=mod.ndim, nombres=mod.nombres, segundos=r["segundos"], ncall=r["ncall"],
                    logz=r["logz"], logz_err=r["logz_err"], logl_max=r["logl_max"],
