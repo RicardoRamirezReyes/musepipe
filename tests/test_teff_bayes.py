@@ -80,7 +80,7 @@ class AuxiliaresTests(unittest.TestCase):
 
     def test_las_dos_rejillas_declaran_sus_ejes(self):
         bt, dr = self.tb.REJILLAS["btsettl"], self.tb.REJILLAS["drift"]
-        self.assertEqual((bt["teff"], bt["logg"]), ((2000.0, 100.0, 13), (2.5, 0.5, 5)))
+        self.assertEqual((bt["teff"], bt["logg"]), ((2000.0, 100.0, 13), (2.5, 0.5, 6)))   # log g 2.5–5.0 (2026-10-17)
         self.assertEqual((dr["teff"], dr["logg"]), ((2000.0, 100.0, 11), (3.0, 0.5, 7)))
 
     def test_rejillas_nuevas_con_ejes_y_nombre(self):
