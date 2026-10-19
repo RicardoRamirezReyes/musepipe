@@ -41,8 +41,8 @@ AMES-Cond y BT-Dusty (PHOENIX con otro trato del polvo), Sonora Diamondback por 
 2400 K; desde 2000 K o, `diamondback1600_<fsed>`, desde 1600 K) y SPHINX (otro código, sin nubes). SPHINX está
 muestreado a λ/Δλ = 250, así que su ajuste va en el modo R = 250 (`--r250`, automático para ella): los píxeles de
 los datos se agrupan de a dos y el modelo se usa a su resolución. `--r250` con una rejilla de resolución alta es
-el control que separa el efecto de la resolución del de la rejilla. Estas corridas tampoco entran en la tabla del
-paper.
+el control que separa el efecto de la resolución del de la rejilla. Estas corridas tampoco entran en la tabla de
+las cadenas: van a la de rejillas (`rejillas`, Tabla B.7 del paper, pedida el 2026-10-18).
 
 `resume` lee los json/npz de uno o varios directorios de `ajusta` y da, por corrida, la T_eff y el margen
 coherente sobre el suelo cromosférico de Manara et al. (2013, Ec. 2): por muestra, log(L_acc/L_bol) − suelo(T_eff),
@@ -56,8 +56,10 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--semilla 0] [--inyecta-bt ...] [--plantilla ...] --salida DIR
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
+     python scripts/teff_bayes.py rejillas DIR [DIR ...]   # cuerpo LaTeX de la tabla de rejillas (ap. B)
 
-El corner plot de las mismas cadenas lo dibuja `scripts/paper_figures.py --figure teff_corner --teff-chains DIR`.
+El corner plot de las mismas cadenas lo dibuja `scripts/paper_figures.py --figure teff_corner --teff-chains DIR`;
+el de solo MUSE / solo IR, `--figure teff_corner_data`; los de todas las cadenas, `scripts/teff_suplemento.py`.
 """
 from __future__ import annotations
 
@@ -749,6 +751,89 @@ def tabla(dirs):
     return filas
 
 
+#: las rejillas de la tabla de rejillas del apéndice B, en el orden de sus filas, con su nombre en LaTeX. De
+#: Diamondback entra la ampliada desde 1600 K: la de 2000 K recortaba la cola de 42B b
+#: (docs/2026-10-17_teff_mas_rejillas.md).
+REJILLAS_TABLA = {"btsettl": "BT-Settl", "drift": "DRIFT-PHOENIX", "ames_dusty": "AMES-Dusty",
+                  "ames_cond": "AMES-Cond", "bt_dusty": "BT-Dusty",
+                  **{f"diamondback1600_{f}": ("Diamondback, no clouds" if f == "nc"
+                                              else rf"Diamondback, \(f_{{\rm sed}} = {f[1:]}\)")
+                     for f in ("f1", "f2", "f3", "f4", "f8", "nc")},
+                  "sphinx": "SPHINX"}
+
+
+def _de_rejillas(d):
+    """Una corrida de la tabla de rejillas: como `_de_la_tabla`, pero con cualquier rejilla de `REJILLAS_TABLA` y
+    a cualquier resolución."""
+    return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
+            and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in REJILLAS_TABLA)
+
+
+def en_el_borde(d):
+    """Los parámetros ('teff', 'logg') cuyo 2.5 o 97.5 % cae a menos de medio paso del borde de su rejilla."""
+    rej = REJILLAS[d.get("rejilla", "btsettl")]
+    fuera = []
+    for p in ("teff", "logg"):
+        x0, paso, n = rej[p]
+        q = d["posterior"][p]
+        if q["p2_5"] - x0 < paso / 2 or x0 + paso * (n - 1) - q["p97_5"] < paso / 2:
+            fuera.append(p)
+    return fuera
+
+
+def filas_rejillas(corridas, deltas, nombres):
+    """El cuerpo LaTeX de la tabla de rejillas del apéndice B: por compañero (orden de `nombres`) y por rejilla
+    (orden de `REJILLAS_TABLA`, primero a R = 500 y después a R = 250), la mediana y el 16–84 % de T_eff, log g y
+    A_V del ajuste con el prior en A_V, la mediana de Δ con A_V 1.8, 3.0 y con el prior, y el ln Z del ajuste con
+    el prior menos el de BT-Settl a la misma resolución. Un valor con el 2.5 o el 97.5 % en el borde de su rejilla
+    lleva `\\tablefootmark{a}`. `deltas`: etiqueta -> `percentiles` del margen. Lo que falta va como `\\ldots`."""
+    filas = []
+    for slug, nombre in nombres.items():
+        suyas = {}
+        for d in corridas:
+            if d["slug"] != slug or not _de_rejillas(d):
+                continue
+            clave = (d.get("r_analisis", 500), d.get("rejilla", "btsettl"), d.get("av_fija"))
+            if clave in suyas:
+                raise SystemExit(f"dos corridas de {slug} con {clave}: {suyas[clave]['etiqueta']} y {d['etiqueta']}")
+            suyas[clave] = d
+        grupos = sorted({k[:2] for k in suyas}, key=lambda k: (-k[0], list(REJILLAS_TABLA).index(k[1])))
+        if not grupos:
+            continue
+        filas.append(rf"\multicolumn{{8}}{{l}}{{{nombre}}} \\")
+        for r, rejilla in grupos:
+            prior = suyas.get((r, rejilla, None))
+            ref = suyas.get((r, "btsettl", None))
+            celdas = [REJILLAS_TABLA[rejilla] + (r" (\(R = 250\))" if r == 250 else "")]
+            if prior is None:
+                celdas += [r"\ldots"] * 3
+            else:
+                borde = en_el_borde(prior)
+                marca = lambda p: r"\tablefootmark{a}" if p in borde else ""
+                P = prior["posterior"]
+                celdas += [_pm(P["teff"]) + marca("teff"), _pm(P["logg"], 2) + marca("logg"), _pm(P["av"], 2)]
+            for av in (1.8, 3.0, None):
+                d = suyas.get((r, rejilla, av))
+                celdas.append(f"${deltas[d['etiqueta']]['p50']:+.2f}$" if d is not None else r"\ldots")
+            celdas.append(f"${prior['logz'] - ref['logz']:.1f}$" if prior is not None and ref is not None
+                          else r"\ldots")
+            filas.append("\\quad " + " & ".join(celdas) + r" \\")
+    return filas
+
+
+def tabla_rejillas(dirs):
+    """Imprime `filas_rejillas` para las corridas de `dirs`, con el margen de cada muestra (como `tabla`)."""
+    from scripts import tipo_ir_indices as tir
+    todos = [d for d in _carga(dirs) if _de_rejillas(d)]
+    slugs = sorted({d["slug"] for d in todos})
+    nombres = {s: tir.perfil(s)["paper"]["display"].replace(" ", "~") for s in slugs}
+    entradas = {s: entrada_margen(s) for s in slugs}
+    deltas = {d["etiqueta"]: percentiles(margen_de_corrida(d, entradas[d["slug"]])) for d in todos}
+    filas = filas_rejillas(todos, deltas, nombres)
+    print("\n".join(filas))
+    return filas
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="orden", required=True)
@@ -775,11 +860,16 @@ def main(argv=None):
     ar.add_argument("--json", type=Path)
     at = sub.add_parser("tabla", help="cuerpo LaTeX de la tabla de las cadenas del apéndice B del paper")
     at.add_argument("dirs", type=Path, nargs="+")
+    ag = sub.add_parser("rejillas", help="cuerpo LaTeX de la tabla de rejillas del apéndice B del paper")
+    ag.add_argument("dirs", type=Path, nargs="+")
     a = ap.parse_args(argv)
     if a.orden == "ajusta":
         return ajusta(a)
     if a.orden == "tabla":
         tabla(a.dirs)
+        return 0
+    if a.orden == "rejillas":
+        tabla_rejillas(a.dirs)
         return 0
     resume(a.dirs, a.json)
     return 0

@@ -278,6 +278,74 @@ class TablaDeLasCadenasTests(unittest.TestCase):
         self.assertFalse(self.tb._de_la_tabla(dict(self._corrida("r250", "btsettl", None, 0.0), r_analisis=250)))
 
 
+class TablaDeRejillasTests(unittest.TestCase):
+    """El cuerpo LaTeX de la tabla de rejillas del apéndice B (`filas_rejillas`), sin leer nada de disco."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tb = _carga("teff_bayes")
+
+    @staticmethod
+    def _p(m, lo, hi, p2=None, p97=None):
+        return dict(p2_5=lo if p2 is None else p2, p16=lo, p50=m, p84=hi, p97_5=hi if p97 is None else p97)
+
+    def _corrida(self, rejilla, av_fija, logz, r=500, teff=(2500.0, 2480.0, 2530.0), logg=(4.0, 3.9, 4.1),
+                 **extra):
+        p = self._p
+        et = f"{rejilla}-{r}-{av_fija}"
+        return dict(etiqueta=et, slug="X", modo="libre", av="primaria", av_fija=av_fija, rejilla=rejilla,
+                    r_analisis=r, logz=logz, verdad=None,
+                    posterior=dict(teff=p(*teff), logg=p(*logg), av=p(2.5, 2.3, 2.6)), **extra)
+
+    def _filas(self, corridas):
+        deltas = {d["etiqueta"]: dict(p50=0.1 if d["av_fija"] is None else d["av_fija"] / 10) for d in corridas}
+        return self.tb.filas_rejillas(corridas, deltas, {"X": "Obj~X"})
+
+    def test_orden_resolucion_y_lnz_contra_bt_settl_a_la_misma_r(self):
+        corridas = [self._corrida("sphinx", None, 40.0, r=250), self._corrida("btsettl", None, 100.0),
+                    self._corrida("drift", None, 90.0), self._corrida("btsettl", None, 50.0, r=250),
+                    self._corrida("btsettl", 1.8, 80.0), self._corrida("btsettl", 3.0, 110.0)]
+        filas = self._filas(corridas)
+        self.assertEqual(filas[0], r"\multicolumn{8}{l}{Obj~X} \\")
+        celdas = [f.split(" & ") for f in filas[1:]]
+        self.assertEqual([len(c) for c in celdas], [8] * 4)
+        self.assertEqual([c[0] for c in celdas], [r"\quad BT-Settl", r"\quad DRIFT-PHOENIX",
+                                                  r"\quad BT-Settl (\(R = 250\))", r"\quad SPHINX (\(R = 250\))"])
+        # ln Z del prior contra BT-Settl con prior a la MISMA resolución (no contra la mejor A_V fija)
+        self.assertEqual([c[-1] for c in celdas], [r"$0.0$ \\", r"$-10.0$ \\", r"$0.0$ \\", r"$-10.0$ \\"])
+        # Δ con 1.8, 3.0 y prior; lo que no se corrió va como \ldots
+        self.assertEqual(celdas[0][4:7], ["$+0.18$", "$+0.30$", "$+0.10$"])
+        self.assertEqual(celdas[1][4:7], [r"\ldots", r"\ldots", "$+0.10$"])
+
+    def test_marca_el_borde_de_la_rejilla(self):
+        # BT-Settl: T_eff 2000–3200, log g 2.5–5.0 (paso 0.5): el 97.5 % de log g a 0.1 del techo
+        d = self._corrida("btsettl", None, 0.0, logg=(4.7, 4.5, 4.8))
+        d["posterior"]["logg"]["p97_5"] = 4.9
+        self.assertEqual(self.tb.en_el_borde(d), ["logg"])
+        celdas = self._filas([d])[1].split(" & ")
+        self.assertTrue(celdas[2].endswith(r"\tablefootmark{a}"))
+        self.assertFalse(celdas[1].endswith(r"\tablefootmark{a}"))
+        # Diamondback desde 1600 K: 1950 K ya no es borde; log g 3.5 (su mínimo) sí
+        d = self._corrida("diamondback1600_f1", None, 0.0, teff=(2050.0, 2020.0, 2080.0), logg=(3.55, 3.51, 3.6))
+        self.assertEqual(self.tb.en_el_borde(d), ["logg"])
+
+    def test_entran_las_rejillas_de_la_tabla_y_no_el_resto(self):
+        nombres = [self.tb.REJILLAS_TABLA[k] for k in ("diamondback1600_f2", "diamondback1600_nc")]
+        self.assertEqual(nombres, [r"Diamondback, \(f_{\rm sed} = 2\)", "Diamondback, no clouds"])
+        self.assertTrue(set(self.tb.REJILLAS_TABLA) <= set(self.tb.REJILLAS))
+        fuera = [self._corrida("diamondback_f2", None, 0.0),                       # la de 2000 K
+                 dict(self._corrida("btsettl", None, 0.0), datos="muse"),
+                 dict(self._corrida("btsettl", None, 0.0), verdad={"plantilla": "TWA26"}),
+                 dict(self._corrida("btsettl", None, 0.0), av="libre")]
+        self.assertEqual(self._filas(fuera), [])
+
+    def test_dos_corridas_de_la_misma_configuracion_fallan(self):
+        a, b = self._corrida("btsettl", None, 1.0), self._corrida("btsettl", None, 2.0)
+        b["etiqueta"] = "otra-semilla"
+        with self.assertRaises(SystemExit):
+            self._filas([a, b])
+
+
 @unittest.skipUnless(_hay_runs(), "sin los QC de los runs del paper")
 class UmbralDelPaperTests(unittest.TestCase):
     """El umbral cromosférico y la pendiente del margen, desde los runs del paper."""
