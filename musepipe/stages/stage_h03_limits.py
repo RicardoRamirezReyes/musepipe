@@ -22,6 +22,7 @@ from .stage_h01_detect import (
     expected_line_center_A,
     matched_filter_point,
 )
+from .stage08c_look_elsewhere import fit_gumbel_tail
 from .stage_x10_compare import METHOD_ORDER
 
 
@@ -31,7 +32,6 @@ M_SUN_G = 1.98847e33
 R_SUN_CM = 6.957e10
 G_CGS = 6.67430e-8
 YR_S = 31557600.0
-EULER_GAMMA = 0.5772156649015329
 ONE_SIDED_5SIGMA_FAP = 2.866515718791933e-7
 
 
@@ -329,19 +329,6 @@ def empirical_upper_quantile(values, fap=0.01):
         return float(np.quantile(vals, probability, interpolation="higher"))
 
 
-def fit_gumbel_moments(values):
-    vals = np.asarray(values, dtype=np.float64)
-    vals = vals[np.isfinite(vals)]
-    if vals.size < 3:
-        raise ValueError("At least three finite null maxima are required for Gumbel tail fitting.")
-    std = float(np.std(vals, ddof=1))
-    if not np.isfinite(std) or std <= 0:
-        raise ValueError("Null maxima must have non-zero scatter for Gumbel tail fitting.")
-    beta = std * math.sqrt(6.0) / math.pi
-    loc = float(np.mean(vals) - EULER_GAMMA * beta)
-    return loc, beta
-
-
 def gumbel_isf(fap, loc, beta):
     tail = float(fap)
     if not 0.0 < tail < 1.0:
@@ -393,14 +380,24 @@ def z_threshold_for(tail, estimator):
 
 
 def tail_limit_summary(null_values, *, fap_99=0.01, fap_5sigma=ONE_SIDED_5SIGMA_FAP):
+    """Umbrales del 99 % y del 5σ extrapolado sobre los maximos nulos de E1.
+
+    La Gumbel se ajusta con `fit_gumbel_tail`, la misma funcion con la que E1 da
+    la FAP: el umbral del 99 % es exactamente el z al que la FAP de E1 vale 0.01.
+    Con el ajuste por momentos que habia antes (hasta el 2026-10-20) los dos no
+    coincidian, y en ROXs 42B b el flujo medido superaba su propio limite.
+    """
     vals = np.asarray(null_values, dtype=np.float64)
     vals = vals[np.isfinite(vals)]
     if vals.size < 3:
         raise ValueError("At least three finite null maxima are required.")
-    loc, beta = fit_gumbel_moments(vals)
+    std = float(np.std(vals, ddof=1))
+    if not np.isfinite(std) or std <= 0:
+        raise ValueError("Null maxima must have non-zero scatter for Gumbel tail fitting.")
+    loc, beta = fit_gumbel_tail(vals)
     minimum_resolvable_fap = float(1.0 / (vals.size + 1))
     return {
-        "tail_model": "gumbel_moments",
+        "tail_model": "gumbel_mle",
         "n_controls": int(vals.size),
         "minimum_resolvable_fap": minimum_resolvable_fap,
         "q99_resolvable": bool(float(fap_99) >= minimum_resolvable_fap),
@@ -1453,7 +1450,6 @@ __all__ = [
     "ccm89_a_over_av",
     "compute_stage_h03_products",
     "empirical_upper_quantile",
-    "fit_gumbel_moments",
     "gumbel_isf",
     "interpolate_throughput",
     "limit_conversion_chain",
