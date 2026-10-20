@@ -4,8 +4,8 @@ Da las cifras del paper sobre el nivel cromosférico: ROXs 12 b en log(L_acc/L_b
 2500 K y 0.6 dex por debajo a 3100 K; la cota de ROXs 42B b 0.6 dex por debajo, extrapolada
 (docs/2026-10-13_correcciones_literatura.md). Desde el 2026-10-14 el paper ya no compara con las T_eff publicadas
 sino con la de su propio ajuste, muestra a muestra (`scripts/teff_bayes.py`, tests/test_teff_bayes.py); de aquí
-quedan el −3.62, el −4.40 (−4.45 hasta el 2026-10-20, con la cola de E3 por momentos) y, para 42B b con la L_bol
-publicada, el 0.5–0.7 dex a 2200–2350 K (−0.57 a 2270 K).
+quedan el −3.62, el −4.12 (−4.45 hasta el 2026-10-20: cola de E3 por momentos y limite = umbral) y, para 42B b con
+la L_bol publicada, el 0.2–0.4 dex a 2200–2350 K (−0.29 a 2270 K).
 Las primeras clases no leen runs: la relación, el margen, la
 marca de extrapolación y la clave `fisica` de `targets/`. `CifrasDelPaperTests` lee los QC de los runs del
 paper; si faltan se salta, no falla.
@@ -120,10 +120,12 @@ class CifrasDelPaperTests(unittest.TestCase):
         # limite sube x1.045 (d^2.26) y la cota pasa de -4.46 a -4.45; sigue 0.6 dex bajo el suelo.
         # 2026-10-20: E3 ajusta la cola como E1 (MLE, docs/2026-10-20_e3_misma_cola_que_e1.md); el
         # umbral de psffit sube de z 2.733 a 3.003, la L_acc limite x1.11 (+0.046 dex) y la cota pasa
-        # a -4.40, 0.57 dex bajo el suelo a 2270 K.
-        self.assertAlmostEqual(out["log_lacc_lbol"], -4.40, delta=0.01)
+        # a -4.40, 0.57 dex bajo el suelo a 2270 K. Ese mismo dia (spec E3 v2) el limite pasa a ser el
+        # superior al 99 %, lo medido + 2.33 sigma (docs/2026-10-20_limite_superior_a99.md): x1.76 en
+        # flujo, +0.28 dex; la cota queda en -4.12, 0.29 dex bajo el suelo a 2270 K.
+        self.assertAlmostEqual(out["log_lacc_lbol"], -4.12, delta=0.01)
         (fila,) = out["filas"]
-        self.assertAlmostEqual(fila["margen_dex"], -0.57, delta=0.01)
+        self.assertAlmostEqual(fila["margen_dex"], -0.29, delta=0.01)
         self.assertTrue(fila["extrapolada"])
 
 

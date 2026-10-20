@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import math
 import os
 from pathlib import Path
+from statistics import NormalDist
 
 import numpy as np
 
@@ -53,6 +54,13 @@ TABLE_FIELDS = [
     "tail_extrapolated_5sigma",
     "matched_sigma",
     "sigma_source",
+    "limit_definition",
+    "limit_confidence",
+    "z_cl",
+    "f_measured",
+    "z_measured",
+    "z_limit",
+    "f_stat_threshold_99",
     "sigma_h01_table",
     "sigma_table_vs_recomputed_pct",
     "f_stat_99",
@@ -377,6 +385,60 @@ def z_threshold_for(tail, estimator):
     if estimator == "parametric":
         return float(tail["z_99_gumbel"])
     return float(tail["z_99_empirical"])
+
+
+#: las dos definiciones del limite citable (spec E3 v2, §3.1).
+LIMIT_DEFINITIONS = ("measured_plus_margin", "detection_threshold")
+
+
+def resolve_limit_definition(cfg, product_kind):
+    """Que es el limite citable, y de donde sale esa decision: `(definicion, fuente)`.
+
+    - `measured_plus_margin` (decision del autor del 2026-10-20, spec E3 v2): el limite
+      superior unilateral clasico, `max(F_medido, 0) + z_CL * sigma`. Es lo que se puede
+      afirmar del flujo VERDADERO dado lo medido. El suelo en 0 evita que una fluctuacion
+      negativa de un limite mas estrecho que la propia sensibilidad.
+    - `detection_threshold`: el umbral de deteccion del 99 % (`z_umbral * sigma`), lo que E3
+      publicaba antes. Una fuente con ese flujo se detecta la mitad de las veces, asi que es
+      una SENSIBILIDAD, no un limite superior: en ROXs 42B b el flujo medido (z = 2.97)
+      quedaba casi igual al umbral (z = 3.00).
+
+    Una deteccion (`product_kind = sensitivity`) no tiene limite superior: ahi se publica
+    siempre el umbral, como antes. Si no, manda el knob `h03_limit_definition` y, si no esta
+    declarado, la definicion de la spec v2.
+    """
+    if product_kind == "sensitivity":
+        return ("detection_threshold",
+                "product_kind=sensitivity: a detection has no upper limit; the 99% threshold is its sensitivity")
+    declarado = cfg.get("h03_limit_definition")
+    if declarado is None:
+        return "measured_plus_margin", "spec E3 v2 (author's decision 2026-10-20)"
+    if declarado not in LIMIT_DEFINITIONS:
+        raise RuntimeError(
+            f"h03_limit_definition must be one of {LIMIT_DEFINITIONS}; got {declarado!r}."
+        )
+    return str(declarado), "config.h03_limit_definition"
+
+
+def measured_flux_for_method_factor(h01_rows, method, factor):
+    """El flujo del filtro adaptado que E1 midio en la posicion del companero (unidad nativa).
+
+    Es el maximo de su barrido (centro y ancho), el mismo numero cuya z decide E1: como
+    entrada del limite es conservador (un maximo esta sesgado hacia arriba).
+    """
+    for row in h01_rows:
+        if row.get("method") != method:
+            continue
+        if not np.isclose(float(parse_template_factor(row.get("template_factor", 1.0))), float(factor)):
+            continue
+        flux = _float_cell(row, ("matched_flux",))
+        z = _float_cell(row, ("matched_z",))
+        if np.isfinite(flux):
+            return float(flux), (float(z) if np.isfinite(z) else None)
+    raise RuntimeError(
+        f"H03 needs the measured matched-filter flux of {method} (template_factor={float(factor):g}) "
+        "from E1's halpha_detection_by_method.csv to build a measured_plus_margin upper limit."
+    )
 
 
 def tail_limit_summary(null_values, *, fap_99=0.01, fap_5sigma=ONE_SIDED_5SIGMA_FAP):
@@ -768,8 +830,20 @@ def limit_conversion_chain(
     alt_lacc_slope=None,
     alt_lacc_intercept=None,
     alt_scatter_dex=None,
+    measured_flux=None,
+    z_cl=None,
 ):
-    f_stat = float(z_threshold) * float(matched_sigma)
+    # Sin `measured_flux` el limite es el umbral de deteccion (z_umbral * sigma); con el,
+    # el limite superior unilateral max(F_medido, 0) + z_CL * sigma (spec E3 v2, §3.1).
+    # El 5 sigma extrapolado sigue siendo un umbral: es la sensibilidad que citan los
+    # sondeos que dan «limites a 5 sigma».
+    f_threshold = float(z_threshold) * float(matched_sigma)
+    if measured_flux is None:
+        f_stat = f_threshold
+    else:
+        if z_cl is None:
+            raise ValueError("measured_flux needs z_cl (the one-sided z of the confidence level).")
+        f_stat = max(float(measured_flux), 0.0) + float(z_cl) * float(matched_sigma)
     f_stat_5sigma = float(z_5sigma_extrap) * float(matched_sigma)
     f_obs = f_stat / float(throughput)
     f_obs_5sigma = f_stat_5sigma / float(throughput)
@@ -807,6 +881,8 @@ def limit_conversion_chain(
         lacc_alt = lacc_alt_5sigma = mdot_alt = mdot_alt_5sigma = mdot_alt_err_dex = np.nan
     return {
         "f_stat_99": f_stat,
+        "f_stat_threshold_99": f_threshold,
+        "z_limit": f_stat / float(matched_sigma) if float(matched_sigma) > 0 else np.nan,
         "f_stat_5sigma_extrap": f_stat_5sigma,
         "f_lim_observed": f_obs,
         "f_lim_observed_err": f_obs_err,
@@ -1040,11 +1116,16 @@ def _row_from_limits(
     throughput_payload,
     physical,
     tail_estimator,
+    limit_payload=None,
     row_kind="method",
     scatter_pct=None,
 ):
     z_threshold = z_threshold_for(tail, tail_estimator)
+    limit_payload = dict(limit_payload or {"limit_definition": "detection_threshold"})
+    medido = limit_payload.get("limit_definition") == "measured_plus_margin"
     chain = limit_conversion_chain(
+        measured_flux=limit_payload.get("f_measured") if medido else None,
+        z_cl=limit_payload.get("z_cl") if medido else None,
         z_threshold=z_threshold,
         z_5sigma_extrap=tail["z_5sigma_extrap"],
         matched_sigma=sigma_payload["matched_sigma"],
@@ -1082,6 +1163,11 @@ def _row_from_limits(
         "tail_extrapolated_5sigma": tail["tail_extrapolated_5sigma"],
         "matched_sigma": sigma_payload["matched_sigma"],
         "sigma_source": sigma_payload["sigma_source"],
+        "limit_definition": limit_payload.get("limit_definition"),
+        "limit_confidence": limit_payload.get("limit_confidence", ""),
+        "z_cl": limit_payload.get("z_cl", ""),
+        "f_measured": limit_payload.get("f_measured", ""),
+        "z_measured": limit_payload.get("z_measured", ""),
         "sigma_h01_table": sigma_payload.get("sigma_h01_table"),
         "sigma_table_vs_recomputed_pct": sigma_payload.get("sigma_table_vs_recomputed_pct"),
         "throughput": throughput_payload["throughput"],
@@ -1124,6 +1210,8 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
     fap_99 = float(cfg.get("h03_tail_fap_99", 0.01))
     fap_5sigma = float(cfg.get("h03_tail_fap_5sigma", ONE_SIDED_5SIGMA_FAP))
     tail_estimator, tail_estimator_source = resolve_tail_estimator(cfg, h01_qc)
+    limit_definition, limit_definition_source = resolve_limit_definition(cfg, prerequisites["product_kind"])
+    z_cl = float(NormalDist().inv_cdf(1.0 - fap_99))
     rows = []
     open_issues = list(prerequisites.get("issues", []))
     # La escala fisica sale del knob si esta declarado y, si no, del BUNIT del
@@ -1183,11 +1271,21 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                 sigma_payload = dict(sigma_payload)
                 sigma_payload["matched_sigma"] = float(sigma_payload["matched_sigma"]) * flux_unit_cgs
                 sigma_payload["sigma_source"] = f"{sigma_payload.get('sigma_source', '')} x flux_unit={flux_unit_cgs:g}"
+            limit_payload = {"limit_definition": limit_definition}
+            z_for_throughput = z_threshold_for(tail, tail_estimator)
+            if limit_definition == "measured_plus_margin":
+                f_nativo, z_medido = measured_flux_for_method_factor(h01_rows, method, factor)
+                f_medido = f_nativo * flux_unit_cgs
+                limit_payload.update(limit_confidence=1.0 - fap_99, z_cl=z_cl,
+                                     f_measured=f_medido, z_measured=z_medido)
+                # El throughput se interpola al S/N del propio limite, no al del umbral.
+                sigma = float(sigma_payload["matched_sigma"])
+                z_for_throughput = (max(f_medido, 0.0) + z_cl * sigma) / sigma
             throughput_payload = interpolate_throughput(
                 throughput_rows,
                 method,
                 factor,
-                z_threshold_for(tail, tail_estimator),
+                z_for_throughput,
                 h04_qc=h04_qc,
             )
             rows.append(
@@ -1200,6 +1298,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                     throughput_payload=throughput_payload,
                     physical=physical,
                     tail_estimator=tail_estimator,
+                    limit_payload=limit_payload,
                 )
             )
     scatter_pct = _intermethod_scatter_pct(rows)
@@ -1262,10 +1361,23 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                 and np.isclose(float(row["template_factor"]), 1.0)
             },
         },
+        "limit_definition": {
+            "definition": limit_definition,
+            "source": limit_definition_source,
+            "confidence": 1.0 - fap_99 if limit_definition == "measured_plus_margin" else None,
+            "z_cl": z_cl if limit_definition == "measured_plus_margin" else None,
+            "formula": ("max(F_measured, 0) + z_cl * sigma, / throughput"
+                        if limit_definition == "measured_plus_margin"
+                        else "z_threshold * sigma, / throughput (a sensitivity, not an upper limit)"),
+        },
         "limits": [
             {
                 "method": row["method"],
                 "template_width": row["template_width"],
+                "limit_definition": row["limit_definition"],
+                "f_measured": row["f_measured"],
+                "z_measured": row["z_measured"],
+                "f_stat_threshold_99": row["f_stat_threshold_99"],
                 "f_stat_99": row["f_stat_99"],
                 "f_stat_5sigma_extrap": row["f_stat_5sigma_extrap"],
                 "throughput": row["throughput"],
@@ -1453,6 +1565,9 @@ __all__ = [
     "gumbel_isf",
     "interpolate_throughput",
     "limit_conversion_chain",
+    "LIMIT_DEFINITIONS",
+    "measured_flux_for_method_factor",
+    "resolve_limit_definition",
     "MAGNETOSPHERIC_FACTOR",
     "mdot_msun_yr_from_lacc",
     "physical_inputs_from_config",
