@@ -5456,8 +5456,8 @@ STAGES: list[dict] = [
     ),
     dict(
         id="E3", slug="E3_upper_limits", title="Límites superiores (Ṁ)", block="E · Resultado",
-        spec="spec_E3_codex_upper_limits.md", run_override=None,
-        what="Límite superior de la tasa de acreción Ṁ a partir de la no-detección (Gumbel 99%).",
+        spec="spec_E3_v2_codex_upper_limits.md", run_override=None,
+        what="Límite superior de la tasa de acreción Ṁ a partir de la no-detección (superior al 99 %: lo medido + 2.33σ; spec E3 v2).",
         inputs="E1 + throughput (E4) + config físico", outputs="`stages/stage_h03_qc.json`, `tables/halpha_upper_limits.csv`",
         downstream="F1, comparación con G3",
         exec=dict(kind="script", target="stage_h03_limits.sh", cost="Ligero–moderado."),
@@ -5466,8 +5466,10 @@ STAGES: list[dict] = [
         narrative_md=(
             "## Qué hace E3 y cómo sale la cifra\n\n"
             "E3 convierte la **no-detección** en un **límite superior de la tasa de acreción Ṁ**. "
-            "Toma el umbral de flujo **Gumbel 99%** de los máximos de ruido de los controles "
-            "(matched filter, `f_stat_99`) y lo pasa por la cadena física:\n\n"
+            "Toma el flujo del filtro adaptado que E1 midió en la posición (`f_measured`, con suelo en 0), "
+            "le suma 2.33σ de los controles (`f_stat_99`: el límite superior unilateral al 99 %, spec E3 v2; "
+            "el umbral de detección Gumbel 99 % queda aparte como sensibilidad, `f_stat_threshold_99`) "
+            "y lo pasa por la cadena física:\n\n"
             "```\nf_stat_99  ÷throughput→  f_obs  ×deredden→  f_dered  ×4πd²→  L_Hα  →Alcalá→  Ṁ\n```\n\n"
             "**Ṁ (99%, canónico {{qc:stages/stage_h03_qc.json:canonical_method}}) = "
             "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** para "
@@ -5488,8 +5490,8 @@ STAGES: list[dict] = [
             "{{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%** (la celda de evidencia y "
             "el Plot 1 dan el valor de cada método).\n\n"
             "**Nota de definición** ([`docs/2026-07-10_mdot_limit_definition_note.md`]"
-            "(../docs/2026-07-10_mdot_limit_definition_note.md)): E3 usa Gumbel 99% **sin** el factor R_in 1.25; "
-            "G3 usa 5σ **con** R_in → G3 da "
+            "(../docs/2026-07-10_mdot_limit_definition_note.md)): E3 usa el límite superior al 99 % (lo medido + 2.33σ) "
+            "**con** el factor R_in 1.25 (desde el 2026-09-04); G3 usa el 5σ de G2, también con R_in → G3 da "
             "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (`n/d` = G3 no ha calculado acreción "
             "para este objeto; ver su notebook). Misma cadena física; la diferencia "
             "es **definicional** (ninguna declarada canónica aún). Knob clave "
@@ -5515,8 +5517,8 @@ STAGES: list[dict] = [
             # 2026-07-24). La diferencia de definición E3-vs-G3 está en
             # docs/2026-07-10_mdot_limit_definition_note.md, y aquí se muestra lo que el QC
             # sí trae: el límite dual Alcala / Aoyama+21 que añadió R1.
-            "print('\\ndefinición: E3 usa Gumbel 99% SIN el factor R_in 1.25 '\n"
-            "      '(G3 usa 5 sigma CON el factor) -> docs/2026-07-10_mdot_limit_definition_note.md')\n"
+            "print('\\ndefinición: E3 usa el límite superior al 99 % (lo medido + 2.33 sigma) con el factor R_in 1.25 '\n"
+            "      '(G3 usa el 5 sigma de G2, también con el factor) -> docs/spec_E3_v2_codex_upper_limits.md')\n"
             "alt = lim[q['canonical_method']].get('mdot_aoyama21')\n"
             "if alt:\n"
             "    print(f\"\\nrelación dual (R1): Alcala+17 {lim[q['canonical_method']]['mdot']:.2e}\"\n"
@@ -5578,7 +5580,7 @@ STAGES: list[dict] = [
                     "    canon = q['canonical_method']\n"
                     "    p = {L['method']: L for L in q['limits']}[canon]; pin = q['physical_inputs']\n"
                     "    deredden = p['f_lim_dereddened'] / p['f_lim_observed']\n"
-                    "    steps = [('Gumbel 99%\\nf_stat_99', p['f_stat_99'], 'erg/s/cm²'),\n"
+                    "    steps = [('medido + 2.33σ\\nf_stat_99', p['f_stat_99'], 'erg/s/cm²'),\n"
                     "             (f\"÷ throughput\\n{p['throughput']:.2f}\", p['f_lim_observed'], 'f_obs'),\n"
                     "             (f\"× deredden\\n(A_Hα={pin['a_halpha_over_av']*pin['av']:.2f}, {deredden:.1f}×)\", p['f_lim_dereddened'], 'f_dered'),\n"
                     "             (f\"× 4πd²\\n(d={pin['distance_pc']}pc)\", p['l_halpha'], 'L_Hα [erg/s]'),\n"
@@ -5600,9 +5602,9 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Ṁ(99%) = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** (canónico {{qc:stages/stage_h03_qc.json:canonical_method}}; Gumbel 99%, L_Hα deredden, throughput {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}, d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}}pc, A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}, {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}).", "2026-07-10_mdot_limit_definition_note.md"),
+            ("**Ṁ(99%) = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** (canónico {{qc:stages/stage_h03_qc.json:canonical_method}}; superior al 99 % = medido + 2.33σ, L_Hα deredden, throughput {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}, d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}}pc, A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}, {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}).", "2026-07-10_mdot_limit_definition_note.md"),
             ("Dependencia del método = throughput; **`{{qc:stages/stage_h03_qc.json:canonical_method}}` canónico citable** por robustez, no por dar el límite más bajo; scatter inter-método {{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%.", None),
-            ("Difiere de G3 ({{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}) solo por DEFINICIÓN (Gumbel99 sin R_in vs 5σ con R_in); cadena física idéntica. Ninguna elegida canónica aún.", None),
+            ("Difiere de G3 ({{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}) solo por DEFINICIÓN (superior al 99 % vs 5σ de G2; los dos con R_in); cadena física idéntica. Ninguna elegida canónica aún.", None),
             ("Knob `h03_flux_unit_cgs=1e-20` (unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos.", None),
         ],
         checks=None,
@@ -5611,7 +5613,7 @@ STAGES: list[dict] = [
             "**E3: Ṁ (99%, canónico {{qc:stages/stage_h03_qc.json:canonical_method}}) = "
             "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** para "
             "este objeto (todo resuelto de su `stage_h03_qc.json`).\n\n"
-            "- **Cadena:** Gumbel 99% → ÷throughput "
+            "- **Cadena:** medido + 2.33σ (99 %) → ÷throughput "
             "({{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}) → "
             "deredden (A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}) → ×4πd² "
             "({{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}} pc) → "
@@ -6725,7 +6727,7 @@ STAGES: list[dict] = [
             "| **Ṁ p50** | {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr (MC "
             "n={{qc:stages/stage_g3_qc.json:mc.n}}) |\n\n"
             "**Diferencia con E3 (definicional):** G3 usa **5σ** del flujo de Hα de G2 **con** el "
-            "factor de truncamiento de disco R_in=1.25; E3 usa Gumbel 99% **sin** R_in. Misma cadena "
+            "factor de truncamiento de disco R_in=1.25; E3 usa el límite superior al 99 % (lo medido + 2.33σ), también con R_in. Misma cadena "
             "física; el desfase entre "
             "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (G3) y "
             "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} (E3) es de "
@@ -6747,7 +6749,7 @@ STAGES: list[dict] = [
             "print(f\"Ṁ p50 = {q['mdot_p50_msun_yr']:.2e} M☉/yr (MC n={q['mc']['n']}); {q['n_lines_with_relation']} línea con relación\")\n"
             "e3 = nb.load_qc('stages/stage_h03_qc.json', RUN_ID)\n"
             "e3_mdot = {L['method']: L['mdot'] for L in e3['limits']}[e3['canonical_method']]\n"
-            "print(f\"\\ncomparación: E3 Ṁ={e3_mdot:.2e} (Gumbel99, sin R_in) vs G3 Ṁ={q['mdot_p50_msun_yr']:.2e} (5σ, con R_in) -> {q['mdot_p50_msun_yr']/e3_mdot:.2f}× definicional\")\n"
+            "print(f\"\\ncomparación: E3 Ṁ={e3_mdot:.2e} (superior 99 %, con R_in) vs G3 Ṁ={q['mdot_p50_msun_yr']:.2e} (5σ, con R_in) -> {q['mdot_p50_msun_yr']/e3_mdot:.2f}× definicional\")\n"
             "print('\\nlibrerías (tipado espectral):')\n"
             "for k, v in q['libraries'].items():\n"
             "    print(f\"   {k:20s} {v}\")"
@@ -6758,7 +6760,7 @@ STAGES: list[dict] = [
                     "## Plot 1 — E3 vs G3: la misma física, dos definiciones\n\n"
                     "Los dos límites de Ṁ de **este objeto**: E3 = "
                     "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
-                    "(Gumbel 99%, sin R_in) y G3 = "
+                    "(superior al 99 %, con R_in) y G3 = "
                     "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (5σ, con el factor R_in "
                     "1.25). El desfase es puramente **definicional** — misma cadena física. Canónica "
                     "sin decidir."
@@ -6775,7 +6777,7 @@ STAGES: list[dict] = [
                     "                       \"('mdot_p50_msun_yr'): puede ser la variante G3-real de \"\n"
                     "                       'tipado espectral. Sin par E3/G3 que comparar.')\n"
                     "    fig, ax = plt.subplots(figsize=(6.5, 4.3))\n"
-                    "    bars = ax.bar(['E3\\n(Gumbel 99%,\\nsin R_in)', 'G3\\n(5σ,\\ncon R_in 1.25)'], [e3_mdot, g3_mdot],\n"
+                    "    bars = ax.bar(['E3\\n(superior 99 %,\\ncon R_in 1.25)', 'G3\\n(5σ,\\ncon R_in 1.25)'], [e3_mdot, g3_mdot],\n"
                     "                  color=['tab:blue', 'tab:green'])\n"
                     "    for b, v in zip(bars, [e3_mdot, g3_mdot]):\n"
                     "        ax.text(b.get_x() + b.get_width() / 2, v * 1.02, f'{v:.2e}', ha='center', fontsize=10)\n"
@@ -6833,7 +6835,7 @@ STAGES: list[dict] = [
             "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr (5σ + R_in).** `n/d` = la "
             "acreción no está calculada en el QC de este objeto.\n\n"
             "- **vs E3:** {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
-            "(Gumbel99, sin R_in) → la diferencia es de definición, no de física; canónica sin "
+            "(superior al 99 %, con R_in) → la diferencia es de definición, no de física; canónica sin "
             "decidir.\n"
             "- **Tipado espectral diferido:** atmósfera/tracks/plantillas `not_constrained` (falta de "
             "librerías externas).\n"
@@ -7108,7 +7110,7 @@ STAGES: list[dict] = [
                     "        '',\n"
                     "        f\"ACRECIÓN (no-detección de Hα):\",\n"
                     "        f\"   L_acc  ≤ {g3['combined_accretion']['l_acc_lsun']:.1e} L☉      (Alcalá+2017 Hα)\",\n"
-                    "        f\"   Ṁ      ≲ {e3_mdot:.1e} M☉/yr  (E3, Gumbel 99%)\",\n"
+                    "        f\"   Ṁ      ≲ {e3_mdot:.1e} M☉/yr  (E3, superior al 99 %)\",\n"
                     "        f\"   Ṁ      = {g3['mdot_p50_msun_yr']:.1e} M☉/yr  (G3, 5σ + R_in)\",\n"
                     "        '',\n"
                     "        f\"PARÁMETROS ADOPTADOS:\",\n"
