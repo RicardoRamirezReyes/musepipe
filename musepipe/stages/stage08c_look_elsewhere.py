@@ -67,6 +67,24 @@ def empirical_fap(observed, null_values):
 PARAMETRIC_FAP_FAMILIES = ("gumbel",)
 
 
+def fit_gumbel_tail(values):
+    """La Gumbel de dos parametros ajustada a los maximos nulos: `(loc, scale)`.
+
+    Maxima verosimilitud (`scipy.stats.gumbel_r.fit`). Es la UNICA funcion que
+    ajusta la cola: E1 la usa para la FAP y E3 para el umbral del 99 %, asi que el
+    limite y el criterio de deteccion salen del mismo ajuste, como pide la decision
+    congelada del 2026-09-03 (`docs/2026-09-03_e3_cola_parametrica.md`). Hasta el
+    2026-10-20 E3 ajustaba por momentos: en psffit de ROXs 42B b su umbral quedaba
+    en z = 2.73 contra el 3.00 de E1, y el flujo medido (z = 2.97) superaba el
+    limite publicado (`docs/2026-10-20_e3_misma_cola_que_e1.md`).
+    """
+
+    from scipy import stats
+
+    loc, scale = stats.gumbel_r.fit(np.asarray(values, dtype=np.float64))
+    return float(loc), float(scale)
+
+
 def _finite_or_none_local(value):
     v = float(value)
     return v if np.isfinite(v) else None
@@ -115,7 +133,7 @@ def parametric_fap(observed, null_values, *, family="gumbel", n_boot=0, seed=Non
                 "ci95": None, "reason": "degenerate_null_zero_spread"}
 
     try:
-        loc, scale = stats.gumbel_r.fit(values)
+        loc, scale = fit_gumbel_tail(values)
         fap = float(stats.gumbel_r.sf(obs, loc, scale))
         ks_p = float(stats.kstest(values, "gumbel_r", args=(loc, scale)).pvalue)
     except (ValueError, TypeError, FloatingPointError) as exc:
@@ -135,7 +153,7 @@ def parametric_fap(observed, null_values, *, family="gumbel", n_boot=0, seed=Non
         for _ in range(int(n_boot)):
             resample = rng.choice(values, size=values.size, replace=True)
             try:
-                l2, s2 = stats.gumbel_r.fit(resample)
+                l2, s2 = fit_gumbel_tail(resample)
             except Exception:
                 continue
             v = float(stats.gumbel_r.sf(obs, l2, s2))
@@ -712,6 +730,8 @@ __all__ = [
     "compute_stage08c_products",
     "empirical_fap",
     "empirical_threshold_rows",
+    "fit_gumbel_tail",
+    "parametric_fap",
     "run_stage08c",
     "save_stage08c_plot",
     "stage08c_config_from_run",

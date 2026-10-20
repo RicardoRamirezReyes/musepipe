@@ -360,11 +360,13 @@ class UmbralDelPaperTests(unittest.TestCase):
         self.assertAlmostEqual(ratio, -3.618, delta=0.001)
         self.assertAlmostEqual(T, 2460.0, delta=2.0)
 
-    def test_umbral_de_42bb_1806_k(self):
+    def test_umbral_de_42bb_1838_k(self):
+        # 2026-10-20: era -4.446 y 1806 K; E3 ajusta ya la cola como E1 (MLE) y la cota sube +0.046 dex
+        # (docs/2026-10-20_e3_misma_cola_que_e1.md).
         T, ratio, tipo = self.tb.umbral("ROXs42Bb")
         self.assertEqual(tipo, "upper_limit")
-        self.assertAlmostEqual(ratio, -4.446, delta=0.001)
-        self.assertAlmostEqual(T, 1806.0, delta=2.0)
+        self.assertAlmostEqual(ratio, -4.400, delta=0.001)
+        self.assertAlmostEqual(T, 1838.0, delta=2.0)
 
     def test_pendiente_del_margen_0370_dex_por_magnitud(self):
         for slug in ("ROXs12b", "ROXs42Bb"):
