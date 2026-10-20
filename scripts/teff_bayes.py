@@ -31,19 +31,35 @@ Pruebas: `--inyecta-bt T LOGG AV R_RJ` sustituye los datos por un modelo de la r
 conserva sus colores) enrojecida con `--av-inyectada` (por defecto la A_V de la primaria): la calibración que
 traduce la T_eff de cada rejilla a un tipo equivalente.
 
+`--datos muse` o `--datos ir` ajusta solo el espectro de MUSE o solo los J/H/K (pedido del autor 2026-10-16, para
+ver lo que aporta cada uno): los mismos píxeles, escalas y priores que el ajuste conjunto, sin los segmentos del
+otro brazo; sin ningún segmento IR, r_K sale de los parámetros (no tendría datos). Esas corridas no entran en la
+tabla del paper (`_de_la_tabla`).
+
+`--rejilla` admite, además de las dos del paper, las del mismo pedido («probar con más modelos»): AMES-Dusty,
+AMES-Cond y BT-Dusty (PHOENIX con otro trato del polvo), Sonora Diamondback por fsed (otro código, con nubes, hasta
+2400 K; desde 2000 K o, `diamondback1600_<fsed>`, desde 1600 K) y SPHINX (otro código, sin nubes). SPHINX está
+muestreado a λ/Δλ = 250, así que su ajuste va en el modo R = 250 (`--r250`, automático para ella): los píxeles de
+los datos se agrupan de a dos y el modelo se usa a su resolución. `--r250` con una rejilla de resolución alta es
+el control que separa el efecto de la resolución del de la rejilla. Estas corridas tampoco entran en la tabla de
+las cadenas: van a la de rejillas (`rejillas`, Tabla B.7 del paper, pedida el 2026-10-18).
+
 `resume` lee los json/npz de uno o varios directorios de `ajusta` y da, por corrida, la T_eff y el margen
 coherente sobre el suelo cromosférico de Manara et al. (2013, Ec. 2): por muestra, log(L_acc/L_bol) − suelo(T_eff),
 con la L_acc del paper reescalada a la A_V de la muestra y la L_bol de la muestra (4πR²σT⁴; en `evo_solo`, la A_V
 adoptada y la L_bol publicada). El suelo se toma sin su incertidumbre: sus autores no publican la covarianza
 de los coeficientes.
 
-uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift] [--modo libre|evo|evo_solo]
+uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dusty|...] [--modo libre|evo|evo_solo]
+                                       [--datos todo|muse|ir] [--r250]
                                        [--tracks ATMO2020] [--av libre|primaria] [--av-fija AV] [--nlive 500]
                                        [--semilla 0] [--inyecta-bt ...] [--plantilla ...] --salida DIR
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
+     python scripts/teff_bayes.py rejillas DIR [DIR ...]   # cuerpo LaTeX de la tabla de rejillas (ap. B)
 
-El corner plot de las mismas cadenas lo dibuja `scripts/paper_figures.py --figure teff_corner --teff-chains DIR`.
+El corner plot de las mismas cadenas lo dibuja `scripts/paper_figures.py --figure teff_corner --teff-chains DIR`;
+el de solo MUSE / solo IR, `--figure teff_corner_data`; los de todas las cadenas, `scripts/teff_suplemento.py`.
 """
 from __future__ import annotations
 
@@ -68,11 +84,41 @@ from musepipe.models.extinction import CCMExtinction  # noqa: E402
 
 #: rejillas de atmósferas: directorio de npz (formato de `musepipe.models.cache`) y ejes (inicio, paso, n).
 #: DRIFT-PHOENIX es la segunda rejilla, para el sistemático de modelo; ATMO 2020 se descartó porque sus autores
-#: la dan por válida solo bajo 2000 K (`/mnt/2TB/IR_Data/atmo2020/README.md`).
+#: la dan por válida solo bajo 2000 K (`/mnt/2TB/IR_Data/atmo2020/README.md`). BT-Settl llega a log g 5.0 desde
+#: 2026-10-17 (decisión del autor): con 2.5–4.5, la posterior de 12 b tocaba el techo de 4.5.
 REJILLAS = {"btsettl": dict(dir=Path("/mnt/2TB/IR_Data/btsettl_cifist/npz"), teff=(2000.0, 100.0, 13),
-                            logg=(2.5, 0.5, 5), nombre="BT-Settl CIFIST2011"),
+                            logg=(2.5, 0.5, 6), nombre="BT-Settl CIFIST2011"),
             "drift": dict(dir=Path("/mnt/2TB/IR_Data/drift_phoenix/npz"), teff=(2000.0, 100.0, 11),
                           logg=(3.0, 0.5, 7), nombre="DRIFT-PHOENIX")}
+#: más rejillas (pedido del autor 2026-10-16, reunión con Claudio: «probar con más modelos»). Las tres de SVO son
+#: PHOENIX con otro trato del polvo: AMES-Dusty (en equilibrio, sin sedimentar), AMES-Cond (sin opacidad de polvo)
+#: y BT-Dusty, que a [M/H] = 0 solo tiene log g < 4.5 desde 2600 K (sirve para 12 b, no para 42B b). Sonora
+#: Diamondback es otro código, con nubes (una rejilla por fsed; «nc» sin nubes), y llega solo a 2400 K (42B b).
+REJILLAS.update({
+    "ames_dusty": dict(dir=Path("/mnt/2TB/IR_Data/ames_dusty/npz"), teff=(2000.0, 100.0, 11),
+                       logg=(3.5, 0.5, 6), nombre="AMES-Dusty"),
+    "ames_cond": dict(dir=Path("/mnt/2TB/IR_Data/ames_cond/npz"), teff=(2000.0, 100.0, 13),
+                      logg=(2.5, 0.5, 8), nombre="AMES-Cond"),
+    "bt_dusty": dict(dir=Path("/mnt/2TB/IR_Data/bt_dusty/npz"), teff=(2600.0, 100.0, 7),
+                     logg=(3.0, 0.5, 6), nombre="BT-Dusty"),
+    **{f"diamondback_{f}": dict(dir=Path(f"/mnt/2TB/IR_Data/sonora_diamondback/npz/{f}"), teff=(2000.0, 100.0, 5),
+                                logg=(3.5, 0.5, 5), nombre=f"Sonora Diamondback ({'sin nubes' if f == 'nc' else 'f_sed = ' + f[1:]})")
+       for f in ("f1", "f2", "f3", "f4", "f8", "nc")},
+    # la misma desde 1600 K: con 2000–2400 K, 42B b quedaba contra el borde de 2000 K (f1–f3, 2026-10-17). En
+    # `npz_1600/` los nodos nublados de 1600–1800 K entran con ∫F/σT⁴ hasta 1.17 (el exceso crece hacia log g alto;
+    # en log g 3.5–4.0, ≤ 1.10); el resto son enlaces a `npz/`, que guarda solo los de ±8 %
+    **{f"diamondback1600_{f}": dict(dir=Path(f"/mnt/2TB/IR_Data/sonora_diamondback/npz_1600/{f}"), teff=(1600.0, 100.0, 9),
+                                    logg=(3.5, 0.5, 5), nombre=f"Sonora Diamondback 1600–2400 K ({'sin nubes' if f == 'nc' else 'f_sed = ' + f[1:]})")
+       for f in ("f1", "f2", "f3", "f4", "f8", "nc")},
+    # otro código, sin nubes, log g ≥ 4.0, [M/H] = 0 y C/O = 0.5; muestreado a λ/Δλ = 250: va en el modo R = 250
+    "sphinx": dict(dir=Path("/mnt/2TB/IR_Data/sphinx/npz"), teff=(2000.0, 100.0, 13), logg=(4.0, 0.25, 7),
+                   nombre="SPHINX (sin nubes)", r_nativa=250.0),
+})
+
+
+def _r250(rejilla, forzado=False):
+    """¿Va el ajuste en el modo R = 250? Si se pide, o si la rejilla no llega a R = 500."""
+    return bool(forzado) or REJILLAS[rejilla].get("r_nativa", np.inf) < 500
 TRACKS = {"BHAC15": ("tracks_bhac15/bhac15_tracks.npz", "Baraffe et al. 2015"),
           "ATMO2020": ("tracks_atmo2020/atmo2020_ceq_tracks.npz", "Phillips et al. 2020")}
 T_D = 1500.0
@@ -80,6 +126,13 @@ LAM_K = 22000.0
 MALO = -1e300
 #: suelo cromosférico de Manara et al. 2013, Ec. 2: log(L_acc,noise/L_bol) = A log T_eff + B
 SUELO = (6.17, -24.54)
+#: qué espectros entran en `ajusta` (`--datos`): todos, solo MUSE o solo los J/H/K
+DATOS = ("todo", "muse", "ir")
+
+
+def _entra(seg, datos):
+    """¿Entra el segmento (`brazo` 'vis' o 'nir') con `datos`?"""
+    return datos == "todo" or (seg["brazo"] == "vis") == (datos == "muse")
 
 
 def _planck(w, T):
@@ -91,29 +144,65 @@ def _ppf_trunc_normal(u, mu, sig, lo=0.0, hi=np.inf):
     return float(stats.truncnorm.ppf(u, a, b, loc=mu, scale=sig))
 
 
-def _prepara(slug, R):
+def _empareja(s):
+    """El segmento con sus píxeles agrupados de a dos (modo R = 250): media del flujo, σ = ½ √(σ₁² + σ₂²), bueno
+    si lo son los dos. Solo se juntan píxeles contiguos (el borde de uno es el del otro); un píxel suelto se pierde."""
+    i = np.arange(0, s["w"].size - 1, 2)
+    i = i[np.abs(s["hi"][i] - s["lo"][i + 1]) <= 0.05 * (s["hi"][i] - s["lo"][i])]
+    j = i + 1
+    return {**s, "w": 0.5 * (s["w"][i] + s["w"][j]), "lo": s["lo"][i], "hi": s["hi"][j],
+            "f": 0.5 * (s["f"][i] + s["f"][j]), "e": 0.5 * np.hypot(s["e"][i], s["e"][j]),
+            "bueno": s["bueno"][i] & s["bueno"][j]}
+
+
+def _bases_nativas(pls, segs):
+    """Modelos que ya están a la resolución del análisis (SPHINX, λ/Δλ = 250 por punto): sin degradar,
+    interpolados en el centro de cada píxel; NaN fuera de su cobertura."""
+    out = {}
+    for i, t in enumerate(pls):
+        fila = []
+        for s in segs:
+            w, f = t[s["brazo"]]
+            m = np.interp(s["w"], w, f)
+            m[(s["w"] < w[0]) | (s["w"] > w[-1])] = np.nan
+            fila.append(m)
+        out[i] = fila
+    return out
+
+
+def _prepara(slug, R, r250=False):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
-    2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes)."""
+    2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes).
+
+    `r250`: los píxeles de los datos se agrupan de a dos (MUSE en bins de 30 Å, el IR a λ/Δλ ≈ 250). Lo exige una
+    rejilla con `r_nativa` < 500 (SPHINX), cuyos modelos se usan tal cual (`_bases_nativas`); con una rejilla de
+    resolución alta, los modelos se degradan a R = 500 y se promedian en el píxel agrupado, como los datos."""
     from scripts import ajuste_conjunto as aj
     from scripts import tipo_ir_plantillas as tp
     p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=True)
     segs = aj.segmentos_cgs(slug, p)
+    if r250:
+        segs = [_empareja(s) for s in segs]
     t0, dt, nt = R["teff"]
     g0, dg, ng = R["logg"]
     p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg))
-    p["bases"] = tp.modelos_base(p["pls"], segs)
+    p["bases"] = (_bases_nativas(p["pls"], segs) if R.get("r_nativa", np.inf) < 500
+                  else tp.modelos_base(p["pls"], segs))
     fac = tp.factores_equilibrio(segs, p["bases"], [p["av_tabla"]])
     return p, aj.Conjunto(segs, p["bases"], 0, fac)
 
 
 class Modelo:
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
-                 av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None):
+                 av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
+                 r250=False):
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
         warnings.simplefilter("ignore", RuntimeWarning)
-        self.slug, self.modo, self.av_modo, self.av_fija = slug, modo, av, av_fija
+        if datos not in DATOS:
+            raise ValueError(f"datos={datos!r}: debe ser uno de {DATOS}")
+        self.slug, self.modo, self.av_modo, self.av_fija, self.datos = slug, modo, av, av_fija, datos
         R = dict(REJILLAS[rejilla])
         if dir_rejilla is not None:
             R["dir"] = Path(dir_rejilla)
@@ -121,7 +210,8 @@ class Modelo:
         self.T0, self.dT, self.nT = R["teff"]
         self.G0, self.dG, self.nG = R["logg"]
         self.T0, self.G0 = float(self.T0), float(self.G0)
-        p, conj = _prepara(slug, R)
+        self.r_analisis = 250 if _r250(rejilla, r250) else 500
+        p, conj = _prepara(slug, R, r250=self.r_analisis == 250)
         self.run = p["run"]
         cfg = load_run_config(self.run, project_root=ROOT).config
         self.cfg = cfg
@@ -165,6 +255,8 @@ class Modelo:
                 ok = np.isfinite(m)
                 self.lref[a, b] = math.log10(float(np.interp(LAM_K, s["w"][ok], m[ok])))
         for k, s in enumerate(conj.segs):
+            if not _entra(s, datos):
+                continue
             c = conj.comun[k].copy()
             f, e = s["f"], s["e"]
             if datos_sint is not None:
@@ -253,7 +345,8 @@ class Modelo:
             add("av", lambda u: 8.0 * u)
         else:
             add("av", lambda u: _ppf_trunc_normal(u, self.av0, self.av_err))
-        add("rk", lambda u: 1.5 * u)
+        if any(s["banda"] != "vis" for s in self.segs):   # sin IR, r_K no tiene datos
+            add("rk", lambda u: 1.5 * u)
         for s in self.segs:
             if s["sigma"] is None:
                 add(f"s_{s['nombre']}", lambda u: 10 ** (math.log10(0.2) + u * 2 * math.log10(5.0)))
@@ -297,7 +390,7 @@ class Modelo:
         lr = self.lref
         fref = 10 ** (c00 * lr[i, j] + c10 * lr[i + 1, j] + c01 * lr[i, j + 1] + c11 * lr[i + 1, j + 1])
         om = (r_cm / (th[P["d_pc"]] * PC_CM)) ** 2
-        av, rk = th[P["av"]], th[P["rk"]]
+        av, rk = th[P["av"]], (th[P["rk"]] if "rk" in P else 0.0)
         out = []
         for s in self.segs:
             L = s["lg"]
@@ -377,10 +470,12 @@ def ajusta(a):
     from musepipe.config import load_run_config
     from scripts import tipo_ir_indices as tir
     a.salida.mkdir(parents=True, exist_ok=True)
-    et = a.etiqueta or "_".join(x for x in (a.slug, "drift" if a.rejilla == "drift" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
+    et = a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                              f"pl-{a.plantilla}" if a.plantilla else None,
                                              f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
                                              "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
+                                             f"solo{a.datos}" if a.datos != "todo" else None,
+                                             "r250" if _r250(a.rejilla, a.r250) else None,
                                              f"s{a.semilla}") if x)
     if a.modo == "evo_solo":
         cfg = load_run_config(tir.perfil(a.slug)["paper"]["run"], project_root=ROOT).config
@@ -391,14 +486,16 @@ def ajusta(a):
         np.savez(a.salida / f"{et}.npz", **{k: v for k, v in r.items() if k != "fraccion_en_rejilla"})
     else:
         mod = Modelo(a.slug, a.modo, a.av, a.tracks, a.inyecta_bt, a.plantilla, a.av_inyectada, a.semilla, a.av_fija,
-                     a.rejilla, a.dir_rejilla)
+                     a.rejilla, a.dir_rejilla, a.datos, a.r250)
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
         for i, k in enumerate(("teff", "logg", "r_cm", "masa_mjup", "lbol_lsun")):
             post[f"der_{k}"] = percentiles(der[:, i] / (RJUP_CM if k == "r_cm" else 1.0))
         out = dict(etiqueta=et, slug=a.slug, run=mod.run, modo=a.modo, av=a.av, av_fija=a.av_fija,
-                   rejilla=a.rejilla, nodos_interpolados=mod.rellenados,
+                   rejilla=a.rejilla, datos=a.datos, r_analisis=mod.r_analisis, nodos_interpolados=mod.rellenados,
+                   # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
+                   ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
                    ndim=mod.ndim, nombres=mod.nombres, segundos=r["segundos"], ncall=r["ncall"],
                    logz=r["logz"], logz_err=r["logz_err"], logl_max=r["logl_max"],
@@ -526,7 +623,8 @@ def resume(dirs, salida=None):
         mtxt = f"{mgp[1]:+.2f} [{mgp[0]:+.2f}, {mgp[2]:+.2f}]"
         psobre = float(np.mean(mg > 0))
         modo = d["modo"] + (f" {d['tracks']}" if d.get("tracks") else "") + (
-            (f", A_V fija {d['av_fija']:g}" if d.get("av_fija") is not None else f", A_V {d['av']}") if d["modo"] != "evo_solo" else "")
+            (f", A_V fija {d['av_fija']:g}" if d.get("av_fija") is not None else f", A_V {d['av']}") if d["modo"] != "evo_solo" else "") + (
+            f", solo {d['datos'].upper()}" if d.get("datos", "todo") != "todo" else "")
         if d["modo"] == "evo_solo":
             fila = dict(slug=d["slug"], modo=modo, teff=d["teff"], p_bajo_umbral=pT, logg=d["logg"], r=d["r_rj"],
                         m=d["masa_mjup"], margen=mgp.tolist(), p_sobre_suelo=psobre)
@@ -544,11 +642,11 @@ def resume(dirs, salida=None):
             chis = "/".join(f"{np.mean(por_banda[b]):.1f}" if b in por_banda else "—" for b in bandas)
             fs = "/".join(f"{math.exp(P[f'lnf_{b}']['p50']):.3f}" if f"lnf_{b}" in P else "—" for b in bandas)
             fila = dict(slug=d["slug"], modo=modo, teff=P["der_teff"], p_bajo_umbral=pT, logg=P["der_logg"],
-                        r=P["der_r_cm"], m=P.get("der_masa_mjup"), av=P["av"], rk=P["rk"], chi2=chi,
+                        r=P["der_r_cm"], m=P.get("der_masa_mjup"), av=P["av"], rk=P.get("rk"), chi2=chi,
                         logz=d["logz"], segundos=d["segundos"], margen=mgp.tolist(), p_sobre_suelo=psobre,
                         av_fija=d.get("av_fija"), logl_max=d["logl_max"])
             print(f"| {d['slug']} | {modo} | {_fmt(P['der_teff'])} | {pT:.2f} | {mtxt} | {psobre:.2f} | {_fmt(P['der_logg'], 2)} | "
-                  f"{_fmt(P['der_r_cm'], 2)} | {_fmt(P.get('der_masa_mjup'), 1)} | {_fmt(P['av'], 2)} | {_fmt(P['rk'], 2)} | "
+                  f"{_fmt(P['der_r_cm'], 2)} | {_fmt(P.get('der_masa_mjup'), 1)} | {_fmt(P['av'], 2)} | {_fmt(P.get('rk'), 2)} | "
                   f"{chis} | {fs} |")
         res["datos"].append(fila)
 
@@ -608,8 +706,11 @@ def _pm(p, nd=0, f=None, signo=False):
 
 
 def _de_la_tabla(d):
-    """Una corrida sobre los datos (no plantilla ni inyección), `libre`, con la A_V fija o con el prior."""
-    return d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
+    """Una corrida sobre los datos (no plantilla ni inyección), `libre`, con la A_V fija o con el prior, con
+    todos los espectros (no `--datos muse|ir`), con una de las rejillas del paper (`NOMBRE_REJILLA`) y a R = 500."""
+    return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
+            and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in NOMBRE_REJILLA
+            and d.get("r_analisis", 500) == 500)
 
 
 def filas_tabla(corridas, deltas, nombres):
@@ -650,12 +751,98 @@ def tabla(dirs):
     return filas
 
 
+#: las rejillas de la tabla de rejillas del apéndice B, en el orden de sus filas, con su nombre en LaTeX. De
+#: Diamondback entra la ampliada desde 1600 K: la de 2000 K recortaba la cola de 42B b
+#: (docs/2026-10-17_teff_mas_rejillas.md).
+REJILLAS_TABLA = {"btsettl": "BT-Settl", "drift": "DRIFT-PHOENIX", "ames_dusty": "AMES-Dusty",
+                  "ames_cond": "AMES-Cond", "bt_dusty": "BT-Dusty",
+                  **{f"diamondback1600_{f}": ("Diamondback, no clouds" if f == "nc"
+                                              else rf"Diamondback, \(f_{{\rm sed}} = {f[1:]}\)")
+                     for f in ("f1", "f2", "f3", "f4", "f8", "nc")},
+                  "sphinx": "SPHINX"}
+
+
+def _de_rejillas(d):
+    """Una corrida de la tabla de rejillas: como `_de_la_tabla`, pero con cualquier rejilla de `REJILLAS_TABLA` y
+    a cualquier resolución."""
+    return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
+            and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in REJILLAS_TABLA)
+
+
+def en_el_borde(d):
+    """Los parámetros ('teff', 'logg') cuyo 2.5 o 97.5 % cae a menos de medio paso del borde de su rejilla."""
+    rej = REJILLAS[d.get("rejilla", "btsettl")]
+    fuera = []
+    for p in ("teff", "logg"):
+        x0, paso, n = rej[p]
+        q = d["posterior"][p]
+        if q["p2_5"] - x0 < paso / 2 or x0 + paso * (n - 1) - q["p97_5"] < paso / 2:
+            fuera.append(p)
+    return fuera
+
+
+def filas_rejillas(corridas, deltas, nombres):
+    """El cuerpo LaTeX de la tabla de rejillas del apéndice B: por compañero (orden de `nombres`) y por rejilla
+    (orden de `REJILLAS_TABLA`, primero a R = 500 y después a R = 250), la mediana y el 16–84 % de T_eff, log g y
+    A_V del ajuste con el prior en A_V, la mediana de Δ con A_V 1.8, 3.0 y con el prior, y el ln Z del ajuste con
+    el prior menos el de BT-Settl a la misma resolución. Un valor con el 2.5 o el 97.5 % en el borde de su rejilla
+    lleva `\\tablefootmark{a}`. `deltas`: etiqueta -> `percentiles` del margen. Lo que falta va como `\\ldots`."""
+    filas = []
+    for slug, nombre in nombres.items():
+        suyas = {}
+        for d in corridas:
+            if d["slug"] != slug or not _de_rejillas(d):
+                continue
+            clave = (d.get("r_analisis", 500), d.get("rejilla", "btsettl"), d.get("av_fija"))
+            if clave in suyas:
+                raise SystemExit(f"dos corridas de {slug} con {clave}: {suyas[clave]['etiqueta']} y {d['etiqueta']}")
+            suyas[clave] = d
+        grupos = sorted({k[:2] for k in suyas}, key=lambda k: (-k[0], list(REJILLAS_TABLA).index(k[1])))
+        if not grupos:
+            continue
+        filas.append(rf"\multicolumn{{8}}{{l}}{{{nombre}}} \\")
+        for r, rejilla in grupos:
+            prior = suyas.get((r, rejilla, None))
+            ref = suyas.get((r, "btsettl", None))
+            celdas = [REJILLAS_TABLA[rejilla] + (r" (\(R = 250\))" if r == 250 else "")]
+            if prior is None:
+                celdas += [r"\ldots"] * 3
+            else:
+                borde = en_el_borde(prior)
+                marca = lambda p: r"\tablefootmark{a}" if p in borde else ""
+                P = prior["posterior"]
+                celdas += [_pm(P["teff"]) + marca("teff"), _pm(P["logg"], 2) + marca("logg"), _pm(P["av"], 2)]
+            for av in (1.8, 3.0, None):
+                d = suyas.get((r, rejilla, av))
+                celdas.append(f"${deltas[d['etiqueta']]['p50']:+.2f}$" if d is not None else r"\ldots")
+            celdas.append(f"${prior['logz'] - ref['logz']:.1f}$" if prior is not None and ref is not None
+                          else r"\ldots")
+            filas.append("\\quad " + " & ".join(celdas) + r" \\")
+    return filas
+
+
+def tabla_rejillas(dirs):
+    """Imprime `filas_rejillas` para las corridas de `dirs`, con el margen de cada muestra (como `tabla`)."""
+    from scripts import tipo_ir_indices as tir
+    todos = [d for d in _carga(dirs) if _de_rejillas(d)]
+    slugs = sorted({d["slug"] for d in todos})
+    nombres = {s: tir.perfil(s)["paper"]["display"].replace(" ", "~") for s in slugs}
+    entradas = {s: entrada_margen(s) for s in slugs}
+    deltas = {d["etiqueta"]: percentiles(margen_de_corrida(d, entradas[d["slug"]])) for d in todos}
+    filas = filas_rejillas(todos, deltas, nombres)
+    print("\n".join(filas))
+    return filas
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="orden", required=True)
     aa = sub.add_parser("ajusta", help="una corrida de muestreo anidado (o `evo_solo`)")
     aa.add_argument("slug")
     aa.add_argument("--modo", choices=("libre", "evo", "evo_solo"), default="libre")
+    aa.add_argument("--datos", choices=DATOS, default="todo", help="todos los espectros, solo MUSE o solo J/H/K")
+    aa.add_argument("--r250", action="store_true",
+                    help="píxeles de a dos (λ/Δλ ≈ 250); automático con una rejilla de menos resolución (SPHINX)")
     aa.add_argument("--tracks", choices=tuple(TRACKS), default="ATMO2020")
     aa.add_argument("--av", choices=("libre", "primaria"), default="primaria")
     aa.add_argument("--nlive", type=int, default=500)
@@ -673,11 +860,16 @@ def main(argv=None):
     ar.add_argument("--json", type=Path)
     at = sub.add_parser("tabla", help="cuerpo LaTeX de la tabla de las cadenas del apéndice B del paper")
     at.add_argument("dirs", type=Path, nargs="+")
+    ag = sub.add_parser("rejillas", help="cuerpo LaTeX de la tabla de rejillas del apéndice B del paper")
+    ag.add_argument("dirs", type=Path, nargs="+")
     a = ap.parse_args(argv)
     if a.orden == "ajusta":
         return ajusta(a)
     if a.orden == "tabla":
         tabla(a.dirs)
+        return 0
+    if a.orden == "rejillas":
+        tabla_rejillas(a.dirs)
         return 0
     resume(a.dirs, a.json)
     return 0

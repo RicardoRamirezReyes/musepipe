@@ -56,6 +56,70 @@ class CornerTests(unittest.TestCase):
             self.assertGreaterEqual(ax.get_ylim()[1], alto)
         plt.close(fig)
 
+    def test_corner_de_los_datos_sin_r_k_y_con_su_leyenda(self):
+        """Fig. teff_corner_data: tres conjuntos de datos, cinco parámetros (sin r_K) y su propia leyenda."""
+        import matplotlib.pyplot as plt
+
+        rng = np.random.default_rng(1)
+        series = {k: rng.normal([2700 + 50 * i, 4.3, 2.1, 3.4, 0.17], [20, 0.08, 0.05, 0.2, 0.05], (3000, 5))
+                  for i, k in enumerate(self.pf.ESTILO_DATOS)}
+        self.assertNotIn("rk", [p for p, _ in self.pf.PARAMETROS_CORNER_DATOS])
+        fig = plt.figure()
+        self.pf._dibuja_corner(fig, series, "X", parametros=self.pf.PARAMETROS_CORNER_DATOS,
+                               estilos=self.pf.ESTILO_DATOS, nombres=self.pf.NOMBRE_DATOS)
+        n = len(self.pf.PARAMETROS_CORNER_DATOS)
+        self.assertEqual(len(fig.axes), n * n)
+        self.assertEqual([t.get_text() for t in fig.legends[0].get_texts()],
+                         ["MUSE + near-IR", "Near-IR only", "MUSE only"])
+        plt.close(fig)
+
+
+class SeriesDeLosDatosTests(unittest.TestCase):
+    """`_series_corner_datos` sobre cadenas sintéticas en disco: qué cadenas elige y en qué orden."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pf = _modulo()
+
+    def _cadena(self, d, nombre, datos, **extra):
+        import json
+
+        nombres = ["teff", "logg", "r_rj", "d_pc", "av"] + ([] if datos == "muse" else ["rk"])
+        n = 50
+        muestras = np.column_stack([np.full(n, 2600.0 + len(datos)), np.full(n, 4.0), np.full(n, 1.8),
+                                    np.full(n, 140.0), np.full(n, 3.0)] + ([] if datos == "muse" else [np.zeros(n)]))
+        np.savez(d / f"{nombre}.npz", muestras=muestras, derivadas=np.zeros((n, 5)), nombres=np.array(nombres))
+        meta = dict(etiqueta=nombre, slug="X", modo="libre", av="primaria", av_fija=None, rejilla="btsettl",
+                    datos=datos, r_analisis=500, verdad=None)
+        meta.update(extra)
+        (d / f"{nombre}.json").write_text(json.dumps(meta))
+
+    def test_elige_las_tres_con_prior_de_bt_settl_en_orden(self):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            self._cadena(d, "a_muse", "muse")
+            self._cadena(d, "b_todo", "todo")
+            self._cadena(d, "c_ir", "ir")
+            # no entran: A_V fija, otra rejilla, una plantilla y R = 250
+            self._cadena(d, "d_fija", "ir", av_fija=1.8)
+            self._cadena(d, "e_drift", "todo", rejilla="drift")
+            self._cadena(d, "f_pl", "todo", verdad={"plantilla": "TWA26"})
+            self._cadena(d, "g_r250", "todo", r_analisis=250)
+            with mock.patch("scripts.teff_bayes.entrada_margen", return_value={}), \
+                    mock.patch("scripts.teff_bayes.margen_de_corrida", side_effect=lambda c, e: np.full(50, 0.1)):
+                series = self.pf._series_corner_datos([d], "X")
+                self.assertEqual(list(series), ["todo", "ir", "muse"])
+                for x in series.values():
+                    self.assertEqual(x.shape, (50, len(self.pf.PARAMETROS_CORNER_DATOS)))
+                self.assertEqual([x[0, 0] for x in series.values()], [2604.0, 2602.0, 2604.0])
+                # si falta un conjunto, falla en vez de dibujar dos
+                (d / "a_muse.json").unlink()
+                with self.assertRaises(SystemExit):
+                    self.pf._series_corner_datos([d], "X")
+
 
 if __name__ == "__main__":
     unittest.main()
