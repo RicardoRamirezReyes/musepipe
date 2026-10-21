@@ -17,11 +17,12 @@
   "primary_display_name": "ROXs 42B",
   "field_notes": {
     "background_source": {
-      "reported": "Fuente de fondo brillante en un costado del campo, citada a veces como ROXs 42B c.",
-      "source": "conocimiento del usuario / literatura; NO verificada en los datos de este proyecto",
+      "reported": "ROXs 42B cc1 (Kraus+2014; Bryan+2016), citada a veces como ROXs 42B c: estrella de fondo a 0.41\" de la primaria en la epoca de estos datos (r = 16 px).",
+      "source": "literatura (Kraus+2014, Currie+2014, Bryan+2016) y medida propia del 2026-10-20 (verification_2026_10_20)",
+      "verification_2026_10_20": "Detectada y caracterizada; docs/2026-10-20_cc1_es_de_fondo.md. Es REAL: S/N 7-9 en 8 bandas de 4800 a 9300 A, siempre en el mismo pixel (un speckle escalaria con lambda). Es de FONDO: Keck 2011-2014 + MUSE 2022.66 dan 18.8 +- 1.3 mas/yr respecto a la primaria (13 km/s, ~2x la velocidad de escape), a 3.6 deg del reflejo del movimiento propio de Gaia DR3; no es miembro de rho Oph, y su SED excluye un companero como b. La verificacion del 07-27 no la encontro: su pasa-altos solo listo fuentes a r~60-83 px, y la fuente esta a 16 px.",
       "verification_2026_07_27": "No se pudo confirmar en cube_telcorr.fits: con un pasa-altos sobre la luz blanca, excluyendo primaria y companero, solo aparecen fuentes de 10-16 sigma, 4-33 px, repartidas simetricamente a r~60-83 px y con color rojo/azul uniforme 2.3-3.0 (speckle, no fuentes). La causa mas probable es el campo: el cubo esta recortado a 200 px = 5.04\" por stream_combine.DEFAULT_CROP_NPIX, contra 8.3\" en ROXs12b.",
-      "impact": "Contamina toda medida azimutal: fondo de anillo de C2, perfil radial de C3 y la curva de crecimiento de la primaria. Puede explicar por que C1 elige moffat sobre psfao en este objeto (8.38% vs 9.80% de residuo de anillo, empate a favor de moffat).",
-      "handled_by": "scripts/target_overrides/ROXs42Bb.py (censo de fuentes + mascara opcional)"
+      "impact": "Cae dentro del radio de ajuste de C1 y contamina toda medida azimutal: fondo de anillo de C2, perfil radial de C3 y la curva de crecimiento de la primaria. NO explica que C1 prefiriera moffat (falsado el 2026-07-31) ni el dipolo del halo (docs/2026-08-30_dipolo_del_halo_es_instrumental.md).",
+      "handled_by": "config del run (stage01c_field_source_approx_yx): B3 la mide y C1 la enmascara con el radio del companero (3 FWHM, 12 px); scripts/target_overrides/ROXs42Bb.py anade el censo en los notebooks de C2 y C3"
     }
   },
   "paper": {

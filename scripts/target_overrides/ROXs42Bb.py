@@ -2,10 +2,10 @@
 
 ## Por que este objeto lo necesita
 
-El campo de ROXs 42B b tiene, segun la literatura, **una fuente de fondo
-brillante en un costado**, citada a veces como ROXs 42B c. Cualquier medida que
-promedie azimutalmente —el fondo de anillo de C2, el perfil de C3, la curva de
-crecimiento— la mete dentro sin darse cuenta.
+El campo de ROXs 42B b tiene **una estrella de fondo a 0.41" de la primaria**,
+citada a veces como ROXs 42B c. Cualquier medida que promedie azimutalmente —el
+fondo de anillo de C2, el perfil de C3, la curva de crecimiento— la mete dentro
+sin darse cuenta.
 
 ## Donde esta, y por que importa tanto
 
@@ -20,10 +20,14 @@ no en coordenadas polares— a la epoca de estos datos (2022.6654):
 
     rho = 381 mas = 0.381"    PA = 241.4 deg    ->   r = 15.1 px
 
-Comprobado sobre el cubo: en esa posicion hay un exceso de 2.4 sigma (azul) y
-3.1 sigma (rojo) sobre la mediana azimutal al mismo radio, contra 0.3 y 1.2
-sigma en un punto al azar de ese mismo anillo. Es compatible, no una deteccion:
-a 15 px de una estrella brillante manda el speckle.
+La primera comprobacion sobre el cubo (07-27) dio un exceso de 2.4 sigma (azul)
+y 3.1 sigma (rojo) sobre la mediana azimutal al mismo radio, y se leyo como
+«compatible, no una deteccion». **Hoy es una deteccion** (2026-10-20,
+`docs/2026-10-20_cc1_es_de_fondo.md`): B3 la mide a S/N 9.4 en (76.25, 98.50),
+a 1.5 px de la prediccion, y sale con S/N 7-9 en 8 bandas de 4800 a 9300 A
+siempre en el mismo pixel, cuando un speckle se moveria con lambda. La posicion
+de MUSE sigue la traza de Keck: 18.8 +- 1.3 mas/yr respecto a la primaria entre
+2011 y 2022, unas dos veces la velocidad de escape. Es real y de fondo.
 
 **Lo de Moffat NO lo explica cc1 — comprobado el 2026-07-31.** La sospecha era
 que cc1, al caer dentro del radio de ajuste de C1 y sin enmascarar, sesgaba el
