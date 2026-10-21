@@ -527,7 +527,11 @@ def fetch_bt_settl(args, cfg, family_dir):
             meta = {"teff_k": teff, "logg": logg, "meta_fe_h": 0.0, "alpha": 0.0,
                     "citation": citation, "grid": "BT-Settl CIFIST2011",
                     "flux_unit": "erg/cm2/s/A", "wave_unit": "angstrom",
-                    "wave_frame": "vacuum (synthetic)", "source_url": url,
+                    # Aire, MEDIDO en los nucleos de las lineas (2026-10-20); el
+                    # VOTable de SVO no declara marco. Antes se escribia
+                    # "vacuum (synthetic)", y era falso.
+                    "wave_frame": "air (measured on line cores; SVO does not declare it)",
+                    "source_url": url,
                     "downloaded_utc": downloaded_utc}
             write_spectrum_npz(target, wave, flux, meta)
             rels.append(rel)

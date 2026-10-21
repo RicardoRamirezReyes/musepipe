@@ -16,7 +16,7 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (1789 tests + 1375 subtests, ~80 min)
+python -m pytest tests/ -q                       # full suite (1792 tests + 1375 subtests, ~80 min)
 python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3.5 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
@@ -248,8 +248,9 @@ telluric bands and accretion lines) and its ECSV export.
 ## Scientific invariants
 
 - **Noise**: never use the cube's `STAT` extension directly as σ, and never assume
-  neighbouring pixels or channels are independent. STAT underestimates aperture noise ~4×;
-  spatial inflation is ~6.5× (3×3) / ~17× (5×5); spectral n_eff/n ≈ 0.69. σ is always
+  neighbouring pixels or channels are independent. In the two paper runs STAT underestimates
+  aperture noise 7–8× per spaxel; spatial inflation is ~5.5× (3×3) / ~19× (5×5); spectral
+  n_eff/n is 0.72 (ROXs 12 b) and 0.38 (ROXs 42B b). σ is always
   estimated empirically from **controls processed identically to the object**. Cite
   `docs/noise_model.md` instead of re-deriving these numbers.
 - **Flux units**: the unit travels with the data (`BUNIT`) and there is **no silent

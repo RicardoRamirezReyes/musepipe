@@ -118,7 +118,9 @@ class DeclarationTests(unittest.TestCase):
                                     _family(tmp, "templates_field", {"citation": "Kesseli"}))
             b = resolve_declaration({"name": "bt-settl-cifist", "subdir": "bt-settl-cifist"},
                                     _family(tmp, "bt-settl-cifist", {"citation": "Allard"}))
-        self.assertEqual((y.wave_frame, f.wave_frame, b.wave_frame), ("air", "vacuum", "vacuum"))
+        # BT-Settl en aire: medido en los nucleos de sus lineas (2026-10-20); la
+        # etiqueta 'vacuum (synthetic)' de los nodos era falsa
+        self.assertEqual((y.wave_frame, f.wave_frame, b.wave_frame), ("air", "vacuum", "air"))
         self.assertEqual(f.resolution_R, 2000.0)
         self.assertTrue(b.resolution_sharp)
         self.assertFalse(y.resolution_sharp)

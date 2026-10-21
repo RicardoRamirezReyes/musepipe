@@ -54,7 +54,9 @@ def _accretion_keys(accretion_qc, rows):
             "mdot_p50_msun_yr": (float(mdot["value"]) if mdot and mdot.get("value") not in ("", None)
                                  else accretion_qc.get("mdot_p50_msun_yr")),
             "mdot_label": mdot.get("label") if mdot else None,
-            "mdot_mr_source": accretion_qc.get("mdot_mr_source")}
+            "mdot_mr_source": accretion_qc.get("mdot_mr_source"),
+            # De donde sale el flujo de Halpha: E3 (limite superior al 99 %) o G2.
+            "halpha_flux_source": accretion_qc.get("halpha_flux_source")}
 
 
 def _relabel_systematics_limited(rows, *, reason, citation, mdot_lit, mr_cite="literature"):

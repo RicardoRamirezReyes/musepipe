@@ -5491,10 +5491,12 @@ STAGES: list[dict] = [
             "el Plot 1 dan el valor de cada método).\n\n"
             "**Nota de definición** ([`docs/2026-07-10_mdot_limit_definition_note.md`]"
             "(../docs/2026-07-10_mdot_limit_definition_note.md)): E3 usa el límite superior al 99 % (lo medido + 2.33σ) "
-            "**con** el factor R_in 1.25 (desde el 2026-09-04); G3 usa el 5σ de G2, también con R_in → G3 da "
+            "**con** el factor R_in 1.25 (desde el 2026-09-04). Cuando E1 no detecta, G3 convierte **este "
+            "mismo límite** (desde el 2026-10-20; antes usaba el 5σ de G2); cuando detecta, la "
+            "integración directa de G2 → G3 da "
             "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (`n/d` = G3 no ha calculado acreción "
-            "para este objeto; ver su notebook). Misma cadena física; la diferencia "
-            "es **definicional** (ninguna declarada canónica aún). Knob clave "
+            "para este objeto; ver su notebook). Con el límite de E3 la L_acc es la misma; el Ṁ de G3 es "
+            "la mediana de un Monte Carlo sobre M y R, unos pocos % por encima del valor nominal de E3. Knob clave "
             "`h03_flux_unit_cgs=1e-20` (unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos."
         ),
         evidence_md=(
@@ -5604,7 +5606,7 @@ STAGES: list[dict] = [
         decisions=[
             ("**Ṁ(99%) = {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} M☉/yr** (canónico {{qc:stages/stage_h03_qc.json:canonical_method}}; superior al 99 % = medido + 2.33σ, L_Hα deredden, throughput {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].throughput:.2f}}, d={{qc:stages/stage_h03_qc.json:physical_inputs.distance_pc}}pc, A_V={{qc:stages/stage_h03_qc.json:physical_inputs.av}}, {{qc:stages/stage_h03_qc.json:physical_inputs.lacc_lha_relation}}).", "2026-07-10_mdot_limit_definition_note.md"),
             ("Dependencia del método = throughput; **`{{qc:stages/stage_h03_qc.json:canonical_method}}` canónico citable** por robustez, no por dar el límite más bajo; scatter inter-método {{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%.", None),
-            ("Difiere de G3 ({{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}) solo por DEFINICIÓN (superior al 99 % vs 5σ de G2; los dos con R_in); cadena física idéntica. Ninguna elegida canónica aún.", None),
+            ("G3 da {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}: con una no detección convierte este mismo límite (desde el 2026-10-20); la diferencia es la mediana del Monte Carlo de M y R frente al valor nominal.", "2026-10-20_auditoria_pipeline.md"),
             ("Knob `h03_flux_unit_cgs=1e-20` (unidad nativa scipost) — sin él L/Ṁ salían ~10²⁰ altos.", None),
         ],
         checks=None,
@@ -5621,8 +5623,8 @@ STAGES: list[dict] = [
             "- **Método:** `{{qc:stages/stage_h03_qc.json:canonical_method}}` canónico citable por "
             "robustez; scatter inter-método "
             "{{qc:stages/stage_h03_qc.json:intermethod_scatter_pct:.1f}}%.\n"
-            "- **vs G3:** {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} por definición "
-            "(5σ + R_in), no por física; ninguna canónica aún.\n"
+            "- **vs G3:** {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}; con una no detección G3 "
+            "convierte este mismo límite (mediana del Monte Carlo de M y R).\n"
             "- **Caveats:** provisional hasta cerrar el A-block del objeto; el FAP 99% está por debajo "
             "de la resolución de "
             "{{csvtop:tables/halpha_detection_by_method.csv:matched_z:n_controls:.0f}} controles.\n"
@@ -6726,17 +6728,17 @@ STAGES: list[dict] = [
             "`{{qc:stages/stage_g3_qc.json:combined_accretion.rule}}`) |\n"
             "| **Ṁ p50** | {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr (MC "
             "n={{qc:stages/stage_g3_qc.json:mc.n}}) |\n\n"
-            "**Diferencia con E3 (definicional):** G3 usa **5σ** del flujo de Hα de G2 **con** el "
-            "factor de truncamiento de disco R_in=1.25; E3 usa el límite superior al 99 % (lo medido + 2.33σ), también con R_in. Misma cadena "
-            "física; el desfase entre "
-            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (G3) y "
-            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} (E3) es de "
-            "**definición**, no de física. Canónica **sin decidir** (usuario diferido, "
-            "[`docs/2026-07-10_mdot_limit_definition_note.md`]"
-            "(../docs/2026-07-10_mdot_limit_definition_note.md)).\n\n"
-            "**Diferido → `not_constrained`:** atmósfera (BT-Settl), tracks (BHAC15/ATMO2020), "
-            "plantillas (Luhman/Bonnefoy) — SpT/Teff/masa necesitan datos externos. **Por eso la "
-            "clasificación de G4 es ambigua.** Provisional."
+            "**Relación con E3:** cuando E1 no detecta, G3 convierte el **límite superior al 99 % de E3** "
+            "(lo medido + 2.33σ, con R_in 1.25; desde el 2026-10-20, antes usaba el 5σ de G2); cuando "
+            "detecta, la integración directa de G2. Con el límite de E3 la L_acc es la misma; el Ṁ de G3, "
+            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}}, es la mediana de un Monte Carlo sobre M "
+            "y R, y el de E3, "
+            "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}}, el valor nominal "
+            "([`docs/2026-10-20_auditoria_pipeline.md`](../docs/2026-10-20_auditoria_pipeline.md)).\n\n"
+            "**Limitado por sistemáticos → `not_constrained`:** el ajuste atmosférico (BT-Settl) no pasa su "
+            "bondad de ajuste (`stops` del QC), así que el run se declara limitado por sistemáticos y "
+            "SpT, T_eff, radio y masa quedan `not_constrained`. **Por eso la clasificación de G4 es "
+            "ambigua.** Provisional."
         ),
         evidence_md=(
             "## Resultados que llevaron a la conclusión\n\n"
@@ -6749,7 +6751,7 @@ STAGES: list[dict] = [
             "print(f\"Ṁ p50 = {q['mdot_p50_msun_yr']:.2e} M☉/yr (MC n={q['mc']['n']}); {q['n_lines_with_relation']} línea con relación\")\n"
             "e3 = nb.load_qc('stages/stage_h03_qc.json', RUN_ID)\n"
             "e3_mdot = {L['method']: L['mdot'] for L in e3['limits']}[e3['canonical_method']]\n"
-            "print(f\"\\ncomparación: E3 Ṁ={e3_mdot:.2e} (superior 99 %, con R_in) vs G3 Ṁ={q['mdot_p50_msun_yr']:.2e} (5σ, con R_in) -> {q['mdot_p50_msun_yr']/e3_mdot:.2f}× definicional\")\n"
+            "print(f\"\\ncomparación: E3 Ṁ={e3_mdot:.2e} (nominal) vs G3 Ṁ={q['mdot_p50_msun_yr']:.2e} (mediana MC de M y R) -> {q['mdot_p50_msun_yr']/e3_mdot:.2f}×; flujo de Hα de G3: {q.get('halpha_flux_source')}\")\n"
             "print('\\nlibrerías (tipado espectral):')\n"
             "for k, v in q['libraries'].items():\n"
             "    print(f\"   {k:20s} {v}\")"
@@ -6757,13 +6759,13 @@ STAGES: list[dict] = [
         plots=[
             dict(
                 md=(
-                    "## Plot 1 — E3 vs G3: la misma física, dos definiciones\n\n"
-                    "Los dos límites de Ṁ de **este objeto**: E3 = "
+                    "## Plot 1 — E3 vs G3: el mismo flujo de Hα\n\n"
+                    "Los dos Ṁ de **este objeto**: E3 = "
                     "{{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
-                    "(superior al 99 %, con R_in) y G3 = "
-                    "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (5σ, con el factor R_in "
-                    "1.25). El desfase es puramente **definicional** — misma cadena física. Canónica "
-                    "sin decidir."
+                    "(valor nominal) y G3 = "
+                    "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} (mediana del Monte Carlo de M y R). "
+                    "Con una no detección, los dos parten del límite superior al 99 % de E3 (desde el "
+                    "2026-10-20); antes G3 usaba el 5σ de G2."
                 ),
                 code=(
                     "try:\n"
@@ -6777,12 +6779,12 @@ STAGES: list[dict] = [
                     "                       \"('mdot_p50_msun_yr'): puede ser la variante G3-real de \"\n"
                     "                       'tipado espectral. Sin par E3/G3 que comparar.')\n"
                     "    fig, ax = plt.subplots(figsize=(6.5, 4.3))\n"
-                    "    bars = ax.bar(['E3\\n(superior 99 %,\\ncon R_in 1.25)', 'G3\\n(5σ,\\ncon R_in 1.25)'], [e3_mdot, g3_mdot],\n"
+                    "    bars = ax.bar(['E3\\n(nominal)', 'G3\\n(mediana MC\\nde M y R)'], [e3_mdot, g3_mdot],\n"
                     "                  color=['tab:blue', 'tab:green'])\n"
                     "    for b, v in zip(bars, [e3_mdot, g3_mdot]):\n"
                     "        ax.text(b.get_x() + b.get_width() / 2, v * 1.02, f'{v:.2e}', ha='center', fontsize=10)\n"
                     "    ax.set_ylabel('Ṁ límite superior [M☉/yr]')\n"
-                    "    ax.set_title(f'G3 · E3 vs G3: {g3_mdot/e3_mdot:.2f}× (definicional, misma física)')\n"
+                    "    ax.set_title(f'G3 · E3 vs G3: {g3_mdot/e3_mdot:.2f}×')\n"
                     "    fig.tight_layout()\n"
                     "    outdir = nb.run_dir(RUN_ID) / 'plots' / 'g3_accretion'; outdir.mkdir(parents=True, exist_ok=True)\n"
                     "    fig.savefig(outdir / 'e3_vs_g3.png', dpi=110); print('figura ->', outdir / 'e3_vs_g3.png'); plt.show()\n"
@@ -6822,9 +6824,9 @@ STAGES: list[dict] = [
             ),
         ],
         decisions=[
-            ("**Ṁ p50 = {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr** (5σ de G2 + factor R_in 1.25); difiere de E3 ({{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}}) solo por DEFINICIÓN; canónica sin decidir.", "2026-07-10_mdot_limit_definition_note.md"),
+            ("**Ṁ p50 = {{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr** (con una no detección, el límite superior al 99 % de E3 + factor R_in 1.25; mediana del Monte Carlo de M y R); E3 da {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} con los valores nominales.", "2026-10-20_auditoria_pipeline.md"),
             ("L_acc {{qc:stages/stage_g3_qc.json:combined_accretion.kind}} = {{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉ de `{{qc:stages/stage_g3_qc.json:combined_accretion.from_line}}` (regla `{{qc:stages/stage_g3_qc.json:combined_accretion.rule}}`).", None),
-            ("Plantilla/atmósfera/tracks = `not_constrained` (pending_libraries: BT-Settl/BHAC15/Luhman-Bonnefoy diferidas) → G4 ambigua.", None),
+            ("SpT/T_eff/radio/masa = `not_constrained`: el ajuste atmosférico no pasa su bondad de ajuste y el run se declara limitado por sistemáticos → G4 ambigua.", None),
         ],
         checks=None,
         conclusion_md=(
@@ -6832,13 +6834,12 @@ STAGES: list[dict] = [
             "**G3 (este objeto): L_acc = "
             "{{qc:stages/stage_g3_qc.json:combined_accretion.l_acc_lsun:.2e}} L☉ "
             "(`{{qc:stages/stage_g3_qc.json:combined_accretion.kind}}`), Ṁ p50 = "
-            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr (5σ + R_in).** `n/d` = la "
+            "{{qc:stages/stage_g3_qc.json:mdot_p50_msun_yr:.2e}} M☉/yr.** `n/d` = la "
             "acreción no está calculada en el QC de este objeto.\n\n"
             "- **vs E3:** {{qc:stages/stage_h03_qc.json:limits[method=@canonical_method].mdot:.2e}} "
-            "(superior al 99 %, con R_in) → la diferencia es de definición, no de física; canónica sin "
-            "decidir.\n"
-            "- **Tipado espectral diferido:** atmósfera/tracks/plantillas `not_constrained` (falta de "
-            "librerías externas).\n"
+            "(nominal); con una no detección, G3 convierte ese mismo límite.\n"
+            "- **Limitado por sistemáticos:** SpT/T_eff/radio/masa `not_constrained` (el ajuste "
+            "atmosférico no pasa su bondad de ajuste).\n"
             "- **Consecuencia:** sin SpT/Teff/masa espectroscópicos, la clasificación de G4 queda "
             "**ambigua** (planeta/BD/M no resuelto).\n"
             "- **Downstream:** G4 (clasificación) y G5 (síntesis)."
@@ -7111,7 +7112,7 @@ STAGES: list[dict] = [
                     "        f\"ACRECIÓN (no-detección de Hα):\",\n"
                     "        f\"   L_acc  ≤ {g3['combined_accretion']['l_acc_lsun']:.1e} L☉      (Alcalá+2017 Hα)\",\n"
                     "        f\"   Ṁ      ≲ {e3_mdot:.1e} M☉/yr  (E3, superior al 99 %)\",\n"
-                    "        f\"   Ṁ      = {g3['mdot_p50_msun_yr']:.1e} M☉/yr  (G3, 5σ + R_in)\",\n"
+                    "        f\"   Ṁ      = {g3['mdot_p50_msun_yr']:.1e} M☉/yr  (G3, mediana MC de M y R)\",\n"
                     "        '',\n"
                     "        f\"PARÁMETROS ADOPTADOS:\",\n"
                     "        f\"   distancia  {ap.loc['distance_pc','value']} pc   (Gaia)\",\n"

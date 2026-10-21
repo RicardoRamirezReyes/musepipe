@@ -52,13 +52,16 @@ class AccretionKeysTests(unittest.TestCase):
 
     def test_el_mdot_y_su_etiqueta_viajan_al_qc_final(self):
         acc = {"combined_accretion": {"kind": "upper_limit", "l_acc_lsun": 1.5e-7},
-               "mdot_p50_msun_yr": 1.9e-13, "mdot_mr_source": {"source": "config"}}
+               "mdot_p50_msun_yr": 1.9e-13, "mdot_mr_source": {"source": "config"},
+               "halpha_flux_source": "E3 99% upper limit (spec E3 v2)"}
         rows = [_row(property="mdot", value="1.9e-13", label="upper_limit")]
         k = _accretion_keys(acc, rows)
         self.assertEqual(k["combined_accretion"]["kind"], "upper_limit")
         self.assertAlmostEqual(k["mdot_p50_msun_yr"], 1.9e-13)
         self.assertEqual(k["mdot_label"], "upper_limit")
         self.assertEqual(k["mdot_mr_source"], {"source": "config"})
+        # la fuente del flujo de Halpha (2026-10-20): E3 o G2
+        self.assertEqual(k["halpha_flux_source"], "E3 99% upper limit (spec E3 v2)")
 
     def test_tras_reetiquetar_publica_el_mdot_recalculado(self):
         rows = [_row(property="l_acc_combined", value="4.5e-6", label="empirical_inference"),

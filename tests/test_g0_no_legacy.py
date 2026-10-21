@@ -93,5 +93,45 @@ class G0IssuesDerivadosTests(unittest.TestCase):
         self.assertNotIn("A-block", f1[0]["issue"])
         self.assertTrue(any("STAT red" in i["issue"] for i in qc["open_issues"]))
 
+
+class G0HashChainDeF1Tests(unittest.TestCase):
+    """G0 copia los checks por producto de F1; no los encadena (2026-10-20).
+
+    Cada check de F1 compara el sha declarado de un producto con el del fichero.
+    Encadenarlos comparaba la fuente de pesos de A1 con el cubo de A3, y G0 decia
+    `fail` con F1 en `pass` en los dos runs del paper.
+    """
+
+    def _qc(self, checks, status):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_minimal_run(root, "R")
+            rd = root / "runs" / "R"
+            rs = json.loads((rd / "report" / "run_summary.json").read_text())
+            rs["hash_chain"] = {"status": status, "checks": checks}
+            (rd / "report" / "run_summary.json").write_text(json.dumps(rs))
+            return RUN_G0.build_g0("R", project_root=root, no_legacy=True)
+
+    def test_productos_distintos_que_cuadran_dan_pass(self):
+        checks = [
+            {"stage": "A1_raw_reduction", "context": "weight_source", "actual": "aaa", "expected": "aaa", "status": "pass"},
+            {"stage": "A3_telluric", "context": "input", "actual": "bbb", "expected": "bbb", "status": "pass"},
+            {"stage": "B3_localize", "context": "input_cube", "actual": "ccc", "expected": "ccc", "status": "pass"},
+        ]
+        qc = self._qc(checks, "pass")
+        self.assertTrue(qc["hash_chain_ok"])
+        self.assertEqual(qc["hash_chain"]["status"], "pass")
+        self.assertEqual([c["status"] for c in qc["hash_chain"]["checks"]], ["pass"] * 3)
+
+    def test_un_producto_cambiado_da_fail(self):
+        checks = [
+            {"stage": "A3_telluric", "context": "input", "actual": "bbb", "expected": "bbb", "status": "pass"},
+            {"stage": "B3_localize", "context": "input_cube", "actual": "xxx", "expected": "ccc", "status": "fail"},
+        ]
+        qc = self._qc(checks, "fail")
+        self.assertFalse(qc["hash_chain_ok"])
+        self.assertEqual(qc["hash_chain"]["status"], "fail")
+
+
 if __name__ == "__main__":
     unittest.main()
