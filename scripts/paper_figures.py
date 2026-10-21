@@ -1982,17 +1982,27 @@ def teff_corner(objetos, out: Path, cadenas):
     plt.close(fig)
 
 
-def teff_corner_data(objetos, out: Path, cadenas):
-    """Como teff_corner, con BT-Settl y tres conjuntos de datos superpuestos: todos los espectros, solo los J/H/K y
-    solo MUSE (pedido del autor 2026-10-16 tras la reunión con Claudio; figura pedida el 2026-10-18). Sin r_K,
-    que sin espectros IR no es un parámetro."""
+def teff_corner_data(objetos, out: Path, cadenas, rejilla="btsettl"):
+    """Como teff_corner, con una rejilla y tres conjuntos de datos superpuestos: todos los espectros, solo los J/H/K
+    y solo MUSE (pedido del autor 2026-10-16 tras la reunión con Claudio; figura pedida el 2026-10-18). Sin r_K,
+    que sin espectros IR no es un parámetro. La del paper es la de BT-Settl (Fig. B.5)."""
+    from scripts import teff_bayes as tb
+
+    nombre = tb.NOMBRE_REJILLA.get(rejilla) or tb.REJILLAS[rejilla]["nombre"]
     fig = plt.figure(figsize=(ANCHO_DOBLE_IN, 0.56 * ANCHO_DOBLE_IN))
     subfiguras = fig.subfigures(1, len(objetos), wspace=0.03, squeeze=False)[0]
     for sub, obj in zip(subfiguras, objetos):
-        _dibuja_corner(sub, _series_corner_datos(cadenas, obj.slug), f"{obj.nombre}, BT-Settl",
+        _dibuja_corner(sub, _series_corner_datos(cadenas, obj.slug, rejilla), f"{obj.nombre}, {nombre}",
                        parametros=PARAMETROS_CORNER_DATOS, estilos=ESTILO_DATOS, nombres=NOMBRE_DATOS)
     fig.savefig(out)
     plt.close(fig)
+
+
+def teff_corner_data_ames_cond(objetos, out: Path, cadenas):
+    """La misma figura con AMES-Cond, la otra rejilla que cubre los dos compañeros a R = 500 sin tocar sus bordes
+    (Tabla B.7). Pedida por el autor el 2026-10-21: «otro plot como Fig. B.5 pero con otro modelo que no sea
+    DRIFT-PHOENIX»."""
+    teff_corner_data(objetos, out, cadenas, rejilla="ames_cond")
 
 
 # --------------------------------------------------------------------------
@@ -2019,6 +2029,7 @@ FIGURAS = {
     "companion_type_combined": companion_type_combined,
     "teff_corner": teff_corner,
     "teff_corner_data": teff_corner_data,
+    "teff_corner_data_ames_cond": teff_corner_data_ames_cond,
 }
 
 
@@ -2061,7 +2072,7 @@ def main(argv=None) -> int:
         fn = FIGURAS[nombre]
         if nombre == "mdot_mass_plane":
             fn(objetos, destino, literatura=Path(args.literature))
-        elif nombre in ("teff_corner", "teff_corner_data"):
+        elif nombre.startswith("teff_corner"):
             if not args.teff_chains:
                 raise SystemExit(f"{nombre} necesita las cadenas de `teff_bayes.py ajusta`: --teff-chains DIR"
                                  " (repetible). No viven en runs/, asi que no hay un directorio por defecto.")
