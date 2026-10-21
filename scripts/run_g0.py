@@ -3,7 +3,7 @@
 
 Reproduces the structure of ``runs/ROXs12b_B_adp/stages/stage_g0_qc.json`` (the
 contract) composing every field from the public helpers in ``musepipe.g0``
-(``build_g0_qc``, ``verify_hash_chain``, ``legacy_comparison``) plus the run's
+(``build_g0_qc``, ``legacy_comparison``) plus the run's
 own generated QCs (F1 ``run_summary.json`` semaphores, ``stage00q`` STAT verdict).
 
 Legacy comparison: G0 compares the new spectrum against a legacy one to catch
@@ -28,7 +28,7 @@ from astropy.io import fits
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from musepipe.g0 import build_g0_qc, legacy_comparison, verify_hash_chain
+from musepipe.g0 import build_g0_qc, legacy_comparison
 
 LEGACY_BANDS = [
     ("continuum_blue", 4900.0, 5400.0),
@@ -181,10 +181,18 @@ def build_g0(run_id, project_root=None, legacy_run=None, pytest_after=None, no_l
 
     # G0 §5.3 legacy comparison summary + §4 hash-chain block (as in the ADP QC).
     qc["legacy_comparison"] = legacy_block
-    links = []
-    for chk in hc.get("checks", []):
-        links.append({"stage": chk.get("stage"), "input_sha": chk.get("actual"), "output_sha": chk.get("expected")})
-    qc["hash_chain"] = verify_hash_chain(links) if links else {"status": "pass" if hash_chain_ok else "fail", "checks": []}
+    # Cada check de F1 compara el sha que una etapa declara con el del fichero en disco:
+    # son comprobaciones por producto, no eslabones de una cadena. Hasta el 2026-10-20
+    # se encadenaban con `verify_hash_chain` (la entrada de cada uno contra la salida
+    # del anterior), lo que comparaba ficheros sin relacion (la fuente de pesos de A1
+    # contra el cubo de A3) y daba `fail` con F1 en `pass` y `hash_chain_ok = true`.
+    qc["hash_chain"] = {
+        "status": hc.get("status", "unavailable"),
+        "source": "report/run_summary.json (F1: declared sha256 vs file on disk, per product)",
+        "checks": [{"stage": chk.get("stage"), "context": chk.get("context"),
+                    "sha256": chk.get("actual"), "status": chk.get("status")}
+                   for chk in hc.get("checks", [])],
+    }
 
     (stage_dir / "stage_g0_qc.json").write_text(json.dumps(qc, indent=2))
     return qc

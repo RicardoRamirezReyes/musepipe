@@ -159,8 +159,15 @@ DOCUMENTED_DEFAULTS = {
         "gravity_class": None,
         "age": None,
         "instrument": "synthetic (PHOENIX BT-Settl CIFIST2011, SVO)",
-        "wave_frame": "vacuum",
-        "wave_frame_source": "metadatos de los nodos: 'vacuum (synthetic)'",
+        "wave_frame": "air",
+        "wave_frame_source": (
+            "MEDIDO 2026-10-20 (docs/2026-10-20_btsettl_en_aire.md): los nucleos de "
+            "19-23 lineas (K I, Na I, Rb I, Cs I, Ti I, Fe I, Mg I, Ca II) caen en "
+            "lambda_aire a +-0.01 A en 8 nodos de 2400-4500 K, y a -2.1/-2.2 A de "
+            "lambda_vac. El VOTable de SVO no declara marco; la etiqueta "
+            "'vacuum (synthetic)' de los nodos la escribio a mano el descargador y es "
+            "falsa. Hasta el 2026-10-20 este valor era 'vacuum' y G3 corria el modelo "
+            "1.7-2.6 A al azul"),
         "resolution_sharp": True,
         "resolution_source": ("sintética: paso 0.02 Å (R_muestreo ≈ 3.5e5 a 7000 Å), "
                               "≪ LSF de MUSE ≈ 2.3 Å; se declara nítida"),
