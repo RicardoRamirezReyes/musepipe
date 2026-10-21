@@ -22,6 +22,7 @@ from ..config import load_run_config
 from ..io import read_json, write_json
 from ..paths import RunPaths
 from ..psf import evaluate_psf_model
+from ..spectral import resolve_lsf_fwhm_A
 from ..stats import robust_sigma
 from .stage_h01_detect import expected_line_center_A, gaussian_flux_template
 
@@ -283,14 +284,18 @@ def _rv_sys_kms(cfg):
     return 0.0
 
 
-def _lsf_fwhm(paths, cfg, default=2.6):
+def _lsf_fwhm(paths, cfg, *, stage_key):
+    """FWHM de la LSF en Halpha por el resolutor COMPARTIDO; devuelve ``(valor, procedencia)``.
+
+    E1b, E5 y E6 tenian su propia cascada, con las claves viejas (`lsf.fwhm_A`,
+    `cube.lsf_fwhm_A`, `lsf_fwhm_A`) y un default de 2.6 A. Ninguna clave existia en los
+    runs del paper, asi que los mapas ciegos, las curvas de contraste y las ROC corrian
+    con 2.6 A mientras E1 usaba 2.285 / 2.297 A: el mismo fallo que se arreglo en C5/C6 el
+    2026-09-10 (`spectral.resolve_lsf_fwhm_A`). Ahora va por ese resolutor, sin default.
+    """
+
     qc00 = _read_optional_json(paths["stage00q_qc_json"])
-    value = qc00.get("lsf", {}).get("fwhm_A") or qc00.get("cube", {}).get("lsf_fwhm_A") or cfg.get("lsf_fwhm_A", default)
-    try:
-        value = float(value)
-    except Exception:
-        value = float(default)
-    return value if np.isfinite(value) and value > 0 else float(default)
+    return resolve_lsf_fwhm_A(qc00, cfg, stage_key=stage_key)
 
 
 def _load_residual(path):
@@ -352,7 +357,7 @@ def compute_stage_h01b_products(config, paths=None):
     open_issues = []
 
     star_yx, companion_yx = _positions(paths, cfg)
-    lsf_fwhm_A = _lsf_fwhm(paths, cfg)
+    lsf_fwhm_A, lsf_source = _lsf_fwhm(paths, cfg, stage_key="h01b_lsf_fwhm_A")
     rv_sys = _rv_sys_kms(cfg)
     line_rest = float(cfg.get("h01b_line_rest_A", 6562.8))
     line_center = expected_line_center_A(line_rest, rv_sys)
@@ -420,6 +425,7 @@ def compute_stage_h01b_products(config, paths=None):
             "line_rest_A": line_rest,
             "line_center_A": float(line_center),
             "lsf_fwhm_A": float(lsf_fwhm_A),
+            "lsf_fwhm_A_source": lsf_source,
             "threshold_sigma": threshold,
             "r_min_px": r_min,
             "kernel_halfsize_px": halfsize,

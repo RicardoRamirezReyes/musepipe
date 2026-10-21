@@ -148,7 +148,7 @@ def compute_stage_h06_products(config, paths=None):
     open_issues = []
 
     star_yx, companion_yx = _positions(paths, cfg)
-    lsf_fwhm_A = _lsf_fwhm(paths, cfg)
+    lsf_fwhm_A, lsf_source = _lsf_fwhm(paths, cfg, stage_key="h06_lsf_fwhm_A")
     line_center = expected_line_center_A(float(cfg.get("h01b_line_rest_A", 6562.8)), _rv_sys_kms(cfg))
 
     states, pre_cube, pre_wave, _psf_model = build_method_states(
@@ -249,6 +249,8 @@ def compute_stage_h06_products(config, paths=None):
             "null_step_channels": int(cfg.get("h06_null_step_channels", DEFAULT_NULL_STEP_CHANNELS)),
             "n_null_wavelengths": len(null_centers),
             "line_center_A": float(line_center),
+            "lsf_fwhm_A": float(lsf_fwhm_A),
+            "lsf_fwhm_A_source": lsf_source,
         },
         "methods": methods_qc,
         "checks": checks,
