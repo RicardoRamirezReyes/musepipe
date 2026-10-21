@@ -346,7 +346,7 @@ def compute_stage_h05_products(config, paths=None):
     open_issues = []
 
     star_yx, companion_yx = _positions(paths, cfg)
-    lsf_fwhm_A = _lsf_fwhm(paths, cfg)
+    lsf_fwhm_A, lsf_source = _lsf_fwhm(paths, cfg, stage_key="h05_lsf_fwhm_A")
     line_center = expected_line_center_A(float(cfg.get("h01b_line_rest_A", 6562.8)), _rv_sys_kms(cfg))
     threshold = float(cfg.get("h05_threshold_sigma", DEFAULT_THRESHOLD_SIGMA))
     contrasts = [float(c) for c in cfg.get("h05_contrasts", DEFAULT_CONTRASTS)]
@@ -429,6 +429,7 @@ def compute_stage_h05_products(config, paths=None):
             "f_star_line": float(f_star),
             "line_center_A": float(line_center),
             "lsf_fwhm_A": float(lsf_fwhm_A),
+            "lsf_fwhm_A_source": lsf_source,
         },
         "methods": {
             method: {"n_injections": int(sum(1 for r in rows if r["method"] == method)), "curve": curve}
