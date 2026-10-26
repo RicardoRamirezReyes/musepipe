@@ -288,6 +288,12 @@ telluric bands and accretion lines) and its ECSV export.
 ## Safety
 
 - Check `git status` before editing; preserve unrelated work.
+- **Existing tests change only with the owner's explicit authorization**, given per change:
+  expected values and pinned numbers, tolerances, skips/xfail, deleting or renaming a test,
+  assertions, fixtures, `conftest.py`, `pytest.ini`. A failing test is reported as failing and
+  stays failing until the owner decides — never re-pinned to the code's new output, even when
+  that output is expected. New tests may be added, and are listed in the report. Full rule in
+  `AGENTS.md` → Tests.
 - Do not touch raw data, `runs/`, `/mnt/2TB`, calibrations, `reports/`, or `paper/` unless
   asked. Do not commit or push unless asked.
 - Never run two writing stages against the same run concurrently. Raw reduction, full
