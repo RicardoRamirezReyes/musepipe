@@ -13,7 +13,7 @@ from ..apertures import aperture_weights
 from ..config import load_run_config
 from ..growth_curve import resolve_flux_convention
 from ..extraction.product import SpectrumProduct
-from ..extraction.psffit import PsfFitProducts, crosstalk_metric, make_psffit_products
+from ..extraction.psffit import PsfFitProducts, _check_background, crosstalk_metric, make_psffit_products, n_design_columns
 from ..io import read_json, write_json
 from ..parallel import config_n_jobs
 from ..paths import RunPaths
@@ -85,6 +85,10 @@ def stage_x03_config_from_run(
     cfg.setdefault("x03_star_key", "primary")
     cfg.setdefault("x03_star_radius_px", 20.0)
     cfg.setdefault("x03_comp_radius_px", 12.0)
+    # spec C4 v2 §1: `shared` (v1, the default so legacy runs reproduce) or
+    # `decoupled_c0`; the paper runs declare it.
+    cfg.setdefault("x03_background", "shared")
+    _check_background(cfg["x03_background"])
     cfg.setdefault("x03_error_mode", "auto")
     cfg.setdefault("x03_control_apertures", cfg.get("stage07_control_apertures", 8))
     cfg.setdefault("x03_control_exclude_angle_deg", 25.0)
@@ -212,6 +216,8 @@ def _qc_payload(products: PsfFitProducts, cfg, paths, psf_model_path, stat_state
             "star_radius_px": float(cfg.get("x03_star_radius_px", 20.0)),
             "comp_radius_px": float(cfg.get("x03_comp_radius_px", 12.0)),
             "n_pixels_median": int(np.nanmedian(fit.npix)),
+            "background": str(cfg.get("x03_background", "shared")),
+            "n_parameters": n_design_columns(cfg.get("x03_background", "shared")),
         },
         "positions": {"from": str(paths["stage01c_qc_json"]), "chromatic": False},
         "conditioning": {
@@ -308,6 +314,7 @@ def compute_stage_x03_products(config, paths=None):
         n_controls=int(cfg.get("x03_control_apertures", 8)),
         exclude_angle_deg=float(cfg.get("x03_control_exclude_angle_deg", 25.0)),
         n_jobs=config_n_jobs(cfg, "x03_n_jobs", "n_jobs"),
+        background=cfg.get("x03_background", "shared"),
     )
     star_check = _star_large_aperture_check(cube, star_yx, psf_model, products.star)
     qc = _qc_payload(products, cfg, paths, psf_model_path, stat_state, star_check, open_issues)

@@ -55,7 +55,27 @@ def fit_region_mask(shape, star_yx, comp_yx, *, star_radius_px=20.0, comp_radius
     )
 
 
-def psf_pair_design(shape, wave_A, star_yx, comp_yx, psf_model):
+# Background term of the fit (spec C4 v2 §1). `shared`: one constant and two
+# gradients over the union of both discs (v1). `decoupled_c0`: the plane only on
+# the star's disc and a constant only on the companion's, so the gradients that
+# absorb the star's core residual cannot carry it to the companion
+# (`docs/2026-10-24_c4_planos_desacoplados_decision.md`).
+BACKGROUND_MODELS = ("shared", "decoupled_c0")
+
+
+def _check_background(background):
+    if background not in BACKGROUND_MODELS:
+        raise ValueError(f"psffit background must be one of {BACKGROUND_MODELS}, got {background!r}.")
+    return background
+
+
+def n_design_columns(background="shared"):
+    return 5 if _check_background(background) == "shared" else 6
+
+
+def psf_pair_design(shape, wave_A, star_yx, comp_yx, psf_model, *, background="shared",
+                    star_radius_px=20.0, comp_radius_px=12.0):
+    _check_background(background)
     yy, xx = np.indices(shape, dtype=np.float64)
     p_star = evaluate_psf_model(
         psf_model,
@@ -74,7 +94,11 @@ def psf_pair_design(shape, wave_A, star_yx, comp_yx, psf_model):
     scale = max(float(np.hypot(float(comp_yx[0]) - float(star_yx[0]), float(comp_yx[1]) - float(star_yx[1]))), 1.0)
     y_scaled = (yy - y0) / scale
     x_scaled = (xx - x0) / scale
-    return np.stack([p_star, p_comp, np.ones(shape), y_scaled, x_scaled], axis=-1)
+    if background == "shared":
+        return np.stack([p_star, p_comp, np.ones(shape), y_scaled, x_scaled], axis=-1)
+    star_disc = ((yy - float(star_yx[0])) ** 2 + (xx - float(star_yx[1])) ** 2 <= float(star_radius_px) ** 2).astype(np.float64)
+    comp_disc = ((yy - float(comp_yx[0])) ** 2 + (xx - float(comp_yx[1])) ** 2 <= float(comp_radius_px) ** 2).astype(np.float64)
+    return np.stack([p_star, p_comp, star_disc, y_scaled * star_disc, x_scaled * star_disc, comp_disc], axis=-1)
 
 
 def _correlation(cov, i, j):
@@ -118,7 +142,7 @@ def _fit_one_channel(data_2d, variance_2d, design_3d, fit_mask):
     else:
         condition = np.inf
     rho_ab = _correlation(cov, 0, 1)
-    rho_bc_vals = [_correlation(cov, 1, j) for j in (2, 3, 4)]
+    rho_bc_vals = [_correlation(cov, 1, j) for j in range(2, p)]
     rho_bc = float(np.nanmax(np.abs(rho_bc_vals))) if np.any(np.isfinite(rho_bc_vals)) else np.nan
     pcomp = a[:, 1]
     npix_eff = np.nan
@@ -138,6 +162,7 @@ def fit_psffit_cube(
     star_radius_px=20.0,
     comp_radius_px=12.0,
     n_jobs=1,
+    background="shared",
 ) -> PsfFitCubeResult:
     cube = np.asarray(cube_zyx, dtype=np.float64)
     variance = np.asarray(variance_zyx, dtype=np.float64)
@@ -151,8 +176,9 @@ def fit_psffit_cube(
 
     nz, ny, nx = cube.shape
     fit_mask = fit_region_mask((ny, nx), star_yx, comp_yx, star_radius_px=star_radius_px, comp_radius_px=comp_radius_px)
-    coeffs = np.full((nz, 5), np.nan, dtype=np.float64)
-    cov = np.full((nz, 5, 5), np.nan, dtype=np.float64)
+    n_par = n_design_columns(background)
+    coeffs = np.full((nz, n_par), np.nan, dtype=np.float64)
+    cov = np.full((nz, n_par, n_par), np.nan, dtype=np.float64)
     chi2r = np.full(nz, np.nan, dtype=np.float64)
     cond = np.full(nz, np.nan, dtype=np.float64)
     rho_ab = np.full(nz, np.nan, dtype=np.float64)
@@ -165,7 +191,8 @@ def fit_psffit_cube(
     def _fit_range(z0, z1):
         # Per-channel work identical to the serial loop; disjoint output slots.
         for z in range(z0, z1):
-            design = psf_pair_design((ny, nx), wave[z], star_yx, comp_yx, psf_model)
+            design = psf_pair_design((ny, nx), wave[z], star_yx, comp_yx, psf_model, background=background,
+                                     star_radius_px=star_radius_px, comp_radius_px=comp_radius_px)
             row = _fit_one_channel(cube[z], variance[z], design, fit_mask)
             coeffs[z], cov[z], chi2r[z], cond[z], rho_ab[z], rho_bc[z], npix[z], npix_eff[z], model_cube[z], residual_cube[z] = row
 
@@ -198,6 +225,7 @@ def control_psffit_spectra(
     n_controls=8,
     exclude_angle_deg=25.0,
     n_jobs=1,
+    background="shared",
 ) -> tuple[list[tuple[int, int]], np.ndarray, np.ndarray]:
     cube = np.asarray(cube_zyx, dtype=np.float64)
     _, ny, nx = cube.shape
@@ -223,6 +251,7 @@ def control_psffit_spectra(
             star_radius_px=star_radius_px,
             comp_radius_px=comp_radius_px,
             n_jobs=n_jobs,
+            background=background,
         )
         star_specs.append(fit.coeffs[:, 0])
         comp_specs.append(fit.coeffs[:, 1])
@@ -231,7 +260,7 @@ def control_psffit_spectra(
     return controls, np.asarray(star_specs, dtype=np.float64), np.asarray(comp_specs, dtype=np.float64)
 
 
-def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, error_mode, stat_factor, cov_factor, chi2r, scaleref="normrad_total_flux", apcmode="psf_model_norm_radius"):
+def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, error_mode, stat_factor, cov_factor, chi2r, scaleref="normrad_total_flux", apcmode="psf_model_norm_radius", background="shared"):
     return {
         "FORMATV": FORMAT_VERSION,
         "METHOD": "psffit",
@@ -252,7 +281,9 @@ def _spectrum_header(run_id, source_label, source_yx, input_cube_path, input_cub
         "INFLAPP": False,
         # The [p_star, p_comp, 1, y, x] design's plane IS this method's
         # background convention; amplitudes are already total NORMRAD flux.
-        "BKGMODE": "psffit_plane",
+        # `decoupled_c0` keeps the plane on the star's disc and gives the
+        # companion only its own constant.
+        "BKGMODE": "psffit_plane" if background == "shared" else "psffit_plane_decoupled_c0",
         "SCALEREF": str(scaleref),
     }
 
@@ -285,6 +316,7 @@ def make_psffit_products(
     n_controls: int = 8,
     exclude_angle_deg: float = 25.0,
     n_jobs: int = 1,
+    background: str = "shared",
 ) -> PsfFitProducts:
     cube = np.asarray(cube_zyx, dtype=np.float64)
     wave = np.asarray(wave_A, dtype=np.float64)
@@ -309,6 +341,7 @@ def make_psffit_products(
         star_radius_px=star_radius_px,
         comp_radius_px=comp_radius_px,
         n_jobs=n_jobs,
+        background=background,
     )
     cov_factor = covariance_factor_for_npix(result.npix_eff_comp, covariance_factor_box3)
     star_var = result.covariance[:, 0, 0] * cov_factor
@@ -326,6 +359,7 @@ def make_psffit_products(
         n_controls=n_controls,
         exclude_angle_deg=exclude_angle_deg,
         n_jobs=n_jobs,
+        background=background,
     )
     if comp_controls.shape[0] >= 2:
         comp_err_emp = robust_sigma_axis0(comp_controls)
@@ -385,8 +419,8 @@ def make_psffit_products(
     # `psf_model_norm_radius` mientras el flujo esta en escala total confunde
     # a quien audite el fichero.
     apcmode = "psf_model_norm_radius+empirical_total" if growth_curve else "psf_model_norm_radius"
-    comp_header = _spectrum_header(run_id, "object", comp_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode)
-    star_header = _spectrum_header(run_id, "star", star_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode)
+    comp_header = _spectrum_header(run_id, "object", comp_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode, background)
+    star_header = _spectrum_header(run_id, "star", star_yx, input_cube_path, input_cube_sha, psf_model, wframe, bunit, mode, stat_factor, cov_median, result.chi2r, scaleref, apcmode, background)
     comp_flux_cal = result.coeffs[:, 1] * apcorr
     star_flux_cal = result.coeffs[:, 0] * apcorr
     comp_err_cal = comp_err * apcorr
@@ -461,6 +495,8 @@ def crosstalk_metric(wave_A, star_flux, comp_flux, windows_A):
 
 
 __all__ = [
+    "BACKGROUND_MODELS",
+    "n_design_columns",
     "PsfFitCubeResult",
     "PsfFitProducts",
     "continuum_running_median",

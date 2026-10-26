@@ -120,6 +120,7 @@ def perobs_spectra_config_from_run(run_id=None, *, project_root=None, overrides=
                    list(x01.get("x01_annulus_bkg_px", ANNULUS_BKG_FALLBACK_PX)))
     cfg.setdefault("perobs_spectra_star_radius_px", x03.get("x03_star_radius_px", 20.0))
     cfg.setdefault("perobs_spectra_comp_radius_px", x03.get("x03_comp_radius_px", 12.0))
+    cfg.setdefault("perobs_spectra_psffit_background", x03.get("x03_background", "shared"))
     # El ajuste por canal de C4 cuesta ~11 min para los 3681 canales de UN cubo;
     # multiplicado por las N exposiciones son horas. El submuestreo es la misma
     # perilla que ya lleva el notebook debug de C4, y la dispersión es una
@@ -247,6 +248,7 @@ def extract_one_observation(exposure, plan, cfg, model_doc, positions_yx, frame_
             star_radius_px=float(cfg["perobs_spectra_star_radius_px"]),
             comp_radius_px=float(cfg["perobs_spectra_comp_radius_px"]),
             n_jobs=1,
+            background=cfg["perobs_spectra_psffit_background"],
         )
         row["psffit"] = {
             "channels": sel,
@@ -527,6 +529,7 @@ def run_perobs_spectra(run_id=None, *, project_root=None, overrides=None,
                 "enabled": bool(cfg.get("perobs_spectra_psffit", True)),
                 "star_radius_px": float(cfg["perobs_spectra_star_radius_px"]),
                 "comp_radius_px": float(cfg["perobs_spectra_comp_radius_px"]),
+                "background": str(cfg["perobs_spectra_psffit_background"]),
                 "channel_step": int(cfg["perobs_spectra_psffit_channel_step"]),
                 "full_windows_A": cfg["perobs_spectra_psffit_full_windows_A"],
                 "apcorr": 1.0,
