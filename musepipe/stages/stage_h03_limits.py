@@ -20,8 +20,14 @@ from .stage_h01_detect import (
     DEFAULT_TEMPLATE_WIDTH_FACTORS,
     HALPHA_REST_A,
     _good_detection_mask,
+    _object_residual,
+    _product_paths_from_config as _h01_product_paths,
+    _scan_maximum,
     expected_line_center_A,
     matched_filter_point,
+    matched_filter_scan,
+    search_centers_A,
+    stage_h01_paths,
 )
 from .stage08c_look_elsewhere import fit_gumbel_tail
 from .stage_x10_compare import METHOD_ORDER
@@ -59,6 +65,7 @@ TABLE_FIELDS = [
     "z_cl",
     "f_measured",
     "z_measured",
+    "f_measured_source",
     "z_limit",
     "f_stat_threshold_99",
     "sigma_h01_table",
@@ -420,11 +427,16 @@ def resolve_limit_definition(cfg, product_kind):
     return str(declarado), "config.h03_limit_definition"
 
 
-def measured_flux_for_method_factor(h01_rows, method, factor):
+def measured_flux_for_method_factor(h01_rows, method, factor, *, paths=None, h01_qc=None, cfg=None):
     """El flujo del filtro adaptado que E1 midio en la posicion del companero (unidad nativa).
 
     Es el maximo de su barrido (centro y ancho), el mismo numero cuya z decide E1: como
     entrada del limite es conservador (un maximo esta sesgado hacia arriba).
+
+    La tabla de E1 trae UNA fila por metodo, la del ancho que E1 prefirio. Si prefirio
+    otro (ROXs12b_OB3444577, 2026-10-23: optimal_ls a 4.0), la fila pedida no existe y
+    E3 v2 abortaba; entonces se rehace el barrido de E1 a ese ancho sobre el producto
+    calibrado (`_measured_flux_from_product`). Devuelve (flujo, z, fuente).
     """
     for row in h01_rows:
         if row.get("method") != method:
@@ -434,11 +446,51 @@ def measured_flux_for_method_factor(h01_rows, method, factor):
         flux = _float_cell(row, ("matched_flux",))
         z = _float_cell(row, ("matched_z",))
         if np.isfinite(flux):
-            return float(flux), (float(z) if np.isfinite(z) else None)
+            return float(flux), (float(z) if np.isfinite(z) else None), "h01_detection_table"
+    if paths is not None:
+        flux, z = _measured_flux_from_product(paths, cfg, h01_qc, method, factor)
+        return flux, z, "recomputed_h01_scan"
     raise RuntimeError(
         f"H03 needs the measured matched-filter flux of {method} (template_factor={float(factor):g}) "
         "from E1's halpha_detection_by_method.csv to build a measured_plus_margin upper limit."
     )
+
+
+def _measured_flux_from_product(paths, cfg, h01_qc, method, factor):
+    """El maximo del barrido de centros de E1 a UN ancho de plantilla, sobre el producto calibrado.
+
+    El producto se resuelve como lo resuelve E1 (no con `_product_path_for_method`, que no
+    conoce sgf ni lpm), con el mismo residuo (flujo menos `cont_runmed`), error, mascara,
+    ventana de busqueda y LSF, que E1 declara en su QC; sin esa declaracion no es el numero
+    de E1 y se aborta. Al ancho que E1 prefirio da el mismo flujo que su tabla.
+    """
+    run_paths = paths["paths"]
+    product_path = _h01_product_paths(
+        cfg or {}, stage_h01_paths(run_paths.run_id, run_paths.project_root))[method]
+    if not product_path.exists():
+        raise RuntimeError(
+            f"H03 needs the measured matched-filter flux of {method} (template_factor={float(factor):g}): "
+            "E1's table has no row at that width and there is no calibrated product to recompute it."
+        )
+    line = (h01_qc or {}).get("line") or {}
+    lsf_fwhm = ((h01_qc or {}).get("templates") or {}).get("lsf_fwhm_A")
+    faltan = [k for k, v in (("line.rv_sys_kms", line.get("rv_sys_kms")),
+                             ("line.search_half_width_kms", line.get("search_half_width_kms")),
+                             ("templates.lsf_fwhm_A", lsf_fwhm)) if v is None]
+    if faltan:
+        raise RuntimeError(f"H03 cannot recompute E1's matched-filter scan: H01 QC lacks {', '.join(faltan)}.")
+    product = SpectrumProduct.read(product_path)
+    wave = np.asarray(product.wave_A, dtype=np.float64)
+    good = _good_detection_mask(product)
+    error = np.asarray((product.extra_columns or {}).get("flux_err_total", product.flux_err), dtype=np.float64)
+    expected = expected_line_center_A(float(line.get("rest_A", HALPHA_REST_A)), float(line["rv_sys_kms"]))
+    centers = search_centers_A(wave, expected, float(line["search_half_width_kms"]), good)
+    scan = matched_filter_scan(wave, _object_residual(product), error, centers, float(lsf_fwhm),
+                               (float(factor),), good)
+    maximum = _scan_maximum(scan)
+    if maximum is None:
+        raise RuntimeError(f"No finite matched-filter value for {method} at template_factor={float(factor):g}.")
+    return float(maximum["flux"]), float(maximum["z"])
 
 
 def tail_limit_summary(null_values, *, fap_99=0.01, fap_5sigma=ONE_SIDED_5SIGMA_FAP):
@@ -1168,6 +1220,7 @@ def _row_from_limits(
         "z_cl": limit_payload.get("z_cl", ""),
         "f_measured": limit_payload.get("f_measured", ""),
         "z_measured": limit_payload.get("z_measured", ""),
+        "f_measured_source": limit_payload.get("f_measured_source", ""),
         "sigma_h01_table": sigma_payload.get("sigma_h01_table"),
         "sigma_table_vs_recomputed_pct": sigma_payload.get("sigma_table_vs_recomputed_pct"),
         "throughput": throughput_payload["throughput"],
@@ -1274,10 +1327,12 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
             limit_payload = {"limit_definition": limit_definition}
             z_for_throughput = z_threshold_for(tail, tail_estimator)
             if limit_definition == "measured_plus_margin":
-                f_nativo, z_medido = measured_flux_for_method_factor(h01_rows, method, factor)
+                f_nativo, z_medido, f_fuente = measured_flux_for_method_factor(
+                    h01_rows, method, factor, paths=paths, h01_qc=h01_qc, cfg=cfg)
                 f_medido = f_nativo * flux_unit_cgs
                 limit_payload.update(limit_confidence=1.0 - fap_99, z_cl=z_cl,
-                                     f_measured=f_medido, z_measured=z_medido)
+                                     f_measured=f_medido, z_measured=z_medido,
+                                     f_measured_source=f_fuente)
                 # El throughput se interpola al S/N del propio limite, no al del umbral.
                 sigma = float(sigma_payload["matched_sigma"])
                 z_for_throughput = (max(f_medido, 0.0) + z_cl * sigma) / sigma
@@ -1377,6 +1432,7 @@ def compute_stage_h03_products(config, paths=None) -> StageH03Product:
                 "limit_definition": row["limit_definition"],
                 "f_measured": row["f_measured"],
                 "z_measured": row["z_measured"],
+                "f_measured_source": row["f_measured_source"],
                 "f_stat_threshold_99": row["f_stat_threshold_99"],
                 "f_stat_99": row["f_stat_99"],
                 "f_stat_5sigma_extrap": row["f_stat_5sigma_extrap"],
