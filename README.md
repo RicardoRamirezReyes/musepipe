@@ -79,6 +79,7 @@ in [`CITATION.cff`](CITATION.cff). Every release is archived on Zenodo:
 
 - **10.5281/zenodo.22651844** — concept DOI, always resolves to the latest version. Cite this
   one unless you need to pin a specific version.
+- **10.5281/zenodo.23670794** — the archived record of `v0.2.10` specifically.
 - **10.5281/zenodo.23502150** — the archived record of `v0.2.9` specifically.
 - **10.5281/zenodo.23423872** — the archived record of `v0.2.8` specifically.
 - **10.5281/zenodo.23397207** — the archived record of `v0.2.7` specifically.
