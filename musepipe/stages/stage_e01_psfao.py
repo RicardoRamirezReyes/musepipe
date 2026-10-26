@@ -23,6 +23,7 @@ import numpy as np
 from astropy.io import fits
 
 from ..config import load_run_config
+from ..psf import MAOPPY_CENTRADO_PX
 
 PSFAO_PARAM_NAMES = ("r0", "C", "A", "alpha", "ratio", "theta", "beta")
 DEFAULT_X0 = [0.15, 1e-4, 1.0, 0.05, 1.0, 0.0, 1.6]
@@ -371,7 +372,7 @@ def _box3_apcorr(system, lam_A, params, norm_radius):
              for i, v in enumerate(params)]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            img = np.asarray(m(x), dtype=np.float64)
+            img = np.asarray(m(x, dx=MAOPPY_CENTRADO_PX, dy=MAOPPY_CENTRADO_PX), dtype=np.float64)
         c = 26
         yy, xx = np.mgrid[0:52, 0:52]
         r = np.hypot(yy - c, xx - c)
@@ -745,7 +746,7 @@ def _norm_roundtrip(system, lam_A, poly, norm_radius):
         npix = int(4 * norm_radius)
         samp = float(muse_nfm.samp(lam_A * 1e-10))
         m = Psfao((npix, npix), system=system, samp=samp)
-        img = m(x)
+        img = m(x, dx=MAOPPY_CENTRADO_PX, dy=MAOPPY_CENTRADO_PX)
         cy, cx = npix // 2, npix // 2
         yy, xx = np.mgrid[0:npix, 0:npix]
         inside = np.hypot(yy - cy, xx - cx) <= norm_radius
