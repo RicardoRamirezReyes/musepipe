@@ -6542,6 +6542,11 @@ STAGES: list[dict] = [
             "| `halpha_reconciliation_v3` | Que la Hα de G2 y la de E1 cuenten lo mismo. | Dos "
             "etapas midiendo la misma línea con distinto método deben coincidir, o una de las dos "
             "está mal. |\n"
+            "| `continuum_model` / `empirical_scale.spectral` | Desde la spec G2 v4: por encima de "
+            "7000 Å el continuo es una plantilla joven del tipo del compañero × un polinomio, y la "
+            "escala empírica toma la mayor de dos nulas, los controles y la misma medida en "
+            "longitudes de onda sin líneas del propio espectro. | En el rojo una recta convierte las "
+            "bandas de TiO en «líneas», y los controles, que no tienen fotosfera, no lo ven. |\n"
         ),
         narrative_md=(
             "## Qué hace G2 y el resultado\n\n"
