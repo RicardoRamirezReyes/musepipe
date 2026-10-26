@@ -148,6 +148,10 @@ class Objeto:
         # recortar el ultimo token daba «ROXs 42B A», y la primaria de ese
         # sistema no es una estrella A sino la binaria sin resolver ROXs 42B.
         self.nombre_primaria = ficha.get("primary_display_name")
+        # La fuente de campo que B3 mide (en ROXs 42B, la estrella de fondo cc1) se
+        # rotula con la etiqueta que declara el objeto, no con un literal aqui.
+        self.etiqueta_fuente_campo = (((ficha.get("field_notes") or {}).get("background_source") or {})
+                                      .get("label"))
         self.run_dir = PROYECTO / "runs" / self.run_id
         if not self.run_dir.is_dir():
             raise SystemExit(f"no existe runs/{self.run_id} (objeto {slug})")
@@ -271,8 +275,19 @@ def fov_redband(objetos, out: Path):
         ax.add_patch(Circle((dx, dy), 0.09, fill=False, color="#00e5ff", lw=0.8))
         ax.annotate("b", (dx, dy), textcoords="offset points", xytext=(7, 5),
                     color="#00e5ff", fontsize=7.5)
-        ax.annotate("A", (0.0, 0.0), textcoords="offset points", xytext=(6, 4),
-                    color="white", fontsize=7.5)
+        # La primaria es «AB» cuando el run declara la binaria sin resolver (C1 la ajusta
+        # con dos componentes): poner «A» la hacia pasar por una estrella sola.
+        binaria = bool(obj.config.get("e01_binary_companion"))
+        ax.annotate("AB" if binaria else "A", (0.0, 0.0), textcoords="offset points",
+                    xytext=(6, 4), color="white", fontsize=7.5)
+        fuente = qc.get("field_source")
+        if fuente:
+            fy, fx = fuente["pos_yx"]
+            fdx, fdy = (fx - px) * pix, (fy - py) * pix
+            ax.add_patch(Circle((fdx, fdy), 0.07, fill=False, color="white", lw=0.6, ls=":"))
+            if obj.etiqueta_fuente_campo:
+                ax.annotate(obj.etiqueta_fuente_campo, (fdx, fdy), textcoords="offset points",
+                            xytext=(5, -9), color="white", fontsize=6.5)
 
         # barra de escala de 0.5" abajo a la izquierda
         x0 = ext[0] + 0.10 * (ext[1] - ext[0])
