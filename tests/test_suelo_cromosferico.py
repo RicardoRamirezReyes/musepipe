@@ -108,10 +108,12 @@ class CifrasDelPaperTests(unittest.TestCase):
     def test_12b_en_el_suelo_a_2500_y_por_debajo_a_3100(self):
         out = self._corre("ROXs12b")
         self.assertEqual(out["lacc_tipo"], "detection")
-        self.assertAlmostEqual(out["log_lacc_lbol"], -3.62, delta=0.005)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): eran -3.62, -0.04 y -0.62
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran -3.64, -0.065 y -0.64
+        self.assertAlmostEqual(out["log_lacc_lbol"], -3.65, delta=0.005)
         margen = {f["teff_k"]: f["margen_dex"] for f in out["filas"]}
-        self.assertAlmostEqual(margen[2500.0], -0.04, delta=0.01)
-        self.assertAlmostEqual(margen[3100.0], -0.62, delta=0.01)
+        self.assertAlmostEqual(margen[2500.0], -0.074, delta=0.01)
+        self.assertAlmostEqual(margen[3100.0], -0.65, delta=0.01)
 
     def test_42bb_cota_06_dex_por_debajo_y_extrapolada(self):
         out = self._corre("ROXs42Bb")
@@ -123,9 +125,10 @@ class CifrasDelPaperTests(unittest.TestCase):
         # a -4.40, 0.57 dex bajo el suelo a 2270 K. Ese mismo dia (spec E3 v2) el limite pasa a ser el
         # superior al 99 %, lo medido + 2.33 sigma (docs/2026-10-20_limite_superior_a99.md): x1.76 en
         # flujo, +0.28 dex; la cota queda en -4.12, 0.29 dex bajo el suelo a 2270 K.
-        self.assertAlmostEqual(out["log_lacc_lbol"], -4.12, delta=0.01)
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran -4.12 y -0.29
+        self.assertAlmostEqual(out["log_lacc_lbol"], -4.19, delta=0.01)
         (fila,) = out["filas"]
-        self.assertAlmostEqual(fila["margen_dex"], -0.29, delta=0.01)
+        self.assertAlmostEqual(fila["margen_dex"], -0.356, delta=0.01)
         self.assertTrue(fila["extrapolada"])
 
 

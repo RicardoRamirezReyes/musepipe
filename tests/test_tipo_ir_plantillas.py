@@ -216,20 +216,24 @@ class CifrasDelPaperTests(unittest.TestCase):
         self.assertEqual(self._tipo("ROXs12b", "ir", av_fija=True)["spt"], "M9")
         self.assertEqual(self._tipo("ROXs42Bb", "ir", av_fija=True)["spt"], "L0")
         self.assertEqual(self._tipo("ROXs12b", "combinado", av_fija=True)["spt"], "M9")
-        self.assertEqual(self._tipo("ROXs42Bb", "combinado", av_fija=True)["spt"], "M9.5")
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): era M9.5
+        self.assertEqual(self._tipo("ROXs42Bb", "combinado", av_fija=True)["spt"], "L0")
         self.assertEqual(self._tipo("ROXs12b", "muse", av_fija=True)["spt"], "M9")
 
     def test_solo_estructuras_en_muse(self):
         pol = {"vis": 2, "nir": 1}
-        self.assertEqual(self._tipo("ROXs12b", "muse", av_fija=True, polinomio=pol)["spt"], "M8")
-        self.assertEqual(self._tipo("ROXs42Bb", "muse", av_fija=True, polinomio=pol)["spt"], "M9.5")
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): eran M8, M9.5 y 0.64
+        self.assertEqual(self._tipo("ROXs12b", "muse", av_fija=True, polinomio=pol)["spt"], "M7")
+        self.assertEqual(self._tipo("ROXs42Bb", "muse", av_fija=True, polinomio=pol)["spt"], "L0")
         c = self.tp.calibra("ROXs12b", "muse", av_fija=True, polinomio=pol)
-        self.assertAlmostEqual(c["rms"], 0.64, delta=0.01)
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): era 0.72
+        self.assertAlmostEqual(c["rms"], 0.70, delta=0.01)
 
     def test_el_error_dejando_una_fuera(self):
         c = self.tp.calibra("ROXs42Bb", "combinado", av_fija=True)
-        self.assertAlmostEqual(c["rms"], 1.03, delta=0.01)
-        self.assertEqual(c["mediana"], 0.0)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): eran 1.03 y 0.0
+        self.assertAlmostEqual(c["rms"], 1.06, delta=0.01)
+        self.assertEqual(c["mediana"], -0.25)
 
 
 if __name__ == "__main__":

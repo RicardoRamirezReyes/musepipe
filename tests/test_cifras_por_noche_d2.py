@@ -86,8 +86,11 @@ def _hay_noches():
 
 
 #: las cifras del paper por objeto (Sect. 4.1, Fig. de variabilidad y Sect. 5.1)
-DEL_PAPER = {"ROXs12b": {"razon": 6.05, "ew": (-1.55, -8.26), "ew_ancha": (-2.59, -11.37), "ancho10": (315, 526),
-                         "sin_lsf": (251, 490)}}
+# 2026-10-25, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md, noches del 10-23) y C4 v2
+# decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran 6.05, (-1.55, -8.26), (-2.59, -11.37),
+# (315, 526) y (251, 490)
+DEL_PAPER = {"ROXs12b": {"razon": 5.87, "ew": (-1.54, -8.17), "ew_ancha": (-2.63, -11.265), "ancho10": (315, 521),
+                         "sin_lsf": (250, 484)}}
 
 
 @unittest.skipUnless(_hay_noches(), "sin los espectros calibrados de las dos noches")

@@ -105,7 +105,9 @@ class CifrasDelPaperTests(unittest.TestCase):
         self.assertAlmostEqual(r["J-K"]["mediana"], 3.81, delta=0.01)
         self.assertAlmostEqual(r["J-H"]["mediana"], 3.42, delta=0.01)
         self.assertAlmostEqual(r["H-K"]["mediana"], 4.63, delta=0.01)
-        self.assertAlmostEqual(r["MUSE-K psffit"]["mediana"], 3.33, delta=0.01)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): era 3.33
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): era 3.01
+        self.assertAlmostEqual(r["MUSE-K psffit"]["mediana"], 3.13, delta=0.01)
         self.assertAlmostEqual(e["cota_superior"], 5.17, delta=0.01)
 
     def test_con_k_corregida_por_veiling(self):
@@ -113,16 +115,20 @@ class CifrasDelPaperTests(unittest.TestCase):
         self.assertAlmostEqual(e["resumen"]["J-K"]["mediana"], 2.68, delta=0.01)
         self.assertAlmostEqual(e["resumen"]["H-K"]["mediana"], 1.84, delta=0.01)
         e12 = self.m.estimacion("ROXs12b", r_k=0.44)
-        self.assertAlmostEqual(e12["resumen"]["MUSE-K psffit"]["mediana"], 4.20, delta=0.01)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): era 4.20
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): era 4.01
+        self.assertAlmostEqual(e12["resumen"]["MUSE-K psffit"]["mediana"], 4.06, delta=0.01)
 
     def test_12b_con_el_tipo_de_los_indices_y_con_m9(self):
         e = self.m.estimacion("ROXs12b")
         self.assertEqual(e["tipo"], "M7.5")
         self.assertEqual(sorted(e["bandas"]), ["K"])
-        self.assertAlmostEqual(e["resumen"]["MUSE-K psffit"]["mediana"], 5.20, delta=0.01)
-        self.assertAlmostEqual(e["cota_superior"], 5.39, delta=0.01)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): eran 5.20, 5.39 y 2.64
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran 5.02 y 2.45
+        self.assertAlmostEqual(e["resumen"]["MUSE-K psffit"]["mediana"], 5.06, delta=0.01)
+        self.assertAlmostEqual(e["cota_superior"], 5.36, delta=0.01)
         m9 = self.m.estimacion("ROXs12b", tipo="M9")
-        self.assertAlmostEqual(m9["resumen"]["MUSE-K psffit"]["mediana"], 2.64, delta=0.01)
+        self.assertAlmostEqual(m9["resumen"]["MUSE-K psffit"]["mediana"], 2.50, delta=0.01)
 
 
 if __name__ == "__main__":
