@@ -354,17 +354,22 @@ class UmbralDelPaperTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tb = _carga("teff_bayes")
 
-    def test_umbral_de_12b_2460_k(self):
+    def test_umbral_de_12b_2440_k(self):
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): eran -3.618 y 2460 K
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran -3.640 y 2440 K
         T, ratio, tipo = self.tb.umbral("ROXs12b")
         self.assertEqual(tipo, "detection")
-        self.assertAlmostEqual(ratio, -3.618, delta=0.001)
-        self.assertAlmostEqual(T, 2460.0, delta=2.0)
+        self.assertAlmostEqual(ratio, -3.649, delta=0.001)
+        self.assertAlmostEqual(T, 2431.0, delta=2.0)
 
-    def test_umbral_de_42bb_1806_k(self):
+    def test_umbral_de_42bb_2039_k(self):
+        # 2026-10-20: era -4.446 y 1806 K. E3 ajusta la cola como E1 (MLE; -4.400, 1838 K) y el limite
+        # citable es el superior al 99 %, lo medido + 2.33 sigma (spec E3 v2): -4.122 y 2039 K.
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran -4.122 y 2039 K
         T, ratio, tipo = self.tb.umbral("ROXs42Bb")
         self.assertEqual(tipo, "upper_limit")
-        self.assertAlmostEqual(ratio, -4.446, delta=0.001)
-        self.assertAlmostEqual(T, 1806.0, delta=2.0)
+        self.assertAlmostEqual(ratio, -4.190, delta=0.001)
+        self.assertAlmostEqual(T, 1987.0, delta=2.0)
 
     def test_pendiente_del_margen_0370_dex_por_magnitud(self):
         for slug in ("ROXs12b", "ROXs42Bb"):

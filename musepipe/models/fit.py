@@ -130,8 +130,10 @@ def fit_grid_3d(fit_spec, library, extinction, *, teff_axis, logg_axis, av_axis,
     Each node is framed/degraded/resampled ONCE and reddened per A_V (same
     numbers as preparing it at every A_V). ``template_R`` / ``template_frame``
     / ``data_frame`` carry the library DECLARATION (plan 2026-09-23): BT-Settl
-    is declared sharp (``R = inf``) and in vacuum, and is taken to air before
-    degrading. Degrees of freedom: ``fit_spec.dof_base − n_free``.
+    is declared sharp (``R = inf``) and in air (measured 2026-10-20; it was
+    declared in vacuum and converted until then); a vacuum library such as
+    Kesseli's is taken to air before degrading. Degrees of freedom:
+    ``fit_spec.dof_base − n_free``.
     """
     wave = np.asarray(fit_spec.wave_bin, float)
     flux = np.asarray(fit_spec.flux_bin, float)

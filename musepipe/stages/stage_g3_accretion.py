@@ -154,6 +154,24 @@ def _read_g2(path):
     return rows, f
 
 
+def limite_halpha_de_e3(h03_qc, flux_unit):
+    """El limite superior de Halpha que publica E3 (metodo canonico), en la unidad de G2, o None.
+
+    Spec E3 v2: lo medido + 2.33 sigma, al 99 %, corregido por throughput. Es el limite que cita el
+    paper. G3 usaba para una linea no detectada el 5 sigma de integracion directa de G2, y el run de
+    ROXs 42B b publicaba asi dos limites de Mdot: 5.2e-14 en E3 y 1.1e-13 aqui (auditoria del
+    2026-10-20). Una deteccion (E3 `sensitivity`) no tiene limite: devuelve None.
+    """
+    if not h03_qc or h03_qc.get("product_kind") != "upper_limit":
+        return None
+    canon = h03_qc.get("canonical_method")
+    fila = next((l for l in h03_qc.get("limits", []) if l.get("method") == canon), None)
+    if fila is None or fila.get("f_lim_observed") in (None, ""):
+        return None
+    valor = float(fila["f_lim_observed"]) / float(flux_unit)
+    return valor if np.isfinite(valor) and valor > 0 else None
+
+
 def compute_stage_g3_accretion(cfg, paths):
     rows_g2, f = _read_g2(paths["g2_table"])
     mr_source, motivo_mr = "config", "no se evaluo (no hay rodaja combinada)"
@@ -179,20 +197,29 @@ def compute_stage_g3_accretion(cfg, paths):
     })
 
     per_line, open_issues = [], []
+    h03_path = paths.get("stage_h03_qc_json") if hasattr(paths, "get") else None
+    h03_qc = json.loads(Path(h03_path).read_text()) if h03_path and Path(h03_path).exists() else {}
+    limite_e3 = limite_halpha_de_e3(h03_qc, flux_unit)
     for r in rows_g2:
         name = r["name"]
         rel = relations.get(name)
         if rel is None:
             continue
         status = r["status"]
-        # use the 5-sigma upper-limit flux for limits, the direct flux for detections
-        flux_val = f(r["flux_upper_limit_5sigma"]) if status in ("upper_limit", "marginal") else f(r["flux_direct"])
+        # Una linea no detectada da una cota: para Halpha, el limite superior de E3 (el del paper);
+        # para las demas, el 5 sigma de integracion directa de G2. Una deteccion, su flujo directo.
+        if status in ("upper_limit", "marginal") and name == "Halpha" and limite_e3 is not None:
+            flux_val, fuente = limite_e3, "E3 99% upper limit (spec E3 v2)"
+        elif status in ("upper_limit", "marginal"):
+            flux_val, fuente = f(r["flux_upper_limit_5sigma"]), "G2 5-sigma direct integration"
+        else:
+            flux_val, fuente = f(r["flux_direct"]), "G2 direct integration"
         if not np.isfinite(flux_val) or flux_val <= 0:
             continue
         a_lam = float(ext.a_lambda_over_av(f(r["rest_A"])))
         res = line_lacc(flux_val, distance_pc=distance, av=av, a_lambda_over_av=a_lam,
                         relation=rel, flux_unit_cgs=flux_unit)
-        res.update({"name": name, "status": status, "l_acc_err_lsun": np.nan})
+        res.update({"name": name, "status": status, "l_acc_err_lsun": np.nan, "flux_source": fuente})
         per_line.append(res)
 
     combined = combine_accretion(per_line)
@@ -210,7 +237,7 @@ def compute_stage_g3_accretion(cfg, paths):
 
     for p in per_line:
         add(f"l_acc_{p['name']}", p["l_acc_lsun"], "upper_limit" if p["status"] in ("upper_limit", "marginal") else "empirical_inference",
-            unit="Lsun", data_used=f"G2 {p['name']}", method="Lacc-Lline relation",
+            unit="Lsun", data_used=p.get("flux_source", f"G2 {p['name']}"), method="Lacc-Lline relation",
             cite=p["citation"], limitations=f"scatter {p['scatter_dex']} dex", depends="[lacc_relation, extinction, distance]")
 
     if combined.get("l_acc_lsun") is not None:
@@ -289,6 +316,7 @@ def compute_stage_g3_accretion(cfg, paths):
         # se decia, y `g3_derived` frente a `config` da un 31 % de diferencia.
         "mdot_mr_source": {"source": mr_source, "reason": motivo_mr},
         "halpha_h03_consistency_v5": v5,
+        "halpha_flux_source": next((p.get("flux_source") for p in per_line if p["name"] == "Halpha"), None),
         "mc": {"seed": seed, "n": int(cfg.get("g3_n_mc", 2000))},
         "open_issues": open_issues,
     }

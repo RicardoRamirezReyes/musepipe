@@ -1,7 +1,9 @@
 """Conversión de longitudes de onda vacío ↔ aire (plan G3 2026-09-23, §3).
 
-MUSE entrega sus longitudes de onda en **aire**; Kesseli+2017 (SDSS) y
-BT-Settl (SVO) vienen en **vacío**. A 7500 Å la diferencia es ≈ 2.07 Å, casi
+MUSE entrega sus longitudes de onda en **aire**; Kesseli+2017 (SDSS) viene en
+**vacío**. BT-Settl (SVO) viene en **aire**: sus nodos decían «vacuum» y hasta
+el 2026-10-20 se convertía, lo que corría el modelo ~2 Å al azul
+(``docs/2026-10-20_btsettl_en_aire.md``). A 7500 Å la diferencia es ≈ 2.07 Å, casi
 una LSF de MUSE: invisible en bins de 25 Å, no a resolución nativa. Toda
 plantilla se lleva al marco del dato ANTES de degradarla.
 

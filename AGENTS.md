@@ -29,6 +29,22 @@ and products in `runs/<RUN_ID>/`.
 - Do not install dependencies, change the environment, commit, or push unless
   explicitly requested.
 
+## Tests
+
+- Changing an existing test needs the owner's explicit authorization, given for
+  that specific change. This covers anything that can turn a failing test into a
+  passing one: expected values and pinned numbers, tolerances, `skip`/`xfail`/
+  `skipIf`/`skipTest`, deleting or renaming a test, assertions, fixtures and
+  helpers, `conftest.py`, `pytest.ini` and markers.
+- A failing test is reported as a failure, with its output and why it fails,
+  and stays failing until the owner decides. Never adjust a test to the code's
+  new output, even when that output is expected (e.g. a pinned paper number
+  after a code fix).
+- To ask, name the test, the old and the new assertion, and why the failure is
+  not a regression. Approval for one change does not extend to another.
+- New tests may be added without asking, but they are listed in the report and
+  never replace or weaken an existing one.
+
 ## Conventions
 
 - Put reusable scientific logic in `musepipe/`, not notebooks.

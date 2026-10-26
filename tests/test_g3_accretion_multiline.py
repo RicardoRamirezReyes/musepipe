@@ -124,6 +124,27 @@ class OwnVsConfigMRTests(unittest.TestCase):
                 self.assertEqual(por["l_acc_combined"], esperada)
                 self.assertEqual(por["mdot"], esperada)
 
+    def test_halpha_no_detectado_usa_el_limite_de_e3(self):
+        # Auditoria del 2026-10-20: G3 publicaba otro limite de 42B b (5 sigma de G2) que E3 y el
+        # paper. Con un E3 `upper_limit`, la cota de Halpha es la de E3; con E3 `sensitivity`
+        # (deteccion) o sin E3, la de G2.
+        e3 = {"product_kind": "upper_limit", "canonical_method": "psffit",
+              "limits": [{"method": "psffit", "f_lim_observed": 5.13e-18}]}
+        for producto, flujo_nativo, fuente in (("upper_limit", 513.0, "E3"),
+                                                ("sensitivity", 5.0e3, "G2"), (None, 5.0e3, "G2")):
+            with self.subTest(e3=producto), tempfile.TemporaryDirectory() as tmp:
+                root = _make_run(tmp, halpha=("marginal", "5.0e3", ""))
+                if producto is not None:
+                    (root / "runs" / "syn" / "stages" / "stage_h03_qc.json").write_text(
+                        json.dumps(dict(e3, product_kind=producto)))
+                rows, qc = compute_stage_g3_accretion(_cfg(), stage_g3_paths("syn", project_root=root))
+                lacc = float(next(r for r in rows if r["property"] == "l_acc_Halpha")["value"])
+                esperado = line_lacc(flujo_nativo, distance_pc=138.6, av=1.8, a_lambda_over_av=0.818,
+                                     relation=_cfg()["g3_lacc_relations"]["Halpha"],
+                                     flux_unit_cgs=1e-20)["l_acc_lsun"]
+                self.assertAlmostEqual(lacc / esperado, 1.0, places=2)
+                self.assertTrue(qc["halpha_flux_source"].startswith(fuente))
+
     def test_stage_with_derived_uses_own_mr(self):
         with tempfile.TemporaryDirectory() as tmp:
             derived = [{"property": "mass", "value": 20.0, "err_stat_lo": 3.0, "err_stat_hi": 4.0},

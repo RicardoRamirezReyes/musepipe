@@ -18,6 +18,8 @@ from musepipe.stages.stage_h03_limits import (
     compute_stage_h03_products,
     extinction_ladder_warning,
     limit_conversion_chain,
+    measured_flux_for_method_factor,
+    resolve_limit_definition,
     resolve_tail_estimator,
     stage_h03_paths,
     write_stage_h03_products,
@@ -87,9 +89,15 @@ def seed_h03_inputs(paths):
     null_maxima = np.linspace(-1.0, 2.5, 120)
     np.savez(paths["h01_null_maxima_npz"], psffit_null_maxima=null_maxima)
     with paths["halpha_detection_csv"].open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["method", "template_factor", "matched_sigma"])
+        # E1 da tambien el flujo medido en la posicion: el limite de la spec E3 v2 es
+        # max(F_medido, 0) + z_CL * sigma (decision del 2026-10-20).
+        writer = csv.DictWriter(handle, fieldnames=["method", "template_factor", "matched_flux",
+                                                    "matched_sigma", "matched_z"])
         writer.writeheader()
-        writer.writerow({"method": "psffit", "template_factor": 1.0, "matched_sigma": 2.0e-17})
+        writer.writerow({"method": "psffit", "template_factor": 1.0, "matched_flux": 3.0e-17,
+                         "matched_sigma": 2.0e-17, "matched_z": 1.5})
+        writer.writerow({"method": "psffit", "template_factor": 2.0, "matched_flux": -1.0e-17,
+                         "matched_sigma": 3.0e-17, "matched_z": -1.0 / 3.0})
     with paths["injection_throughput_csv"].open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
@@ -221,6 +229,103 @@ class H03ChainTests(unittest.TestCase):
                 written["qc"]["physical_inputs"]["lacc_aoyama21_relation"]
             )
             self.assertTrue(all("mdot_aoyama21" in lim for lim in written["qc"]["limits"]))
+            # Spec E3 v2: el limite es lo medido mas z_CL sigma, con suelo en 0 para lo medido.
+            self.assertEqual(written["qc"]["limit_definition"]["definition"], "measured_plus_margin")
+            z_cl = written["qc"]["limit_definition"]["z_cl"]
+            self.assertAlmostEqual(z_cl, 2.3263478740, places=6)
+            por_ancho = {r["template_factor"]: r for r in product.rows if r["row_kind"] == "method"}
+            self.assertAlmostEqual(por_ancho[1.0]["f_stat_99"], 3.0e-17 + z_cl * 2.0e-17)
+            self.assertAlmostEqual(por_ancho[2.0]["f_stat_99"], 0.0 + z_cl * 3.0e-17)
+            self.assertAlmostEqual(por_ancho[1.0]["f_lim_observed"], por_ancho[1.0]["f_stat_99"] / 0.4)
+            # El umbral de deteccion sigue publicado, aparte.
+            self.assertGreater(por_ancho[1.0]["f_stat_threshold_99"], 0.0)
+            self.assertNotAlmostEqual(por_ancho[1.0]["f_stat_threshold_99"] / por_ancho[1.0]["f_stat_99"], 1.0,
+                                      places=3)
+
+
+class H03MeasuredFluxTests(unittest.TestCase):
+    """E1 deja UNA fila por metodo, la del ancho que prefirio; E3 v2 pide el flujo a cada ancho.
+
+    Bug latente de E3 v2 (ROXs12b_OB3444577, 2026-10-23): E1 prefirio 4.0 en optimal_ls y E3,
+    que pide 1.0, abortaba. Ahora rehace el barrido de E1 a ese ancho sobre el producto.
+    """
+
+    H01_QC = {"line": {"rest_A": 6562.8, "rv_sys_kms": 0.0, "search_half_width_kms": 500.0},
+              "templates": {"lsf_fwhm_A": 2.5}}
+
+    def _e1_row_wide_line(self, root):
+        from musepipe.stages.stage_h01_detect import analyze_halpha_method
+        from tests.test_h01_helpers import h01_controls, h01_product
+
+        # Una linea cuatro veces mas ancha que la LSF: E1 prefiere el ancho 4.
+        product = h01_product("optimal_ls", signal_flux=40.0, lsf_fwhm_A=10.0)
+        paths = stage_h03_paths("synthetic_h03", project_root=root)
+        paths["paths"].ensure_base_dirs()
+        product.write(paths["paths"].stage_dir / "spec_calibrated_optimal_ls_object.fits")
+        controls = h01_controls(40, noise=0.5)
+        completo = analyze_halpha_method("optimal_ls", product, controls, rv_sys_kms=0.0, lsf_fwhm_A=2.5,
+                                         width_factors=(1.0, 2.0, 4.0))
+        solo_1 = analyze_halpha_method("optimal_ls", product, controls, rv_sys_kms=0.0, lsf_fwhm_A=2.5,
+                                       width_factors=(1.0,))
+        return paths, completo.row, solo_1.row
+
+    def test_another_width_is_recomputed_as_e1_would_have_measured_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, fila, solo_1 = self._e1_row_wide_line(Path(tmp))
+            self.assertEqual(fila["template_factor"], 4.0)
+            flux, z, fuente = measured_flux_for_method_factor([fila], "optimal_ls", 1.0, paths=paths,
+                                                              h01_qc=self.H01_QC, cfg={})
+            self.assertEqual(fuente, "recomputed_h01_scan")
+            self.assertEqual((flux, z), (solo_1["matched_flux"], solo_1["matched_z"]))
+            self.assertLess(flux, fila["matched_flux"])
+
+    def test_the_table_row_wins_at_the_width_e1_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, fila, _ = self._e1_row_wide_line(Path(tmp))
+            flux, z, fuente = measured_flux_for_method_factor([fila], "optimal_ls", 4.0, paths=paths,
+                                                              h01_qc=self.H01_QC, cfg={})
+            self.assertEqual((flux, z, fuente), (fila["matched_flux"], fila["matched_z"], "h01_detection_table"))
+
+    def test_without_e1_declaring_its_scan_it_aborts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, fila, _ = self._e1_row_wide_line(Path(tmp))
+            sin_ventana = {"line": {"rv_sys_kms": 0.0}, "templates": {"lsf_fwhm_A": 2.5}}
+            with self.assertRaisesRegex(RuntimeError, "search_half_width_kms"):
+                measured_flux_for_method_factor([fila], "optimal_ls", 1.0, paths=paths, h01_qc=sin_ventana, cfg={})
+
+
+class H03LimitDefinitionTests(unittest.TestCase):
+    """Spec E3 v2 (2026-10-20): que es el limite citable segun el producto y el knob."""
+
+    def test_a_detection_keeps_the_threshold(self):
+        definicion, fuente = resolve_limit_definition({"h03_limit_definition": "measured_plus_margin"}, "sensitivity")
+        self.assertEqual(definicion, "detection_threshold")
+        self.assertIn("sensitivity", fuente)
+
+    def test_an_upper_limit_is_measured_plus_margin_by_default(self):
+        self.assertEqual(resolve_limit_definition({}, "upper_limit")[0], "measured_plus_margin")
+
+    def test_the_knob_can_restore_the_threshold(self):
+        definicion, fuente = resolve_limit_definition({"h03_limit_definition": "detection_threshold"}, "upper_limit")
+        self.assertEqual((definicion, fuente), ("detection_threshold", "config.h03_limit_definition"))
+
+    def test_an_unknown_definition_is_an_error(self):
+        with self.assertRaises(RuntimeError):
+            resolve_limit_definition({"h03_limit_definition": "5sigma"}, "upper_limit")
+
+    def test_a_negative_measurement_does_not_tighten_the_limit(self):
+        base = dict(z_threshold=3.0, z_5sigma_extrap=5.0, matched_sigma=1.0, throughput=1.0,
+                    throughput_err=0.0, distance_pc=100.0, distance_err_pc=0.0, av=0.0, av_err=0.0,
+                    a_halpha_over_av=1.0, lacc_lha_slope=1.0, lacc_lha_intercept=0.0,
+                    relation_scatter_dex=0.3, mass_msun=1.0, radius_rsun=1.0, z_cl=2.326)
+        negativo = limit_conversion_chain(measured_flux=-2.0, **base)
+        cero = limit_conversion_chain(measured_flux=0.0, **base)
+        positivo = limit_conversion_chain(measured_flux=2.0, **base)
+        self.assertAlmostEqual(negativo["f_stat_99"], 2.326)
+        self.assertAlmostEqual(cero["f_stat_99"], 2.326)
+        self.assertAlmostEqual(positivo["f_stat_99"], 4.326)
+        self.assertAlmostEqual(positivo["f_stat_threshold_99"], 3.0)
+        self.assertAlmostEqual(positivo["z_limit"], 4.326)
 
 
 class H03ExtinctionLadderWarningTests(unittest.TestCase):

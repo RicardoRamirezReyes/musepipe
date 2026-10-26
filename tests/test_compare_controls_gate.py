@@ -85,5 +85,45 @@ class CompareControlsGateTests(unittest.TestCase):
         self.assertNotIn("psffit_vs_optimal_psfsub", qc["pairs_degraded"])
 
 
+# Control positions of both paper runs.
+REAL_N_CONTROLS = 33
+
+
+class CompareControlsGateCanFireTests(unittest.TestCase):
+    """2026-10-24, added with the author's approval.
+
+    49a9dd9 (D1 v4) inverted the three tests above that showed this gate
+    degrading a pair, and with their 8 controls it cannot: a control's t uses
+    the sample's own scatter, so one outlier among 8 reaches at most
+    |t| = 7/sqrt(8) = 2.47 (6 bad rows of 48, excess p = 0.021 > 0.01) and two
+    or more hide each other. These use the 33 controls of the real runs.
+    """
+
+    def _continuum_gate(self, n_dirty):
+        wave = make_wave()
+        controls = rough_controls(wave, n_controls=REAL_N_CONTROLS)
+        controls["psffit"] = controls["psffit"].copy()
+        controls["psffit"][:n_dirty] += 50.0
+        _rows, _controls, qc = compare_methods(make_products(), controls)
+        return qc, qc["controls"]["by_observable"]["continuum"]["psffit_vs_optimal_psfsub"]
+
+    def test_three_of_33_controls_on_an_artifact_degrade_the_pair(self):
+        qc, gate = self._continuum_gate(3)
+
+        self.assertFalse(gate["clean"])
+        self.assertEqual(gate["reason"], "control_bad_fraction_excess")
+        self.assertIn("psffit_vs_optimal_psfsub", qc["pairs_degraded"])
+
+    def test_a_quarter_of_the_controls_on_an_artifact_still_degrade_the_pair(self):
+        # Fails on 2026-10-24: from 7 of 33 dirty controls on, the dirty ones
+        # inflate the scatter that judges them and no row is bad (0 of 198), so
+        # the gate reads clean when the controls are worst. It fires again only
+        # at ~16 of 33, through the scale-check.
+        qc, gate = self._continuum_gate(8)
+
+        self.assertFalse(gate["clean"])
+        self.assertIn("psffit_vs_optimal_psfsub", qc["pairs_degraded"])
+
+
 if __name__ == "__main__":
     unittest.main()

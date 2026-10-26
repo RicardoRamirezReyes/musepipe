@@ -149,7 +149,8 @@ INLINE_SOURCES = {
         ]),
         ("musepipe/extraction/optimal.py", ["covariance_factor_for_npix", "estimate_variance_cube"]),
         ("musepipe/extraction/psffit.py", [
-            "PsfFitCubeResult", "fit_region_mask", "psf_pair_design", "_correlation",
+            "PsfFitCubeResult", "fit_region_mask", "_check_background", "n_design_columns",
+            "psf_pair_design", "_correlation",
             "_fit_one_channel", "fit_psffit_cube", "control_psffit_spectra",
         ]),
     ],
@@ -1977,8 +1978,9 @@ def build_a3_cells(mb, target, run_id):
             "> **Ojo con el marco de la biblioteca.** Los nodos declaran "
             "`wave_frame: \"vacuum\"` y **no es cierto** — ya vienen en aire. La celda lo "
             "**mide** en vez de creérselo: prueba las dos hipótesis y se queda con la que "
-            "alinea en cero. Nada en `musepipe` lee ese campo ni convierte, así que hoy no "
-            "rompe nada; pero quien se fíe del metadato mete ~1.7 canales de error.\n\n"
+            "alinea en cero. G3 se fió del metadato del 2026-09-23 al 2026-10-20 y corría "
+            "el modelo ~1.7 canales al azul; desde entonces `musepipe` declara BT-Settl en "
+            "aire (`docs/2026-10-20_btsettl_en_aire.md`).\n\n"
             "**b) El ruido que amplifica la propia corrección.** Dividir por una transmisión "
             "`T` multiplica el ruido por `1/T`. Donde la banda es profunda eso solo ya predice "
             "un residuo de varias veces el suelo, **sin que haya nada mal**. Es la parte del "
@@ -5341,6 +5343,7 @@ def build_c4_cells(mb, target, run_id):
             "X03 = stage_x03_config_from_run(RUN_ID, project_root=ROOT)\n"
             "STAR_RADIUS_PX    = float(X03.get('x03_star_radius_px', 20.0))\n"
             "COMP_RADIUS_PX    = float(X03.get('x03_comp_radius_px', 12.0))\n"
+            "BACKGROUND        = X03.get('x03_background', 'shared')\n"
             "ERROR_MODE        = X03.get('x03_error_mode', 'auto')\n"
             "N_CONTROLS        = int(X03.get('x03_control_apertures', 8))\n"
             "EXCLUDE_ANGLE_DEG = float(X03.get('x03_control_exclude_angle_deg', 25.0))\n"
@@ -5438,7 +5441,9 @@ def build_c4_cells(mb, target, run_id):
             "mask = fit_region_mask(CUBE.shape[1:], STAR_YX, COMP_YX,\n"
             "                       star_radius_px=STAR_RADIUS_PX, comp_radius_px=COMP_RADIUS_PX)\n"
             "iz = int(np.argmin(np.abs(WAVE - 7500)))\n"
-            "design = psf_pair_design(CUBE.shape[1:], WAVE[iz], STAR_YX, COMP_YX, PSF_MODEL)\n"
+            "design = psf_pair_design(CUBE.shape[1:], WAVE[iz], STAR_YX, COMP_YX, PSF_MODEL,\n"
+            "                         background=BACKGROUND, star_radius_px=STAR_RADIUS_PX,\n"
+            "                         comp_radius_px=COMP_RADIUS_PX)\n"
             "print('píxeles en la región de ajuste:', int(mask.sum()))\n\n"
             "ys, xs = np.nonzero(mask)\n"
             "sl = (slice(max(ys.min() - 3, 0), ys.max() + 4),\n"
@@ -5497,7 +5502,7 @@ def build_c4_cells(mb, target, run_id):
             "            else np.asarray(STAT, dtype=float) * STAT_FACTOR)\n"
             "res = fit_psffit_cube(CUBE, variance, WAVE, STAR_YX, COMP_YX, PSF_MODEL,\n"
             "                      star_radius_px=STAR_RADIUS_PX, comp_radius_px=COMP_RADIUS_PX,\n"
-            "                      n_jobs=1)\n"
+            "                      n_jobs=1, background=BACKGROUND)\n"
             "print(f'χ²ᵣ mediano   = {float(np.nanmedian(res.chi2r)):.3f}')\n"
             "print(f'|ρ(a,b)| mediano = {float(np.nanmedian(np.abs(res.rho_ab))):.3f}'\n"
             "      f'  (p95 {float(np.nanpercentile(np.abs(res.rho_ab), 95)):.3f})')\n"
@@ -5526,7 +5531,8 @@ def build_c4_cells(mb, target, run_id):
             "controls_yx, star_ctrl, comp_ctrl = control_psffit_spectra(\n"
             "    CUBE, variance, WAVE, STAR_YX, COMP_YX, PSF_MODEL,\n"
             "    star_radius_px=STAR_RADIUS_PX, comp_radius_px=COMP_RADIUS_PX,\n"
-            "    n_controls=N_CONTROLS, exclude_angle_deg=EXCLUDE_ANGLE_DEG, n_jobs=1)\n"
+            "    n_controls=N_CONTROLS, exclude_angle_deg=EXCLUDE_ANGLE_DEG, n_jobs=1,\n"
+            "    background=BACKGROUND)\n"
             "comp_err_emp = (robust_sigma_axis0(comp_ctrl) if comp_ctrl.shape[0] >= 2\n"
             "                else np.full(WAVE.size, robust_sigma(res.coeffs[:, 1])))\n"
             "star_err_emp = (robust_sigma_axis0(star_ctrl) if star_ctrl.shape[0] >= 2\n"
@@ -10391,6 +10397,7 @@ def build_apcorr_cells(mb, target, run_id):
             "E01 = stage_e01_config_from_run(RUN_ID, project_root=ROOT)\n"
             "STAR_RADIUS_PX = float(X03.get('x03_star_radius_px', 20.0))\n"
             "COMP_RADIUS_PX = float(X03.get('x03_comp_radius_px', 12.0))\n"
+            "BACKGROUND     = X03.get('x03_background', 'shared')\n"
             "APCORR_MODE    = X03.get('x03_aperture_correction', 'auto')\n"
             "GROWTH, CONVENCION = _res_conv(X03, SD, knob='x03_flux_convention')\n\n"
             "# Radio de normalización del modelo de PSF: el '1' de la convención\n"
@@ -10577,7 +10584,8 @@ def build_apcorr_cells(mb, target, run_id):
             "            * float(X03.get('x03_stat_factor_spaxel', 1.0) or 1.0))\n"
             "AJUSTE = fit_psffit_cube(CUBE, VARIANZA, WAVE, STAR_YX, COMP_YX, PSF_MODEL,\n"
             "                         star_radius_px=STAR_RADIUS_PX,\n"
-            "                         comp_radius_px=COMP_RADIUS_PX, n_jobs=1)\n"
+            "                         comp_radius_px=COMP_RADIUS_PX, n_jobs=1,\n"
+            "                         background=BACKGROUND)\n"
             "F_PSFFIT = AJUSTE.coeffs[:, 0]\n"
             "print(f'{WAVE.size} canales ajustados · χ²ᵣ mediano'\n"
             "      f' {float(np.nanmedian(AJUSTE.chi2r)):.3f}')\n"
@@ -10989,7 +10997,8 @@ def build_apcorr_cells(mb, target, run_id):
             "            * float(X03.get('x03_stat_factor_spaxel', 1.0) or 1.0))\n"
             "    _aj = fit_psffit_cube(CUBE_FULL[idx], _var, WAVE_FULL[idx], STAR_YX, COMP_YX,\n"
             "                          modelo, star_radius_px=STAR_RADIUS_PX,\n"
-            "                          comp_radius_px=COMP_RADIUS_PX, n_jobs=1)\n"
+            "                          comp_radius_px=COMP_RADIUS_PX, n_jobs=1,\n"
+            "                          background=BACKGROUND)\n"
             "    _ap = extract_aperture_spectrum(CUBE_FULL[idx], STAR_YX, float(R_NORM))\n"
             "    with np.errstate(invalid='ignore', divide='ignore'):\n"
             "        return _aj.coeffs[:, 0] / _ap\n\n"
@@ -11033,7 +11042,8 @@ def build_apcorr_cells(mb, target, run_id):
             "_modelo_nuevo['psfao_wave_bin_A'] = float(SNAP_NUEVO_A)\n"
             "AJUSTE_NUEVO = fit_psffit_cube(CUBE, VARIANZA, WAVE, STAR_YX, COMP_YX, _modelo_nuevo,\n"
             "                               star_radius_px=STAR_RADIUS_PX,\n"
-            "                               comp_radius_px=COMP_RADIUS_PX, n_jobs=1)\n"
+            "                               comp_radius_px=COMP_RADIUS_PX, n_jobs=1,\n"
+            "                               background=BACKGROUND)\n"
             "with np.errstate(invalid='ignore', divide='ignore'):\n"
             "    RATIO_NUEVO = AJUSTE_NUEVO.coeffs[:, 0] / F_NORM\n\n"
             "def _p2p98(valores, mascara):\n"

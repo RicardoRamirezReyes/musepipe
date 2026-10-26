@@ -120,6 +120,22 @@ class SeriesDeLosDatosTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.pf._series_corner_datos([d], "X")
 
+    def test_con_otra_rejilla_elige_solo_las_suyas(self):
+        # la segunda figura (AMES-Cond, 2026-10-21): las de BT-Settl del mismo directorio no entran
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            for datos in ("todo", "ir", "muse"):
+                self._cadena(d, f"bt_{datos}", datos)
+                self._cadena(d, f"ac_{datos}", datos, rejilla="ames_cond", r_analisis=500)
+            with mock.patch("scripts.teff_bayes.entrada_margen", return_value={}), \
+                    mock.patch("scripts.teff_bayes.margen_de_corrida", side_effect=lambda c, e: np.full(50, 0.1)):
+                series = self.pf._series_corner_datos([d], "X", "ames_cond")
+                self.assertEqual(list(series), ["todo", "ir", "muse"])
+        self.assertIn("teff_corner_data_ames_cond", self.pf.FIGURAS)
+
 
 if __name__ == "__main__":
     unittest.main()
