@@ -5,7 +5,9 @@ Solo lectura. Es el árbitro del radio de ajuste de C1 (docs/2026-09-21_plan_cri
 §R2, §D7 y §F4; docs/2026-09-27_r0_entregado_42bb.md). Vivió fuera del repo hasta el 2026-09-28
 (`~/muse_noche_20260927/nivel_sesgo_controles.py`, reconstruido el 09-27).
 `tests/test_nivel_sesgo_controles.py` comprueba contra `runs/` que da las cifras publicadas en los dos
-docs (las nueve del 09-21, los niveles y los r₀ del 09-27); la tabla vive allí porque nombra runs.
+docs (las nueve del 09-21, los niveles y los r₀ del 09-27); la tabla vive allí porque nombra runs. Los
+runs de radio se re-corrieron después (evaluador centrado, 10-22; C4 v2 `decoupled_c0`, 10-25): sus
+cifras de los docs se leen de la copia de septiembre (`productos=`) y el estado con c0, del run.
 
     b_i = 100 · mediana_λ(control_i) / mediana_λ(objeto)       (% del compañero; canales finitos del objeto)
     b_i = A + B·cos φ_i + C·sin φ_i                              (mínimos cuadrados, m ≤ 1)
@@ -86,8 +88,12 @@ def ajuste(b, phi):
     return float(coef[0]), math.sqrt(cov[0, 0]), float(math.hypot(coef[1], coef[2]))
 
 
-def lee_run(run, root=ROOT, absoluto=False):
-    """(b, φ, radio de C1) de un run, con los knobs RESUELTOS de C1 y C4."""
+def lee_run(run, root=ROOT, absoluto=False, productos=None):
+    """(b, φ, radio de C1) de un run, con los knobs RESUELTOS de C1 y C4.
+
+    `productos` es otra carpeta de la que leer los dos espectros calibrados de psffit (p. ej. la copia
+    `stages/_antes_*/stages` que deja un re-corrido); la geometría y los knobs salen igual del run.
+    """
     from musepipe.stages.stage_e01_psf import stage_e01_config_from_run
     from musepipe.stages.stage_x01_aperture import _source_pos_yx
     from musepipe.stages.stage_x03_psffit import stage_x03_config_from_run, stage_x03_paths
@@ -103,7 +109,7 @@ def lee_run(run, root=ROOT, absoluto=False):
     phi = azimuts(comp, star, ny, nx, n_controls=c4["x03_control_apertures"],
                   exclude_angle_deg=c4["x03_control_exclude_angle_deg"],
                   comp_radius_px=c4["x03_comp_radius_px"])
-    st = Path(paths["paths"].stage_dir)
+    st = Path(productos) if productos is not None else Path(paths["paths"].stage_dir)
     obj = fits.getdata(st / "spec_calibrated_psffit_object.fits", 1)["flux"]
     ctl = np.load(st / "spec_calibrated_psffit_controls.npz")["control_spectra"]
     if ctl.shape[0] != phi.size:
@@ -202,9 +208,12 @@ def resumen_bootstrap(muestras, r0, hipotesis=(), semilla=0):
     return res
 
 
-def sesgos_por_radio(runs, root=ROOT, absoluto=False):
-    """(bs, φ, radios, runs) ordenados por radio; falla si los controles no son las mismas posiciones."""
-    datos = sorted((lee_run(r, root, absoluto) + (r,) for r in runs), key=lambda d: d[2])
+def sesgos_por_radio(runs, root=ROOT, absoluto=False, productos=None):
+    """(bs, φ, radios, runs) ordenados por radio; falla si los controles no son las mismas posiciones.
+
+    `productos`: {run: carpeta} para los runs que se leen de otra carpeta (ver `lee_run`)."""
+    productos = productos or {}
+    datos = sorted((lee_run(r, root, absoluto, productos.get(r)) + (r,) for r in runs), key=lambda d: d[2])
     phi0 = datos[0][1]
     for b, phi, _r, run in datos[1:]:
         if phi.shape != phi0.shape or not np.allclose(phi, phi0):
@@ -212,8 +221,8 @@ def sesgos_por_radio(runs, root=ROOT, absoluto=False):
     return [d[0] for d in datos], phi0, [d[2] for d in datos], [d[3] for d in datos]
 
 
-def radios(runs, root=ROOT, absoluto=False):
-    return analiza(*sesgos_por_radio(runs, root, absoluto))
+def radios(runs, root=ROOT, absoluto=False, productos=None):
+    return analiza(*sesgos_por_radio(runs, root, absoluto, productos))
 
 
 def main(argv=None):
