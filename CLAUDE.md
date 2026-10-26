@@ -52,7 +52,7 @@ historical run only.
 ### Canonical chain A→G
 
 Stages are lettered blocks, each with a frozen spec in `docs/spec_<ID>_codex_*.md` (read
-the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`, `spec_G2_v3_*`)
+the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`, `spec_G2_v4_*`)
 and a JSON QC product under `runs/<RUN>/stages/`:
 
 - **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5).
