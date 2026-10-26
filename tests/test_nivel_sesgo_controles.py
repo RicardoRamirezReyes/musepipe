@@ -7,6 +7,10 @@ tramo y el bootstrap-. `CifrasPublicadasTests` sí lee `runs/` (solo lectura, ~5
 comprueba las cifras de los docs del 09-21, 09-27 y 09-28 a media unidad del último dígito publicado.
 Son copias de trabajo que se pueden borrar para liberar disco: si falta alguna, su caso se salta, no
 falla (como los demás tests que leen `runs/`; `external_data` es para las bibliotecas de G3).
+
+Los cinco runs de radio se re-corrieron después (evaluador centrado, 10-22; C4 v2 `decoupled_c0`, 10-25)
+y sus productos ya no son los de los docs: esas cifras se leen de la copia de septiembre que dejó el
+primer re-corrido (`COPIAS_DE_LOS_DOCS`), y el estado con c0 lo fija `EstadoConC0Tests` sobre el run.
 """
 import importlib.util
 import math
@@ -254,8 +258,26 @@ R0_0927 = [
 ]
 
 
-def _hay(*runs):
-    return all((ROOT / "runs" / r / "stages" / "spec_calibrated_psffit_controls.npz").exists() for r in runs)
+#: 2026-10-25: los productos sobre los que se midieron los docs, guardados por el re-corrido del evaluador
+#: centrado antes de sobrescribirlos (C4 → D2). Con ellos el fichero entero reproduce los docs al dígito.
+COPIAS_DE_LOS_DOCS = {
+    "ROXs12b_r55_20260921": "_antes_psf_centrado_20261022T225508",
+    "ROXs12b_r64_20260921": "_antes_psf_centrado_20261022T232201",
+    "ROXs42Bb_r45_20260928": "_antes_psf_centrado_20261022T234907",
+    "ROXs42Bb_realigned": "_antes_psf_centrado_20261021T224346",
+    "ROXs42Bb_r78_20260927": "_antes_psf_centrado_20261023T001648",
+}
+
+
+def _productos(*runs):
+    """{run: carpeta de la copia} de los runs cuyas cifras de los docs no están ya en su `stages/`."""
+    return {r: ROOT / "runs" / r / "stages" / COPIAS_DE_LOS_DOCS[r] / "stages" for r in runs if r in COPIAS_DE_LOS_DOCS}
+
+
+def _hay(*runs, copias=True):
+    donde = _productos(*runs) if copias else {}
+    return all((donde.get(r, ROOT / "runs" / r / "stages") / "spec_calibrated_psffit_controls.npz").exists()
+               for r in runs)
 
 
 class CifrasPublicadasTests(unittest.TestCase):
@@ -268,7 +290,7 @@ class CifrasPublicadasTests(unittest.TestCase):
             with self.subTest(run=run):
                 if not _hay(run):
                     self.skipTest(f"{run} no está en runs/")
-                res = self.m.resumen(run, *self.m.lee_run(run))
+                res = self.m.resumen(run, *self.m.lee_run(run, productos=_productos(run).get(run)))
                 for k, v in doc.items():
                     self.assertAlmostEqual(res[k], v, delta=(0.05 if k == "dipolo" else 0.005) + 1e-9, msg=k)
 
@@ -277,7 +299,7 @@ class CifrasPublicadasTests(unittest.TestCase):
             with self.subTest(runs=pareja):
                 if not _hay(*pareja):
                     self.skipTest(f"{pareja} no está en runs/")
-                c = self.m.radios(pareja)["cruce"]
+                c = self.m.radios(pareja, productos=_productos(*pareja))["cruce"]
                 self.assertIs(c["encierra_el_cruce"], encierra)
                 for k, v in doc.items():
                     self.assertAlmostEqual(c[k], v, delta=0.05 + 1e-9, msg=k)
@@ -305,7 +327,8 @@ class CifrasPublicadasTests(unittest.TestCase):
         trio, doc = TRES_RADIOS_0928
         if not _hay(*trio):
             self.skipTest(f"{trio} no está en runs/")
-        bs, phi, rs, nombres = self.m.sesgos_por_radio(trio)
+        copias = _productos(*trio)
+        bs, phi, rs, nombres = self.m.sesgos_por_radio(trio, productos=copias)
         r = self.m.analiza(bs, phi, rs, nombres)
         n45 = r["niveles"][0]
         self.assertAlmostEqual(n45["A"], doc["A45"][0], delta=0.005 + 1e-9)
@@ -331,9 +354,10 @@ class CifrasPublicadasTests(unittest.TestCase):
         self.assertAlmostEqual((x["r0_px"] - 36.0) / math.hypot(x["e_r0_px"], 4.1 * 46.6 / 71.2), 3.30,
                                delta=0.005 + 1e-9)
 
-        ra = self.m.radios(trio, absoluto=True)
+        ra = self.m.radios(trio, absoluto=True, productos=copias)
         # la mediana del objeto es el cociente entre los dos modos, la misma para todos los controles
-        for b, babs, med in zip(bs, self.m.sesgos_por_radio(trio, absoluto=True)[0], doc["mediana_objeto"]):
+        for b, babs, med in zip(bs, self.m.sesgos_por_radio(trio, absoluto=True, productos=copias)[0],
+                                doc["mediana_objeto"]):
             self.assertAlmostEqual(float(np.median(100.0 * babs / b)), med, delta=0.05 + 1e-9)
         ca = ra["curvatura"][0]
         self.assertAlmostEqual(ca["pendiente_alta_menos_baja"], doc["curvatura_abs"][0], delta=0.0005 + 1e-12)
@@ -349,6 +373,57 @@ class CifrasPublicadasTests(unittest.TestCase):
         self.assertAlmostEqual(p["p97.7"], doc["bootstrap_95"][1], delta=0.05 + 1e-9)
         for h, f in doc["hipotesis"].items():
             self.assertAlmostEqual(bt["hipotesis"][f"{h:g}"]["fraccion"], f, delta=1e-9, msg=f"hipótesis {h}")
+
+
+#: 2026-10-25, C4 v2 `decoupled_c0` (docs/2026-10-24_c4_planos_desacoplados_decision.md), sobre los runs tal
+#: como quedaron: nivel A, σ(A) y dipolo, un dígito más que en los docs.
+NIVELES_C0 = {
+    "ROXs12b_r55_20260921": (0.203, 0.453, 0.34),
+    "ROXs12b_r64_20260921": (0.235, 0.455, 0.34),
+    "ROXs42Bb_r45_20260928": (2.189, 3.668, 4.79),
+    "ROXs42Bb_realigned": (2.003, 3.660, 4.75),
+    "ROXs42Bb_r78_20260927": (1.778, 3.657, 4.70),
+}
+#: los saltos emparejados entre radios consecutivos, ΔA ± σ, en % del compañero (a ±0.001)
+TRAMOS_C0 = [
+    (("ROXs12b_r55_20260921", "ROXs12b_r64_20260921"), [(0.032, 0.005)]),
+    (("ROXs42Bb_r45_20260928", "ROXs42Bb_realigned", "ROXs42Bb_r78_20260927"), [(-0.186, 0.029), (-0.226, 0.038)]),
+]
+
+
+class EstadoConC0Tests(unittest.TestCase):
+    """Con el plano solo sobre el disco de la estrella, el sesgo de los controles es compatible con cero en
+    todos los radios, apenas depende del radio y no cruza cero: r₀ deja de existir (el de los docs era el
+    dipolo del plano compartido)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _carga("nivel_sesgo_controles")
+
+    def test_el_nivel_es_compatible_con_cero_en_todos_los_radios(self):
+        from musepipe.config import load_run_config
+        for run, (A, eA, dip) in NIVELES_C0.items():
+            with self.subTest(run=run):
+                if not _hay(run, copias=False):
+                    self.skipTest(f"{run} no está en runs/")
+                self.assertEqual(load_run_config(run, project_root=ROOT).config.get("x03_background"), "decoupled_c0")
+                res = self.m.resumen(run, *self.m.lee_run(run))
+                self.assertAlmostEqual(res["A"], A, delta=0.005 + 1e-9)
+                self.assertAlmostEqual(res["eA"], eA, delta=0.005 + 1e-9)
+                self.assertAlmostEqual(res["dipolo"], dip, delta=0.05 + 1e-9)
+                self.assertLess(abs(res["A"]), res["eA"])
+
+    def test_no_depende_del_radio_ni_cruza_cero(self):
+        for runs, saltos in TRAMOS_C0:
+            with self.subTest(runs=runs):
+                if not _hay(*runs, copias=False):
+                    self.skipTest(f"{runs} no está en runs/")
+                r = self.m.radios(runs)
+                self.assertFalse(r["cruce"]["encierra_el_cruce"])
+                for t, (dA, edA) in zip(r["tramos"], saltos):
+                    self.assertAlmostEqual(t["dA"], dA, delta=0.001)
+                    self.assertAlmostEqual(t["e_dA"], edA, delta=0.001)
+                    self.assertLess(abs(t["dA"]), 0.5)
 
 
 if __name__ == "__main__":

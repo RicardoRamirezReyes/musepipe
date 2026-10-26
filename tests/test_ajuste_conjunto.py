@@ -110,9 +110,12 @@ class CifrasDelPaperTests(unittest.TestCase):
     def test_mejor_ajuste(self):
         r12, r42 = self.aj.ajusta("ROXs12b"), self.aj.ajusta("ROXs42Bb")
         self.assertEqual((r12["mejor"]["spt"], r12["mejor"]["av"], r12["mejor"]["rk"]), ("M9", 2.2, 0.3))
-        self.assertEqual((r42["mejor"]["spt"], r42["mejor"]["av"], r42["mejor"]["rk"]), ("M9.5", 3.0, 0.2))
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): A_V de 42B b era 3.0
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): A_V de 42B b era 2.4
+        self.assertEqual((r42["mejor"]["spt"], r42["mejor"]["av"], r42["mejor"]["rk"]), ("M9.5", 2.6, 0.2))
 
     def test_error_dejando_una_fuera(self):
         c = self.aj.calibra("ROXs12b")
-        self.assertAlmostEqual(c["rms_av"], 0.88, delta=0.01)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): era 0.88
+        self.assertAlmostEqual(c["rms_av"], 0.85, delta=0.01)
         self.assertAlmostEqual(c["rms_tipo"], 1.18, delta=0.01)

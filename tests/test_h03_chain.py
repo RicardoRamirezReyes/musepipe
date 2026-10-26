@@ -18,6 +18,7 @@ from musepipe.stages.stage_h03_limits import (
     compute_stage_h03_products,
     extinction_ladder_warning,
     limit_conversion_chain,
+    measured_flux_for_method_factor,
     resolve_limit_definition,
     resolve_tail_estimator,
     stage_h03_paths,
@@ -240,6 +241,57 @@ class H03ChainTests(unittest.TestCase):
             self.assertGreater(por_ancho[1.0]["f_stat_threshold_99"], 0.0)
             self.assertNotAlmostEqual(por_ancho[1.0]["f_stat_threshold_99"] / por_ancho[1.0]["f_stat_99"], 1.0,
                                       places=3)
+
+
+class H03MeasuredFluxTests(unittest.TestCase):
+    """E1 deja UNA fila por metodo, la del ancho que prefirio; E3 v2 pide el flujo a cada ancho.
+
+    Bug latente de E3 v2 (ROXs12b_OB3444577, 2026-10-23): E1 prefirio 4.0 en optimal_ls y E3,
+    que pide 1.0, abortaba. Ahora rehace el barrido de E1 a ese ancho sobre el producto.
+    """
+
+    H01_QC = {"line": {"rest_A": 6562.8, "rv_sys_kms": 0.0, "search_half_width_kms": 500.0},
+              "templates": {"lsf_fwhm_A": 2.5}}
+
+    def _e1_row_wide_line(self, root):
+        from musepipe.stages.stage_h01_detect import analyze_halpha_method
+        from tests.test_h01_helpers import h01_controls, h01_product
+
+        # Una linea cuatro veces mas ancha que la LSF: E1 prefiere el ancho 4.
+        product = h01_product("optimal_ls", signal_flux=40.0, lsf_fwhm_A=10.0)
+        paths = stage_h03_paths("synthetic_h03", project_root=root)
+        paths["paths"].ensure_base_dirs()
+        product.write(paths["paths"].stage_dir / "spec_calibrated_optimal_ls_object.fits")
+        controls = h01_controls(40, noise=0.5)
+        completo = analyze_halpha_method("optimal_ls", product, controls, rv_sys_kms=0.0, lsf_fwhm_A=2.5,
+                                         width_factors=(1.0, 2.0, 4.0))
+        solo_1 = analyze_halpha_method("optimal_ls", product, controls, rv_sys_kms=0.0, lsf_fwhm_A=2.5,
+                                       width_factors=(1.0,))
+        return paths, completo.row, solo_1.row
+
+    def test_another_width_is_recomputed_as_e1_would_have_measured_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, fila, solo_1 = self._e1_row_wide_line(Path(tmp))
+            self.assertEqual(fila["template_factor"], 4.0)
+            flux, z, fuente = measured_flux_for_method_factor([fila], "optimal_ls", 1.0, paths=paths,
+                                                              h01_qc=self.H01_QC, cfg={})
+            self.assertEqual(fuente, "recomputed_h01_scan")
+            self.assertEqual((flux, z), (solo_1["matched_flux"], solo_1["matched_z"]))
+            self.assertLess(flux, fila["matched_flux"])
+
+    def test_the_table_row_wins_at_the_width_e1_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, fila, _ = self._e1_row_wide_line(Path(tmp))
+            flux, z, fuente = measured_flux_for_method_factor([fila], "optimal_ls", 4.0, paths=paths,
+                                                              h01_qc=self.H01_QC, cfg={})
+            self.assertEqual((flux, z, fuente), (fila["matched_flux"], fila["matched_z"], "h01_detection_table"))
+
+    def test_without_e1_declaring_its_scan_it_aborts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths, fila, _ = self._e1_row_wide_line(Path(tmp))
+            sin_ventana = {"line": {"rv_sys_kms": 0.0}, "templates": {"lsf_fwhm_A": 2.5}}
+            with self.assertRaisesRegex(RuntimeError, "search_half_width_kms"):
+                measured_flux_for_method_factor([fila], "optimal_ls", 1.0, paths=paths, h01_qc=sin_ventana, cfg={})
 
 
 class H03LimitDefinitionTests(unittest.TestCase):

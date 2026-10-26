@@ -561,6 +561,19 @@ def build_psf_model_document(
 
 _PSFAO_PARAM_NAMES = ("r0", "C", "A", "alpha", "ratio", "theta", "beta")
 
+#: Desplazamiento que se le pasa a maoppy para que CENTRE su PSF. `Psfao.__call__`
+#: solo aplica la compensacion del sobremuestreo, (k-1)/(2k) px, cuando dx o dy no
+#: son cero (`maoppy/psfmodel.py`, `_otf`: `if (dx==0) and (dy==0): otfShift = 1.0`).
+#: Con `model(x)` la imagen salia 1/3 px (k = 3, por encima de ~6400 A) o 3/8 px
+#: (k = 4, por debajo) fuera en y y en x, y el evaluador la muestreaba como si su
+#: pico estuviera en (npix//2, npix//2): todo consumidor del modelo (apcorr, pesos
+#: de optimal, plantillas de psffit, inyecciones de E4) ponia la PSF ~0.47 px en
+#: diagonal lejos de la posicion pedida. Hallado el 2026-10-21
+#: (`docs/2026-10-21_psf_evaluador_centrado.md`). Cualquier valor no nulo dispara
+#: la compensacion; este no mueve nada medible. C1 ya esquivaba el mismo salto en su
+#: ajuste (`ARRANQUE_DESPLAZAMIENTO` en `stage_e01_psfao.fit_bin_binary`).
+MAOPPY_CENTRADO_PX = 1e-12
+
 
 @functools.lru_cache(maxsize=16384)
 def _psfao_image_cached(x_key, npix, system_name, samp, norm_radius):
@@ -591,7 +604,8 @@ def _psfao_image_cached(x_key, npix, system_name, samp, norm_radius):
     ]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        img = np.asarray(model(x), dtype=np.float64)  # peak at (npix//2, npix//2)
+        img = np.asarray(model(x, dx=MAOPPY_CENTRADO_PX, dy=MAOPPY_CENTRADO_PX),
+                         dtype=np.float64)  # peak at (npix//2, npix//2)
     c = npix // 2
     gy, gx = np.mgrid[0:npix, 0:npix]
     rr = np.hypot(gy - c, gx - c)

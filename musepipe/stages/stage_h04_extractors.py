@@ -458,6 +458,7 @@ def build_production_extractors(config, paths, *, wave_A, psf_model, base_cube=N
             skyline_windows_A=x03_cfg.get("x03_skyline_windows_A", []),
             interpolated_windows_A=x03_cfg.get("x03_interpolated_windows_A", []),
             n_controls=0,
+            background=x03_cfg.get("x03_background", "shared"),
         )
         return prods.companion
 

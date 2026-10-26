@@ -103,6 +103,7 @@ def stage_h04b_config_from_run(run_id=None, *, project_root=None, overrides=None
     """
 
     from .stage_x01_aperture import stage_x01_config_from_run
+    from .stage_x03_psffit import stage_x03_config_from_run
 
     run = load_run_config(run_id, project_root=project_root,
                           allow_run_id_mismatch=allow_run_id_mismatch)
@@ -123,6 +124,10 @@ def stage_h04b_config_from_run(run_id=None, *, project_root=None, overrides=None
     cfg.setdefault("x06b_flux_convention", cfg.get("flux_convention", "normrad"))
     cfg.setdefault("x06b_psffit_star_radius_px", 20.0)
     cfg.setdefault("x06b_psffit_comp_radius_px", 12.0)
+    # El fondo del ajuste es el de C4, del config resuelto (spec C4 v2 §1).
+    cfg.setdefault("x06b_psffit_background", stage_x03_config_from_run(
+        run.run_id, project_root=run.paths.project_root,
+        allow_run_id_mismatch=allow_run_id_mismatch).get("x03_background", "shared"))
     cfg.setdefault("x06b_continuum_window_A", 80.0)
     # Ventana espectral de la medida. El filtro adaptado solo mira la linea y su
     # ventana de continuo, asi que leer los 3681 canales es tirar tiempo: medido,
@@ -166,6 +171,7 @@ def _extrae(metodo, cube, stat, wave, centro, star_yx, apertura, model_doc, grow
             cube, stat, wave, star_yx, centro, model_doc,
             star_radius_px=float(cfg["x06b_psffit_star_radius_px"]),
             comp_radius_px=float(cfg["x06b_psffit_comp_radius_px"]),
+            background=cfg.get("x06b_psffit_background", "shared"),
         )
         flujo = np.asarray(fit.coeffs[:, 1], dtype=np.float64) * apcorr
         err = np.sqrt(np.clip(np.asarray(fit.covariance[:, 1, 1], dtype=np.float64), 0.0, np.inf)) * apcorr

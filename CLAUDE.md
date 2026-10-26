@@ -250,7 +250,9 @@ telluric bands and accretion lines) and its ECSV export.
 - **Noise**: never use the cube's `STAT` extension directly as σ, and never assume
   neighbouring pixels or channels are independent. In the two paper runs STAT underestimates
   aperture noise 7–8× per spaxel; spatial inflation is ~5.5× (3×3) / ~19× (5×5); spectral
-  n_eff/n is 0.72 (ROXs 12 b) and 0.38 (ROXs 42B b). σ is always
+  n_eff/n is 0.73 (ROXs 12 b) and 0.67 (ROXs 42B b) with C4 v2 (`decoupled_c0`). It was 0.38
+  in 42B b with the shared plane, whose pedestal correlated the channels: n_eff/n is a property
+  of the extraction, not only of the cube. σ is always
   estimated empirically from **controls processed identically to the object**. Cite
   `docs/noise_model.md` instead of re-deriving these numbers.
 - **Flux units**: the unit travels with the data (`BUNIT`) and there is **no silent
@@ -288,6 +290,12 @@ telluric bands and accretion lines) and its ECSV export.
 ## Safety
 
 - Check `git status` before editing; preserve unrelated work.
+- **Existing tests change only with the owner's explicit authorization**, given per change:
+  expected values and pinned numbers, tolerances, skips/xfail, deleting or renaming a test,
+  assertions, fixtures, `conftest.py`, `pytest.ini`. A failing test is reported as failing and
+  stays failing until the owner decides — never re-pinned to the code's new output, even when
+  that output is expected. New tests may be added, and are listed in the report. Full rule in
+  `AGENTS.md` → Tests.
 - Do not touch raw data, `runs/`, `/mnt/2TB`, calibrations, `reports/`, or `paper/` unless
   asked. Do not commit or push unless asked.
 - Never run two writing stages against the same run concurrently. Raw reduction, full

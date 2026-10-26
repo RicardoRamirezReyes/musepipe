@@ -6,8 +6,8 @@
 > (verificadas en disco el 2026-07-10).
 >
 > **Las cifras de §1–§3 son del cubo ADP de julio (`ROXs12b_B_adp`).** Las de los dos runs
-> del paper están en la tabla de abajo (leídas del QC el 2026-10-20). La regla no cambia;
-> los factores sí, y son mayores.
+> del paper están en la tabla de abajo (leídas del QC el 2026-10-26, con C4 v2
+> `decoupled_c0`). La regla no cambia; los factores sí, y son mayores.
 
 | | `ROXs12b_B_adp` (julio) | `ROXs12b_invvar` | `ROXs42Bb_realigned` |
 |---|---|---|---|
@@ -15,12 +15,18 @@
 | A4/M5: STAT en caja 3×3 (mediana) | — | 12.64× | 17.17× |
 | G1: inflación de varianza, caja 3×3 | 6.45× | 5.54× | 5.55× |
 | G1: inflación de varianza, caja 5×5 | 16.96× | 19.08× | 19.06× |
-| G1: longitud de correlación espectral | 1.45 ± 0.08 can. | 1.40 ± 0.02 can. | 2.67 ± 0.19 can. |
-| G1: n_eff / n | 0.69 | 0.72 | 0.38 |
+| G1: longitud de correlación espectral | 1.45 ± 0.08 can. | 1.37 ± 0.01 can. | 1.49 ± 0.04 can. |
+| G1: n_eff / n | 0.69 | 0.73 | 0.67 |
 
 Fuentes: `runs/<RUN>/stages/stage00q_qc.json` → `m5_stat` (`factor_spaxel_median`,
-`factor_box3_median`) y `runs/<RUN>/stages/stage_g1_qc.json` → `covariance`. En 42B b la
-correlación espectral es casi el doble que en 12 b: promediar en λ gana todavía menos.
+`factor_box3_median`) y `runs/<RUN>/stages/stage_g1_qc.json` → `covariance`.
+
+**La correlación espectral depende de la extracción, no solo del cubo** (2026-10-26). G1 la
+mide sobre los controles de psffit. Con el plano compartido de C4 v1, en 42B b daba
+2.60 ± 0.16 canales y n_eff/n = 0.38 (copia `runs/ROXs42Bb_realigned/stages/_antes_c4_c0_*`).
+El pedestal de banda ancha de ese plano, distinto en cada control, correlacionaba los canales.
+Con C4 v2 (`decoupled_c0`) baja a 1.49 ± 0.04 y n_eff/n = 0.67, como en 12 b (antes 1.39 y
+0.72). La inflación espacial no cambia: es del cubo.
 
 ---
 

@@ -17,6 +17,7 @@
   "primary_display_name": "ROXs 42B",
   "field_notes": {
     "background_source": {
+      "label": "cc1",
       "reported": "ROXs 42B cc1 (Kraus+2014; Bryan+2016), citada a veces como ROXs 42B c: estrella de fondo a 0.41\" de la primaria en la epoca de estos datos (r = 16 px).",
       "source": "literatura (Kraus+2014, Currie+2014, Bryan+2016) y medida propia del 2026-10-20 (verification_2026_10_20)",
       "verification_2026_10_20": "Detectada y caracterizada; docs/2026-10-20_cc1_es_de_fondo.md. Es REAL: S/N 7-9 en 8 bandas de 4800 a 9300 A, siempre en el mismo pixel (un speckle escalaria con lambda). Es de FONDO: Keck 2011-2014 + MUSE 2022.66 dan 18.8 +- 1.3 mas/yr respecto a la primaria (13 km/s, ~2x la velocidad de escape), a 3.6 deg del reflejo del movimiento propio de Gaia DR3; no es miembro de rho Oph, y su SED excluye un companero como b. La verificacion del 07-27 no la encontro: su pasa-altos solo listo fuentes a r~60-83 px, y la fuente esta a 16 px.",

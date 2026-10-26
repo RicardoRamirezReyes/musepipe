@@ -96,5 +96,7 @@ class CifrasDelPaperTests(unittest.TestCase):
 
     def test_optico_sin_veiling_y_su_suelo(self):
         o = self.v.veiling_ajuste("ROXs12b", "muse", av_fija=True, calibrar=True)
-        self.assertEqual(o["mejor"]["r"], 0.0)
-        self.assertAlmostEqual(o["calibracion"]["p95"], 0.085, delta=0.003)
+        # 2026-10-22, evaluador de la PSF centrado (docs/2026-10-21_psf_evaluador_centrado.md): eran r = 0 (en el borde) y p95 0.085
+        # 2026-10-25, C4 v2 decoupled_c0 (docs/2026-10-24_c4_planos_desacoplados_decision.md): eran r = 0.014 y p95 0.078
+        self.assertAlmostEqual(o["mejor"]["r"], 0.0, delta=0.001)
+        self.assertAlmostEqual(o["calibracion"]["p95"], 0.083, delta=0.003)
