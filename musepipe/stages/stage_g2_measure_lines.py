@@ -21,6 +21,7 @@ from ..lines import measure_catalog
 from ..paths import RunPaths
 from ..spectral import resolve_lsf_fwhm_A
 from ..stages.stage07_accretion_lines import default_accretion_lines
+from ..telluric_lines import AO_LASER_WINDOW_A, TELLURIC_BANDS, telluric_mask
 
 TABLE_FIELDS = [
     "name", "rest_A", "family", "kind", "status", "label",
@@ -34,6 +35,9 @@ TABLE_FIELDS = [
     # reducciones o entre metodos que no se explique por el procedimiento.
     "z_emp", "sigma_inflation", "sigma_inflation_applied", "fap_empirical", "n_controls",
     "min_resolvable_fap", "null_source",
+    # spec G2 v4: el continuo de cada linea, la nula espectral y el limite al 99 %.
+    "continuum_model", "sigma_inflation_spectral", "n_placebos",
+    "flux_mf", "flux_mf_sigma_emp", "flux_upper_limit_99",
     "throughput_applied", "n_mc", "seed", "covariance_used",
     "line_window_A", "continuum_windows_A", "flags", "reason",
 ]
@@ -196,6 +200,78 @@ def _empirical_scale_block(measurements, control_source):
     return block
 
 
+#: --- spec G2 v4 ---
+#: por encima de esta lambda las bandas de TiO/VO dominan el espectro de un M tardio y la
+#: recta de la v1 no las sigue: el continuo es plantilla x polinomio de grado 2.
+TEMPLATE_CONTINUUM_MIN_A = 7000.0
+#: margenes de los placebos: a 6 A de una banda telurica fuerte, a 50 A del hueco del laser.
+PLACEBO_TELLURIC_PAD_A = 6.0
+PLACEBO_LASER_PAD_A = 50.0
+
+
+def _resolve_continuum_template(cfg, wave, lsf_fwhm):
+    """La plantilla del continuo del rojo que declara el run, preparada como en G3.
+
+    Devuelve `(flujo en la malla del dato, bloque para el QC)`, o `(None, bloque con
+    el motivo)` si el run no la declara. Declararla y que no exista es un ERROR, no
+    un aviso: un knob que no se puede cumplir no se sustituye en silencio.
+    """
+    decl = cfg.get("g2_continuum_template")
+    if not decl:
+        return None, {"declared": None,
+                      "reason": "g2_continuum_template not declared: red lines use the straight line of v1"}
+    from ..models.libraries import data_frame
+    from ..models.prep import prepare_template_base
+    from ..models.template_fit import declared_prep_kwargs
+    from .stage_g3_template_fit import _build_libraries
+
+    lib_name, obj_name = str(decl["library"]), str(decl["object"])
+    libs = {lib.name: lib for lib in _build_libraries(cfg)}
+    if lib_name not in libs:
+        raise RuntimeError(f"g2_continuum_template: library {lib_name!r} is not in "
+                           f"g3_template_libraries ({sorted(libs)}).")
+    lib = libs[lib_name]
+    for code, path, meta in lib.entries():
+        if meta.get("object") != obj_name:
+            continue
+        tmpl = lib.load_entry(code, path, meta)
+        frame = data_frame(cfg)
+        flux, mismatch = prepare_template_base(tmpl, wave, lsf_fwhm_A=float(lsf_fwhm),
+                                               **declared_prep_kwargs(tmpl, frame))
+        info = {"declared": {"library": lib_name, "object": obj_name},
+                "spt": tmpl.meta.get("spt"), "citation": tmpl.meta.get("citation"),
+                "source_npz": tmpl.meta.get("source_npz"),
+                "declared_resolution_R": tmpl.meta.get("declared_resolution_R"),
+                "data_wave_frame": frame, "lsf_fwhm_A": float(lsf_fwhm),
+                "resolution_mismatch": bool(mismatch)}
+        return np.asarray(flux, dtype=np.float64), info
+    raise RuntimeError(f"g2_continuum_template: library {lib_name!r} has no entry with object {obj_name!r}.")
+
+
+def _spectral_scale_block(measurements):
+    """Resumen de la nula espectral entre lineas (spec G2 v4 §6)."""
+    con = [m for m in measurements if np.isfinite(m.sigma_inflation_spectral)]
+    infl = np.asarray([m.sigma_inflation_spectral for m in con], dtype=np.float64)
+    block = {
+        "n_lines_with_spectral_null": int(len(con)),
+        "lines_without_spectral_null": [m.name for m in measurements
+                                        if m.status != "not_measurable"
+                                        and not np.isfinite(m.sigma_inflation_spectral)],
+        "lines_where_spectral_dominates": [m.name for m in measurements
+                                           if "spectral_null_dominates" in m.flags],
+        "n_placebos_min_max": ([int(min(m.n_placebos for m in con)), int(max(m.n_placebos for m in con))]
+                               if con else None),
+    }
+    if infl.size:
+        block.update({
+            "inflation_median": float(np.median(infl)),
+            "inflation_min": float(np.min(infl)),
+            "inflation_max": float(np.max(infl)),
+            "inflation_p16_p84": [float(np.percentile(infl, 16)), float(np.percentile(infl, 84))],
+        })
+    return block
+
+
 #: Veredictos de E1 compatibles con cada estado de Hα en G2 (spec G2 v3, §V3).
 #: `marginal` (3 <= z < 5 a λ fija) no tiene par en E1: es local, y `candidate`
 #: exige una FAP global < 0.01 tras buscar en ±500 km/s y en tres plantillas. Una
@@ -262,13 +338,38 @@ def compute_stage_g2(cfg, paths):
                       "`detected` aqui no es comparable con el veredicto de E1."),
             "priority": "blocking"})
 
+    # --- spec G2 v4: continuo de plantilla en el rojo y nula espectral ---
+    t_min = float(cfg.get("g2_template_continuum_min_A", TEMPLATE_CONTINUUM_MIN_A))
+    half = float(cfg.get("g2_template_fit_half_A", 60.0))
+    template, template_info = _resolve_continuum_template(cfg, wave, lsf_fwhm)
+    fuertes = [b for b in TELLURIC_BANDS if b["severity"] == "strong"]
+    placebo_excl = tuple((b["lo_A"], b["hi_A"], PLACEBO_TELLURIC_PAD_A) for b in fuertes) + (
+        (AO_LASER_WINDOW_A[0], AO_LASER_WINDOW_A[1], PLACEBO_LASER_PAD_A),)
+    rojas = [ln for ln in catalog if float(ln["wave_A"]) >= t_min]
+    if template is None and rojas:
+        open_issues.append({
+            "issue": (f"{len(rojas)} lines at >= {t_min:.0f} A are measured against a straight line over the "
+                      "molecular bands of the photosphere (no g2_continuum_template declared): their "
+                      "fluxes include band structure."),
+            "priority": "major"})
+
     measurements = measure_catalog(
         wave, flux, ferr, catalog, lsf_fwhm_A=lsf_fwhm, vsys_kms=vsys,
         wl_cal_err_kms=wl_cal_err, throughput=throughput, n_mc=n_mc, seed=seed,
         bad_flags=(flags != 0),
         control_fluxes=controls,
         null_source=str(control_source),
+        continuum_template=template,
+        template_name=str((template_info.get("declared") or {}).get("object", "template")),
+        template_min_A=t_min, template_half_A=half,
+        template_exclude_mask=telluric_mask(wave, severities=("strong",)),
+        spectral_null=bool(cfg.get("g2_spectral_null", True)),
+        placebo_exclude_ranges=placebo_excl,
     )
+    if template is None:
+        for m in measurements:
+            if m.rest_A >= t_min and m.status != "not_measurable":
+                m.flags = tuple(m.flags) + ("linear_continuum_over_molecular_bands",)
 
     # RV weighted over detected lines
     det = [m for m in measurements if m.status == "detected" and np.isfinite(m.rv_kms) and m.rv_err_kms > 0]
@@ -291,8 +392,18 @@ def compute_stage_g2(cfg, paths):
         if not v3["consistent"]:
             open_issues.append({"issue": f"V3: G2 Halpha status {ha.status!r} vs H01 {h01_verdict!r} — two statistics on the same data disagree.", "priority": "blocking"})
 
+    template_info.update({
+        "template_min_A": t_min, "fit_half_A": half, "poly_degree": 2,
+        "excluded_telluric_bands": [b["name"] for b in fuertes],
+        "lines_by_model": {modelo: [m.name for m in measurements if m.continuum_model == modelo]
+                           for modelo in sorted({m.continuum_model for m in measurements})},
+    })
+    empirical = _empirical_scale_block(measurements, control_source)
+    empirical["spectral"] = _spectral_scale_block(measurements)
+
     qc = {
         "stage": "g2_measure_lines", "run_id": str(cfg["run_id"]), "provisional": True,
+        "rule": "spec_G2_v4",
         "input_spectrum": {"file": str(paths["spectrum_fits"].name), "method": canonical},
         "lsf_source": lsf_source, "lsf_fwhm_A": lsf_fwhm,
         "covariance_used": "none",  # per-line MC used independent errors in this provisional run
@@ -302,7 +413,8 @@ def compute_stage_g2(cfg, paths):
         # metodos y entre reducciones deberia moverse poco. Un salto que no se
         # explique por lo que se ha cambiado a proposito apunta a la reduccion,
         # no a la fisica, y por eso se publica por linea en la tabla.
-        "empirical_scale": _empirical_scale_block(measurements, control_source),
+        "empirical_scale": empirical,
+        "continuum_model": template_info,
         "catalog_n": len(catalog),
         "n_detected": counts["detected"], "n_marginal": counts["marginal"],
         "n_upper_limit": counts["upper_limit"], "n_not_measurable": counts["not_measurable"],

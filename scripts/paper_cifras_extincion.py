@@ -22,6 +22,14 @@ Una Paschen cuya ventana de G2 se solapa con la de otra linea del catalogo
 Hasta el 2026-10-12 la cota de Paschen del paper («15-21 mag») no salia de
 ningun codigo (`docs/2026-10-12_e4_extractores_de_produccion.md`).
 
+Desde G2 v4 (`docs/spec_G2_v4_codex_spectral_measurements.md`) el limite citable es el
+del 99 % del filtro adaptado (`flux_upper_limit_99`, la regla de E3 v2), con la escala de
+la nula que manda (controles, placebos o el presupuesto propagado). Si la tabla de G2 es
+de antes de la v4 y no lo trae, se usa el de 5 sigma de integracion directa, como hasta
+ahora, y se dice cual (`limite`). El flujo de Halpha sigue siendo el de integracion
+directa de G2: es el mayor de los dos estimadores, asi que las dos cotas salen por el
+lado menos restrictivo.
+
     python scripts/paper_cifras_extincion.py
 """
 from __future__ import annotations
@@ -57,6 +65,14 @@ def _solapa(fila, otras):
     return [o["name"] for o in otras if not (_ventana(o)[1] < lo or _ventana(o)[0] > hi)]
 
 
+def _limite(fila):
+    """`(limite, cual)`: el del 99 % de G2 v4 si la tabla lo trae; si no, el de 5 sigma."""
+    v = fila.get("flux_upper_limit_99")
+    if v not in (None, "") and math.isfinite(float(v)):
+        return float(v), "99% (G2 v4, filtro adaptado)"
+    return float(fila["flux_upper_limit_5sigma"]), "5 sigma (G2 v3, integracion directa)"
+
+
 def cotas_de_lineas(obj, ccm):
     g2 = {r["name"]: r for r in obj.filas("g2_line_measurements.csv")}
     escala = float(obj.config["h03_flux_unit_cgs"])
@@ -68,13 +84,20 @@ def cotas_de_lineas(obj, ccm):
     out = {"objeto": obj.nombre, "f_ha_direct_cgs": f_ha * escala}
 
     hb = g2["Hbeta"]
-    lim_hb = float(hb["flux_upper_limit_5sigma"])
+    lim_hb, cual = _limite(hb)
     r_hb = case_b_ratio("Halpha", "Hbeta", temperature_K=NODO[0], density_cm3=NODO[1])
+    # el tiempo para una deteccion a 5 sigma: con la sigma empirica del filtro adaptado
+    # (G2 v4) o, en una tabla anterior, con el limite de 5 sigma, que ya es 5 sigma.
+    s_mf = hb.get("flux_mf_sigma_emp")
+    cinco = (5.0 * float(s_mf) if s_mf not in (None, "") and math.isfinite(float(s_mf))
+             else float(hb["flux_upper_limit_5sigma"]))
     out["balmer"] = {
+        "limite": cual,
+        "limite_cgs": lim_hb * escala,
         "limite_sobre_ha": lim_hb / f_ha,
         "razon_caso_b": r_hb,
         "factor_bajo_el_limite": lim_hb / (f_ha / r_hb),
-        "tiempo_para_detectar": (lim_hb / (f_ha / r_hb)) ** 2,
+        "tiempo_para_detectar_5sigma": (cinco / (f_ha / r_hb)) ** 2,
         "av_min": av_lower_limit_undetected_bluer(
             f_ha, lim_hb, r_hb, k_ha, ccm.a_lambda_over_av(float(hb["rest_A"]))),
     }
@@ -93,11 +116,12 @@ def cotas_de_lineas(obj, ccm):
             por_linea[nombre] = {"excluida": "ventana solapada con " + ", ".join(mezcla)}
             continue
         k_pa = ccm.a_lambda_over_av(float(fila["rest_A"]))
-        lim = float(fila["flux_upper_limit_5sigma"])
+        lim, cual = _limite(fila)
         barrido = [av_upper_limit_undetected_redder(
             f_ha, lim, case_b_ratio("Halpha", nombre, temperature_K=t, density_cm3=d), k_ha, k_pa)
             for t in BARRIDO_T for d in BARRIDO_NE]
         por_linea[nombre] = {
+            "limite": cual,
             "limite_cgs": lim * escala,
             "razon_caso_b": case_b_ratio("Halpha", nombre, temperature_K=NODO[0], density_cm3=NODO[1]),
             "av_max": av_upper_limit_undetected_redder(

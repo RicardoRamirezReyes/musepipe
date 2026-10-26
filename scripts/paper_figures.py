@@ -902,7 +902,7 @@ def _gaussiana(wave, centro_A, flujo, fwhm_A):
 
 
 def hbeta_limit(objetos, out: Path, metodo="psffit", media_ventana_A=45.0):
-    """Hbeta no detectada, con el limite a 5 sigma y lo que el caso B predice.
+    """Hbeta no detectada, con su limite superior y lo que el caso B predice.
 
     Existe porque la no deteccion de Hbeta es la que cierra la via del
     decremento de Balmer para medir la extincion, y un limite solo se puede
@@ -910,8 +910,10 @@ def hbeta_limit(objetos, out: Path, metodo="psffit", media_ventana_A=45.0):
 
     - el espectro calibrado de D2 y su `flux_err_total` (el mismo error que la
       figura de Halpha), en la ventana de Hbeta;
-    - el limite a 5 sigma de G2 dibujado como perfil, con la LSF **medida** de
-      A4/M2 que declara el run, no una anchura inventada;
+    - el limite superior de G2 dibujado como perfil, con la LSF **medida** de
+      A4/M2 que declara el run, no una anchura inventada. Es el del 99 % del filtro
+      adaptado si la tabla es de G2 v4 (`flux_upper_limit_99`), y el de 5 sigma si es
+      anterior (el mismo criterio que `paper_cifras_extincion.py`);
     - donde caeria Hbeta si el decremento fuese el del caso B, escalando el
       Halpha MEDIDO de este mismo objeto. Solo se dibuja donde Halpha esta
       detectado, porque escalar un limite no ensena nada.
@@ -950,17 +952,22 @@ def hbeta_limit(objetos, out: Path, metodo="psffit", media_ventana_A=45.0):
         cerca = np.abs(w - centro) <= 6.0 * lsf
 
         hb = _linea_g2(obj, "Hbeta")
-        lim = float(hb.get("flux_upper_limit_5sigma", "nan"))
+        lim99 = float(hb.get("flux_upper_limit_99") or "nan")
+        if np.isfinite(lim99):
+            lim, etiqueta = lim99, r"$99\%$ upper limit"
+        else:
+            lim, etiqueta = float(hb.get("flux_upper_limit_5sigma", "nan")), r"$5\sigma$ upper limit"
         if np.isfinite(lim) and lim > 0:
             perfil = base + _gaussiana(w[cerca], centro, lim * escala * 1e18, lsf)
             ax.plot(w[cerca], perfil, color="#1f77b4", lw=0.9, ls="--",
-                    label=r"$5\sigma$ upper limit")
+                    label=etiqueta)
 
         ha = _linea_g2(obj, "Halpha")
         if ha.get("status") == "detected" and np.isfinite(lim) and lim > 0:
-            # el flujo de integracion directa: es el estimador del limite a 5
-            # sigma de G2 contra el que se compara, y el de las cotas de A_V de
-            # `scripts/paper_cifras_extincion.py`. Hasta el 2026-10-12 era el del
+            # el flujo de integracion directa: el de las cotas de A_V de
+            # `scripts/paper_cifras_extincion.py`, y el mayor de los dos estimadores
+            # (con el limite del 99 % de G2 v4, que es de filtro adaptado, el cociente
+            # sale por el lado menos restrictivo). Hasta el 2026-10-12 era el del
             # ajuste gaussiano, un 5 % menor en ROXs 12 b.
             f_ha = float(ha["flux_direct"])
             esperado = f_ha / CASO_B_HA_HB
