@@ -530,26 +530,30 @@ def margen(teff, av, lbol_lsun, lacc0_lsun, av0, a, ahav):
     return np.log10(lacc / np.asarray(lbol_lsun, float)) - suelo(np.asarray(teff, float))
 
 
-def umbral(slug):
-    """(T*, log L_acc/L_bol, tipo): el umbral cromosférico con la L_acc del paper y la L_bol publicada."""
+def umbral(slug, root=None):
+    """(T*, log L_acc/L_bol, tipo): el umbral cromosférico con la L_acc del paper y la L_bol publicada. `root`: la
+    raíz que contiene `runs/` (por defecto la del repo; desde un worktree, la del clon que los tiene)."""
     from scripts import suelo_cromosferico as sc
     from scripts import tipo_ir_indices as tir
-    perfil = tir.perfil(slug)
-    lacc, tipo = sc.lacc_hal(perfil["paper"]["run"])
+    root = ROOT if root is None else Path(root)
+    perfil = tir.perfil(slug, root=root)
+    lacc, tipo = sc.lacc_hal(perfil["paper"]["run"], root=root)
     ratio = math.log10(lacc) - float(perfil["fisica"]["log_lbol"])
     return teff_umbral(ratio), ratio, tipo
 
 
-def entrada_margen(slug):
-    """L_acc publicada (con la A_V adoptada), A_V adoptada, pendiente de la relación y A_Hα/A_V del run del paper."""
+def entrada_margen(slug, root=None):
+    """L_acc publicada (con la A_V adoptada), A_V adoptada, pendiente de la relación y A_Hα/A_V del run del paper.
+    `root`: la raíz que contiene `runs/` (por defecto la del repo; desde un worktree, la del clon que los tiene)."""
     from musepipe.config import load_run_config
     from musepipe.stages.stage_h03_limits import physical_inputs_from_config
     from scripts import suelo_cromosferico as sc
     from scripts import tipo_ir_indices as tir
-    perfil = tir.perfil(slug)
+    root = ROOT if root is None else Path(root)
+    perfil = tir.perfil(slug, root=root)
     run = perfil["paper"]["run"]
-    lacc, tipo = sc.lacc_hal(run)
-    cfg = load_run_config(run, project_root=ROOT).config
+    lacc, tipo = sc.lacc_hal(run, root=root)
+    cfg = load_run_config(run, project_root=root).config
     phys = physical_inputs_from_config(cfg)
     return dict(lacc0=lacc, tipo=tipo, av0=float(cfg["h03_av"]), a=float(phys["lacc_lha_a"]),
                 ahav=float(phys["a_halpha_over_av"]), lbol_lit=10 ** float(perfil["fisica"]["log_lbol"]))
@@ -779,6 +783,52 @@ def en_el_borde(d):
         if q["p2_5"] - x0 < paso / 2 or x0 + paso * (n - 1) - q["p97_5"] < paso / 2:
             fuera.append(p)
     return fuera
+
+
+def pares_que_encierran(plantillas, teff):
+    """Los pares de plantillas consecutivas en tipo cuyas T_eff ajustadas encierran `teff` (la regla de
+    `~/muse_noche_20261017/analiza.py`, `encierran`). `plantillas`: dicts con 'spt', 'codigo' (`spt_code`) y
+    'teff', en el orden de desempate (el de sus etiquetas); se ordenan por 'codigo' de forma estable, así que dos
+    plantillas del mismo tipo quedan en ese orden."""
+    cc = sorted(plantillas, key=lambda c: c["codigo"])
+    return [(a, b) for a, b in zip(cc, cc[1:]) if min(a["teff"], b["teff"]) <= teff <= max(a["teff"], b["teff"])]
+
+
+def tipo_equivalente(plantillas, teff, rejilla=None):
+    """El tipo espectral equivalente de un compañero: su T_eff (con el prior en A_V) entre las de plantillas de
+    tipo conocido ajustadas con la MISMA rejilla y el ruido del compañero (Tabla B.5 y Sects. 4.1–4.2 del paper).
+
+    - Un solo par de plantillas consecutivas la encierra (`pares_que_encierran`): el tipo es el par, `A–B`, o `A`
+      si las dos son del mismo tipo. Si una plantilla del par está saturada contra un borde de la rejilla (a
+      menos de medio paso, con `rejilla`), el par no ordena las T_eff: se lee la plantilla del par más cercana
+      (DRIFT-PHOENIX con el ruido de ROXs 12 b, cuyas M6.5–M8 dan 2960–2990 K; `autor_9b.md` §2 del 2026-10-23).
+    - Ningún par, y más fría que todas: `posterior` al tipo más tardío («≥L1»: tan fría como la plantilla más fría
+      de ese tipo o más). Más caliente que todas: `anterior` al más temprano.
+    - Más de un par: ambiguo (`ValueError`); el tipo no es una lectura única y hay que mirarlo.
+
+    Devuelve dict(clase='par'|'una'|'posterior'|'anterior', tipos=(spt, ...), pares=[...], saturadas=[...])."""
+    pares = pares_que_encierran(plantillas, teff)
+    if len(pares) > 1:
+        raise ValueError("tipo equivalente ambiguo: " + ", ".join(f"{a['spt']}–{b['spt']}" for a, b in pares))
+    satura = []
+    if rejilla is not None:
+        x0, paso, n = REJILLAS[rejilla]["teff"]
+        satura = [p for p in plantillas if p["teff"] - x0 < paso / 2 or x0 + paso * (n - 1) - p["teff"] < paso / 2]
+    nombres = lambda ps: [p.get("plantilla", p["spt"]) for p in ps]  # noqa: E731
+    out = dict(pares=[(a["spt"], b["spt"]) for a, b in pares], saturadas=nombres(satura))
+    if pares:
+        a, b = pares[0]
+        if any(p is a or p is b for p in satura):
+            cerca = min((a, b), key=lambda p: abs(p["teff"] - teff))
+            return dict(out, clase="una", tipos=(cerca["spt"],))
+        if a["spt"] == b["spt"]:
+            return dict(out, clase="una", tipos=(a["spt"],))
+        return dict(out, clase="par", tipos=(a["spt"], b["spt"]))
+    if teff < min(p["teff"] for p in plantillas):
+        ultimo = max(plantillas, key=lambda p: p["codigo"])["spt"]
+        return dict(out, clase="posterior", tipos=(ultimo,))
+    primero = min(plantillas, key=lambda p: p["codigo"])["spt"]
+    return dict(out, clase="anterior", tipos=(primero,))
 
 
 def filas_rejillas(corridas, deltas, nombres):
