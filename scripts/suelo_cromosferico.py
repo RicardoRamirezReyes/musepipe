@@ -39,19 +39,21 @@ def suelo(teff_k: float) -> float:
     return MANARA13["A"] * math.log10(teff_k) + MANARA13["B"]
 
 
-def lacc_hal(run_id: str) -> tuple[float, str]:
+def lacc_hal(run_id: str, root=None) -> tuple[float, str]:
     """L_acc de la Hα (L_sol) del run, con la relación estelar, y si es medida o cota.
 
     Detección (G3 sin etiqueta `upper_limit`): la L_acc combinada de G3 (la del Ṁ del paper). No detección: la
     cota de E3 del método canónico de D2, con la relación L_acc–L_Hα de la config (Alcalá 2017), la misma de la
-    tabla de acreción."""
+    tabla de acreción. `root`: la raíz del proyecto con los `runs/` (por defecto este clon; desde un worktree,
+    que no los lleva, la del clon que sí)."""
     from musepipe.config import load_run_config
     from musepipe.stages.stage_h03_limits import L_SUN_ERG_S, lacc_lsun_from_lha
-    rd = ROOT / "runs" / run_id / "stages"
+    root = ROOT if root is None else Path(root)
+    rd = root / "runs" / run_id / "stages"
     g3 = json.loads((rd / "stage_g3_qc.json").read_text())
     if g3.get("mdot_label") != "upper_limit":
         return float(g3["combined_accretion"]["l_acc_lsun"]), "detection"
-    cfg = load_run_config(run_id, project_root=ROOT).config
+    cfg = load_run_config(run_id, project_root=root).config
     canon = json.loads((rd / "stage_x11_qc.json").read_text())["canonical_method"]
     h3 = json.loads((rd / "stage_h03_qc.json").read_text())
     lim = next(x for x in h3["limits"] if x["method"] == canon)

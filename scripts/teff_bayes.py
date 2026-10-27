@@ -419,8 +419,10 @@ class Modelo:
         return out
 
 
-def evo_solo(mod_cfg, slug, tracks, n=20000, semilla=0):
-    """T_eff, R, M y log g de la L_bol publicada y el prior de edad, sin espectro (la referencia)."""
+def evo_solo(mod_cfg, slug, tracks, n=20000, semilla=0, root=None):
+    """T_eff, R, M y log g de la L_bol publicada y el prior de edad, sin espectro (la referencia). `root`: la raíz
+    del proyecto contra la que se resuelve `g3_libraries_root` (por defecto este clon; desde un worktree, la del
+    clon con los datos)."""
     from musepipe.models.tracks import TrackGrid
     from scripts import tipo_ir_indices as tir
     rng = np.random.default_rng(semilla)
@@ -430,7 +432,8 @@ def evo_solo(mod_cfg, slug, tracks, n=20000, semilla=0):
     edad, (elo, ehi) = float(cfg["g3_age_myr"]), cfg["g3_age_err_myr"]
     sig = 0.5 * (math.log((edad + ehi) / edad) + math.log(edad / (edad - elo)))
     rel, cita = TRACKS[tracks]
-    tg = TrackGrid((ROOT / cfg["g3_libraries_root"]).resolve() / rel, family=tracks, citation=cita, version=None)
+    raiz = ROOT if root is None else Path(root)
+    tg = TrackGrid((raiz / cfg["g3_libraries_root"]).resolve() / rel, family=tracks, citation=cita, version=None)
     lbol = 10 ** rng.normal(fis["log_lbol"], fis["log_lbol_err"], n)
     age = np.exp(rng.normal(math.log(edad), sig, n)) / 1e3
     s = tg.sample(lbol, age)
@@ -540,16 +543,17 @@ def umbral(slug):
     return teff_umbral(ratio), ratio, tipo
 
 
-def entrada_margen(slug):
-    """L_acc publicada (con la A_V adoptada), A_V adoptada, pendiente de la relación y A_Hα/A_V del run del paper."""
+def entrada_margen(slug, root=None):
+    """L_acc publicada (con la A_V adoptada), A_V adoptada, pendiente de la relación y A_Hα/A_V del run del paper.
+    `root`: la raíz del proyecto con los `runs/` (por defecto este clon; desde un worktree, la del clon que sí)."""
     from musepipe.config import load_run_config
     from musepipe.stages.stage_h03_limits import physical_inputs_from_config
     from scripts import suelo_cromosferico as sc
     from scripts import tipo_ir_indices as tir
     perfil = tir.perfil(slug)
     run = perfil["paper"]["run"]
-    lacc, tipo = sc.lacc_hal(run)
-    cfg = load_run_config(run, project_root=ROOT).config
+    lacc, tipo = sc.lacc_hal(run, root=root)
+    cfg = load_run_config(run, project_root=ROOT if root is None else Path(root)).config
     phys = physical_inputs_from_config(cfg)
     return dict(lacc0=lacc, tipo=tipo, av0=float(cfg["h03_av"]), a=float(phys["lacc_lha_a"]),
                 ahav=float(phys["a_halpha_over_av"]), lbol_lit=10 ** float(perfil["fisica"]["log_lbol"]))
