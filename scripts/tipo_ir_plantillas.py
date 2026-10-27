@@ -213,8 +213,9 @@ def plantillas_eso(lib_root, etiqueta, nir=DEFAULT_NIR):
     return out
 
 
-def plantillas(cfg, bibliotecas=("manara", "lateM", "xshyne"), nir=DEFAULT_NIR):
-    raiz = library_root(cfg, project_root=ROOT)
+def plantillas(cfg, bibliotecas=("manara", "lateM", "xshyne"), nir=DEFAULT_NIR, root=ROOT):
+    """`root`: la raíz de la que cuelga `g3_libraries_root` (el repo, salvo desde un worktree)."""
+    raiz = library_root(cfg, project_root=root)
     out = []
     for b in bibliotecas:
         out += plantillas_manara(raiz, nir) if b == "manara" else plantillas_eso(raiz, b, nir)

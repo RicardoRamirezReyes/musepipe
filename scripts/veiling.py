@@ -155,9 +155,10 @@ def calibra(p, brazo, tipo_ref, *, r_inyectada=0.0, semilla=0, ventana=1.5, esca
                 p84=float(np.percentile(r, 84)), p95=float(np.percentile(r, 95)), filas=out)
 
 
-def tipo_indices(slug):
-    perfil = tir.perfil(slug)
-    av, av_err = tir.av_del_run(perfil["paper"]["run"])
+def tipo_indices(slug, root=ROOT):
+    """`root`: la raíz que contiene `runs/` (el repo salvo desde un worktree, como `--project-root`)."""
+    perfil = tir.perfil(slug, root=root)
+    av, av_err = tir.av_del_run(perfil["paper"]["run"], root=root)
     return tir.lectura(tir.DEFAULT_CDS, perfil["ir_spectra"]["spectra"], av, av_err)["spt"]
 
 
@@ -186,14 +187,17 @@ def profundidad_co(w, f, variante="nominal"):
     return 1.0 - m(*banda) / m(*cont)
 
 
-def r_k_co(slug, tipo=None, ventana=1.0, variante="nominal", n_mc=300):
-    """r_K de cada espectro K del compañero por la profundidad del CO frente a las plantillas a ±`ventana`."""
+def r_k_co(slug, tipo=None, ventana=1.0, variante="nominal", n_mc=300, root=ROOT):
+    """r_K de cada espectro K del compañero por la profundidad del CO frente a las plantillas a ±`ventana`.
+
+    `root` es la raíz que contiene `runs/` y de la que cuelga `g3_libraries_root`: el repo, salvo desde un
+    worktree (lo usa `scripts/disco_cotas.py --project-root`)."""
     from musepipe.config import load_run_config
-    run = tir.perfil(slug)["paper"]["run"]
-    cfg = load_run_config(run, project_root=ROOT).config
-    tref = tipo_indices(slug) if tipo is None else spt_code(tipo)
+    run = tir.perfil(slug, root=root)["paper"]["run"]
+    cfg = load_run_config(run, project_root=root).config
+    tref = tipo_indices(slug, root=root) if tipo is None else spt_code(tipo)
     dfot = []
-    for t in tp.plantillas(cfg):
+    for t in tp.plantillas(cfg, root=root):
         if abs(spt_code(t["spt"]) - tref) <= ventana + 1e-9:
             w, f = t["nir"]
             o = np.argsort(w)
@@ -203,7 +207,7 @@ def r_k_co(slug, tipo=None, ventana=1.0, variante="nominal", n_mc=300):
     dfot = np.array(dfot)
     rng = np.random.default_rng(0)
     espectros = {}
-    for nombre, spec in tir.perfil(slug)["ir_spectra"]["spectra"].items():
+    for nombre, spec in tir.perfil(slug, root=root)["ir_spectra"]["spectra"].items():
         if spec["band"] != "K":
             continue
         wu, f, e = tir.load(tir.DEFAULT_CDS, spec["file"])
