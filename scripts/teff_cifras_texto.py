@@ -67,7 +67,14 @@ if str(ROOT) not in sys.path:
 from musepipe.constants import spt_code  # noqa: E402
 from scripts import teff_bayes as tb  # noqa: E402
 
-SLUGS = ("ROXs12b", "ROXs42Bb")
+#: los dos objetos del paper (`targets/<slug>.json` con `paper`, en el orden de `paper.order`): O1, el compañero
+#: con la línea detectada (el «12b» de las claves de las cuentas, que siguen los nombres de la sesión), y O2, el de
+#: la cota (el «42b»). Los fija `fija_objetos` desde targets/: ningún nombre de objeto va en el código
+#: (`tests/test_no_hardcoded_target.py`); las frases sí los llevan, porque son el texto del paper.
+SLUGS: tuple[str, ...] = ()
+O1 = O2 = ""
+#: el nombre de cada objeto en el texto (`paper.display`, con ~)
+NOMBRES: dict[str, str] = {}
 #: las tres elecciones de A_V de las cadenas: fija 1.8, fija 3.0 y con el prior de la primaria
 AVS = ("1.8", "3", "prior")
 #: el sistemático de la T_eff que adopta el paper («we take ±150 K as the systematic error of the method»): una
@@ -76,16 +83,23 @@ SISTEMATICO_K = 150.0
 #: las 12 plantillas jóvenes de tipo conocido ajustadas como datos (Tabla de bibliotecas del paper)
 PLANTILLAS = ("2MASS0046", "2MASS1207", "CHSM17173", "J11195652-7504529", "LM601", "LM717", "TWA26", "TWA29",
               "USco_J16073798-2242471", "USco_J16104713-2239496", "VISTA_J16072381-2211021", "WISE0528")
-#: plantillas del modo evolutivo (las tres más jóvenes de cada configuración)
-EVO_PLANTILLAS = {"ROXs12b": ("LM601", "LM717", "TWA26"), "ROXs42Bb": ("2MASS1207", "LM601", "TWA29")}
-#: rejillas de la Tabla B.7 por compañero: (rejilla, R = 250)
-REJILLAS_B7 = {
-    "ROXs12b": [("btsettl", False), ("drift", False), ("ames_dusty", False), ("ames_cond", False),
-                ("bt_dusty", False), ("btsettl", True), ("sphinx", True)],
-    "ROXs42Bb": [("btsettl", False), ("drift", False), ("ames_dusty", False), ("ames_cond", False)]
-    + [(f"diamondback1600_{f}", False) for f in ("f1", "f2", "f3", "f4", "f8", "nc")]
-    + [("btsettl", True), ("sphinx", True)],
-}
+#: con cuántas palabras se escribe un recuento en el texto
+PALABRAS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
+
+
+def fija_objetos(root=ROOT):
+    """Fija `SLUGS`, `O1`, `O2` y `NOMBRES` desde `targets/` (los que declaran `paper`, por `paper.order`)."""
+    global SLUGS, O1, O2
+    from musepipe.targets import targets_dir
+    fichas = [(json.loads(f.read_text()), f.stem) for f in sorted(targets_dir(root).glob("*.json"))]
+    fichas = sorted(((d["paper"]["order"], s, d) for d, s in fichas if "paper" in d))
+    if len(fichas) != 2:
+        raise SystemExit(f"el paper tiene dos objetos y targets/ declara {len(fichas)} con `paper`")
+    SLUGS = tuple(s for _, s, _ in fichas)
+    O1, O2 = SLUGS
+    NOMBRES.clear()
+    NOMBRES.update({s: d["paper"]["display"].replace(" ", "~") for _, s, d in fichas})
+    return SLUGS
 
 
 # ================================================================== formato (las convenciones del texto)
@@ -327,8 +341,20 @@ def clave_av(d):
 
 
 # ================================================================== las cuentas
-#: el nombre de cada compañero en el texto (`targets/<slug>.json` → paper.display; `Calculo` lo relee de ahí)
-NOMBRES: dict[str, str] = {"ROXs12b": "ROXs~12~b", "ROXs42Bb": "ROXs~42B~b"}
+def rejillas_b7(K: Cadenas, slug):
+    """Las (rejilla, R = 250) de la Tabla B.7 de un compañero: las de `teff_bayes.REJILLAS_TABLA`, a R = 500 y a
+    R = 250, de las que hay alguna de sus tres cadenas (con A_V 1.8, 3.0 y con prior); después se exigen las
+    tres. BT-Dusty no llega a la T_eff de 42B b ni Diamondback a la de 12 b, así que cada uno tiene las suyas."""
+    return [(rj, r) for rj in tb.REJILLAS_TABLA for r in (False, True)
+            if any(etiqueta(slug, rj, a, r250=r) in K.por_etiqueta for a in AVS)]
+
+
+def unica_por_patron(K: Cadenas, patron):
+    """La única cadena cuya etiqueta casa con `patron` (las inyecciones: sus parámetros van en la etiqueta)."""
+    ets = sorted(e for e in K.por_etiqueta if re.fullmatch(patron, e))
+    if len(ets) != 1:
+        raise Faltan([f"una cadena que case con {patron} (hay {len(ets)}: {', '.join(ets)})"])
+    return ets
 
 
 class Calculo:
@@ -336,12 +362,11 @@ class Calculo:
     2026-10-25, salvo donde se dice). `self.c[parte]` es un dict, o {'faltan': [...]} si faltan cadenas."""
 
     def __init__(self, cadenas: Cadenas, root: Path):
-        from scripts import tipo_ir_indices as tir
         self.K, self.root = cadenas, Path(root)
-        for s in SLUGS:
-            NOMBRES[s] = tir.perfil(s, root=self.root)["paper"]["display"].replace(" ", "~")
+        fija_objetos(self.root)
+        self.b7 = {s: rejillas_b7(self.K, s) for s in SLUGS}
         self.E = {s: tb.entrada_margen(s, root=self.root) for s in SLUGS}
-        self.c: dict = {"entrada_margen": self.E}
+        self.c: dict = {"objetos": dict(slugs=list(SLUGS), nombres=dict(NOMBRES)), "entrada_margen": self.E}
         for nombre in ("b6", "semillas", "cruce_y_avlibre", "rejillas", "datos", "ames_cond_datos", "evo",
                        "inyecciones", "plantillas", "nlive", "ejes"):
             try:
@@ -393,7 +418,7 @@ class Calculo:
         r["correlaciones"] = cor
         ta = [v for c in cor.values() for kk, v in c.items() if kk in ("T_av", "delta_av")]
         r["corr_T_delta_rango"] = [min(ta), max(ta)]
-        r["corr_12b_R_rk"] = [cor[f"ROXs12b_{g}"][k] for g in ("btsettl", "drift") for k in ("R_av", "rk_av")]
+        r["corr_12b_R_rk"] = [cor[f"{O1}_{g}"][k] for g in ("btsettl", "drift") for k in ("R_av", "rk_av")]
         # intervalos del 68 y del 95 % de T_eff y log g con prior (semilla 1)
         sol = {}
         for s in SLUGS:
@@ -405,47 +430,47 @@ class Calculo:
                                        solapan68=se_solapan((b["p16"], b["p84"]), (dd["p16"], dd["p84"])),
                                        solapan95=se_solapan((b["p2_5"], b["p97_5"]), (dd["p2_5"], dd["p97_5"])))
         r["solapes_prior_s1"] = sol
-        r["42b_T_18_30"] = [min(T("ROXs42Bb", g, a) for g in ("btsettl", "drift") for a in AVS),
-                            max(T("ROXs42Bb", g, a) for g in ("btsettl", "drift") for a in AVS)]
-        r["42b_T_18_30_sin_prior"] = [min(T("ROXs42Bb", g, a) for g in ("btsettl", "drift") for a in AVS[:2]),
-                                      max(T("ROXs42Bb", g, a) for g in ("btsettl", "drift") for a in AVS[:2])]
-        r["42b_T_todas"] = [T("ROXs42Bb", g, a) for g in ("btsettl", "drift") for a in AVS]
-        r["42b_av_prior"] = [t[("ROXs42Bb", g, "prior")]["posterior"]["av"]["p50"] for g in ("btsettl", "drift")]
-        r["12b_T_18"] = [T("ROXs12b", g, "1.8") for g in ("btsettl", "drift")]
-        r["12b_T_30_prior"] = [T("ROXs12b", g, a) for g in ("btsettl", "drift") for a in ("3", "prior")]
-        r["12b_av_prior"] = [t[("ROXs12b", g, "prior")]["posterior"]["av"]["p50"] for g in ("btsettl", "drift")]
+        r["42b_T_18_30"] = [min(T(O2, g, a) for g in ("btsettl", "drift") for a in AVS),
+                            max(T(O2, g, a) for g in ("btsettl", "drift") for a in AVS)]
+        r["42b_T_18_30_sin_prior"] = [min(T(O2, g, a) for g in ("btsettl", "drift") for a in AVS[:2]),
+                                      max(T(O2, g, a) for g in ("btsettl", "drift") for a in AVS[:2])]
+        r["42b_T_todas"] = [T(O2, g, a) for g in ("btsettl", "drift") for a in AVS]
+        r["42b_av_prior"] = [t[(O2, g, "prior")]["posterior"]["av"]["p50"] for g in ("btsettl", "drift")]
+        r["12b_T_18"] = [T(O1, g, "1.8") for g in ("btsettl", "drift")]
+        r["12b_T_30_prior"] = [T(O1, g, a) for g in ("btsettl", "drift") for a in ("3", "prior")]
+        r["12b_av_prior"] = [t[(O1, g, "prior")]["posterior"]["av"]["p50"] for g in ("btsettl", "drift")]
         r["logl_max_bt_menos_drift_prior"] = {s: t[(s, "btsettl", "prior")]["logl_max"] - t[(s, "drift", "prior")]["logl_max"]
                                              for s in SLUGS}
         fb = {g: [100 * math.exp(t[(s, g, a)]["posterior"]["lnf_vis"]["p50"]) for s in SLUGS for a in AVS]
               for g in ("btsettl", "drift")}
         r["fb_muse"] = {g: [min(v), max(v)] for g, v in fb.items()}
         r["fb_muse_todas"] = fb
-        r["12b_18_rk"] = [t[("ROXs12b", g, "1.8")]["posterior"]["rk"]["p50"] for g in ("btsettl", "drift")]
-        r["12b_18_R"] = [t[("ROXs12b", g, "1.8")]["posterior"]["r_rj"]["p50"] for g in ("btsettl", "drift")]
+        r["12b_18_rk"] = [t[(O1, g, "1.8")]["posterior"]["rk"]["p50"] for g in ("btsettl", "drift")]
+        r["12b_18_R"] = [t[(O1, g, "1.8")]["posterior"]["r_rj"]["p50"] for g in ("btsettl", "drift")]
         dl = {(s, g, a): self.mediana_delta(t[(s, g, a)]) for s in SLUGS for g in ("btsettl", "drift") for a in AVS}
         r["delta"] = {f"{s}_{g}_{a}": v for (s, g, a), v in dl.items()}
-        r["12b_dif_rejillas_av_fija"] = [abs(dl[("ROXs12b", "btsettl", a)] - dl[("ROXs12b", "drift", a)]) for a in AVS[:2]]
-        r["12b_delta_30_prior"] = [dl[("ROXs12b", g, a)] for g in ("btsettl", "drift") for a in ("3", "prior")]
-        r["42b_delta_todas"] = [min(v for (s, g, a), v in dl.items() if s == "ROXs42Bb"),
-                                max(v for (s, g, a), v in dl.items() if s == "ROXs42Bb")]
-        Rs = [t[("ROXs12b", g, a)]["posterior"]["r_rj"]["p50"] for g in ("btsettl", "drift") for a in AVS]
+        r["12b_dif_rejillas_av_fija"] = [abs(dl[(O1, "btsettl", a)] - dl[(O1, "drift", a)]) for a in AVS[:2]]
+        r["12b_delta_30_prior"] = [dl[(O1, g, a)] for g in ("btsettl", "drift") for a in ("3", "prior")]
+        r["42b_delta_todas"] = [min(v for (s, g, a), v in dl.items() if s == O2),
+                                max(v for (s, g, a), v in dl.items() if s == O2)]
+        Rs = [t[(O1, g, a)]["posterior"]["r_rj"]["p50"] for g in ("btsettl", "drift") for a in AVS]
         r["12b_R_rango"] = [min(Rs), max(Rs)]
         r["dlnz_30_mayor_que_18"] = {f"{s}_{g}": t[(s, g, "3")]["logz"] > t[(s, g, "1.8")]["logz"]
                                      for s in SLUGS for g in ("btsettl", "drift")}
         # Δ con la L_bol publicada en vez de la del ajuste, a la T_eff de BT-Settl a 1.8 (12 b)
-        e12 = self.E["ROXs12b"]
-        T18 = T("ROXs12b", "btsettl", "1.8")
+        e12 = self.E[O1]
+        T18 = T(O1, "btsettl", "1.8")
         r["12b_delta_Lbol_publicada_T18"] = dict(
             teff=T18, delta=math.log10(e12["lacc0"] / e12["lbol_lit"]) - float(tb.suelo(T18)))
         # el límite de 42B b con la L_bol publicada en los extremos del rango de T_eff (A_V fija)
-        e42 = self.E["ROXs42Bb"]
+        e42 = self.E[O2]
         rat42 = math.log10(e42["lacc0"] / e42["lbol_lit"])
         r["42b_limite_Lbol_publicada"] = [rat42 - float(tb.suelo(x)) for x in r["42b_T_18_30_sin_prior"]]
         # log(L_Hα/L_bol) de 12 b: la L_Hα que da la L_acc de G3 con la relación de la config, invertida
         from musepipe.config import load_run_config
         from musepipe.stages.stage_h03_limits import physical_inputs_from_config
         from scripts import tipo_ir_indices as tir
-        perfil = tir.perfil("ROXs12b", root=self.root)
+        perfil = tir.perfil(O1, root=self.root)
         fis = physical_inputs_from_config(load_run_config(perfil["paper"]["run"], project_root=self.root).config)
         r["12b_log_lha_lbol_av0"] = ((math.log10(e12["lacc0"]) - float(fis["lacc_lha_b"])) / float(fis["lacc_lha_a"])
                                      - float(perfil["fisica"]["log_lbol"]))
@@ -481,7 +506,7 @@ class Calculo:
                     max_ptp_av_prior=max(f["ptp"]["av"] for f in pr), max_ptp_delta=max(f["ptp"]["delta"] for f in filas),
                     max_ptp_logz_fija=max(f["ptp"]["logz"] for f in fi), max_ptp_logz_prior=max(f["ptp"]["logz"] for f in pr),
                     medianas_menores_que_intervalos=all(all(f["menor_que_intervalo"].values()) for f in filas),
-                    av_prior_12b_todas=[a for f in pr if f["clave"].startswith("ROXs12b_") for a in f["av"]])
+                    av_prior_12b_todas=[a for f in pr if f["clave"].startswith(f"{O1}_") for a in f["av"]])
 
     # ------------------------------------------------------------------ cruce de signo de Δ y A_V libre
     def _cruce_y_avlibre(self):
@@ -509,7 +534,7 @@ class Calculo:
     # ------------------------------------------------------------------ Tabla B.7 y su párrafo
     def _rejillas(self):
         filas_por = {}
-        ets = [etiqueta(s, rj, a, r250=r) for s in SLUGS for rj, r in REJILLAS_B7[s] for a in AVS]
+        ets = [etiqueta(s, rj, a, r250=r) for s in SLUGS for rj, r in self.b7[s] for a in AVS]
         for d in self.K.exige(ets):
             P = d["posterior"]
             q = tb.percentiles(self.dl(d))
@@ -528,8 +553,8 @@ class Calculo:
                                    dlnz_vs_bt={f"{f['rejilla']}@{f['r']}": f["logz"] - ref[f["r"]]
                                                for f in filas if f["rejilla"] != "btsettl"},
                                    filas=filas)
-        f12 = {a: out[f"ROXs12b_{a}"] for a in AVS}
-        f42 = {a: out[f"ROXs42Bb_{a}"] for a in AVS}
+        f12 = {a: out[f"{O1}_{a}"] for a in AVS}
+        f42 = {a: out[f"{O2}_{a}"] for a in AVS}
         otras12 = [v for a in AVS for v in f12[a]["dlnz_vs_bt"].values()]
         db = lambda a: [v for k, v in f42[a]["dlnz_vs_bt"].items() if k.startswith("diamondback")]  # noqa: E731
         t_db = [f["teff"] for f in f42["prior"]["filas"] if f["rejilla"].startswith("diamondback")]
@@ -547,8 +572,8 @@ class Calculo:
         lnz42_r500 = {f"{f['rejilla']}": f["logz"] for f in f42["prior"]["filas"] if f["r"] == 500}
         return dict(
             por_av={k: {kk: vv for kk, vv in v.items() if kk != "filas"} for k, v in out.items()}, filas=out,
-            n_rejillas={s: len({rj.split("1600_")[0] for rj, _ in REJILLAS_B7[s]}) for s in SLUGS},
-            n_rejillas_total=len({rj.split("1600_")[0] for s in SLUGS for rj, _ in REJILLAS_B7[s]}),
+            n_rejillas={s: len({rj.split("1600_")[0] for rj, _ in self.b7[s]}) for s in SLUGS},
+            n_rejillas_total=len({rj.split("1600_")[0] for s in SLUGS for rj, _ in self.b7[s]}),
             bt_mejor_12b_tres_av=all(max(f12[a]["filas"], key=lambda f: f["logz"])["rejilla"] == "btsettl" for a in AVS),
             otras_12b_dlnz=[min(otras12), max(otras12)],
             diamondback_dlnz_prior=[min(db("prior")), max(db("prior"))],
@@ -596,26 +621,26 @@ class Calculo:
         mm = lambda xs: [min(xs), max(xs)]  # noqa: E731
         return dict(
             bt_max_abs_dif=max(abs(v) for s in SLUGS for x in ("ir", "muse") for v in dif(s, "btsettl", x)),
-            bt_12b_ir=dif("ROXs12b", "btsettl", "ir"), bt_12b_muse=dif("ROXs12b", "btsettl", "muse"),
-            bt_42b_ir=dif("ROXs42Bb", "btsettl", "ir"), bt_42b_muse=dif("ROXs42Bb", "btsettl", "muse"),
+            bt_12b_ir=dif(O1, "btsettl", "ir"), bt_12b_muse=dif(O1, "btsettl", "muse"),
+            bt_42b_ir=dif(O2, "btsettl", "ir"), bt_42b_muse=dif(O2, "btsettl", "muse"),
             bt_ancho_logg_muse=mm([ancho(s, "btsettl", a, "muse") for s in SLUGS for a in AVS]),
             bt_ancho_logg_todo=mm([ancho(s, "btsettl", a, "todo") for s in SLUGS for a in AVS]),
-            drift_12b_ir_absmax=max(abs(v) for v in dif("ROXs12b", "drift", "ir")),
-            drift_42b_ir_absmax=max(abs(v) for v in dif("ROXs42Bb", "drift", "ir")),
-            drift_12b_muse=dif("ROXs12b", "drift", "muse"),
+            drift_12b_ir_absmax=max(abs(v) for v in dif(O1, "drift", "ir")),
+            drift_42b_ir_absmax=max(abs(v) for v in dif(O2, "drift", "ir")),
+            drift_12b_muse=dif(O1, "drift", "muse"),
             # el error de modelo en MUSE de los ajustes solo a MUSE de ROXs 12 b (la frase habla de 12 b; con los
             # dos compañeros, 26–35 % y 14–29 %, se solapan: `autor.md` A.4 del 2026-10-25)
-            fb_muse_solo_12b={rj: mm([fb("ROXs12b", rj, a) for a in AVS]) for rj in ("btsettl", "drift")},
+            fb_muse_solo_12b={rj: mm([fb(O1, rj, a) for a in AVS]) for rj in ("btsettl", "drift")},
             fb_muse_solo_bt_todos=mm([fb(s, "btsettl", a) for s in SLUGS for a in AVS]),
             av_prior={f"{s}_{rj}_{x}": P(s, rj, "prior", x)["av"]["p50"] for s in SLUGS for rj in ("btsettl", "drift")
                       for x in ("muse", "ir")},
-            delta_12b_muse=mm([D("ROXs12b", rj, a, "muse") for rj in ("btsettl", "drift") for a in AVS]),
-            delta_12b_ir_18=mm([D("ROXs12b", rj, "1.8", "ir") for rj in ("btsettl", "drift")]),
-            delta_12b_ir_30_prior=mm([D("ROXs12b", rj, a, "ir") for rj in ("btsettl", "drift") for a in ("3", "prior")]),
-            delta_42b_todo_conjunto=mm([D("ROXs42Bb", rj, a, x) for rj in ("btsettl", "drift") for a in AVS
+            delta_12b_muse=mm([D(O1, rj, a, "muse") for rj in ("btsettl", "drift") for a in AVS]),
+            delta_12b_ir_18=mm([D(O1, rj, "1.8", "ir") for rj in ("btsettl", "drift")]),
+            delta_12b_ir_30_prior=mm([D(O1, rj, a, "ir") for rj in ("btsettl", "drift") for a in ("3", "prior")]),
+            delta_42b_todo_conjunto=mm([D(O2, rj, a, x) for rj in ("btsettl", "drift") for a in AVS
                                         for x in ("muse", "ir")]),
-            delta_12b_solos_18=mm([D("ROXs12b", rj, "1.8", x) for rj in ("btsettl", "drift") for x in ("muse", "ir")]),
-            delta_12b_solos_30=mm([D("ROXs12b", rj, "3", x) for rj in ("btsettl", "drift") for x in ("muse", "ir")]),
+            delta_12b_solos_18=mm([D(O1, rj, "1.8", x) for rj in ("btsettl", "drift") for x in ("muse", "ir")]),
+            delta_12b_solos_30=mm([D(O1, rj, "3", x) for rj in ("btsettl", "drift") for x in ("muse", "ir")]),
         )
 
     # ------------------------------------------------------------------ AMES-Cond, solo MUSE / solo IR (Fig. B.6)
@@ -627,8 +652,8 @@ class Calculo:
         m = [(s, a) for s in SLUGS for a in AVS]
         return dict(
             teff_prior={s: {x: P(s, "prior", x, "der_teff") for x in ("todo", "ir", "muse")} for s in SLUGS},
-            logg_prior_12b={x: P("ROXs12b", "prior", x, "der_logg") for x in ("todo", "muse")},
-            R_prior_42b={x: P("ROXs42Bb", "prior", x, "r_rj") for x in ("todo", "muse")},
+            logg_prior_12b={x: P(O1, "prior", x, "der_logg") for x in ("todo", "muse")},
+            R_prior_42b={x: P(O2, "prior", x, "r_rj") for x in ("todo", "muse")},
             logg_p2_5_muse_max=max(P(s, a, "muse", "der_logg", "p2_5") for s, a in m),
             f_muse_solo=[min(100 * math.exp(P(s, a, "muse", "lnf_vis")) for s, a in m),
                          max(100 * math.exp(P(s, a, "muse", "lnf_vis")) for s, a in m)],
@@ -648,17 +673,24 @@ class Calculo:
                                     teff_semiancho=float(np.percentile(Tm, 84) - np.percentile(Tm, 16)) / 2,
                                     delta_p50=float(np.median(self.dl(d))),
                                     fuera_de_la_rejilla=1.0 - float(d["fraccion_en_rejilla"]))
+        # sobre plantillas jóvenes (las que se corrieron para cada compañero: su nombre va en la etiqueta)
         pl = {}
         for s in SLUGS:
-            ds = self.K.exige([f"{s}_evo_ATMO2020_avprimaria_pl-{p}_s0" for p in EVO_PLANTILLAS[s]])
-            pl[s] = [10 ** d["posterior"]["log_edad_myr"]["p50"] for d in ds]
+            ets = sorted(e for e in self.K.por_etiqueta
+                         if re.fullmatch(rf"{re.escape(s)}_evo_ATMO2020_avprimaria_pl-.+_s0", e))
+            if not ets:
+                raise Faltan([f"{s}_evo_ATMO2020_avprimaria_pl-*_s0"])
+            pl[s] = [10 ** d["posterior"]["log_edad_myr"]["p50"] for d in self.K.exige(ets)]
         r["plantillas"] = {s: [min(v), max(v)] for s, v in pl.items()}
+        r["n_plantillas"] = {s: len(v) for s, v in pl.items()}
         return r
 
     # ------------------------------------------------------------------ inyección de un modelo de la rejilla
     def _inyecciones(self):
-        ets = ["ROXs12b_libre_avprimaria_bt-2550-3.75-1.8-2.2_s0", "ROXs42Bb_libre_avprimaria_bt-2250-3.9-1.9-2.1_s0",
-               "ROXs12b_drift_libre_avprimaria_bt-2550-3.75-1.8-2.2_s0", "ROXs42Bb_drift_libre_avprimaria_bt-2250-3.9-1.9-2.1_s0"]
+        """Un modelo de BT-Settl inyectado con la S/N de cada compañero, ajustado con las dos rejillas: una cadena
+        por compañero y rejilla (`--inyecta-bt T LOGG AV R`, que van en la etiqueta)."""
+        ets = [e for s in SLUGS for pre in ("", "_drift")
+               for e in unica_por_patron(self.K, rf"{re.escape(s)}{pre}_libre_avprimaria_bt-[0-9.-]+_s0")]
         r = {d["etiqueta"]: d["posterior"]["der_teff"]["p50"] - d["verdad"]["teff"] for d in self.K.exige(ets)}
         return dict(errores=r, max_abs=max(abs(v) for v in r.values()))
 
@@ -691,27 +723,27 @@ class Calculo:
                                                 dif_impresas=int(i0(cerca["teff"])) - int(i0(T)))
         difs = {s: [cal[(s, "drift", p)]["teff"] - cal[(s, "btsettl", p)]["teff"] for p in PLANTILLAS] for s in SLUGS}
         r["drift_menos_bt_rms"] = {s: float(np.sqrt(np.mean(np.square(v)))) for s, v in difs.items()}
-        r["drift_12b_M65_M8"] = [cal[("ROXs12b", "drift", p)]["teff"] for p in PLANTILLAS
-                                 if cal[("ROXs12b", "drift", p)]["codigo"] <= spt_code("M8")]
+        r["drift_12b_M65_M8"] = [cal[(O1, "drift", p)]["teff"] for p in PLANTILLAS
+                                 if cal[(O1, "drift", p)]["codigo"] <= spt_code("M8")]
         r["av_menos_inyectada_max"] = max(v["av"] - v["av_iny"] for v in cal.values())
-        r["av_42b"] = [min(cal[k]["av"] for k in cal if k[0] == "ROXs42Bb"), max(cal[k]["av"] for k in cal if k[0] == "ROXs42Bb")]
+        r["av_42b"] = [min(cal[k]["av"] for k in cal if k[0] == O2), max(cal[k]["av"] for k in cal if k[0] == O2)]
         r["n"], r["tipos"] = len(PLANTILLAS), [min((c for c in cal.values()), key=lambda c: c["codigo"])["spt"],
                                                max((c for c in cal.values()), key=lambda c: c["codigo"])["spt"]]
         # la misma plantilla con el ruido y la cobertura de cada compañero, y plantillas del mismo tipo; el par del
         # mismo tipo más discrepante va aparte («(500 K for one pair of M9 templates)»)
-        misma = [abs(cal[("ROXs12b", rej, p)]["teff"] - cal[("ROXs42Bb", rej, p)]["teff"])
+        misma = [abs(cal[(O1, rej, p)]["teff"] - cal[(O2, rej, p)]["teff"])
                  for rej in ("btsettl", "drift") for p in PLANTILLAS]
         pares = {}
         ps = sorted(PLANTILLAS)
         for i, a in enumerate(ps):
             for b in ps[i + 1:]:
-                if cal[("ROXs12b", "btsettl", a)]["spt"] == cal[("ROXs12b", "btsettl", b)]["spt"]:
+                if cal[(O1, "btsettl", a)]["spt"] == cal[(O1, "btsettl", b)]["spt"]:
                     pares[(a, b)] = [abs(cal[(s, rej, a)]["teff"] - cal[(s, rej, b)]["teff"])
                                      for s in SLUGS for rej in ("btsettl", "drift")]
         peor = max(pares, key=lambda k: max(pares[k]))
         resto = misma + [x for k, v in pares.items() if k != peor for x in v]
         r["dispersion_plantillas"] = dict(max_resto=max(resto), par_discrepante=list(peor),
-                                          spt_par=cal[("ROXs12b", "btsettl", peor[0])]["spt"],
+                                          spt_par=cal[(O1, "btsettl", peor[0])]["spt"],
                                           par_discrepante_dif=[min(pares[peor]), max(pares[peor])])
         return r
 
@@ -720,7 +752,7 @@ class Calculo:
         """Los ejes (T_eff, log g) de cada rejilla, de los `ejes` que guarda cada cadena de las Tablas B.6–B.7 (las
         de Diamondback juntas); todas las de una rejilla tienen que coincidir. Y los nodos rellenados."""
         ejes, rellenos = {}, {}
-        ets = [etiqueta(s, rj, a, r250=r) for s in SLUGS for rj, r in REJILLAS_B7[s] for a in AVS]
+        ets = [etiqueta(s, rj, a, r250=r) for s in SLUGS for rj, r in self.b7[s] for a in AVS]
         for d in self.K.exige(ets):
             g = d.get("rejilla", "btsettl").split("1600_")[0]
             e = d.get("ejes")
@@ -807,18 +839,19 @@ def unico(xs):
 
 
 def cruce(c):
-    a, b = CR(c)["ROXs12b_btsettl"]["cruce"], CR(c)["ROXs12b_drift"]["cruce"]
+    a, b = CR(c)[f"{O1}_btsettl"]["cruce"], CR(c)[f"{O1}_drift"]["cruce"]
     if a is None or b is None:
         raise ValueError(f"Δ de ROXs 12 b no cruza el cero entre 1.8 y 3.0 mag (BT-Settl {a}, DRIFT-PHOENIX {b})")
     return rango(a, b, d1)
 
 
 def cruce_ok(c):
-    a, b = CR(c)["ROXs12b_btsettl"]["cruce"], CR(c)["ROXs12b_drift"]["cruce"]
+    a, b = CR(c)[f"{O1}_btsettl"]["cruce"], CR(c)[f"{O1}_drift"]["cruce"]
     return a is not None and b is not None
 
 
 av_alto = lambda c: d1(max(B6(c)["12b_av_prior"]))  # noqa: E731
+n_rej = lambda c: PALABRAS[RJ(c)["n_rejillas"][O1]]  # noqa: E731  («the six grids»: las familias de rejillas de O1)
 av12 = lambda c: rango(min(SEM(c)["av_prior_12b_todas"]), max(SEM(c)["av_prior_12b_todas"]), d1)  # noqa: E731
 av42 = lambda c: rango(min(B6(c)["42b_av_prior"]), max(B6(c)["42b_av_prior"]), d1)  # noqa: E731
 T12_18 = lambda c: rango(min(B6(c)["12b_T_18"]), max(B6(c)["12b_T_18"]), k50)  # noqa: E731
@@ -831,7 +864,7 @@ evo = lambda c, s, k="ATMO2020": EV(c)[f"{s}_evo_solo_{k}_avprimaria_s0"]  # noq
 
 def tipo42(c):
     """«L1 or later» si las dos rejillas dan lo mismo (la frase dice «both grids»)."""
-    a, b = (tipo_prosa(tipo(c, "ROXs42Bb", g)) for g in ("btsettl", "drift"))
+    a, b = (tipo_prosa(tipo(c, O2, g)) for g in ("btsettl", "drift"))
     if a != b:
         raise ValueError(f"las dos rejillas dan tipos distintos para ROXs 42B b: {a} / {b}")
     return a
@@ -839,13 +872,13 @@ def tipo42(c):
 
 def lha_lbol(c, av):
     """log(L_Hα/L_bol) de ROXs 12 b a la A_V dada: el de la A_V adoptada, más 0.4·A_Hα/A_V·(A_V − A_V0)."""
-    e = c["entrada_margen"]["ROXs12b"]
+    e = c["entrada_margen"][O1]
     return B6(c)["12b_log_lha_lbol_av0"] + 0.4 * e["ahav"] * (av - e["av0"])
 
 
 def dmacc(c, av):
     """Δ log Ṁ con la A_V (Eq. av_sensitivity): 0.4·a·A_Hα/A_V·(A_V − A_V0)."""
-    e = c["entrada_margen"]["ROXs12b"]
+    e = c["entrada_margen"][O1]
     return 0.4 * e["a"] * e["ahav"] * (av - e["av0"])
 
 
@@ -856,7 +889,7 @@ def lim_pub(c):
 
 def joven(c):
     """La plantilla de tipo anterior al más tardío más cercana en T_eff, si es la misma con las dos rejillas."""
-    j = [PL(c)["joven"][f"ROXs42Bb_{g}"] for g in ("btsettl", "drift")]
+    j = [PL(c)["joven"][f"{O2}_{g}"] for g in ("btsettl", "drift")]
     if j[0]["plantilla"] != j[1]["plantilla"]:
         raise ValueError(f"no es la misma plantilla con las dos rejillas: {j[0]['plantilla']} / {j[1]['plantilla']}")
     return j
@@ -864,8 +897,8 @@ def joven(c):
 
 def sigma_evo(c, g):
     """(T_eff a 1.8 − T_evo) / √(150² + σ_evo² + σ_T²), σ = semiancho 16–84 % de cada una (12 b)."""
-    e = evo(c, "ROXs12b")
-    p = B6(c)["teff_post"][f"ROXs12b_{g}_1.8"]
+    e = evo(c, O1)
+    p = B6(c)["teff_post"][f"{O1}_{g}_1.8"]
     return (p["p50"] - e["teff_p50"]) / math.sqrt(SISTEMATICO_K ** 2 + e["teff_semiancho"] ** 2 + ((p["p84"] - p["p16"]) / 2) ** 2)
 
 
@@ -900,17 +933,17 @@ def dlnz_frase(c):
         if len(v) != 1:
             raise ValueError(f"{s}: las dos rejillas no coinciden: la frase cambia")
         pal[s] = "higher" if v.pop() else "lower"
-    if pal["ROXs12b"] == pal["ROXs42Bb"]:
+    if pal[O1] == pal[O2]:
         raise ValueError("los dos compañeros dan lo mismo: la frase cambia")
-    return pal["ROXs12b"], pal["ROXs42Bb"]
+    return pal[O1], pal[O2]
 
 
 def avlibre_frase(c):
     """«In the two fits of ROXs~12~b, the evidence is higher than in all the fits of this table»."""
     sube = sorted(k for k, v in CR(c)["avlibre"].items() if v["dlnz_vs_mejor_B6"] > 0)
-    if sube != ["ROXs12b_btsettl", "ROXs12b_drift"]:
+    if sube != [f"{O1}_btsettl", f"{O1}_drift"]:
         raise ValueError(f"con A_V libre superan a la tabla: {sube}: la frase cambia")
-    return "two", NOMBRES["ROXs12b"]
+    return PALABRAS[len(sube)], NOMBRES[O1]
 
 
 def otras_min_donde(c):
@@ -953,32 +986,32 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       "T_eff (p50) a A_V 1.8 de las dos rejillas, a 50 K; a 3.0 y con prior, a 10 K; A_V con prior (s1, la mayor)")
     A("s41_tipo", "Sect. 4.1",
       r"the companion corresponds to «bt» with BT-Settl and to «dr» with DRIFT-PHOENIX (Table~\ref{tab:teff}).",
-      dict(bt=lambda c: tipo_prosa(tipo(c, "ROXs12b", "btsettl")), dr=lambda c: tipo_prosa(tipo(c, "ROXs12b", "drift"))),
+      dict(bt=lambda c: tipo_prosa(tipo(c, O1, "btsettl")), dr=lambda c: tipo_prosa(tipo(c, O1, "drift"))),
       "tipo equivalente (`teff_bayes.tipo_equivalente`): plantillas con la misma rejilla, T_eff con prior, s1")
     A("s41_evo", "Sect. 4.1",
       r"The evolutionary models give \(«T»\pm«e»\)~K for the published luminosity and age, and they place the "
       r"companion at the noise level (\(«d»\)~dex;",
-      dict(T=lambda c: k10(evo(c, "ROXs12b")["teff_p50"]), e=lambda c: k10(evo(c, "ROXs12b")["teff_semiancho"]),
-           d=lambda c: s2(evo(c, "ROXs12b")["delta_p50"])),
+      dict(T=lambda c: k10(evo(c, O1)["teff_p50"]), e=lambda c: k10(evo(c, O1)["teff_semiancho"]),
+           d=lambda c: s2(evo(c, O1)["delta_p50"])),
       "cadena `evo_solo` ATMO2020: T_eff p50 y semiancho 16–84 % a 10 K; Δ con la L_bol publicada y la A_V adoptada",
-      guarda=lambda c: abs(evo(c, "ROXs12b")["delta_p50"]) < 0.05)
+      guarda=lambda c: abs(evo(c, O1)["delta_p50"]) < 0.05)
     A("s41_d", "Sect. 4.1",
       r"The companion is at the noise level (BT-Settl) or \(«d18»\)~dex below it (DRIFT-PHOENIX) at the adopted "
       r"\(A_V = 1.8\)~mag, and «d30»~dex above it for \(A_V = 3.0\)--\(«av»\)~mag (Table~\ref{tab:teff}).",
-      dict(d18=lambda c: d1(-B6(c)["delta"]["ROXs12b_drift_1.8"]),
+      dict(d18=lambda c: d1(-B6(c)["delta"][f"{O1}_drift_1.8"]),
            d30=lambda c: rango(min(B6(c)["12b_delta_30_prior"]), max(B6(c)["12b_delta_30_prior"]), d1, d2), av=av_alto),
       "Δ (p50) de la Tabla B.5; a 3.0 y con prior, el mínimo con 1 decimal y el máximo con 2 (como el texto)",
-      guarda=lambda c: (abs(B6(c)["delta"]["ROXs12b_btsettl_1.8"]) < 0.05 and B6(c)["delta"]["ROXs12b_drift_1.8"] < 0
+      guarda=lambda c: (abs(B6(c)["delta"][f"{O1}_btsettl_1.8"]) < 0.05 and B6(c)["delta"][f"{O1}_drift_1.8"] < 0
                         and min(B6(c)["12b_delta_30_prior"]) > 0))
     A("s41_dif", "Sect. 4.1",
       r"At fixed \(A_V\), the two grids of model atmospheres give the same difference within \(«x»\)~dex.",
       dict(x=lambda c: d1(max(B6(c)["12b_dif_rejillas_av_fija"]))), "máx. |Δ_BT − Δ_DRIFT| de 12 b con A_V fija")
     A("s41_rej", "Sect. 4.1",
-      r"With the six grids that we fit to this companion, the difference is «d18»~dex at \(A_V = 1.8\)~mag and "
+      r"With the «n» grids that we fit to this companion, the difference is «d18»~dex at \(A_V = 1.8\)~mag and "
       r"«d30»~dex at \(3.0\)~mag (Table~\ref{tab:teff_grids}).",
-      dict(d18=lambda c: hasta(*RJ(c)["delta_12b_18"], s2), d30=lambda c: hasta(*RJ(c)["delta_12b_30"], s2)),
+      dict(n=n_rej, d18=lambda c: hasta(*RJ(c)["delta_12b_18"], s2), d30=lambda c: hasta(*RJ(c)["delta_12b_30"], s2)),
       "Δ de 12 b en la Tabla B.7 (todas las rejillas y resoluciones)",
-      guarda=lambda c: RJ(c)["delta_12b_30"][0] > 0 and RJ(c)["n_rejillas"]["ROXs12b"] == 6)
+      guarda=lambda c: RJ(c)["delta_12b_30"][0] > 0)
     A("s41_solos", "Sect. 4.1",
       r"spectra alone, the difference is «d18»~dex at \(A_V = 1.8\)~mag and «d30»~dex at \(3.0\)~mag "
       r"(Appendix~\ref{app:nir}).",
@@ -988,19 +1021,19 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"with a free \(A_V\), it gives \(«T»\)~K, with the spurious extinction of Appendix~\ref{app:nir} "
       r"(\(A_V = «av»\)~mag). This is the edge of the DRIFT-PHOENIX grid, but not of the BT-Settl grid, which "
       r"reaches \(«techo»\)~K; with BT-Settl, \(97.5\%\) of the samples are below \(«p975»\)~K.",
-      dict(T=lambda c: str(r_mitad(CR(c)["avlibre"]["ROXs12b_btsettl"]["teff"], 100)),
-           av=lambda c: d1(CR(c)["avlibre"]["ROXs12b_btsettl"]["av"]),
+      dict(T=lambda c: str(r_mitad(CR(c)["avlibre"][f"{O1}_btsettl"]["teff"], 100)),
+           av=lambda c: d1(CR(c)["avlibre"][f"{O1}_btsettl"]["av"]),
            techo=lambda c: i0(tb.REJILLAS["btsettl"]["teff"][0] + tb.REJILLAS["btsettl"]["teff"][1] * (tb.REJILLAS["btsettl"]["teff"][2] - 1)),
-           p975=lambda c: k10(CR(c)["avlibre"]["ROXs12b_btsettl"]["teff_p97_5"])),
+           p975=lambda c: k10(CR(c)["avlibre"][f"{O1}_btsettl"]["teff_p97_5"])),
       "cadena de BT-Settl con A_V libre (T_eff a 100 K, su 97.5 % a 10 K); el techo de la rejilla",
-      guarda=lambda c: ("teff" in CR(c)["avlibre"]["ROXs12b_drift"]["borde"]
-                        and "teff" not in CR(c)["avlibre"]["ROXs12b_btsettl"]["borde"]))
+      guarda=lambda c: ("teff" in CR(c)["avlibre"][f"{O1}_drift"]["borde"]
+                        and "teff" not in CR(c)["avlibre"][f"{O1}_btsettl"]["borde"]))
     A("s41_cruce", "Sect. 4.1",
       r"the companion is above it if its extinction exceeds «cruce»~mag. With the prior on \(A_V\), the fits of its "
       r"spectra give «avs»~mag (Appendix~\ref{app:nir}). At \(A_V = 3.0\)~mag, the companion is «d30»~dex above the "
-      r"noise level with the six grids. At \(A_V = 3.0\)--\(«av»\)~mag, \(\log(\lha/L_{\mathrm{bol}})\) is \(«l30»\) "
+      r"noise level with the «n» grids. At \(A_V = 3.0\)--\(«av»\)~mag, \(\log(\lha/L_{\mathrm{bol}})\) is \(«l30»\) "
       r"to \(«lav»\), at the upper end",
-      dict(cruce=cruce, avs=av12, d30=lambda c: rango(*RJ(c)["delta_12b_30"], d2), av=av_alto,
+      dict(n=n_rej, cruce=cruce, avs=av12, d30=lambda c: rango(*RJ(c)["delta_12b_30"], d2), av=av_alto,
            l30=lambda c: d1(lha_lbol(c, 3.0)), lav=lambda c: d1(lha_lbol(c, round(max(B6(c)["12b_av_prior"]), 1)))),
       "cruce de signo; A_V con prior de 12 b, tres semillas y dos rejillas; Δ a 3.0 en la Tabla B.7; "
       "log(L_Hα/L_bol): la L_Hα que da la L_acc de G3 con la relación de la config, reescalada a la A_V",
@@ -1042,12 +1075,12 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"(Table~\ref{tab:teff_grids}). The temperature of BT-Settl and DRIFT-PHOENIX agrees with \(«T»\pm«e»\)~K from "
       r"evolutionary models at the published luminosity and age, and with the \(2270^{+170}_{-140}\)~K of the "
       r"\(K\)-band retrieval of \citet{ref:xuan2024}. That of Sonora Diamondback is «menos»~K lower.",
-      dict(db=DB, T=lambda c: k10(evo(c, "ROXs42Bb")["teff_p50"]), e=lambda c: k10(evo(c, "ROXs42Bb")["teff_semiancho"]),
-           menos=lambda c: rango(evo(c, "ROXs42Bb")["teff_p50"] - RJ(c)["diamondback_teff_prior"][1],
-                                 evo(c, "ROXs42Bb")["teff_p50"] - RJ(c)["diamondback_teff_prior"][0], k10)),
+      dict(db=DB, T=lambda c: k10(evo(c, O2)["teff_p50"]), e=lambda c: k10(evo(c, O2)["teff_semiancho"]),
+           menos=lambda c: rango(evo(c, O2)["teff_p50"] - RJ(c)["diamondback_teff_prior"][1],
+                                 evo(c, O2)["teff_p50"] - RJ(c)["diamondback_teff_prior"][0], k10)),
       "Diamondback (6 f_sed) con prior, a 10 K; `evo_solo` ATMO2020 de 42B b; la diferencia evo − Diamondback a 10 K",
       guarda=lambda c: (RJ(c)["db_mayor_evidencia_42b_prior_r500"].startswith("diamondback")
-                        and all(abs(T - evo(c, "ROXs42Bb")["teff_p50"]) <= math.hypot(SISTEMATICO_K, evo(c, "ROXs42Bb")["teff_semiancho"])
+                        and all(abs(T - evo(c, O2)["teff_p50"]) <= math.hypot(SISTEMATICO_K, evo(c, O2)["teff_semiancho"])
                                 for T in B6(c)["42b_T_todas"])))
 
     # ---------------------------------------------------------------- Sect. 5.3
@@ -1062,14 +1095,14 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
     # ---------------------------------------------------------------- conclusiones
     A("con_3", "Conclusiones 3",
       r"At the adopted extinction, it is within \(«x»\)~dex of the chromospheric noise level of young stars "
-      r"\citep{ref:manara2013} with six grids of model atmospheres, and within \(«y»\)~dex with the MUSE spectrum or "
+      r"\citep{ref:manara2013} with «n» grids of model atmospheres, and within \(«y»\)~dex with the MUSE spectrum or "
       r"the near-infrared spectra alone.",
-      dict(x=lambda c: d1(RJ(c)["delta_12b_18_absmax"]), y=lambda c: d1(max(abs(v) for v in DT(c)["delta_12b_solos_18"]))),
+      dict(n=n_rej, x=lambda c: d1(RJ(c)["delta_12b_18_absmax"]), y=lambda c: d1(max(abs(v) for v in DT(c)["delta_12b_solos_18"]))),
       "máx. |Δ| de 12 b a 1.8 en la Tabla B.7 y con solo MUSE o solo IR")
     A("con_4", "Conclusiones 4",
       r"the noise level of young stars if its extinction exceeds «cruce»~mag (BT-Settl and DRIFT-PHOENIX), by "
-      r"«d30»~dex at \(A_V = 3.0\)~mag with the six grids, and the fits of its spectra prefer such an extinction.",
-      dict(cruce=cruce, d30=lambda c: rango(*RJ(c)["delta_12b_30"], d2)),
+      r"«d30»~dex at \(A_V = 3.0\)~mag with the «n» grids, and the fits of its spectra prefer such an extinction.",
+      dict(n=n_rej, cruce=cruce, d30=lambda c: rango(*RJ(c)["delta_12b_30"], d2)),
       "cruce de signo; Δ de 12 b a 3.0 en la Tabla B.7",
       guarda=lambda c: cruce_ok(c) and min(SEM(c)["av_prior_12b_todas"]) > 3.0)
     A("con_5", "Conclusiones 5",
@@ -1134,23 +1167,23 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
            r2=lambda c: rango(min(abs(x) for x in B6(c)["corr_12b_R_rk"]), max(abs(x) for x in B6(c)["corr_12b_R_rk"]), d1)[2:]),
       "corr(T_eff, A_V) y corr(Δ, A_V) en las 4 cadenas con prior; |corr(R, A_V)| y |corr(r_K, A_V)| de 12 b",
       guarda=lambda c: (min(B6(c)["corr_T_delta_rango"]) > 0 and all(
-          B6(c)["correlaciones"][f"ROXs12b_{g}"]["R_av"] > 0 > B6(c)["correlaciones"][f"ROXs12b_{g}"]["rk_av"] for g in ("btsettl", "drift"))))
+          B6(c)["correlaciones"][f"{O1}_{g}"]["R_av"] > 0 > B6(c)["correlaciones"][f"{O1}_{g}"]["rk_av"] for g in ("btsettl", "drift"))))
     A("apB_solapes", "Ap. B",
       r"The \(68\%\) intervals of the two grids «s68». The \(95\%\) intervals meet at about \(«m95»\)~K in temperature "
       r"for ROXs~12~b, and they overlap in «s95» for ROXs~42B~b (\(\log g = «gbt» with BT-Settl and «gdr» with "
       r"DRIFT-PHOENIX).",
       dict(s68=lambda c: frase_solape68({(s, p): B6(c)["solapes_prior_s1"][f"{s}_{p}"]["solapan68"]
                                           for s in SLUGS for p in ("teff", "logg")}),
-           m95=lambda c: k10((B6(c)["solapes_prior_s1"]["ROXs12b_teff"]["bt95"][1]
-                              + B6(c)["solapes_prior_s1"]["ROXs12b_teff"]["drift95"][0]) / 2),
+           m95=lambda c: k10((B6(c)["solapes_prior_s1"][f"{O1}_teff"]["bt95"][1]
+                              + B6(c)["solapes_prior_s1"][f"{O1}_teff"]["drift95"][0]) / 2),
            s95=lambda c: {(True, True): "gravity and in temperature", (True, False): "gravity"}[
-               (B6(c)["solapes_prior_s1"]["ROXs42Bb_logg"]["solapan95"], B6(c)["solapes_prior_s1"]["ROXs42Bb_teff"]["solapan95"])],
-           gbt=lambda c: rango(*B6(c)["solapes_prior_s1"]["ROXs42Bb_logg"]["bt95"], d2)[2:],
-           gdr=lambda c: rango(*B6(c)["solapes_prior_s1"]["ROXs42Bb_logg"]["drift95"], d2)),
+               (B6(c)["solapes_prior_s1"][f"{O2}_logg"]["solapan95"], B6(c)["solapes_prior_s1"][f"{O2}_teff"]["solapan95"])],
+           gbt=lambda c: rango(*B6(c)["solapes_prior_s1"][f"{O2}_logg"]["bt95"], d2)[2:],
+           gdr=lambda c: rango(*B6(c)["solapes_prior_s1"][f"{O2}_logg"]["drift95"], d2)),
       "intervalos del 68 y 95 % de T_eff y log g con prior (s1); «meet at about»: punto medio entre el 97.5 % de "
       "BT-Settl y el 2.5 % de DRIFT-PHOENIX de 12 b, a 10 K",
-      guarda=lambda c: (abs(B6(c)["solapes_prior_s1"]["ROXs12b_teff"]["bt95"][1] - B6(c)["solapes_prior_s1"]["ROXs12b_teff"]["drift95"][0]) < 20
-                        and not B6(c)["solapes_prior_s1"]["ROXs12b_logg"]["solapan95"]))
+      guarda=lambda c: (abs(B6(c)["solapes_prior_s1"][f"{O1}_teff"]["bt95"][1] - B6(c)["solapes_prior_s1"][f"{O1}_teff"]["drift95"][0]) < 20
+                        and not B6(c)["solapes_prior_s1"][f"{O1}_logg"]["solapan95"]))
     A("apB_42b", "Ap. B",
       r"For ROXs~42B~b, both grids give \(T_{\rm eff} = «T»~K for \(A_V = 1.8\)--\(3.0\)~mag and the equivalent type "
       r"«tipo». The L templates are older (\(10\)--\(200\)~Myr) than the companion, and one young «spt» template gives "
@@ -1159,7 +1192,7 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"published luminosity and age, give \(«eT»\pm«ee»\)~K.",
       dict(T=lambda c: T42(c)[2:], tipo=tipo42, spt=lambda c: joven(c)[0]["spt"],
            dif=lambda c: rango(min(j["dif_impresas"] for j in joven(c)), max(j["dif_impresas"] for j in joven(c)), str),
-           av=av42, eT=lambda c: k10(evo(c, "ROXs42Bb")["teff_p50"]), ee=lambda c: k10(evo(c, "ROXs42Bb")["teff_semiancho"])),
+           av=av42, eT=lambda c: k10(evo(c, O2)["teff_p50"]), ee=lambda c: k10(evo(c, O2)["teff_semiancho"])),
       "como la Sect. 4.2; «13–23 K higher»: la T_eff impresa de la plantilla menos la del compañero (2214 − 2191, "
       "2158 − 2145), con las dos rejillas",
       guarda=lambda c: all(j["teff"] > j["teff_companero"] for j in joven(c)))
@@ -1170,29 +1203,31 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"models give \(«eT»\pm«ee»\)~K, \(«sbt»\sigma\) (BT-Settl) and \(«sdr»\sigma\) (DRIFT-PHOENIX) below the value "
       r"at the adopted \(A_V\) when the systematic error of the method is included.",
       dict(T18=T12_18, T30=T12_30, av=av_alto, avs=av12,
-           bt=lambda c: tipo_prosa(tipo(c, "ROXs12b", "btsettl")), dr=lambda c: tipo_prosa(tipo(c, "ROXs12b", "drift")),
-           eT=lambda c: k10(evo(c, "ROXs12b")["teff_p50"]), ee=lambda c: k10(evo(c, "ROXs12b")["teff_semiancho"]),
+           bt=lambda c: tipo_prosa(tipo(c, O1, "btsettl")), dr=lambda c: tipo_prosa(tipo(c, O1, "drift")),
+           eT=lambda c: k10(evo(c, O1)["teff_p50"]), ee=lambda c: k10(evo(c, O1)["teff_semiancho"]),
            sbt=lambda c: d1(sigma_evo(c, "btsettl")), sdr=lambda c: d1(sigma_evo(c, "drift"))),
       "como la Sect. 4.1; σ: (T_eff a 1.8 − T_evo) / √(150² + σ_evo² + σ_T²)",
       guarda=lambda c: (min(SEM(c)["av_prior_12b_todas"]) > 1.8 + PL(c)["av_menos_inyectada_max"]
-                        and min(B6(c)["12b_T_18"]) > evo(c, "ROXs12b")["teff_p50"]))
+                        and min(B6(c)["12b_T_18"]) > evo(c, O1)["teff_p50"]))
     A("apB_edades", "Ap. B",
-      r"(\(«e12»\)~Myr for ROXs~12~b and \(«e42»\)~Myr for ROXs~42B~b). The same fit returns «p12»~Myr for three "
+      r"(\(«e12»\)~Myr for ROXs~12~b and \(«e42»\)~Myr for ROXs~42B~b). The same fit returns «p12»~Myr for «n» "
       r"young templates of \(1\)--\(10\)~Myr with the noise of ROXs~12~b, and «p42»~Myr with that of ROXs~42B~b",
-      dict(e12=lambda c: i0(EV(c)["ROXs12b_evo_ATMO2020_avprimaria_s0"]["edad_myr"]),
-           e42=lambda c: i0(EV(c)["ROXs42Bb_evo_ATMO2020_avprimaria_s0"]["edad_myr"]),
-           p12=lambda c: rango(*EV(c)["plantillas"]["ROXs12b"], abajo(1), arriba(1)),
-           p42=lambda c: rango(*EV(c)["plantillas"]["ROXs42Bb"], abajo(1), arriba(1))),
-      "modo evo (ATMO2020): mediana de la edad; sobre plantillas, rango hacia fuera")
+      dict(e12=lambda c: i0(EV(c)[f"{O1}_evo_ATMO2020_avprimaria_s0"]["edad_myr"]),
+           e42=lambda c: i0(EV(c)[f"{O2}_evo_ATMO2020_avprimaria_s0"]["edad_myr"]),
+           p12=lambda c: rango(*EV(c)["plantillas"][O1], abajo(1), arriba(1)),
+           n=lambda c: PALABRAS[unico(EV(c)["n_plantillas"].values())],
+           p42=lambda c: rango(*EV(c)["plantillas"][O2], abajo(1), arriba(1))),
+      "modo evo (ATMO2020): mediana de la edad; sobre plantillas (las mismas en número para los dos), rango hacia "
+      "fuera")
     A("apB_logg", "Ap. B",
       r"for ROXs~12~b, BT-Settl gives \(\log g = «bt» and DRIFT-PHOENIX «dr», which is high",
-      dict(bt=lambda c: rango(*B6(c)["B5_ROXs12b_btsettl"]["logg"], d1)[2:], dr=lambda c: rango(*B6(c)["B5_ROXs12b_drift"]["logg"], d1)),
+      dict(bt=lambda c: rango(*B6(c)[f"B5_{O1}_btsettl"]["logg"], d1)[2:], dr=lambda c: rango(*B6(c)[f"B5_{O1}_drift"]["logg"], d1)),
       "log g de la Tabla B.5: mín. p16 – máx. p84 de las tres A_V")
     A("apB_mejor", "Ap. B",
       r"BT-Settl fits both companions better. Its maximum log-likelihood is higher by \(«l12»\) and \(«l42»\), and its "
       r"model error in the MUSE spectrum is «fbt», against «fdr» for DRIFT-PHOENIX.",
-      dict(l12=lambda c: i0(B6(c)["logl_max_bt_menos_drift_prior"]["ROXs12b"]),
-           l42=lambda c: i0(B6(c)["logl_max_bt_menos_drift_prior"]["ROXs42Bb"]),
+      dict(l12=lambda c: i0(B6(c)["logl_max_bt_menos_drift_prior"][O1]),
+           l42=lambda c: i0(B6(c)["logl_max_bt_menos_drift_prior"][O2]),
            fbt=lambda c: por_ciento(*B6(c)["fb_muse"]["btsettl"]), fdr=lambda c: por_ciento(*B6(c)["fb_muse"]["drift"])),
       "ln L máx. BT − DRIFT con prior; f_b de MUSE (p50) de las seis cadenas de cada rejilla",
       guarda=lambda c: min(B6(c)["logl_max_bt_menos_drift_prior"].values()) > 0 and B6(c)["fb_muse"]["btsettl"][1] < B6(c)["fb_muse"]["drift"][0])
@@ -1209,7 +1244,7 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
            R=lambda c: rango(min(B6(c)["12b_18_R"]), max(B6(c)["12b_18_R"]), d1),
            T=lambda c: i0(B6(c)["12b_delta_Lbol_publicada_T18"]["teff"]),
            d=lambda c: d2(B6(c)["12b_delta_Lbol_publicada_T18"]["delta"]),
-           cbt=lambda c: d1(CR(c)["ROXs12b_btsettl"]["cruce"]), cdr=lambda c: d1(CR(c)["ROXs12b_drift"]["cruce"])),
+           cbt=lambda c: d1(CR(c)[f"{O1}_btsettl"]["cruce"]), cdr=lambda c: d1(CR(c)[f"{O1}_drift"]["cruce"])),
       "r_K y R (p50) a A_V 1.8; Δ con la L_bol publicada a la T_eff de BT-Settl a 1.8; cruce de signo de cada rejilla",
       guarda=lambda c: (B6(c)["12b_18_rk"][1] > 1.45 and max(B6(c)["12b_18_R"]) < 2.2 and cruce_ok(c)
                         and B6(c)["12b_T_18"][1] > B6(c)["12b_T_18"][0] and B6(c)["12b_18_R"][1] < B6(c)["12b_18_R"][0]))
@@ -1220,13 +1255,13 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"\(\ln Z\) is lower by «l12». For ROXs~42B~b, Diamondback has a higher evidence than BT-Settl for all values "
       r"of \(f_{\rm sed}\), by «dbp» with the prior on \(A_V\) and «dbf» with \(A_V\) fixed, but its gravity is at the "
       r"lower edge of its grid, and its temperature, «db»~K with the prior on \(A_V\), is the lowest of all the grids. "
-      r"At a given extinction, the temperatures of the seven fits of a companion span «span», much more than the "
+      r"At a given extinction, the temperatures of the «n7» fits of a companion span «span», much more than the "
       r"interval of each fit (\(\pm«semi»~K), and similar to the systematic error of \(\pm150\)~K that we adopt. For "
       r"ROXs~12~b, \(\Delta\) is between \(«a»\) and \(«b»\)~dex at \(A_V = 1.8\)~mag and between \(«x»\) and "
       r"\(«y»\)~dex at \(3.0\)~mag with all the grids, so the sign of the difference is still set by the extinction. "
       r"For ROXs~42B~b, the upper limit is between \(«dmin»\)~dex below and \(«dmax»\)~dex above the noise level with "
       r"all the grids; it is below it only «neg».",
-      dict(l12=lambda c: rango(-RJ(c)["otras_12b_dlnz"][1], -RJ(c)["otras_12b_dlnz"][0], i0),
+      dict(n7=lambda c: PALABRAS[RJ(c)["n_rejillas_total"]], l12=lambda c: rango(-RJ(c)["otras_12b_dlnz"][1], -RJ(c)["otras_12b_dlnz"][0], i0),
            dbp=lambda c: rango(*RJ(c)["diamondback_dlnz_prior"], i0), dbf=lambda c: rango(*RJ(c)["diamondback_dlnz_fija"], i0),
            db=DB, span=dispersion, semi=lambda c: rango(*RJ(c)["semiancho_global"], i0)[2:],
            a=lambda c: s2(RJ(c)["delta_12b_18"][0]), b=lambda c: s2(RJ(c)["delta_12b_18"][1]),
@@ -1237,7 +1272,7 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       "fija); T_eff de Diamondback con prior (10 K); dispersión entre rejillas por compañero y A_V; semiancho 16–84 % "
       "de T_eff; Δ de cada compañero y las rejillas con Δ < 0",
       guarda=lambda c: (RJ(c)["bt_mejor_12b_tres_av"] and RJ(c)["otras_12b_dlnz"][1] < 0 and RJ(c)["db_mayor_que_bt_todas"]
-                        and RJ(c)["diamondback_borde_logg_prior"] and RJ(c)["db_teff_mas_baja"] and RJ(c)["n_rejillas_total"] == 7
+                        and RJ(c)["diamondback_borde_logg_prior"] and RJ(c)["db_teff_mas_baja"]
                         and RJ(c)["delta_12b_30"][0] > 0 and RJ(c)["delta_42b_todas"][0] < 0 < RJ(c)["delta_42b_todas"][1]))
 
     # ---------------------------------------------------------------- apéndice B: solo MUSE / solo IR (Fig. B.5)
@@ -1272,7 +1307,7 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       {k: (lambda kk: lambda c: d1(DT(c)["av_prior"][kk]))(kk) for k, kk in zip(
           "abcdefgh", [f"{s}_{rj}_{x}" for s in SLUGS for x in ("muse", "ir") for rj in ("btsettl", "drift")])},
       "A_V (p50) con prior de cada conjunto y rejilla",
-      guarda=lambda c: all(DT(c)["av_prior"][f"ROXs12b_{rj}_{x}"] > c["entrada_margen"]["ROXs12b"]["av0"]
+      guarda=lambda c: all(DT(c)["av_prior"][f"{O1}_{rj}_{x}"] > c["entrada_margen"][O1]["av0"]
                            for rj in ("btsettl", "drift") for x in ("muse", "ir")))
     A("apB_datos_delta", "Ap. B",
       r"For ROXs~12~b, \(\Delta\) is «m12»~dex with the MUSE spectrum alone, for all the values of \(A_V\), because "
@@ -1295,24 +1330,24 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"the posterior of \(\log g\) extends to the lower edge of the grid (\(2.5\)), and the model error in that "
       r"spectrum is «fac», against «fbt» with BT-Settl. With the MUSE spectrum alone, \(\Delta\) is «d12»~dex for "
       r"ROXs~12~b and «d42»~dex for ROXs~42B~b, for all the values of \(A_V\).",
-      dict(i12=lambda c: arriba(10)(abs(AC(c)["ir_menos_todo_prior"]["ROXs12b"])),
-           i42=lambda c: arriba(10)(abs(AC(c)["ir_menos_todo_prior"]["ROXs42Bb"])),
-           tm=lambda c: i0(AC(c)["teff_prior"]["ROXs12b"]["muse"]), tt=lambda c: i0(AC(c)["teff_prior"]["ROXs12b"]["todo"]),
+      dict(i12=lambda c: arriba(10)(abs(AC(c)["ir_menos_todo_prior"][O1])),
+           i42=lambda c: arriba(10)(abs(AC(c)["ir_menos_todo_prior"][O2])),
+           tm=lambda c: i0(AC(c)["teff_prior"][O1]["muse"]), tt=lambda c: i0(AC(c)["teff_prior"][O1]["todo"]),
            gm=lambda c: d1(AC(c)["logg_prior_12b"]["muse"]), gt=lambda c: d1(AC(c)["logg_prior_12b"]["todo"]),
-           dT=lambda c: k10(AC(c)["teff_prior"]["ROXs42Bb"]["muse"] - AC(c)["teff_prior"]["ROXs42Bb"]["todo"]),
-           t42=lambda c: i0(AC(c)["teff_prior"]["ROXs42Bb"]["muse"]),
+           dT=lambda c: k10(AC(c)["teff_prior"][O2]["muse"] - AC(c)["teff_prior"][O2]["todo"]),
+           t42=lambda c: i0(AC(c)["teff_prior"][O2]["muse"]),
            Rm=lambda c: d2(AC(c)["R_prior_42b"]["muse"]), Rt=lambda c: d2(AC(c)["R_prior_42b"]["todo"]),
            fac=lambda c: por_ciento(*AC(c)["f_muse_solo"]), fbt=lambda c: por_ciento(*DT(c)["fb_muse_solo_bt_todos"]),
-           d12=lambda c: hasta(min(v for k, v in AC(c)["delta_muse"].items() if k.startswith("ROXs12b_")),
-                               max(v for k, v in AC(c)["delta_muse"].items() if k.startswith("ROXs12b_")), s2),
-           d42=lambda c: hasta(min(v for k, v in AC(c)["delta_muse"].items() if k.startswith("ROXs42Bb_")),
-                               max(v for k, v in AC(c)["delta_muse"].items() if k.startswith("ROXs42Bb_")), s2)),
+           d12=lambda c: hasta(min(v for k, v in AC(c)["delta_muse"].items() if k.startswith(f"{O1}_")),
+                               max(v for k, v in AC(c)["delta_muse"].items() if k.startswith(f"{O1}_")), s2),
+           d42=lambda c: hasta(min(v for k, v in AC(c)["delta_muse"].items() if k.startswith(f"{O2}_")),
+                               max(v for k, v in AC(c)["delta_muse"].items() if k.startswith(f"{O2}_")), s2)),
       "AMES-Cond con prior: |T_IR − T_todo| hacia arriba a 10 K; T_eff, log g y R de solo MUSE frente a todo; f_b de "
       "MUSE de los ajustes solo a MUSE (AMES-Cond y BT-Settl, los dos compañeros); Δ de solo MUSE",
       guarda=lambda c: (RJ(c)["sin_borde_r500_ambos"]["ames_cond"] and not any(
           v for g, v in RJ(c)["sin_borde_r500_ambos"].items() if g != "ames_cond")
-          and abs(AC(c)["teff_prior"]["ROXs12b"]["muse"] - AC(c)["teff_prior"]["ROXs12b"]["todo"]) < 20
-          and AC(c)["teff_prior"]["ROXs42Bb"]["muse"] > AC(c)["teff_prior"]["ROXs42Bb"]["todo"]
+          and abs(AC(c)["teff_prior"][O1]["muse"] - AC(c)["teff_prior"][O1]["todo"]) < 20
+          and AC(c)["teff_prior"][O2]["muse"] > AC(c)["teff_prior"][O2]["todo"]
           and AC(c)["logg_p2_5_muse_max"] < AC_LOGG_BORDE
           and DT(c)["fb_muse_solo_bt_todos"][1] < AC(c)["f_muse_solo"][0]))
 
@@ -1332,9 +1367,9 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
     A("B5_evo", "Tabla B.5",
       r"\quad \(T_{\rm eff}\) (K) & \multicolumn{2}{c}{\(«t12»\pm«e12»\)} & \multicolumn{2}{c}{\(«t42»\pm«e42»\)} \\ "
       r"\quad \(\Delta\) (dex) & \multicolumn{2}{c}{\(«d12»\)} & \multicolumn{2}{c}{\(<«d42»\)} \\",
-      dict(t12=lambda c: i0(evo(c, "ROXs12b")["teff_p50"]), e12=lambda c: k10(evo(c, "ROXs12b")["teff_semiancho"]),
-           t42=lambda c: i0(evo(c, "ROXs42Bb")["teff_p50"]), e42=lambda c: k10(evo(c, "ROXs42Bb")["teff_semiancho"]),
-           d12=lambda c: s2(evo(c, "ROXs12b")["delta_p50"]), d42=lambda c: s2(evo(c, "ROXs42Bb")["delta_p50"])),
+      dict(t12=lambda c: i0(evo(c, O1)["teff_p50"]), e12=lambda c: k10(evo(c, O1)["teff_semiancho"]),
+           t42=lambda c: i0(evo(c, O2)["teff_p50"]), e42=lambda c: k10(evo(c, O2)["teff_semiancho"]),
+           d12=lambda c: s2(evo(c, O1)["delta_p50"]), d42=lambda c: s2(evo(c, O2)["delta_p50"])),
       "cadenas `evo_solo` ATMO2020 (L_bol publicada, A_V adoptada): T_eff p50 ± semiancho 16–84 % (a 10 K), Δ p50")
     A("B5_nota_40", "Tabla B.5 (nota)",
       r"The statistical uncertainties of \(T_{\rm eff}\) are below \(«x»\)~K (\(16\)--\(84\%\)), and the systematic "
@@ -1343,8 +1378,8 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       "mayor semiancho 16–84 % de T_eff de las 12 cadenas, hacia arriba a 10 K")
     A("B5_nota_tipo", "Tabla B.5 (nota)",
       r"\(\geq\)«t» means as cool as the coolest «t» template or cooler.",
-      dict(t=lambda c: unico([tipo(c, "ROXs42Bb", g)["tipos"][0] for g in ("btsettl", "drift")
-                              if tipo(c, "ROXs42Bb", g)["clase"] == "posterior"])),
+      dict(t=lambda c: unico([tipo(c, O2, g)["tipos"][0] for g in ("btsettl", "drift")
+                              if tipo(c, O2, g)["clase"] == "posterior"])),
       "el tipo más tardío de la calibración, si algún compañero queda por debajo de todas las plantillas")
     A("B5_nota_semillas", "Tabla B.5 (nota)",
       r"Two more samplings with other seeds change the medians by up to \(«t»\)~K in \(T_{\rm eff}\), \(«a»\)~mag in "
@@ -1358,7 +1393,7 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
                                           for s in SLUGS)),
            d=lambda c: d2(max(abs(float(s2(evo(c, s, "BHAC15")["delta_p50"])) - float(s2(evo(c, s)["delta_p50"])))
                               for s in SLUGS)),
-           f=lambda c: i0(100 * evo(c, "ROXs42Bb", "BHAC15")["fuera_de_la_rejilla"])),
+           f=lambda c: i0(100 * evo(c, O2, "BHAC15")["fuera_de_la_rejilla"])),
       "`evo_solo` BHAC15 frente a ATMO2020: «the same values» son las celdas de la tabla, así que se comparan los "
       "valores como se imprimen (T_eff a 1 K, Δ a 0.01 dex: 2436/2420 y 2250/2254 K, 0.00/+0.01 y −0.33/−0.34): la "
       "mayor diferencia, la de T_eff hacia arriba a 10 K. Con las medianas sin redondear Δ difiere 0.017 dex en "
@@ -1381,8 +1416,8 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"for ROXs~12~b, and \(«c»\) and \(«d»\)~mag for ROXs~42B~b. In the «cuantos» fits of «quien», the evidence is "
       r"higher than in all the fits of this table.",
       dict(n=lambda c: str(unico(v["nlive"] for v in CR(c)["avlibre"].values())),
-           a=lambda c: d1(CR(c)["avlibre"]["ROXs12b_btsettl"]["av"]), b=lambda c: d1(CR(c)["avlibre"]["ROXs12b_drift"]["av"]),
-           c=lambda c: d1(CR(c)["avlibre"]["ROXs42Bb_btsettl"]["av"]), d=lambda c: d1(CR(c)["avlibre"]["ROXs42Bb_drift"]["av"]),
+           a=lambda c: d1(CR(c)["avlibre"][f"{O1}_btsettl"]["av"]), b=lambda c: d1(CR(c)["avlibre"][f"{O1}_drift"]["av"]),
+           c=lambda c: d1(CR(c)["avlibre"][f"{O2}_btsettl"]["av"]), d=lambda c: d1(CR(c)["avlibre"][f"{O2}_drift"]["av"]),
            cuantos=lambda c: avlibre_frase(c)[0], quien=lambda c: avlibre_frase(c)[1]),
       "las cuatro cadenas con A_V libre: A_V (p50) y ln Z frente al mejor de la Tabla B.6 del compañero")
 
@@ -1399,7 +1434,9 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
 
 
 def cifras() -> list[Cifra]:
-    """Las frases del paper con cifras de las cadenas, en el orden del texto."""
+    """Las frases del paper con cifras de las cadenas, en el orden del texto (con los objetos de targets/)."""
+    if not SLUGS:
+        fija_objetos()
     return _cifras()
 
 

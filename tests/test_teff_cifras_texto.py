@@ -27,6 +27,11 @@ from scripts import teff_bayes as tb  # noqa: E402
 from scripts import teff_cifras_texto as tc  # noqa: E402
 
 
+def setUpModule():
+    # los dos objetos del paper salen de targets/ (el script no nombra objetos en el código)
+    tc.fija_objetos(ROOT)
+
+
 def _pl(spt, teff, nombre=None):
     from musepipe.constants import spt_code
     return dict(plantilla=nombre or spt, spt=spt, codigo=spt_code(spt), teff=float(teff))
