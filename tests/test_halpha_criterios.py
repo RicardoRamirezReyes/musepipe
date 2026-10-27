@@ -200,9 +200,13 @@ class DatosPublicadosTests(unittest.TestCase):
 
 
 def _raiz_con_runs():
+    """La raíz con los productos de D2 y G3 de los runs del paper (los de `targets/<slug>.json` -> `paper.run`)."""
+    import json
     raiz = Path(os.environ.get("MUSE_PROJECT_ROOT", ROOT))
-    st = raiz / "runs" / "ROXs12b_invvar" / "stages"
-    ok = all((st / f).exists() for f in ("spec_calibrated_psffit_object.fits", "spec_calibrated_psffit_controls.npz"))
+    runs = [json.loads(f.read_text())["paper"]["run"] for f in sorted((ROOT / "targets").glob("*.json"))
+            if "paper" in json.loads(f.read_text())]
+    hace_falta = ("spec_calibrated_psffit_object.fits", "spec_calibrated_psffit_controls.npz", "stage_g3_qc.json")
+    ok = bool(runs) and all((raiz / "runs" / r / "stages" / f).exists() for r in runs for f in hace_falta)
     return raiz if ok else None
 
 
@@ -214,17 +218,23 @@ class CifrasDelPaperTests(unittest.TestCase):
         cls.hc = _carga("halpha_criterios")
         cls.ctx = cls.hc.Contexto(_raiz_con_runs())
 
+    def test_un_detectado_y_uno_con_cota_salen_de_g3(self):
+        ctx = self.ctx
+        self.assertEqual(sorted(ctx.papel(s) for s in ctx.slugs), sorted((self.hc.DETECCION, self.hc.LIMITE)))
+        self.assertNotEqual(ctx.detectado, ctx.limite)
+
     def test_ew_de_g2_y_su_error_en_los_controles(self):
         hc, ctx = self.hc, self.ctx
-        sp, ctr = ctx.espectro("ROXs12b", "psffit"), ctx.controles("ROXs12b", "psffit")
-        r = hc.ew_con_controles(sp, ctr, ctx.catalogo("ROXs12b"), "G2", np.random.default_rng(0), n_mc=50000)
-        g2 = ctx.g2_halpha("ROXs12b")
+        det = ctx.detectado
+        sp, ctr = ctx.espectro(det, "psffit"), ctx.controles(det, "psffit")
+        r = hc.ew_con_controles(sp, ctr, ctx.catalogo(det), "G2", np.random.default_rng(0), n_mc=50000)
+        g2 = ctx.g2_halpha(det)
         self.assertAlmostEqual(r["EW"], g2["ew_A"], places=9)      # la de G2: −26.2
         self.assertAlmostEqual(r["EW_err_ctrl"], 4.28, delta=0.1)  # «26 ± 4, el error de los 33 controles»
 
     def test_w10_del_companero(self):
         hc, ctx = self.hc, self.ctx
-        sp = ctx.espectro("ROXs12b", "psffit")
+        sp = ctx.espectro(ctx.detectado, "psffit")
         self.assertAlmostEqual(hc.w10_kms(sp["wave"], sp["flux"], hc.HA_A), 256.0, delta=0.5)  # «256 km/s»
 
 

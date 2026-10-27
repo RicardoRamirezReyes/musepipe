@@ -8,6 +8,11 @@ anchura a 10 % del pico, la fracción de Class III), la Tabla 6 (EW de los dos),
 de ruido cromosférico de Manara et al. 2013). Hermano de `paper_cifras_extincion.py` y `cifras_por_noche_d2.py`, con
 la misma regla: lee lo que las etapas escribieron y no inventa entradas. Solo lectura; no escribe en runs/.
 
+Los objetos salen de `targets/<slug>.json` (los que declaran `paper`, en el orden de `paper.order`: run, noches) y
+el papel de cada uno, de G3 (`mdot_label`): el compañero con la línea detectada (12 b) y el de la cota (42B b). Ningún
+nombre de objeto va en el código (`tests/test_no_hardcoded_target.py`); las claves de las salidas que dicen
+«12b»/«42bb» siguen los nombres de la sesión y significan esos dos papeles.
+
 Lee: los espectros calibrados de D2 (`spec_calibrated_<método>_object.fits`) y sus 33 controles
 (`..._controls.npz`), la tabla de G2, el QC de E3 (límites al 99 %), el de A4/M2 (la LSF y los SKY_SPECTRUM por
 exposición), las bibliotecas de plantillas de G3 (`g3_libraries_root`), las cadenas de T_eff de
@@ -85,7 +90,10 @@ HA_A = cn.HA_A
 C_KMS = cn.C_KMS
 #: W10/FWHM de una gaussiana, sqrt(ln 10 / ln 2) = 1.8226
 G10 = cn.ANCHO10_GAUSS
-SLUGS = ("ROXs12b", "ROXs42Bb")
+#: los papeles de los dos compañeros, que salen de los productos (G3: `mdot_label`), no de su nombre: el de la línea
+#: detectada (12 b en el paper) y el de la cota (42B b). Las claves de las salidas que dicen «12b»/«42bb» siguen los
+#: nombres de la sesión y significan estos papeles.
+DETECCION, LIMITE = "deteccion", "limite"
 #: los seis métodos de extracción, en el orden de D1 (`stage_x10_compare.METHOD_ORDER`)
 METODOS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 #: los que conservan el continuo: SGF y LPM lo quitan por construcción (nota c de la Tabla 4 del paper)
@@ -98,14 +106,24 @@ SEMILLA_CROMOSFERA = 2013
 
 
 # ====================================================================================== entradas
+def objetos_del_paper(root=ROOT):
+    """Los slugs de los objetos del paper: los `targets/<slug>.json` que declaran `paper`, en el orden de
+    `paper.order` (el orden en que se recorren, y en que consumen los generadores de números aleatorios)."""
+    from musepipe.targets import targets_dir
+    fichas = [(json.loads(f.read_text()), f.stem) for f in sorted(targets_dir(root).glob("*.json"))]
+    return tuple(s for _, s in sorted((d["paper"]["order"], s) for d, s in fichas if "paper" in d))
+
+
 class Contexto:
-    """Dónde están los productos: la raíz del proyecto con `runs/` (`--project-root`) y los runs del paper
-    (`targets/<slug>.json` -> `paper`). Cachea lo que lee."""
+    """Dónde están los productos: la raíz del proyecto con `runs/` (`--project-root`), los objetos del paper
+    (`targets/<slug>.json` -> `paper`: run, nombre, noches) y el papel de cada uno (detección o cota, de G3).
+    Cachea lo que lee."""
 
     def __init__(self, root=None, cadenas=None):
         self.root = Path(root).resolve() if root else ROOT
         self.cadenas = Path(cadenas) if cadenas else CADENAS_C0
-        self._esp, self._ctr, self._cfg = {}, {}, {}
+        self.slugs = objetos_del_paper()
+        self._esp, self._ctr, self._cfg, self._papel = {}, {}, {}, {}
 
     def perfil(self, slug):
         from musepipe.targets import load_target
@@ -113,8 +131,30 @@ class Contexto:
 
     def run(self, slug):
         """El run del paper de un objeto (o un run_id tal cual)."""
-        p = self.perfil(slug) if slug in SLUGS else None
+        p = self.perfil(slug) if slug in self.slugs else None
         return p["paper"]["run"] if p else slug
+
+    def papel(self, slug):
+        """`DETECCION` o `LIMITE`: lo que dice G3 del run del paper (`mdot_label`), como `suelo_cromosferico`."""
+        if slug not in self._papel:
+            g3 = json.loads((self.rp(slug).stage_dir / "stage_g3_qc.json").read_text())
+            self._papel[slug] = LIMITE if g3.get("mdot_label") == "upper_limit" else DETECCION
+        return self._papel[slug]
+
+    def con_papel(self, papel):
+        """El único objeto del paper con ese papel."""
+        s = [x for x in self.slugs if self.papel(x) == papel]
+        if len(s) != 1:
+            raise SystemExit(f"el paper tiene un compañero con {papel} y G3 da {len(s)}: {s}")
+        return s[0]
+
+    @property
+    def detectado(self):
+        return self.con_papel(DETECCION)
+
+    @property
+    def limite(self):
+        return self.con_papel(LIMITE)
 
     def rp(self, run):
         from musepipe.paths import RunPaths
@@ -170,9 +210,9 @@ class Contexto:
         h03 = json.loads((self.rp(slug).stage_dir / "stage_h03_qc.json").read_text())
         return {x["method"]: x for x in h03["limits"]}
 
-    def bibliotecas(self, slug="ROXs12b"):
+    def bibliotecas(self, slug=None):
         from musepipe.models.manifest import library_root
-        return library_root(self.cfg(slug), project_root=self.root)
+        return library_root(self.cfg(slug or self.detectado), project_root=self.root)
 
 
 def _es_numero(v):
@@ -292,7 +332,7 @@ def g2_reproduce(ctx, slug, metodo):
 def cmd_ew(ctx):
     rng = np.random.default_rng(SEMILLA_EW)
     out = dict(semilla=SEMILLA_EW, unidad={}, g2={}, g2_tabla={}, filas=[], limite_ew_42bb={})
-    for slug in SLUGS:
+    for slug in ctx.slugs:
         esc, fuente = ctx.escala_cgs(slug)
         out["unidad"][slug] = dict(escala_cgs=esc, fuente=fuente)
         out["g2"][slug] = {m: g2_reproduce(ctx, slug, m) for m in METODOS}
@@ -304,18 +344,19 @@ def cmd_ew(ctx):
             for definicion in DEFS:
                 fila = ew_con_controles(sp, ctr, ctx.catalogo(slug), definicion, rng)
                 out["filas"].append(dict(slug=slug, metodo=metodo, **fila))
-    # 42B b: límite de EW = límite de flujo al 99 % de E3 / continuo bajo la línea (definición de G2)
-    esc = out["unidad"]["ROXs42Bb"]["escala_cgs"]
-    lims = ctx.limites_e3("ROXs42Bb")
+    # el de la cota (42B b): límite de EW = límite de flujo al 99 % de E3 / continuo bajo la línea (def. de G2)
+    lim = ctx.limite
+    esc = out["unidad"][lim]["escala_cgs"]
+    lims = ctx.limites_e3(lim)
     for m in CON_CONTINUO:
-        fila = _fila(out, "ROXs42Bb", m, "G2")
+        fila = _fila(out, lim, m, "G2")
         Fl = float(lims[m]["f_lim_observed"]) / esc
         C, sC = fila["C"], fila["sigma_C"]
         out["limite_ew_42bb"][m] = dict(f_lim_observed=float(lims[m]["f_lim_observed"]), C=C, sigma_C=sC,
                                         EW_lim=Fl / C, EW_lim_C_mas_menos_1sigma=[Fl / (C + sC), Fl / (C - sC)]
                                         if C > sC else [Fl / (C + sC), float("inf")])
-    out["resumen"] = resumen_ew(out)
-    _imprime_ew(out)
+    out["resumen"] = resumen_ew(out, ctx.detectado)
+    _imprime_ew(out, ctx)
     return out
 
 
@@ -324,25 +365,26 @@ def _fila(out, slug, metodo, definicion):
                 and x["definicion"] == definicion)
 
 
-def resumen_ew(out):
+def resumen_ew(out, det):
     """Las cifras de EW del texto: la de G2 y su MC, el error de los controles, el rango de PSF fit y apertura con
-    tres definiciones (sin `ancha`), el de las dos óptimas (definición de G2) y el límite de 42B b con psffit."""
-    g2 = out["g2_tabla"]["ROXs12b"]
-    ps = _fila(out, "ROXs12b", "psffit", "G2")
-    tres = [-_fila(out, "ROXs12b", m, d)["EW"] for m in ("psffit", "aperture") for d in ("G2", "med", "runmed")]
-    opt = [-_fila(out, "ROXs12b", m, "G2")["EW"] for m in ("optimal_ls", "optimal_psfsub")]
+    tres definiciones (sin `ancha`) y el de las dos óptimas (definición de G2), del compañero detectado `det`; y el
+    límite de EW del de la cota con psffit."""
+    g2 = out["g2_tabla"][det]
+    ps = _fila(out, det, "psffit", "G2")
+    tres = [-_fila(out, det, m, d)["EW"] for m in ("psffit", "aperture") for d in ("G2", "med", "runmed")]
+    opt = [-_fila(out, det, m, "G2")["EW"] for m in ("optimal_ls", "optimal_psfsub")]
     return dict(ew_g2=g2["ew_A"], ew_err_g2_mc=g2["ew_err_A"], ew_err_controles=ps["EW_err_ctrl"],
                 ew_psffit_aperture_3defs=[min(tres), max(tres)], ew_optimas_g2=[min(opt), max(opt)],
                 ew_lim_42bb_psffit=out["limite_ew_42bb"]["psffit"]["EW_lim"],
-                reproduce_tabla_g2=bool(abs(out["g2"]["ROXs12b"]["psffit"]["ew_A"] - g2["ew_A"]) < 1e-9
-                                        and abs(out["g2"]["ROXs12b"]["psffit"]["ew_err_A"] - g2["ew_err_A"]) < 1e-9))
+                reproduce_tabla_g2=bool(abs(out["g2"][det]["psffit"]["ew_A"] - g2["ew_A"]) < 1e-9
+                                        and abs(out["g2"][det]["psffit"]["ew_err_A"] - g2["ew_err_A"]) < 1e-9))
 
 
-def _imprime_ew(out):
+def _imprime_ew(out, ctx):
     r = out["resumen"]
-    print(f"G2 (tabla) Hα de 12 b: EW {r['ew_g2']:+.2f} ± {r['ew_err_g2_mc']:.2f} Å (MC); rehecha igual: "
-          f"{r['reproduce_tabla_g2']}; error con los 33 controles ±{r['ew_err_controles']:.2f} Å")
-    for slug in SLUGS:
+    print(f"G2 (tabla) Hα del compañero detectado ({ctx.detectado}): EW {r['ew_g2']:+.2f} ± {r['ew_err_g2_mc']:.2f} "
+          f"Å (MC); rehecha igual: {r['reproduce_tabla_g2']}; error con los 33 controles ±{r['ew_err_controles']:.2f} Å")
+    for slug in ctx.slugs:
         print(f"\n### {slug}  (unidad {out['unidad'][slug]['escala_cgs']:g}, {out['unidad'][slug]['fuente']})")
         print("| método | continuo | F | C | σ_F ctrl | σ_C ctrl | ρ | EW (Å) | EW p16 … p84 |")
         print("|---|---|---|---|---|---|---|---|---|")
@@ -356,7 +398,7 @@ def _imprime_ew(out):
     print(f"\nPSF fit y apertura, tres definiciones: {a:.1f}–{b:.1f} Å; las dos óptimas (G2): {o1:.1f}–{o2:.1f} Å")
     for m, x in out["limite_ew_42bb"].items():
         lo, hi = x["EW_lim_C_mas_menos_1sigma"]
-        print(f"42B b {m}: límite de E3 {x['f_lim_observed']:.3e} / C {x['C']:.1f} ± {x['sigma_C']:.1f} -> "
+        print(f"{ctx.limite} {m}: límite de E3 {x['f_lim_observed']:.3e} / C {x['C']:.1f} ± {x['sigma_C']:.1f} -> "
               f"EW < {x['EW_lim']:.2f} Å (C ± 1σ: {lo:.1f}–{hi:.1f})")
 
 
@@ -396,10 +438,12 @@ def _perfil_linea_cielo(path, centro, half=6.0, cont=(8.0, 20.0)):
     return x, y, float(np.sum(x * yp) / np.sum(yp))
 
 
-def perfil_lsf_cielo(ctx, slug="ROXs12b"):
+def perfil_lsf_cielo(ctx, slug=None):
     """El perfil de [O I] 6300.304 y 6363.776 Å (singletes, anchura propia despreciable) en los SKY_SPECTRUM por
-    exposición que midió A4/M2 (muestreo 0.3125 Å): FWHM y W10 por cruce en cada uno, y el perfil mediano
-    normalizado, alineado en su centroide, en `REJILLA_PERFIL`. Devuelve (resumen, {línea: (rejilla, perfil)})."""
+    exposición que midió A4/M2 (muestreo 0.3125 Å) del run del compañero detectado (por defecto): FWHM y W10 por
+    cruce en cada uno, y el perfil mediano normalizado, alineado en su centroide, en `REJILLA_PERFIL`. Devuelve
+    (resumen, {línea: (rejilla, perfil)})."""
+    slug = slug or ctx.detectado
     qc = json.loads((ctx.rp(slug).stage_dir / "stage00q_qc.json").read_text())["m2_lsf"]
     files, poly = qc["sky_spectrum_files"], qc["poly2_coeffs"]
     out = dict(run=ctx.run(slug), n_ficheros=len(files), poly2_coeffs=poly,
@@ -434,7 +478,7 @@ LINEAS_PRIMARIA = {"Ca I 6439.08": 6439.075, "Ca I 6462.57": 6462.567, "Ca I 649
                    "Fe I 6750.15": 6750.152, "Ni I 7714.3": 7714.31, "Fe I 8688.6": 8688.624, "Ti I 8434.96": 8434.957}
 
 
-def lineas_primaria(ctx, slug="ROXs12b"):
+def lineas_primaria(ctx, slug):
     """FWHM de un ajuste gaussiano con continuo lineal (±5 Å) a líneas fotosféricas estrechas de la primaria (psffit
     de D2, mismo cubo y misma extracción que el compañero). Es una cota SUPERIOR de la LSF efectiva de una fuente
     puntual (la línea tiene su propia anchura). Li I 6708 da 2.34 Å en 12 b: apoya el modelo `cielo_esc`."""
@@ -467,7 +511,7 @@ def lineas_primaria(ctx, slug="ROXs12b"):
 
 def cmd_lsf(ctx, salida=None):
     out, perfiles = perfil_lsf_cielo(ctx)
-    out["primaria"] = {s: lineas_primaria(ctx, s) for s in SLUGS}
+    out["primaria"] = {s: lineas_primaria(ctx, s) for s in ctx.slugs}
     for k, v in out["lineas"].items():
         print(f"{k}: n={v['n']} FWHM {v['fwhm_A_med']:.3f} ± {v['fwhm_A_std']:.3f} Å (polinomio de M2 "
               f"{v['fwhm_poly_A']:.3f}); W10 {v['w10_A_med']:.3f} Å; W10/FWHM {v['cociente_w10_fwhm']:.3f} "
@@ -702,12 +746,13 @@ def _pct(a, q):
 
 
 def instrumentales(ctx, perfil=None):
-    """{modelo: (W10, FWHM)} instrumentales del estimador para 12 b (rápido: sin inyección)."""
+    """{modelo: (W10, FWHM)} instrumentales del estimador en el run del compañero detectado (rápido: sin inyección)."""
     if perfil is None:
         perfil = perfil_lsf_cielo(ctx)[1]["OI6300"]
-    sp = ctx.espectro("ROXs12b", "psffit")
-    lsf = float(ctx.cfg("ROXs12b")["h01_lsf_fwhm_A"])
-    C0 = float(ctx.g2_halpha("ROXs12b")["continuum_density"])
+    det = ctx.detectado
+    sp = ctx.espectro(det, "psffit")
+    lsf = float(ctx.cfg(det)["h01_lsf_fwhm_A"])
+    C0 = float(ctx.g2_halpha(det)["continuum_density"])
     out = {}
     for modelo in MODELOS_LSF:
         kx, kk = kernel(modelo, lsf, perfil)
@@ -716,19 +761,21 @@ def instrumentales(ctx, perfil=None):
 
 
 def cmd_w10(ctx, perfil=None):
-    """W10 de 12 b, la instrumental por modelo de LSF, la inyección en los controles y su análisis de Neyman."""
+    """W10 del compañero detectado (12 b), la instrumental por modelo de LSF, la inyección en los controles y su
+    análisis de Neyman."""
     if perfil is None:
         perfil = perfil_lsf_cielo(ctx)[1]["OI6300"]
-    cfg = ctx.cfg("ROXs12b")
+    det = ctx.detectado
+    cfg = ctx.cfg(det)
     lsf = float(cfg["h01_lsf_fwhm_A"])
-    sp = ctx.espectro("ROXs12b", "psffit")
+    sp = ctx.espectro(det, "psffit")
     w, f, err, flags = sp["wave"], sp["flux"], sp["err"], sp["flags"]
-    ctr = ctx.controles("ROXs12b", "psffit")
-    C0 = float(ctx.g2_halpha("ROXs12b")["continuum_density"])
+    ctr = ctx.controles(det, "psffit")
+    C0 = float(ctx.g2_halpha(det)["continuum_density"])
     out = dict(lsf_A=lsf, C0_g2=C0, w10_inst_gauss_sin_muestreo_kms=G10 * lsf / HA_A * C_KMS, metodos={},
                modelos={}, inyeccion_aleatoria=False)
     for m in METODOS:
-        s = ctx.espectro("ROXs12b", m)
+        s = ctx.espectro(det, m)
         r = mide_todo(s["wave"], s["flux"], s["err"], HA_A, s["flags"], con_ajuste=False)
         r["cruce_med_sin_lsf_gauss"] = cn.sin_lsf_kms(r["cruce_med"], lsf)
         out["metodos"][m] = r
@@ -816,14 +863,15 @@ def _imprime_w10(out):
 #: tipos de las plantillas que entran (por el nombre del fichero)
 SPT_PLANTILLAS = ("M6", "M7", "M8", "M9", "L0", "L1")
 BIBLIOTECAS = ("templates_young", "templates_young_lateM_xshooter", "templates_xshyne_L_xshooter")
-#: plantillas por objeto para predecir el continuo (tipo óptico del paper: 12 b M7.5–M8, 42B b M9.5 o más tardío).
-#: Fuera: USco J16073798 (Hα en «absorción» de 27 Å a su resolución nativa: artefacto) y 2MASS0616 (continuo negativo
-#: en Hα). Las de Manara et al. (2013/2017) son Class III de A_V ≲ 0.2 (ReadMe de J/A+A/551/A107); las de USco pueden
-#: estar enrojecidas (no se corrige: baja la predicción, conservador para la EW).
-USO_CONTINUO = {"ROXs12b": ("J11195652-7504529_M7", "LM601_M7.5", "CHSM17173_M8", "USco_J16104713-2239496_M8.5",
+#: plantillas para predecir el continuo, por el papel del compañero (sus tipos ópticos en el paper: el detectado, 12 b,
+#: M7.5–M8 -> M7–M8.5; el de la cota, 42B b, M9.5 o más tardío -> M9–L1). Fuera: USco J16073798 (Hα en «absorción» de
+#: 27 Å a su resolución nativa: artefacto) y 2MASS0616 (continuo negativo en Hα). Las de Manara et al. (2013/2017) son
+#: Class III de A_V ≲ 0.2 (ReadMe de J/A+A/551/A107); las de USco pueden estar enrojecidas (no se corrige: baja la
+#: predicción, conservador para la EW).
+USO_CONTINUO = {DETECCION: ("J11195652-7504529_M7", "LM601_M7.5", "CHSM17173_M8", "USco_J16104713-2239496_M8.5",
                             "VISTA_J16072381-2211021_M8.5"),
-                "ROXs42Bb": ("TWA26_M9", "TWA29_M9.5", "USco_J16081842-2232252_M9", "2MASS0046_L0", "2MASS0518_L1",
-                             "2MASS1207_L1", "2MASS1826_L1", "WISE0528_L1")}
+                LIMITE: ("TWA26_M9", "TWA29_M9.5", "USco_J16081842-2232252_M9", "2MASS0046_L0", "2MASS0518_L1",
+                         "2MASS1207_L1", "2MASS1826_L1", "WISE0528_L1")}
 MANARA = ("J11195652-7504529_M7", "LM601_M7.5", "CHSM17173_M8", "TWA26_M9", "TWA29_M9.5")
 #: la comparación de W10 (Sect. 4.1: «M7–M9.5 ... 230–310 km/s») va sin las dos USco M9: J16073798 tiene Hα en
 #: absorción a su resolución nativa, y en J16081842 el «pico» es más estrecho que la resolución nativa (FWHM 24 km/s
@@ -922,16 +970,17 @@ def rojo(w, f):
 
 def mide_plantillas(ctx, modo_r="declaracion"):
     """Cada plantilla M6–L1 de las bibliotecas jóvenes de G3, a su resolución nativa y degradada a MUSE e integrada en
-    los canales de 12 b con el pico en el del compañero: EW (cuatro definiciones), W10 y FWHM (estimador del paper), y
-    el cociente C(Hα, G2)/nivel rojo."""
+    los canales del compañero detectado (12 b) con el pico en el suyo: EW (cuatro definiciones), W10 y FWHM
+    (estimador del paper), y el cociente C(Hα, G2)/nivel rojo."""
     from musepipe.models.libraries import resolve_declaration, template_library_entries
     from musepipe.models.templates import EmpiricalTemplateLibrary
+    det = ctx.detectado
     raiz = ctx.bibliotecas()
-    sp = ctx.espectro("ROXs12b", "psffit")
+    sp = ctx.espectro(det, "psffit")
     w_obj = sp["wave"]
-    lsf = float(ctx.cfg("ROXs12b")["h01_lsf_fwhm_A"])
-    cat = ctx.catalogo("ROXs12b")
-    entradas_g3 = {e["subdir"]: e for e in template_library_entries(ctx.cfg("ROXs12b"))}
+    lsf = float(ctx.cfg(det)["h01_lsf_fwhm_A"])
+    cat = ctx.catalogo(det)
+    entradas_g3 = {e["subdir"]: e for e in template_library_entries(ctx.cfg(det))}
     filas = []
     for nombre_lib in BIBLIOTECAS:
         fam = raiz / nombre_lib
@@ -967,11 +1016,12 @@ def fotosferas_btsettl(ctx):
     """La «EW» que cada definición del continuo mide sobre una fotosfera BT-Settl pura (sin emisión, vacío -> aire),
     degradada igual: el cero fotosférico de cada definición (> 0 = absorción)."""
     from musepipe.models.airvac import vacuum_to_air
+    det = ctx.detectado
     raiz = ctx.bibliotecas()
-    sp = ctx.espectro("ROXs12b", "psffit")
+    sp = ctx.espectro(det, "psffit")
     w_obj = sp["wave"]
-    lsf = float(ctx.cfg("ROXs12b")["h01_lsf_fwhm_A"])
-    cat = ctx.catalogo("ROXs12b")
+    lsf = float(ctx.cfg(det)["h01_lsf_fwhm_A"])
+    cat = ctx.catalogo(det)
     fot = []
     for teff in TEFF_BTSETTL:
         for logg in LOGG_BTSETTL:
@@ -1017,11 +1067,12 @@ def prediccion_continuo(ctx, filas, ewj, av_nodos):
     for r in filas:
         cocientes.setdefault(r["plantilla"], []).append(r["cociente_C_rojo"])
     out = dict(k_ha=k_ha, k_rojo=k_rojo, dk=dk, objetos={})
-    for slug, nombres in USO_CONTINUO.items():
+    for slug in ctx.slugs:
+        nombres = USO_CONTINUO[ctx.papel(slug)]
         q = {n: float(np.mean(cocientes[n])) for n in nombres if n in cocientes}
         qm = {n: v for n, v in q.items() if n in MANARA}
         esc = ctx.escala_cgs(slug)[0]
-        lims = ctx.limites_e3(slug) if slug == "ROXs42Bb" else None
+        lims = ctx.limites_e3(slug) if ctx.papel(slug) == LIMITE else None
         o = dict(cocientes=q, av_nodos=list(av_nodos[slug]), metodos={})
         for m in CON_CONTINUO:
             fila = next(x for x in ewj["filas"] if x["slug"] == slug and x["metodo"] == m and x["definicion"] == "G2")
@@ -1050,13 +1101,18 @@ def prediccion_continuo(ctx, filas, ewj, av_nodos):
 
 
 def nodos_av(ctx):
-    """Las A_V a las que se predice el continuo: la adoptada (`h03_av`), 3.0 y, para 12 b, la del ajuste con prior
-    (Tabla B.6, de las cadenas: 3.74); para 42B b, la adoptada."""
-    av12 = [float(ctx.cfg("ROXs12b")["h03_av"]), 3.0]
-    prior = av_prior_bt_settl(ctx, "ROXs12b")
-    if prior is not None:
-        av12.append(prior)
-    return {"ROXs12b": tuple(av12), "ROXs42Bb": (float(ctx.cfg("ROXs42Bb")["h03_av"]),)}
+    """Las A_V a las que se predice el continuo: para el compañero detectado (12 b), la adoptada (`h03_av`), 3.0 y la
+    del ajuste con prior (Tabla B.6, de las cadenas: 3.74); para el de la cota (42B b), la adoptada."""
+    out = {}
+    for slug in ctx.slugs:
+        av = [float(ctx.cfg(slug)["h03_av"])]
+        if ctx.papel(slug) == DETECCION:
+            av.append(3.0)
+            prior = av_prior_bt_settl(ctx, slug)
+            if prior is not None:
+                av.append(prior)
+        out[slug] = tuple(av)
+    return out
 
 
 def cmd_plantillas(ctx, ewj=None, modo_r="declaracion"):
@@ -1066,7 +1122,7 @@ def cmd_plantillas(ctx, ewj=None, modo_r="declaracion"):
     fot = fotosferas_btsettl(ctx)
     cont = prediccion_continuo(ctx, filas, ewj, nodos_av(ctx))
     out = dict(modo_r=modo_r, plantillas=filas, fotosferas=fot, continuo=cont)
-    out["resumen"] = resumen_plantillas(out)
+    out["resumen"] = resumen_plantillas(out, ctx.detectado, ctx.limite)
     _imprime_plantillas(out)
     return out
 
@@ -1076,15 +1132,16 @@ def _code(spt):
     return spt_code(str(spt))
 
 
-def resumen_plantillas(out):
+def resumen_plantillas(out, det, lim):
     """Las cifras del texto: la W10 a la resolución de MUSE de las Class III M7–M9.5 (sin `EXCLUIDAS_W10`), la EW de
-    las M9/M9.5 de Manara, la EW de 12 b con el continuo predicho por A_V (psffit) y el límite de EW de 42B b."""
+    las M9/M9.5 de Manara, la EW del compañero detectado `det` con el continuo predicho por A_V (psffit) y el límite
+    de EW del de la cota `lim`."""
     sel = [r for r in out["plantillas"] if _code("M7") <= _code(r["spt"]) <= _code("M9.5")
            and r["plantilla"] not in EXCLUIDAS_W10 and np.isfinite(r["w10_muse"])]
     w10 = [r["w10_muse"] for r in sel]
     m9 = [-r["ew_muse"]["G2"] for r in out["plantillas"] if r["plantilla"] in MANARA_M9]
-    c12 = out["continuo"]["objetos"]["ROXs12b"]["metodos"]["psffit"]["prediccion"]
-    c42 = out["continuo"]["objetos"]["ROXs42Bb"]["metodos"]["psffit"]["prediccion"]
+    c12 = out["continuo"]["objetos"][det]["metodos"]["psffit"]["prediccion"]
+    c42 = out["continuo"]["objetos"][lim]["metodos"]["psffit"]["prediccion"]
     ew12 = {av: sorted(-x for x in d["EW_pred_rango"]) for av, d in c12.items()}
     lim42 = {av: d["EWlim_pred_rango"] for av, d in c42.items()}
     todos12 = [x for v in ew12.values() for x in v]
@@ -1138,8 +1195,13 @@ def _imprime_plantillas(out):
 def cmd_primaria(ctx, inst=None, plantillas=None, ewj=None):
     """Sect. 5.1: la W10 de la primaria por noche (`cifras_por_noche_d2.noche`), sin la LSF gaussiana (lo que da ese
     script, 484/250) y sin la W10 instrumental del estimador (211–222 km/s, la de `w10`). Sect. 4.1: la fuga de la
-    primaria, su EW de la noche buena (±6 Å) entre la EW del compañero (G2) o la de las plantillas a la A_V adoptada."""
-    perfil = ctx.perfil("ROXs12b")["paper"]
+    primaria, su EW de la noche buena (±6 Å) entre la EW del compañero (G2) o la de las plantillas a la A_V adoptada.
+    Es el sistema del compañero detectado: su `targets/<slug>.json` -> `paper` declara las dos noches
+    (`previous_run`, la buena, y `second_epoch_run`)."""
+    det = ctx.detectado
+    perfil = ctx.perfil(det)["paper"]
+    if not all(k in perfil for k in ("previous_run", "second_epoch_run")):
+        raise SystemExit(f"{det}: targets/ no declara las dos noches (paper.previous_run, paper.second_epoch_run)")
     if inst is None:
         inst = instrumentales(ctx)
     noches = {}
@@ -1155,7 +1217,7 @@ def cmd_primaria(ctx, inst=None, plantillas=None, ewj=None):
         plantillas = cmd_plantillas(ctx, ewj)
     n1 = noches[perfil["previous_run"]]
     ew_comp = -ewj["resumen"]["ew_g2"]
-    av0 = f"{float(ctx.cfg('ROXs12b')['h03_av']):g}"
+    av0 = f"{float(ctx.cfg(det)['h03_av']):g}"
     ew_plant = min(plantillas["resumen"]["ew_12b_por_av"][av0])
     fuga = dict(ew_primaria_noche1=-n1["EW_prim_A"], ew_companero_g2=ew_comp, ew_plantillas_av_adoptada=ew_plant,
                 f_max=-n1["EW_prim_A"] / ew_comp, f_max_plantillas=-n1["EW_prim_A"] / ew_plant)
@@ -1357,11 +1419,12 @@ def cmd_cromosfera(ctx):
     from scripts import teff_bayes as tb
     if not ctx.cadenas.is_dir():
         raise SystemExit(f"sin las cadenas de T_eff en {ctx.cadenas} (--cadenas DIR)")
-    cfg12 = ctx.cfg("ROXs12b")
-    a, b = float(cfg12["h03_lacc_lha_a"]), float(cfg12["h03_lacc_lha_b"])
-    g2 = ctx.g2_halpha("ROXs12b")
-    # el error del flujo de la línea de 12 b (G2: 2381 ± 247, 10.37 %), en L_acc; el mismo ancho para las dos (la
-    # sesión usó 10.4 %, redondeado: las fracciones cambian en < 5e-5)
+    det = ctx.detectado
+    cfg_det = ctx.cfg(det)
+    a, b = float(cfg_det["h03_lacc_lha_a"]), float(cfg_det["h03_lacc_lha_b"])
+    g2 = ctx.g2_halpha(det)
+    # el error del flujo de la línea detectada (12 b; G2: 2381 ± 247, 10.37 %), en L_acc; el mismo ancho para los dos
+    # (la sesión usó 10.4 %, redondeado: las fracciones cambian en < 5e-5)
     sig_f_dex = a * math.log10(1 + g2["flux_direct_err"] / g2["flux_direct"])
     rng = np.random.default_rng(SEMILLA_CROMOSFERA)
     pob, filas_m13 = poblacion_manara(a, b, rng)
@@ -1373,7 +1436,7 @@ def cmd_cromosfera(ctx):
     print("  tardías:", pob["tardias"])
     print("  σ de los coeficientes (bootstrap) a 2400/2600/2800 K:",
           [round(float(sigma_coef(pob, t)), 3) for t in (2400, 2600, 2800)])
-    for slug in SLUGS:
+    for slug in ctx.slugs:
         entrada = tb.entrada_margen(slug, root=ctx.root)
         filas = [evalua_cadena(d, entrada, pob, rng, sig_f_dex, a, b) for d in carga_cadenas(ctx.cadenas, slug)]
         filas += evo_solo_filas(ctx, slug, entrada, pob, rng, sig_f_dex, a, b)
@@ -1387,13 +1450,13 @@ def cmd_cromosfera(ctx):
                   f"{dd[0]:+.2f}/{dd[1]:+.2f}/{dd[2]:+.2f} | {r['p_bajo_suelo']:.2f} | {r['P_pob_todas']:.2f} | "
                   f"{r['P_pob_tardias']:.2f} | {r['lha_lbol_p16_50_84'][1]:+.2f} | {r['P_saturacion']:.3f} |")
     out["west2011"] = {spt: fracciones_west(*lee_west2011(spt)) for spt in ("M7", "M8", "M9")}
-    out["resumen"] = resumen_cromosfera(out)
+    out["resumen"] = resumen_cromosfera(out, det, ctx.limite)
     r = out["resumen"]
     print("\nWest et al. 2011, activas con EW ≥ 26.2 Å:",
           {k: round(v["frac_activas_ge"]["26.2"], 3) for k, v in out["west2011"].items()})
-    print(f"Tabla B.7 (12 b), P_pob: A_V 1.8 {r['P_12b_av18']}, 3.0 {r['P_12b_av30']}, prior {r['P_12b_prior']}; "
+    print(f"Tabla B.7 ({det}), P_pob: A_V 1.8 {r['P_12b_av18']}, 3.0 {r['P_12b_av30']}, prior {r['P_12b_prior']}; "
           f"solo M6.5–M9.5 a 1.8 {r['P_12b_tardias_av18']}")
-    print(f"Tabla B.6 (42B b, BT-Settl y DRIFT-PHOENIX, A_V ≤ 3): {r['P_42bb_av_le_3']}")
+    print(f"Tabla B.6 ({ctx.limite}, BT-Settl y DRIFT-PHOENIX, A_V ≤ 3): {r['P_42bb_av_le_3']}")
     return out
 
 
@@ -1401,13 +1464,14 @@ def _rango(v):
     return [float(min(v)), float(max(v))]
 
 
-def resumen_cromosfera(out):
+def resumen_cromosfera(out, det, lim):
     """Las cifras del apéndice B y de la Sect. 4.1/4.2: la media y la dispersión de la población, el bootstrap a
-    2400–2800 K, las tardías, y los rangos de P_pob sobre las filas de la Tabla B.7 (12 b, semilla 1, A_V 1.8, 3.0 y
-    con prior) y de la Tabla B.6 (42B b, BT-Settl y DRIFT-PHOENIX, semilla 1, A_V ≤ 3)."""
+    2400–2800 K, las tardías, y los rangos de P_pob sobre las filas de la Tabla B.7 del compañero detectado `det`
+    (12 b; semilla 1, A_V 1.8, 3.0 y con prior) y de la Tabla B.6 del de la cota `lim` (42B b; BT-Settl y
+    DRIFT-PHOENIX, semilla 1, A_V ≤ 3)."""
     pob = out["poblacion"]
-    f12 = [r for r in out["objetos"]["ROXs12b"]["filas"] if r.get("tabla_b7") and r.get("semilla") == 1]
-    f42 = [r for r in out["objetos"]["ROXs42Bb"]["filas"] if r.get("tabla_b6") and r.get("semilla") == 1
+    f12 = [r for r in out["objetos"][det]["filas"] if r.get("tabla_b7") and r.get("semilla") == 1]
+    f42 = [r for r in out["objetos"][lim]["filas"] if r.get("tabla_b6") and r.get("semilla") == 1
            and r["av_p50"] <= 3.0 + 1e-9]
     por_av = {k: [r for r in f12 if r["av_fija"] == v] for k, v in (("av18", 1.8), ("av30", 3.0), ("prior", None))}
     return dict(media_ha=pob["ha"]["media"], sd_ha=pob["ha"]["sd"], n_ha=pob["ha"]["n"],
@@ -1419,7 +1483,7 @@ def resumen_cromosfera(out):
                 P_12b_tardias_av18=_rango([r["P_pob_tardias"] for r in por_av["av18"]]),
                 n_filas_tabla_b7={k: len(v) for k, v in por_av.items()},
                 P_42bb_av_le_3=_rango([r["P_pob_todas"] for r in f42]), n_filas_42bb=len(f42),
-                P_saturacion_12b_av_le_38=max(r["P_saturacion"] for r in out["objetos"]["ROXs12b"]["filas"]
+                P_saturacion_12b_av_le_38=max(r["P_saturacion"] for r in out["objetos"][det]["filas"]
                                               if r["av_p50"] <= 3.8))
 
 
