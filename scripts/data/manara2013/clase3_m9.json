@@ -1,0 +1,39 @@
+{
+  "cita": "Manara, C. F., Testi, L., Rigliaco, E., et al. 2013, A&A, 551, A107",
+  "doi": "10.1051/0004-6361/201220921",
+  "arxiv": "1301.3058v1",
+  "que_es": "Las dos Clase III mas tardias de la muestra (M9 y M9.5), con los datos que hacen falta para expresar sus lineas en L_line/L_bol: distancia (Tabla 1), log L* (Tabla 3), flujo de Halpha (Tabla 6) y flujos del triplete del Ca II (Tabla 7). Ver README.md.",
+  "unidades": {
+    "d_pc": "pc (Tabla 1, columna D)",
+    "log_lstar": "log(L*/Lsun) (Tabla 3)",
+    "teff_k": "K (Tabla 3)",
+    "flujo_cgs": "erg s-1 cm-2, observado (Tablas 6 y 7); la Tabla 6 da 1e-14 erg s-1 cm-2 y aqui va ya multiplicado"
+  },
+  "limites": "`limite: true` es un '<' de la tabla: un limite superior a 3 sigma de los autores (Sect. 6.1, texto de las Figs. 10-11)",
+  "objetos": {
+    "TWA26": {
+      "spt": "M9",
+      "d_pc": 42.0,
+      "log_lstar": -2.70,
+      "teff_k": 2400.0,
+      "lineas": {
+        "Halpha": {"flujo_cgs": 5.2e-16, "limite": false, "fuente": "Tabla 6: 0.052 +- 0.008 (1e-14)"},
+        "Ca II 8498": {"flujo_cgs": 1.10e-16, "limite": true, "fuente": "Tabla 7, CaII 849.9: <1.10e-16"},
+        "Ca II 8542": {"flujo_cgs": 1.69e-16, "limite": true, "fuente": "Tabla 7, CaII 854.2: <1.69e-16"},
+        "Ca II 8662": {"flujo_cgs": 8.50e-17, "limite": true, "fuente": "Tabla 7, CaII 866.2: <8.50e-17"}
+      }
+    },
+    "TWA29": {
+      "spt": "M9.5",
+      "d_pc": 79.0,
+      "log_lstar": -2.81,
+      "teff_k": 2330.0,
+      "lineas": {
+        "Halpha": {"flujo_cgs": 1.9e-16, "limite": false, "fuente": "Tabla 6: 0.019 +- 0.003 (1e-14)"},
+        "Ca II 8498": {"flujo_cgs": 2.59e-17, "limite": true, "fuente": "Tabla 7, CaII 849.9: <2.59e-17"},
+        "Ca II 8542": {"flujo_cgs": 4.37e-17, "limite": true, "fuente": "Tabla 7, CaII 854.2: <4.37e-17"},
+        "Ca II 8662": {"flujo_cgs": 2.73e-17, "limite": true, "fuente": "Tabla 7, CaII 866.2: <2.73e-17"}
+      }
+    }
+  }
+}
