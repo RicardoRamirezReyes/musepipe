@@ -1058,6 +1058,26 @@ def comprueba(dirs, dirs_rejilla=None):
     return filas
 
 
+def bins_muse(slug):
+    """{variante: dict(n, w_min, w_max, por_banda)} de los bins de 15 Å del espectro MUSE que entran en el ajuste con
+    cada variante de `MASCARAS_MUSE` (`tipo_ir_plantillas.segmento_muse`, sin leer ninguna rejilla: con las rejillas
+    de las tablas, todos los bins de MUSE caen dentro de los modelos). `por_banda`: los bins cuyo centro cae en cada
+    banda telúrica de `musepipe.telluric_lines.TELLURIC_BANDS` (± medio bin)."""
+    from musepipe.telluric_lines import TELLURIC_BANDS
+    from scripts import tipo_ir_indices as tir
+    from scripts import tipo_ir_plantillas as tp
+    run = tir.perfil(slug)["paper"]["run"]
+    out = {}
+    for m, v in MASCARAS_MUSE.items():
+        s = tp.segmento_muse(run, h2o=v["h2o"], o2=v["o2"])
+        w = s["w"][s["bueno"]]
+        medio = float(np.median(s["hi"] - s["lo"])) / 2
+        out[m] = dict(n=int(w.size), w_min=float(w.min()), w_max=float(w.max()),
+                      por_banda={b["name"]: int(np.sum((w >= b["lo_A"] - medio) & (w <= b["hi_A"] + medio)))
+                                 for b in TELLURIC_BANDS})
+    return out
+
+
 def fija_raiz(raiz):
     """Lee los runs y las bibliotecas de otro clon (`--project-root`), como `paper_figures.py --project-root`: un
     worktree no lleva `runs/`, y `g3_libraries_root` es relativo a la raíz. Cambia la raíz de este script y la de
@@ -1118,6 +1138,9 @@ def main(argv=None):
     ac.add_argument("--dir-rejilla", action="append", default=None, metavar="REJILLA=DIR",
                     help="directorio de npz de una rejilla que no está en la ruta de REJILLAS (repetible)")
     ac.add_argument("--json", type=Path)
+    ab = sub.add_parser("bins", parents=[comun], help="bins de MUSE que entran en el ajuste con cada --mascara-muse")
+    ab.add_argument("slugs", nargs="*", help="por defecto, los objetos del paper (targets/*.json con `paper`)")
+    ab.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
     if a.project_root is not None:
         fija_raiz(a.project_root)
@@ -1129,6 +1152,16 @@ def main(argv=None):
         if a.json:
             a.json.write_text(json.dumps(filas, indent=1, ensure_ascii=False, default=float) + "\n")
         return 0 if filas and all(f["bit_a_bit"] and f["n_puntos_iguales"] for f in filas) else 1
+    if a.orden == "bins":
+        from scripts.halpha_criterios import objetos_del_paper
+        res = {s: bins_muse(s) for s in (a.slugs or objetos_del_paper(Path(__file__).resolve().parents[1]))}
+        for s, r in res.items():
+            for m, v in r.items():
+                bandas = ", ".join(f"{k} {n}" for k, n in v["por_banda"].items() if n)
+                print(f"{s} {m}: {v['n']} bins en {v['w_min']:.1f}–{v['w_max']:.1f} Å" + (f" ({bandas})" if bandas else ""))
+        if a.json:
+            a.json.write_text(json.dumps(res, indent=1, ensure_ascii=False) + "\n")
+        return 0
     if a.orden == "tabla":
         tabla(a.dirs)
         return 0

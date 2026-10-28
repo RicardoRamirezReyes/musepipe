@@ -208,6 +208,14 @@ class DatosRealesTests(unittest.TestCase):
             self.assertEqual(n["sin_o2"] - n["paper"], n["sin_telurico"] - n["g3"], slug)   # los de O2
             self.assertGreater(n["sin_o2"], n["paper"])
             self.assertGreater(n["g3"], n["paper"])
+            # `teff_bayes.py bins` cuenta lo mismo y reparte los bins por banda telúrica
+            b = self.tb.bins_muse(slug)
+            self.assertEqual({m: v["n"] for m, v in b.items()}, n)
+            for m in ("paper", "g3"):
+                self.assertEqual((b[m]["por_banda"]["O₂ B"], b[m]["por_banda"]["O₂ A"]), (0, 0), (slug, m))
+            for m in ("sin_o2", "sin_telurico"):
+                self.assertGreater(b[m]["por_banda"]["O₂ A"], 0, (slug, m))
+            self.assertEqual(b["sin_o2"]["por_banda"]["H₂O 8200"], 0, slug)
 
     def test_sin_o2_destapa_las_dos_bandas_de_o2(self):
         run = next(iter(self.runs.values()))
