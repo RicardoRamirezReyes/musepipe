@@ -239,8 +239,31 @@ def segmentos_ir(slug, telurico=True):
     return segs
 
 
-def segmento_muse(run, h2o=True):
+def sin_o2(cfg):
+    """Copia del config de un run sin las bandas de O2 en `g3_fit_masks.telluric_bands_A` (las que solapan una
+    banda de O2 de `musepipe.telluric_lines.TELLURIC_BANDS`; sin la clave, las de D9 por defecto). Las demás
+    bandas, las líneas y los canales malos se quedan. No toca `cfg` ni nada en `runs/` (pruebas exploratorias de
+    las máscaras de MUSE, 2026-10-28)."""
+    import copy
+
+    from musepipe.models.observed import DEFAULT_TELLURIC_BANDS_A
+    from musepipe.telluric_lines import TELLURIC_BANDS
+    o2 = [(b["lo_A"], b["hi_A"]) for b in TELLURIC_BANDS if b["species"] == "O2"]
+    out = copy.deepcopy(cfg)
+    fm = dict(out.get("g3_fit_masks", {}))
+    bandas = fm.get("telluric_bands_A", DEFAULT_TELLURIC_BANDS_A)
+    fm["telluric_bands_A"] = [[float(lo), float(hi)] for lo, hi in bandas
+                              if not any(float(lo) < b_hi and float(hi) > b_lo for b_lo, b_hi in o2)]
+    out["g3_fit_masks"] = fm
+    return out
+
+
+def segmento_muse(run, h2o=True, o2=True):
+    """El segmento de MUSE: el espectro de G3 con sus máscaras, más las de H2O (`h2o`). `o2=False` quita las de
+    O2 de la máscara de G3 en una copia del config (`sin_o2`)."""
     cfg = load_run_config(run, project_root=ROOT).config
+    if not o2:
+        cfg = sin_o2(cfg)
     inputs = load_fit_inputs(cfg, RunPaths.from_project_root(run, ROOT))
     if h2o:
         for lo, hi in H2O_MUSE_A:
@@ -415,8 +438,9 @@ def curvas_por_biblioteca(pls, res, escala):
 
 
 def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo_binado=False,
-             bibliotecas=("manara", "lateM", "xshyne")):
-    """Plantillas, segmentos, modelos base, rejilla de A_V y A_V de la Tabla 1 de un objeto."""
+             bibliotecas=("manara", "lateM", "xshyne"), o2_muse=True):
+    """Plantillas, segmentos, modelos base, rejilla de A_V y A_V de la Tabla 1 de un objeto. `o2_muse=False`:
+    sin las bandas de O2 de G3 en MUSE (`segmento_muse(..., o2=False)`)."""
     run = tir.perfil(slug)["paper"]["run"]
     cfg = load_run_config(run, project_root=ROOT).config
     lo, hi, paso = cfg["g3_atmo_av_axis"]
@@ -428,7 +452,7 @@ def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo
     if modo in ("ir", "combinado"):
         segs += segmentos_ir(slug, telurico=telurico_ir)
     if modo in ("muse", "combinado"):
-        segs.append(segmento_muse(run, h2o=h2o_muse))
+        segs.append(segmento_muse(run, h2o=h2o_muse, o2=o2_muse))
     return dict(run=run, pls=pls, segs=segs, bases=modelos_base(pls, segs, solo_binado_ir=solo_binado),
                 av_axis=av_axis, av_tabla=av_tabla)
 

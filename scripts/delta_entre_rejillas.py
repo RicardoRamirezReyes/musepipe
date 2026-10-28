@@ -395,7 +395,7 @@ def modelo_de(d, dir_rejilla=None):
     `teff_bayes.REJILLAS` (ATMO 2020 se convierte a la ruta que se quiera)."""
     mod = tb.Modelo(d["slug"], d["modo"], d["av"], "ATMO2020", None, None, None, d["semilla"], d.get("av_fija"),
                     d.get("rejilla", "btsettl"), dir_rejilla, d.get("datos", "todo"), d.get("r_analisis", 500) == 250,
-                    d.get("degrada") or "cuadratura")
+                    d.get("degrada") or "cuadratura", mascara_muse=d.get("mascara_muse", "paper"))
     th = np.array([d["mejor"][k] for k in mod.nombres])
     return mod, th
 
