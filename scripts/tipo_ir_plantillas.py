@@ -266,19 +266,77 @@ def sin_o2(cfg, bandas=O2_MUSE):
     return out
 
 
-def segmento_muse(run, h2o=True, quita_o2=()):
-    """El segmento de MUSE: el espectro de G3 con sus máscaras, más las de H2O (`h2o`). `quita_o2`: las bandas de O2
-    (`O2_MUSE`) que se quitan de la máscara de G3, en una copia del config (`sin_o2`)."""
+#: Hα en reposo (aire), la del catálogo de G2: la línea a la que `--ventana-halpha` da su propia ventana
+HALPHA_A = 6562.8
+
+
+def ventanas_de_lineas(cfg, ventana_kms=None, ventana_ha_kms=None):
+    """Ventanas de las líneas de G2 distintas de las del run (pregunta del autor 2026-10-28: ¿qué anchura extrae más
+    información sin sesgo?). Devuelve `(cfg2, extra)`: una COPIA del config con `g3_fit_masks.line_window_kms` = la
+    menor de las dos anchuras (`ventana_kms` para todas las líneas, `ventana_ha_kms` para Hα; la que sea None, la del
+    run, 300 km/s por defecto), y `extra` = [(es_halpha, kms)]: las líneas (Hα o las demás) que llevan la mayor, para
+    añadirlas a la máscara con la misma regla que `build_fit_masks` (`ventana_extra`). Con las dos None devuelve el
+    config tal cual y `extra` vacío. No toca `cfg` ni nada en `runs/`."""
+    import copy
+    if ventana_kms is None and ventana_ha_kms is None:
+        return cfg, []
+    fm = dict(cfg.get("g3_fit_masks", {}))
+    resto = float(ventana_kms) if ventana_kms is not None else float(fm.get("line_window_kms", 300.0))
+    ha = float(ventana_ha_kms) if ventana_ha_kms is not None else resto
+    if resto < 0 or ha < 0:
+        raise ValueError(f"ventanas negativas: {resto}, {ha} km/s")
+    base = min(resto, ha)
+    out = copy.deepcopy(cfg)
+    fm["line_window_kms"] = base
+    out["g3_fit_masks"] = fm
+    extra = [(True, ha)] if ha > base else ([(False, resto)] if resto > base else [])
+    return out, extra
+
+
+def ventana_extra(wave, rests, extra):
+    """Máscara (True = fuera) de las ventanas de `extra` (`ventanas_de_lineas`) alrededor de las líneas de reposo
+    `rests`, con la regla de `musepipe.models.observed.build_fit_masks` (±rest·kms/c, extremos incluidos)."""
+    from musepipe.constants import C_KMS
+    wave = np.asarray(wave, float)
+    m = np.zeros(wave.size, bool)
+    for es_ha, kms in extra:
+        for rest in rests:
+            if (abs(float(rest) - HALPHA_A) < 1.0) != es_ha:
+                continue
+            half = rest * kms / C_KMS
+            m |= (wave >= rest - half) & (wave <= rest + half)
+    return m
+
+
+def entradas_muse(run, h2o=True, quita_o2=(), ventana_kms=None, ventana_ha_kms=None):
+    """Lo que entra en `fit_spectrum_from_inputs` para el segmento de MUSE: `(inputs, cfg, kernel)`, con las máscaras
+    de G3, más las de H2O (`h2o`), sin las bandas de O2 `quita_o2` y con las ventanas de las líneas que se pidan
+    (`ventanas_de_lineas`); `kernel(λ)` es la FWHM del degradado a R = 500. `segmento_muse` lo usa tal cual;
+    `scripts/ventanas_lineas.py` inyecta líneas en `inputs` para medir su fuga."""
+    from musepipe.models.observed import _g2_rest_wavelengths
     cfg = load_run_config(run, project_root=ROOT).config
     if quita_o2:
         cfg = sin_o2(cfg, tuple(quita_o2))
-    inputs = load_fit_inputs(cfg, RunPaths.from_project_root(run, ROOT))
+    cfg, extra = ventanas_de_lineas(cfg, ventana_kms, ventana_ha_kms)
+    rp = RunPaths.from_project_root(run, ROOT)
+    inputs = load_fit_inputs(cfg, rp)
+    if extra:
+        inputs["mask"] = inputs["mask"] | ventana_extra(inputs["wave"], _g2_rest_wavelengths(rp.table_dir), extra)
+        inputs["mask_prov"] = {**inputs["mask_prov"], "ventanas_extra": [dict(halpha=h, kms=k) for h, k in extra]}
     if h2o:
         for lo, hi in H2O_MUSE_A:
             inputs["mask"] = inputs["mask"] | ((inputs["wave"] >= lo) & (inputs["wave"] <= hi))
     lsf = float(cfg["h01_lsf_fwhm_A"])
+    return inputs, cfg, (lambda w: np.sqrt(np.clip((w / R_OBJ) ** 2 - lsf ** 2, 0, None)))
+
+
+def segmento_muse(run, h2o=True, quita_o2=(), ventana_kms=None, ventana_ha_kms=None):
+    """El segmento de MUSE: el espectro de G3 con sus máscaras, más las de H2O (`h2o`). `quita_o2`: las bandas de O2
+    (`O2_MUSE`) que se quitan de la máscara de G3, en una copia del config (`sin_o2`). `ventana_kms` /
+    `ventana_ha_kms`: las ventanas de las líneas (`ventanas_de_lineas`; None = las del run)."""
+    inputs, cfg, kernel = entradas_muse(run, h2o, quita_o2, ventana_kms, ventana_ha_kms)
     fs = fit_spectrum_from_inputs(inputs, n_channels=12, wave_range=cfg["g3_fit_wave_range_A"],
-                                  data_kernel_fwhm_A=lambda w: np.sqrt(np.clip((w / R_OBJ) ** 2 - lsf ** 2, 0, None)))
+                                  data_kernel_fwhm_A=kernel)
     w = np.asarray(fs.wave_bin, float)
     medio = 12 * float(np.median(np.diff(inputs["wave"]))) / 2
     return dict(nombre="MUSE", brazo="vis", w=w, lo=w - medio, hi=w + medio, f=np.asarray(fs.flux_bin, float),
@@ -446,9 +504,10 @@ def curvas_por_biblioteca(pls, res, escala):
 
 
 def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo_binado=False,
-             bibliotecas=("manara", "lateM", "xshyne"), quita_o2_muse=()):
+             bibliotecas=("manara", "lateM", "xshyne"), quita_o2_muse=(), ventana_kms=None, ventana_ha_kms=None):
     """Plantillas, segmentos, modelos base, rejilla de A_V y A_V de la Tabla 1 de un objeto. `quita_o2_muse`: las
-    bandas de O2 de G3 que no se enmascaran en MUSE (`segmento_muse(..., quita_o2=...)`)."""
+    bandas de O2 de G3 que no se enmascaran en MUSE (`segmento_muse(..., quita_o2=...)`); `ventana_kms` /
+    `ventana_ha_kms`, las ventanas de las líneas en MUSE (None = las del run)."""
     run = tir.perfil(slug)["paper"]["run"]
     cfg = load_run_config(run, project_root=ROOT).config
     lo, hi, paso = cfg["g3_atmo_av_axis"]
@@ -460,7 +519,8 @@ def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo
     if modo in ("ir", "combinado"):
         segs += segmentos_ir(slug, telurico=telurico_ir)
     if modo in ("muse", "combinado"):
-        segs.append(segmento_muse(run, h2o=h2o_muse, quita_o2=quita_o2_muse))
+        segs.append(segmento_muse(run, h2o=h2o_muse, quita_o2=quita_o2_muse, ventana_kms=ventana_kms,
+                                  ventana_ha_kms=ventana_ha_kms))
     return dict(run=run, pls=pls, segs=segs, bases=modelos_base(pls, segs, solo_binado_ir=solo_binado),
                 av_axis=av_axis, av_tabla=av_tabla)
 
