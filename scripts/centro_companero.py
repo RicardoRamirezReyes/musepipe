@@ -50,7 +50,9 @@ Reproducir la sesión del 2026-10-21. Sus entradas siguen en la copia que dejó 
 cubo de B2 no ha cambiado. Con `RUN@COPIA`, `--evaluador-descentrado` (`MAOPPY_CENTRADO_PX = 0`, el de entonces) y
 `--fondo-c4 shared`, `--metodos aperture,optimal_ls,psffit` (los cubos de C1b, C5 y C6 de entonces no se guardaron) da
 el z de E1 de la sesión en δ = 0 (12 b: 10.599 / 12.032 / 11.635; 42B b: 2.489 / 2.171 / 2.968) y, con
-`--controles-de-produccion`, el 3.22 de psffit de 42B b a lo largo de la traza.
+`--controles-de-produccion`, el E1 de 42B b a lo largo de la traza (`r4_resumen_companero.json`, caso `dar`): psffit
+z 3.2040 y FAP 0.006230, optimal_ls 2.2737; aperture, que en `s4` sí re-extraía sus controles, 3.0481 con los
+controles re-extraídos. (El 3.22 del INFORME de la sesión es el de la plantilla fija, `r4b`.)
 
 uso:
     python scripts/centro_companero.py --project-root RAIZ --sin-escribir --json SALIDA.json [--figura TRAZA.png]
