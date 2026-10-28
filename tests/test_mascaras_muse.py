@@ -45,11 +45,13 @@ class OpcionMascaraTests(unittest.TestCase):
 
     def test_las_cuatro_variantes(self):
         M = self.tb.MASCARAS_MUSE
-        self.assertEqual(list(M), ["paper", "g3", "sin_o2", "sin_telurico"])
-        self.assertEqual(M["paper"], dict(h2o=True, o2=True))     # lo de las cadenas del paper
-        self.assertEqual(M["g3"], dict(h2o=False, o2=True))
-        self.assertEqual(M["sin_o2"], dict(h2o=True, o2=False))
-        self.assertEqual(M["sin_telurico"], dict(h2o=False, o2=False))
+        self.assertEqual(list(M), ["paper", "g3", "sin_o2", "sin_o2b", "sin_telurico"])
+        self.assertEqual(M["paper"], dict(h2o=True, quita_o2=()))     # lo de las cadenas del paper
+        self.assertEqual(M["g3"], dict(h2o=False, quita_o2=()))
+        self.assertEqual(M["sin_o2"], dict(h2o=True, quita_o2=("O₂ B", "O₂ A")))
+        self.assertEqual(M["sin_o2b"], dict(h2o=True, quita_o2=("O₂ B",)))
+        self.assertEqual(M["sin_telurico"], dict(h2o=False, quita_o2=("O₂ B", "O₂ A")))
+        self.assertEqual(set(M["sin_o2"]["quita_o2"]), set(self.tp.O2_MUSE))
 
     def test_una_variante_que_no_existe_no_se_acepta(self):
         with self.assertRaises(SystemExit):
@@ -66,7 +68,7 @@ class OpcionMascaraTests(unittest.TestCase):
         self.assertEqual(self.tb.etiqueta_de(_args(rejilla="atmo_ceq1500")), "X_atmo_ceq1500_libre_avprimaria_s1")
 
     def test_la_etiqueta_lleva_la_variante(self):
-        for m in ("g3", "sin_o2", "sin_telurico"):
+        for m in ("g3", "sin_o2", "sin_o2b", "sin_telurico"):
             et = self.tb.etiqueta_de(_args(av_fija=1.8, mascara_muse=m))
             self.assertEqual(et, f"X_libre_avprimaria_avfija1.8_mascara-{m}_s1")
         # una etiqueta explícita manda, como antes
@@ -81,7 +83,7 @@ class OpcionMascaraTests(unittest.TestCase):
         d = dict(etiqueta="e", slug="X", modo="libre", av="primaria", rejilla="btsettl", datos="todo", r_analisis=500)
         self.assertTrue(self.tb._de_la_tabla(d))
         self.assertTrue(self.tb._de_rejillas(d))
-        for m in ("g3", "sin_o2", "sin_telurico"):
+        for m in ("g3", "sin_o2", "sin_o2b", "sin_telurico"):
             self.assertFalse(self.tb._de_la_tabla(dict(d, mascara_muse=m)), m)
             self.assertFalse(self.tb._de_rejillas(dict(d, mascara_muse=m)), m)
         self.assertTrue(self.tb._de_la_tabla(dict(d, mascara_muse="paper")))
@@ -98,6 +100,11 @@ class OpcionMascaraTests(unittest.TestCase):
         self.assertEqual(json.dumps(cfg, sort_keys=True), antes)   # copia, no en el sitio
         # sin la clave valen las de D9 por defecto (O2 B y O2 A): no queda ninguna
         self.assertEqual(self.tp.sin_o2({})["g3_fit_masks"]["telluric_bands_A"], [])
+        # una sola banda: O2 B fuera, O2 A dentro
+        self.assertEqual(self.tp.sin_o2(cfg, ("O₂ B",))["g3_fit_masks"]["telluric_bands_A"],
+                         [[7130.0, 7360.0], [7590.0, 7700.0]])
+        with self.assertRaises(ValueError):
+            self.tp.sin_o2(cfg, ("O2 Z",))
 
 
 def _banda_o2_sintetica(w):
@@ -163,6 +170,25 @@ class ResiduoTeluricoTests(unittest.TestCase):
             np.testing.assert_array_equal(w2, self.w)
             np.testing.assert_array_equal(T2, self.T)
 
+    def test_tramos_junta_los_huecos_cortos(self):
+        w = np.arange(0.0, 100.0, 1.0)
+        x = np.zeros_like(w)
+        x[10:20] = x[23:30] = x[60:70] = 1.0
+        self.assertEqual(self.g.tramos(w, x, 0.5, hueco=5.0), [[10.0, 29.0], [60.0, 69.0]])
+        self.assertEqual(self.g.tramos(w, x, 0.5, hueco=2.0), [[10.0, 19.0], [23.0, 29.0], [60.0, 69.0]])
+        self.assertEqual(self.g.tramos(w, np.zeros_like(w), 0.5), [])
+
+    def test_bordes_cuenta_donde_la_curva_vale_uno(self):
+        bd = self.g.bordes(self.w, self.T, regiones=((7500.0, 7800.0),), umbrales=(0.01,),
+                           ventanas={"cola": (7710.0, 7750.0)})
+        self.assertEqual(bd["canales"], self.w.size)
+        self.assertGreater(bd["canales_T_igual_1"], 0)
+        lo, hi = bd["tramos_T_menor_que_1"][0]
+        self.assertGreaterEqual(lo, 7300.0)
+        (t,) = bd["tramos"]
+        self.assertTrue(t["nativa"] and all(7550.0 < a <= b < 7750.0 for a, b in t["nativa"]))
+        self.assertLess(bd["ventanas"]["cola"]["media_pct"], 0.5)
+
     def test_en_rejilla_vale_uno_fuera_de_la_curva(self):
         w = np.array([7000.0, 7650.0, 9000.0])
         T = self.g.en_rejilla(w, self.w, self.T)
@@ -201,12 +227,13 @@ class DatosRealesTests(unittest.TestCase):
     def test_bins_por_variante(self):
         """84 bins con las máscaras del paper (apéndice B); cada variante añade los de sus bandas y nada más."""
         for slug, run in self.runs.items():
-            n = {m: int(self.tp.segmento_muse(run, h2o=v["h2o"], o2=v["o2"])["bueno"].sum())
+            n = {m: int(self.tp.segmento_muse(run, h2o=v["h2o"], quita_o2=v["quita_o2"])["bueno"].sum())
                  for m, v in self.tb.MASCARAS_MUSE.items()}
             self.assertEqual(n["paper"], 84, slug)
             self.assertEqual(n["g3"] - n["paper"], n["sin_telurico"] - n["sin_o2"], slug)   # los de H2O
             self.assertEqual(n["sin_o2"] - n["paper"], n["sin_telurico"] - n["g3"], slug)   # los de O2
-            self.assertGreater(n["sin_o2"], n["paper"])
+            self.assertGreater(n["sin_o2"], n["sin_o2b"])
+            self.assertGreater(n["sin_o2b"], n["paper"])
             self.assertGreater(n["g3"], n["paper"])
             # `teff_bayes.py bins` cuenta lo mismo y reparte los bins por banda telúrica
             b = self.tb.bins_muse(slug)
@@ -216,11 +243,12 @@ class DatosRealesTests(unittest.TestCase):
             for m in ("sin_o2", "sin_telurico"):
                 self.assertGreater(b[m]["por_banda"]["O₂ A"], 0, (slug, m))
             self.assertEqual(b["sin_o2"]["por_banda"]["H₂O 8200"], 0, slug)
+            self.assertEqual((b["sin_o2b"]["por_banda"]["O₂ B"] > 0, b["sin_o2b"]["por_banda"]["O₂ A"]), (True, 0), slug)
 
     def test_sin_o2_destapa_las_dos_bandas_de_o2(self):
         run = next(iter(self.runs.values()))
         w_paper = self.tp.segmento_muse(run)["w"]
-        w = self.tp.segmento_muse(run, o2=False)["w"]
+        w = self.tp.segmento_muse(run, quita_o2=self.tp.O2_MUSE)["w"]
         for lo, hi in ((6860.0, 6960.0), (7590.0, 7700.0)):
             self.assertFalse(np.any((w_paper > lo) & (w_paper < hi)))
             self.assertTrue(np.any((w > lo) & (w < hi)))
@@ -267,6 +295,23 @@ class ResiduoReproduceLaSesionTests(unittest.TestCase):
                 self.assertEqual(round(r["alpha"], 2) + 0.0, a, (run, fichero))
                 self.assertEqual(round(r["sigma_nula"], 2), s, (run, fichero))
                 self.assertFalse(math.isnan(r["z"]))
+
+    def test_bin_a_bin_en_o2_con_la_primaria(self):
+        g = _carga("g3_residuo_telurico_fino")
+        if not self.CURVA.exists():
+            self.skipTest("sin la curva de la estándar (MUSE_PROJECT_ROOT)")
+        from scripts import teff_bayes as stb   # el módulo que `compara_por_bin` re-enraíza
+        antes = stb.ROOT
+        try:
+            for slug in _runs_del_paper():
+                filas = g.compara_por_bin(slug, PROYECTO, g.carga_patron(self.CURVA))
+                self.assertEqual({f["banda"] for f in filas}, {"o2_b", "o2_a"}, slug)
+                for f in filas:
+                    self.assertGreaterEqual(f["residuo_2sigma_pct"], abs(f["residuo_central_pct"]) - 1e-12)
+                    self.assertGreater(f["err_rel_companero_pct"], 0)
+                    self.assertAlmostEqual(f["cota_sobre_error"], f["residuo_2sigma_pct"] / f["err_rel_companero_pct"])
+        finally:
+            stb.fija_raiz(antes)
 
 
 if __name__ == "__main__":

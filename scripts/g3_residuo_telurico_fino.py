@@ -41,7 +41,13 @@ uso:
     python scripts/g3_residuo_telurico_fino.py --project-root RAIZ \\
         --patron estandar=RAIZ/runs/<RUN_RAW>/raw_reduction/TELLURIC_TRANS.fits \\
         [--patrones-a3] [--bandas o2_b o2_a h2o_8200] [--slug SLUG ...] [--espectro NOMBRE=RUTA ...]
-        [--inyecta] [--json SALIDA] [--md SALIDA]
+        [--inyecta] [--por-bin] [--bordes] [--json SALIDA] [--md SALIDA]
+
+`--por-bin` y `--bordes` (2026-10-28, dos ideas de la revisión bibliográfica de la sesión): (a) en cada bin de 15 Å
+del ajuste de T_eff dentro de O2 B y O2 A, el residuo que deja la corrección según la primaria del mismo cubo
+(1 − T^α con su α y con |α| + 2σ, a R = 500) frente al error relativo del compañero en ese bin; (b) dónde absorbe
+la estándar más de 0.5, 1 y 2 % alrededor de las máscaras (a la resolución de MUSE y a R = 500) y cuánto en las
+ventanas que quedan fuera (O2 B hasta 7000 Å; el hueco 9100–9250 Å entre las máscaras de H2O).
 """
 from __future__ import annotations
 
@@ -289,6 +295,97 @@ def consistencia(patrones_a3_run, patrones, bandas):
     return out
 
 
+# ================================================================== bin a bin y bordes (2026-10-28, revisión bibliográfica)
+#: resolución de los ajustes de T_eff (`tipo_ir_plantillas.R_OBJ`)
+R_AJUSTE = 500.0
+#: regiones donde se buscan los tramos con absorción (`bordes`): alrededor de O2 B, H2O 7200, O2 A, H2O 8200 y del
+#: hueco 9100–9250 Å que las máscaras de H2O de los ajustes dejan entre 8900–9100 y 9250–9700
+REGIONES_BORDES_A = ((6700.0, 7100.0), (7050.0, 7450.0), (7500.0, 7800.0), (8000.0, 8500.0), (8800.0, 9350.0))
+#: umbrales de absorción (1 − T) de `bordes`
+UMBRALES_BORDES = (0.005, 0.01, 0.02)
+#: dos tramos por encima del umbral separados por menos de esto (Å) se juntan
+HUECO_BORDES_A = 5.0
+#: ventanas fuera de las máscaras de hoy donde se da la absorción media y máxima (Kirkpatrick et al. 1999 dan O2 B
+#: hasta ~7000 Å y H2O hasta ~9300 Å: lo dijo la revisión bibliográfica del 2026-10-28)
+VENTANAS_BORDES_A = {"O2 B, lado azul 6800–6860": (6800.0, 6860.0), "O2 B, cola 6960–7000": (6960.0, 7000.0),
+                     "O2 A, cola 7700–7750": (7700.0, 7750.0), "H2O 7200, cola 7360–7450": (7360.0, 7450.0),
+                     "H2O, hueco 9100–9250": (9100.0, 9250.0)}
+
+
+def degrada_a_r(w, y, r=R_AJUSTE):
+    """y degradada con una gaussiana de FWHM λ/r (la de los ajustes de T_eff; la LSF de MUSE, ~2.3 Å, se
+    desprecia frente a λ/500 ≈ 14–19 Å)."""
+    from musepipe.models.prep import degrade_variable
+    return degrade_variable(np.asarray(w, float), np.asarray(y, float), np.asarray(w, float) / r)
+
+
+def tramos(w, x, umbral, hueco=HUECO_BORDES_A):
+    """[lo, hi] de los tramos donde x > umbral, juntando los separados por menos de `hueco` Å."""
+    idx = np.flatnonzero(x > umbral)
+    if not idx.size:
+        return []
+    out = [[float(w[idx[0]]), float(w[idx[0]])]]
+    for i in idx[1:]:
+        if w[i] - out[-1][1] <= hueco:
+            out[-1][1] = float(w[i])
+        else:
+            out.append([float(w[i]), float(w[i])])
+    return out
+
+
+def bordes(w, T, regiones=REGIONES_BORDES_A, umbrales=UMBRALES_BORDES, ventanas=VENTANAS_BORDES_A):
+    """(b) Los bordes de las máscaras contra la transmisión: por región, los tramos donde la absorción 1 − T pasa
+    cada umbral, a la resolución de MUSE y a R = 500; la absorción media y máxima en `ventanas`; y los tramos donde
+    T < 1 (`tramos_T_menor_que_1`). Ojo: la curva de `muse_standard` vale EXACTAMENTE 1 fuera de las ventanas
+    telúricas en que la ajusta la reducción, así que fuera de ellas no mide la atmósfera (y la reducción no corrige
+    nada allí): una absorción 0 en esas ventanas no dice que la atmósfera no absorba."""
+    a_nat = 1 - np.asarray(T, float)
+    a_500 = degrada_a_r(w, a_nat)
+    out = dict(tramos=[], ventanas={}, tramos_T_menor_que_1=tramos(w, a_nat, 0.0),
+               canales_T_igual_1=int(np.sum(np.asarray(T, float) == 1.0)), canales=int(np.size(T)))
+    for lo, hi in regiones:
+        m = (w >= lo) & (w <= hi)
+        for u in umbrales:
+            out["tramos"].append(dict(region=[lo, hi], umbral_pct=100 * u,
+                                      nativa=tramos(w[m], a_nat[m], u), r500=tramos(w[m], a_500[m], u)))
+    for k, (lo, hi) in ventanas.items():
+        m = (w >= lo) & (w <= hi)
+        out["ventanas"][k] = dict(media_pct=float(100 * a_nat[m].mean()), max_pct=float(100 * a_nat[m].max()),
+                                  media_r500_pct=float(100 * a_500[m].mean()), max_r500_pct=float(100 * a_500[m].max()))
+    return out
+
+
+def compara_por_bin(slug, root, patron, bandas=("o2_b", "o2_a")):
+    """(a) Bin a bin, en los bins de 15 Å del ajuste de T_eff que tapan hoy las máscaras de O2: el residuo que deja
+    la corrección según la PRIMARIA del mismo cubo (1 − T^α, con la α de la primaria en esa banda y con |α| + 2σ,
+    degradado a R = 500 y promediado en el bin) frente al error relativo σ/F del COMPAÑERO en ese bin
+    (`tipo_ir_plantillas.segmento_muse` sin máscaras telúricas: el error de los datos, sin el término de modelo f_b
+    de `teff_bayes`). Supone que el residuo del compañero es el de la primaria (la corrección es la misma para todo
+    el cubo) y que tiene la forma T^α."""
+    from scripts import teff_bayes as tb
+    from scripts import tipo_ir_plantillas as tp
+    tb.fija_raiz(root)
+    run, _, es = espectros_del_paper(slug, root)
+    wp, fp, _ = spec(es[f"{slug} primaria"])
+    Tp = en_rejilla(wp, *patron)
+    seg = tp.segmento_muse(run, h2o=False, quita_o2=tp.O2_MUSE)
+    medio = float(np.median(seg["hi"] - seg["lo"])) / 2
+    filas = []
+    for banda in bandas:
+        r = mide(wp, fp, Tp, banda)
+        b = BANDAS[banda]
+        res = {k: degrada_a_r(wp, 1 - np.clip(Tp, 1e-3, None) ** amp)
+               for k, amp in (("central", r["alpha"]), ("cota_2sigma", abs(r["alpha"]) + 2 * r["sigma_nula"]))}
+        for i in np.flatnonzero(seg["bueno"] & (seg["w"] >= b["lo"] - medio) & (seg["w"] <= b["hi"] + medio)):
+            m = (wp >= seg["lo"][i]) & (wp < seg["hi"][i])
+            err = float(100 * seg["e"][i] / seg["f"][i])
+            c, s2 = (float(100 * res[k][m].mean()) for k in ("central", "cota_2sigma"))
+            filas.append(dict(slug=slug, run=run, banda=banda, w_A=float(seg["w"][i]), alpha_primaria=r["alpha"],
+                              sigma_primaria=r["sigma_nula"], residuo_central_pct=c, residuo_2sigma_pct=s2,
+                              err_rel_companero_pct=err, cota_sobre_error=s2 / err))
+    return filas
+
+
 def tabla_md(res):
     """Tabla en markdown de las filas de `calcula` y de `consistencia`."""
     lin = ["| espectro | patrón | banda | α | σ nula | z | α con rasgos | absorción media / máx (%) | "
@@ -311,6 +408,26 @@ def tabla_md(res):
             p = c["patron_a3"] + ("" if c["declarado_qc"] else " (no declarado)")
             lin.append(f"| {c['run']}: {p} | {c['respecto_a']} | {c['banda']} | {c['alpha']:+.3f} | "
                        f"{c['absorcion_media_pct']:.2f} / {c['absorcion_max_pct']:.1f} |")
+    if res.get("por_bin"):
+        lin += ["", "| objeto | banda | bin (Å) | α primaria | residuo central (%) | cota 2σ (%) | σ/F compañero (%) | "
+                "cota / σ |", "|---|---|---|---|---|---|---|---|"]
+        for f in res["por_bin"]:
+            lin.append(f"| {f['slug']} | {f['banda']} | {f['w_A']:.1f} | {f['alpha_primaria']:+.3f} ± "
+                       f"{f['sigma_primaria']:.3f} | {f['residuo_central_pct']:+.2f} | {f['residuo_2sigma_pct']:.2f} | "
+                       f"{f['err_rel_companero_pct']:.2f} | {f['cota_sobre_error']:.2f} |")
+    if res.get("bordes"):
+        for np_, bd in res["bordes"].items():
+            fmt = lambda xs: ", ".join(f"{lo:.0f}–{hi:.0f}" for lo, hi in xs) or "—"
+            lin += ["", f"Bordes contra el patrón `{np_}`: T = 1 exacto en {bd['canales_T_igual_1']} de "
+                        f"{bd['canales']} canales; T < 1 en {fmt(bd['tramos_T_menor_que_1'])} Å.", "",
+                    "| ventana | absorción media / máx (%) | a R = 500 |", "|---|---|---|"]
+            for k, v in bd["ventanas"].items():
+                lin.append(f"| {k} | {v['media_pct']:.2f} / {v['max_pct']:.2f} | {v['media_r500_pct']:.2f} / "
+                           f"{v['max_r500_pct']:.2f} |")
+            lin += ["", "| región (Å) | umbral (%) | tramos, resolución de MUSE | tramos, R = 500 |", "|---|---|---|---|"]
+            for t in bd["tramos"]:
+                lin.append(f"| {t['region'][0]:.0f}–{t['region'][1]:.0f} | {t['umbral_pct']:g} | {fmt(t['nativa'])} | "
+                           f"{fmt(t['r500'])} |")
     return "\n".join(lin)
 
 
@@ -329,6 +446,11 @@ def main(argv=None):
     ap.add_argument("--espectro", action="append", default=None, metavar="NOMBRE=RUTA",
                     help="espectros explícitos en vez de los del run del paper (repetible)")
     ap.add_argument("--inyecta", action="store_true", help="calibración: ganancia con T^a inyectada")
+    ap.add_argument("--por-bin", action="store_true",
+                    help="bin a bin (15 Å, los del ajuste) en O2: el residuo según la primaria frente al error del "
+                         "compañero, con el primer --patron")
+    ap.add_argument("--bordes", action="store_true",
+                    help="tramos de absorción alrededor de las máscaras, con cada --patron")
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--md", type=Path, default=None)
     a = ap.parse_args(argv)
@@ -352,6 +474,13 @@ def main(argv=None):
     res = dict(runs=runs, patrones={k: str(v) for k, v in _pares(a.patron, "--patron").items()},
                bandas={b: BANDAS[b] for b in a.bandas}, desplazamientos_A=DESPLAZAMIENTOS_A.tolist(),
                medidas=calcula(espectros, patrones, a.bandas, por_espectro, a.inyecta), consistencia=consis)
+    if a.por_bin:
+        if not patrones or not runs:
+            raise SystemExit("--por-bin necesita --patron y los runs del paper (sin --espectro)")
+        primero = next(iter(patrones.values()))
+        res["por_bin"] = [f for slug in runs for f in compara_por_bin(slug, root, primero[:2])]
+    if a.bordes:
+        res["bordes"] = {k: bordes(wT, T) for k, (wT, T, _) in patrones.items()}
     md = tabla_md(res)
     print(md)
     if a.json:

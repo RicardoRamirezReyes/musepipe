@@ -55,7 +55,8 @@ párrafo las da `scripts/paper_cifras_atmo.py`.
 `--mascara-muse` (pruebas exploratorias del 2026-10-28, pedido del autor: «las bandas telúricas de O2, si están
 corregidas, deberían poder agregarse») elige las máscaras telúricas del espectro MUSE (`MASCARAS_MUSE`): `paper`
 (por defecto, las de las cadenas del paper: las de G3, O2 B y O2 A, más las de H2O de
-`tipo_ir_plantillas.H2O_MUSE_A`), `g3` (sin H2O), `sin_o2` (con H2O, sin O2) o `sin_telurico` (sin ninguna). Las
+`tipo_ir_plantillas.H2O_MUSE_A`), `g3` (sin H2O), `sin_o2` (con H2O, sin O2), `sin_o2b` (con H2O y O2 A, sin O2 B)
+o `sin_telurico` (sin ninguna). Las
 ventanas de las líneas y los canales malos se quedan siempre; el cambio de O2 es en memoria. Esas cadenas llevan
 `mascara-<variante>` en la etiqueta y `mascara_muse` en el json, y no entran en `tabla` ni en `rejillas`. El residuo
 telúrico en O2 lo mide `scripts/g3_residuo_telurico_fino.py`.
@@ -76,7 +77,7 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--tracks ATMO2020] [--av libre|primaria] [--av-fija AV] [--nlive 500]
                                        [--semilla 0] [--inyecta-bt ...] [--plantilla ...] --salida DIR
                                        [--dir-rejilla DIR] [--degrada cuadratura|ingenua] [--project-root RAIZ]
-                                       [--mascara-muse paper|g3|sin_o2|sin_telurico]
+                                       [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
@@ -214,12 +215,14 @@ SUELO = (6.17, -24.54)
 DATOS = ("todo", "muse", "ir")
 #: máscaras de las bandas telúricas en el espectro MUSE (`--mascara-muse`; pruebas exploratorias del 2026-10-28,
 #: `~/muse_sesion_20261028/mascaras_muse/BRIEF.md`): ¿se añaden las bandas de H2O de `tipo_ir_plantillas.H2O_MUSE_A`
-#: (`h2o`)? ¿se quedan las de O2 de G3 (`g3_fit_masks.telluric_bands_A`, `o2`)? `paper` es lo de las cadenas del
-#: paper; `g3`, las máscaras de G3 (sin H2O); `sin_o2`, con H2O y sin O2; `sin_telurico`, sin ninguna. Las ventanas
-#: de las líneas y los canales malos de 04b se quedan siempre. El cambio de O2 se hace en una copia del config en
-#: memoria (`tipo_ir_plantillas.sin_o2`), nunca en `runs/`.
-MASCARAS_MUSE = {"paper": dict(h2o=True, o2=True), "g3": dict(h2o=False, o2=True),
-                 "sin_o2": dict(h2o=True, o2=False), "sin_telurico": dict(h2o=False, o2=False)}
+#: (`h2o`)? ¿qué bandas de O2 de G3 (`g3_fit_masks.telluric_bands_A`) se destapan (`quita_o2`)? `paper` es lo de las
+#: cadenas del paper; `g3`, las máscaras de G3 (sin H2O); `sin_o2`, con H2O y sin O2; `sin_o2b`, con H2O y O2 A y sin
+#: O2 B (O2 A lleva el doblete de K I 7665/7699, que la ventana de las líneas no tapa: así se separa una banda de la
+#: otra); `sin_telurico`, sin ninguna. Las ventanas de las líneas y los canales malos de 04b se quedan siempre. El
+#: cambio de O2 se hace en una copia del config en memoria (`tipo_ir_plantillas.sin_o2`), nunca en `runs/`.
+MASCARAS_MUSE = {"paper": dict(h2o=True, quita_o2=()), "g3": dict(h2o=False, quita_o2=()),
+                 "sin_o2": dict(h2o=True, quita_o2=("O₂ B", "O₂ A")), "sin_o2b": dict(h2o=True, quita_o2=("O₂ B",)),
+                 "sin_telurico": dict(h2o=False, quita_o2=("O₂ B", "O₂ A"))}
 
 
 def _entra(seg, datos):
@@ -282,7 +285,8 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper"):
     if mascara_muse not in MASCARAS_MUSE:
         raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
     mm = MASCARAS_MUSE[mascara_muse]
-    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"], o2_muse=mm["o2"])
+    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
+                    quita_o2_muse=mm["quita_o2"])
     segs = aj.segmentos_cgs(slug, p)
     if r250:
         segs = [_empareja(s) for s in segs]
@@ -1069,7 +1073,7 @@ def bins_muse(slug):
     run = tir.perfil(slug)["paper"]["run"]
     out = {}
     for m, v in MASCARAS_MUSE.items():
-        s = tp.segmento_muse(run, h2o=v["h2o"], o2=v["o2"])
+        s = tp.segmento_muse(run, h2o=v["h2o"], quita_o2=v["quita_o2"])
         w = s["w"][s["bueno"]]
         medio = float(np.median(s["hi"] - s["lo"])) / 2
         out[m] = dict(n=int(w.size), w_min=float(w.min()), w_max=float(w.max()),
@@ -1118,7 +1122,8 @@ def main(argv=None):
                          "(por defecto) o la trata como alta («ingenua»); en las demás no hace nada")
     aa.add_argument("--mascara-muse", choices=tuple(MASCARAS_MUSE), default="paper",
                     help="máscaras telúricas del espectro MUSE: paper (las de las cadenas del paper: G3 + H2O), g3 "
-                         "(sin H2O), sin_o2 (con H2O, sin O2), sin_telurico (sin ninguna); líneas y canales malos "
+                         "(sin H2O), sin_o2 (con H2O, sin O2), sin_o2b (con H2O y O2 A, sin O2 B), sin_telurico "
+                         "(sin ninguna); líneas y canales malos "
                          "siempre. Distinta de paper, la etiqueta lleva `mascara-<variante>`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
