@@ -90,6 +90,27 @@
         "adopted": 14.14
       },
       "note": "Exceso de color (scripts/av_exceso_color.py, docs/2026-10-13_av_exceso_color.md): la J y la H no valen (escaladas a la fotometría de la terciaria, ver 'note'); solo MUSE − K. El K del catálogo está escalado a la Kp de Kraus+2014 (14.32) y se reescala a la Ks de Bowler+2017 (14.14 ± 0.03; ERIS da 14.11 ± 0.04, ~/muse_sesion_20260927/eris/INFORME.md)."
+    },
+    "hydrogen_lines": {
+      "note": "Paβ y Brγ en estos espectros (scripts/pab_brg.py). Lo midió por primera vez la sesión del 2026-10-21 (~/muse_sesion_20261021/pab_brg/INFORME.md); los valores de este bloque son los que declaró ella. 'spectra': la R nativa y la fecha de cada espectro que cubre una de las dos líneas, de los artículos (Bowler+2017, verificadas en el PDF de arXiv:1708.07611); la columna «Resolution» del catálogo no es fiable. 'flux_rescale_mag': la J del catálogo es la de Kraus+2014, el contraste de NIRC2 sumado a la 2MASS de la TERCIARIA (J = 11.022); con la 2MASS de ROXs 12 A (J = 10.282) el compañero tiene J = 16.64 − 11.022 + 10.282 = 15.90 (/mnt/2TB/IR_Data/README.md, «Trampa en ROXs 12 b»). La K se reescala con colour_excess.k_rescale_mag. 'btsettl_reference': el modelo con el que se mide el eje λ del catálogo y que divide los estimadores *_cociente (el nodo más cercano al ajuste BT-Settl con A_V = 1.8 de la Tabla B.5, 2589 K). 'btsettl_photosphere': los modelos en los que se mide la absorción fotosférica con el mismo estimador (2600–2800 K: las T_eff de la Tabla B.5 con A_V 1.8–3.8). 'photospheric_absorption_A': la absorción que una emisión tiene que rellenar antes de verse, sumada al límite; valor intermedio conservador entre BT-Settl (Paβ +0.4..+0.8 Å) y las Clase III M6.5–M9.5 de Manara (−0.4..+0.4 Å). 'also_checked': espectros del catálogo que no están en 'spectra' (el ERIS va con el continuo restado y no sirve para la SED) y solo se miran para decir qué cubren.",
+      "spectra": {
+        "NIFS_J": {"r_native": 6000, "date": "2016-04-18/22"},
+        "OSIRIS_J": {"r_native": 3800, "date": "2016-05-22"},
+        "OSIRIS_K": {"r_native": 3800, "date": "2016-05-22"}
+      },
+      "flux_rescale_mag": {
+        "J": {"catalogue": 16.64, "adopted": 15.90}
+      },
+      "btsettl_reference": {"teff_k": 2600, "logg": 4.0},
+      "btsettl_photosphere": [
+        {"teff_k": 2600, "logg": 4.0},
+        {"teff_k": 2700, "logg": 4.0},
+        {"teff_k": 2800, "logg": 4.5}
+      ],
+      "photospheric_absorption_A": {"PaB": 0.4, "BrG": 0.0},
+      "also_checked": {
+        "ERIS_K": {"file": "roxs12b_spectrum_Hayoz2025_ERIS_K-long_contrem.dat", "instrument": "VLT/ERIS K_long", "ref": "Hayoz+2026"}
+      }
     }
   }
 }
