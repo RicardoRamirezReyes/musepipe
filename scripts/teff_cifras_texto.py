@@ -1391,14 +1391,13 @@ def _cifras() -> list[Cifra]:  # noqa: C901 (una lista larga, no lógica)
       r"below their lowest mass.",
       dict(t=lambda c: arriba(10)(max(abs(int(i0(evo(c, s, "BHAC15")["teff_p50"])) - int(i0(evo(c, s)["teff_p50"])))
                                           for s in SLUGS)),
-           d=lambda c: d2(max(abs(float(s2(evo(c, s, "BHAC15")["delta_p50"])) - float(s2(evo(c, s)["delta_p50"])))
-                              for s in SLUGS)),
+           d=lambda c: d2(math.ceil(100 * max(abs(evo(c, s, "BHAC15")["delta_p50"] - evo(c, s)["delta_p50"])
+                                              for s in SLUGS) - 1e-9) / 100),
            f=lambda c: i0(100 * evo(c, O2, "BHAC15")["fuera_de_la_rejilla"])),
-      "`evo_solo` BHAC15 frente a ATMO2020: «the same values» son las celdas de la tabla, así que se comparan los "
-      "valores como se imprimen (T_eff a 1 K, Δ a 0.01 dex: 2436/2420 y 2250/2254 K, 0.00/+0.01 y −0.33/−0.34): la "
-      "mayor diferencia, la de T_eff hacia arriba a 10 K. Con las medianas sin redondear Δ difiere 0.017 dex en "
-      "ROXs 12 b, que no da «0.01» (`autor.md` §C del 2026-10-25). Fracción de muestras de 42B b fuera de la "
-      "rejilla de BHAC15")
+      "`evo_solo` BHAC15 frente a ATMO2020: la T_eff se compara como se imprime en la tabla (2436/2420 y 2250/2254 K; "
+      "la mayor diferencia, hacia arriba a 10 K). Δ con las medianas sin redondear: 0.017 dex en ROXs 12 b, hacia "
+      "arriba a 0.01 → «0.02» (autor 2026-10-28, «corrige las tablas»; antes «0.01», la diferencia de los valores "
+      "impresos 0.00/+0.01 y −0.33/−0.34). Fracción de muestras de 42B b fuera de la rejilla de BHAC15")
 
     # ---------------------------------------------------------------- Tabla B.6 (nota)
     A("B6_nota", "Tabla B.6 (nota)",
