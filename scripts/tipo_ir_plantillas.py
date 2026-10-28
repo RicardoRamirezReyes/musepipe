@@ -213,8 +213,9 @@ def plantillas_eso(lib_root, etiqueta, nir=DEFAULT_NIR):
     return out
 
 
-def plantillas(cfg, bibliotecas=("manara", "lateM", "xshyne"), nir=DEFAULT_NIR):
-    raiz = library_root(cfg, project_root=ROOT)
+def plantillas(cfg, bibliotecas=("manara", "lateM", "xshyne"), nir=DEFAULT_NIR, root=ROOT):
+    """`root`: la raíz de la que cuelga `g3_libraries_root` (el repo, salvo desde un worktree)."""
+    raiz = library_root(cfg, project_root=root)
     out = []
     for b in bibliotecas:
         out += plantillas_manara(raiz, nir) if b == "manara" else plantillas_eso(raiz, b, nir)
@@ -421,7 +422,8 @@ def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo
     lo, hi, paso = cfg["g3_atmo_av_axis"]
     av_tabla = float(cfg["h03_av"])
     av_axis = np.array([av_tabla]) if av_fija else np.round(np.arange(lo, hi + paso / 2, paso), 3)
-    pls = plantillas(cfg, bibliotecas)
+    # la raíz de AHORA (`teff_bayes.fija_raiz` la cambia desde un worktree), no la que `plantillas` fijó al definirse
+    pls = plantillas(cfg, bibliotecas, root=ROOT)
     segs = []
     if modo in ("ir", "combinado"):
         segs += segmentos_ir(slug, telurico=telurico_ir)

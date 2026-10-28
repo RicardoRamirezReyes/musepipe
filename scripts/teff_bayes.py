@@ -44,6 +44,16 @@ los datos se agrupan de a dos y el modelo se usa a su resolución. `--r250` con 
 el control que separa el efecto de la resolución del de la rejilla. Estas corridas tampoco entran en la tabla de
 las cadenas: van a la de rejillas (`rejillas`, Tabla B.7 del paper, pedida el 2026-10-18).
 
+ATMO 2020 (`atmo_ceq`, 2000–3000 K; `atmo_ceq1500`, desde 1500 K; indicación 1 de Claudio, 2026-10-26) entra solo
+como PRUEBA (un párrafo del apéndice B, no la Tabla B.7): sus autores la dan por válida solo bajo ~2000 K. La
+rejilla se convierte con `scripts/convierte_atmo.py` a la ruta que se quiera (`--dir-rejilla`). Está muestreada en
+número de onda (10 cm⁻¹ por punto, media de banda), así que el degradado a R = 500 resta en cuadratura la
+resolución que el muestreo ya trae (`--degrada cuadratura`, por defecto; `ingenua` es el camino de las demás
+rejillas). `btsettl_bin` (BT-Settl promediado en las bandas de ATMO) es el control del muestreo. Las cifras del
+párrafo las da `scripts/paper_cifras_atmo.py`.
+
+`--project-root` (todas las órdenes) lee los runs y las bibliotecas de otro clon: un worktree no lleva `runs/`.
+
 `resume` lee los json/npz de uno o varios directorios de `ajusta` y da, por corrida, la T_eff y el margen
 coherente sobre el suelo cromosférico de Manara et al. (2013, Ec. 2): por muestra, log(L_acc/L_bol) − suelo(T_eff),
 con la L_acc del paper reescalada a la A_V de la muestra y la L_bol de la muestra (4πR²σT⁴; en `evo_solo`, la A_V
@@ -54,6 +64,7 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--datos todo|muse|ir] [--r250]
                                        [--tracks ATMO2020] [--av libre|primaria] [--av-fija AV] [--nlive 500]
                                        [--semilla 0] [--inyecta-bt ...] [--plantilla ...] --salida DIR
+                                       [--dir-rejilla DIR] [--degrada cuadratura|ingenua] [--project-root RAIZ]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
      python scripts/teff_bayes.py rejillas DIR [DIR ...]   # cuerpo LaTeX de la tabla de rejillas (ap. B)
@@ -83,8 +94,9 @@ from musepipe.constants import LSUN_ERG_S, PC_CM, RJUP_CM, RSUN_CM, SIGMA_SB_CGS
 from musepipe.models.extinction import CCMExtinction  # noqa: E402
 
 #: rejillas de atmósferas: directorio de npz (formato de `musepipe.models.cache`) y ejes (inicio, paso, n).
-#: DRIFT-PHOENIX es la segunda rejilla, para el sistemático de modelo; ATMO 2020 se descartó porque sus autores
-#: la dan por válida solo bajo 2000 K (`/mnt/2TB/IR_Data/atmo2020/README.md`). BT-Settl llega a log g 5.0 desde
+#: DRIFT-PHOENIX es la segunda rejilla, para el sistemático de modelo; ATMO 2020 se descartó como segunda rejilla
+#: porque sus autores la dan por válida solo bajo 2000 K (`/mnt/2TB/IR_Data/atmo2020/README.md`) y entra solo como
+#: prueba (abajo, `atmo_ceq`). BT-Settl llega a log g 5.0 desde
 #: 2026-10-17 (decisión del autor): con 2.5–4.5, la posterior de 12 b tocaba el techo de 4.5.
 REJILLAS = {"btsettl": dict(dir=Path("/mnt/2TB/IR_Data/btsettl_cifist/npz"), teff=(2000.0, 100.0, 13),
                             logg=(2.5, 0.5, 6), nombre="BT-Settl CIFIST2011"),
@@ -114,6 +126,65 @@ REJILLAS.update({
     "sphinx": dict(dir=Path("/mnt/2TB/IR_Data/sphinx/npz"), teff=(2000.0, 100.0, 13), logg=(4.0, 0.25, 7),
                    nombre="SPHINX (sin nubes)", r_nativa=250.0),
 })
+#: ATMO 2020 CEQ (Phillips et al. 2020; indicación 1 de Claudio, 2026-10-26), convertida por
+#: `scripts/convierte_atmo.py`: 2000–3000 K × log g 2.5–5.5 (77 nodos, completa). Sus autores la dan por válida SOLO
+#: bajo ~2000 K, así que es una prueba, no una rejilla de las tablas. Muestreo uniforme en número de onda, 10 cm⁻¹
+#: por punto (media de banda): Δλ = λ²·10 cm⁻¹ (5.6 Å a 0.75 µm, 15.7 a 1.25, 27 a 1.65, 48.5 a 2.2); `nu_bin_cm`
+#: activa `degrada_nativa`. Las NEQ (weak/strong) no entran: en el tar de los autores solo llegan a 1800 K. La
+#: `atmo_ceq1500` es la misma desde 1500 K (112 nodos; `convierte_atmo.py atmo ... --tmin 1500`): con 2000–3000 K,
+#: 42B b con el prior en A_V tocaba el borde de 2000 K. `btsettl_bin` es el control: BT-Settl promediado en esas
+#: mismas bandas (`convierte_atmo.py btbin`). Los directorios no existen hasta que se convierten; `--dir-rejilla`
+#: apunta a otro.
+REJILLAS.update({
+    "atmo_ceq": dict(dir=Path("/mnt/2TB/IR_Data/atmo2020/npz_ceq"), teff=(2000.0, 100.0, 11), logg=(2.5, 0.5, 7),
+                     nombre="ATMO 2020 (CEQ)", nu_bin_cm=10.0),
+    "atmo_ceq1500": dict(dir=Path("/mnt/2TB/IR_Data/atmo2020/npz_ceq1500"), teff=(1500.0, 100.0, 16),
+                         logg=(2.5, 0.5, 7), nombre="ATMO 2020 (CEQ) 1500–3000 K", nu_bin_cm=10.0),
+    "btsettl_bin": dict(dir=Path("/mnt/2TB/IR_Data/atmo2020/npz_btsettl_bin"), teff=(2000.0, 100.0, 13),
+                        logg=(2.5, 0.5, 6), nombre="BT-Settl con el muestreo de ATMO", nu_bin_cm=10.0),
+})
+#: varianza (en unidades de W², W = ancho de banda en Å) que el muestreo de ATMO ya trae, tras la interpolación
+#: lineal a 1 Å de `ajuste_conjunto.modelos_btsettl`: la caja de la banda (W²/12) más la interpolación lineal
+#: (W²/6). Se resta en cuadratura de la gaussiana de R = 500 (`--degrada cuadratura`); `ingenua` trata la rejilla
+#: como de resolución alta (el camino de las demás). El valor lo comprobó el agente `atmo` con `btsettl_bin`: con
+#: c = 1/4, BT-Settl muestreado como ATMO queda a 0.4–0.6 % (MUSE), 0.1–0.7 % (J, H) y 1.0–1.4 % (K) del nativo.
+C_VAR_MUESTREO = 0.25
+#: cómo se degrada a R = 500 una rejilla muestreada en número de onda (`--degrada`)
+DEGRADA = ("cuadratura", "ingenua")
+
+
+def degrada_nativa(w, f, nu_bin_cm, c_var=C_VAR_MUESTREO):
+    """Como `tipo_ir_plantillas.degrada` (gaussiana de FWHM λ/500, huecos a NaN donde pesan > 20 %), pero con la
+    resolución que el muestreo de la rejilla ya trae restada en cuadratura: σ_k² = σ_500² − c·W², W = λ²·Δν.
+    Donde σ_k² ≤ 0 (K, λ ≳ 2.0 µm con ATMO) no se convoluciona: el modelo queda MÁS BASTO que R = 500
+    (R ≈ 425 a 2.0 µm, 385 a 2.2 y 355 a 2.4)."""
+    from musepipe.models.prep import degrade_variable
+    from scripts import tipo_ir_plantillas as tp
+    ok = np.isfinite(f)
+    g = np.interp(w, w[ok], f[ok])
+    W = w ** 2 * nu_bin_cm * 1e-8
+    s500 = w / tp.R_OBJ / 2.3548200450309493
+    var = s500 ** 2 - c_var * W ** 2
+    fwhm = np.where(var > 0, 2.3548200450309493 * np.sqrt(np.clip(var, 0, None)), 0.0)
+    out = degrade_variable(w, g, fwhm)
+    hueco = degrade_variable(w, (~ok).astype(float), w / tp.R_OBJ)
+    out[hueco > 0.2] = np.nan
+    return out
+
+
+def modelos_base_nativa(pls, segs, nu_bin_cm, c_var=C_VAR_MUESTREO):
+    """`tipo_ir_plantillas.modelos_base` con `degrada_nativa` en vez de `degrada`."""
+    from scripts import tipo_ir_plantillas as tp
+    cache = {}
+    for i, t in enumerate(pls):
+        por_brazo = {}
+        for brazo in ("vis", "nir"):
+            w, f = t[brazo]
+            orden = np.argsort(w)
+            w, f = w[orden], f[orden]
+            por_brazo[brazo] = (w, degrada_nativa(w, f, nu_bin_cm, c_var))
+        cache[i] = [tp.media_en_intervalos(*por_brazo[s["brazo"]], s["lo"], s["hi"]) for s in segs]
+    return cache
 
 
 def _r250(rejilla, forzado=False):
@@ -170,15 +241,21 @@ def _bases_nativas(pls, segs):
     return out
 
 
-def _prepara(slug, R, r250=False):
+def _prepara(slug, R, r250=False, degrada="cuadratura"):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
     2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes).
 
     `r250`: los píxeles de los datos se agrupan de a dos (MUSE en bins de 30 Å, el IR a λ/Δλ ≈ 250). Lo exige una
     rejilla con `r_nativa` < 500 (SPHINX), cuyos modelos se usan tal cual (`_bases_nativas`); con una rejilla de
-    resolución alta, los modelos se degradan a R = 500 y se promedian en el píxel agrupado, como los datos."""
+    resolución alta, los modelos se degradan a R = 500 y se promedian en el píxel agrupado, como los datos.
+
+    `degrada`: solo para una rejilla muestreada en número de onda (`nu_bin_cm`, ATMO 2020): «cuadratura» degrada
+    con `modelos_base_nativa` (resta la resolución del muestreo), «ingenua» por el camino de las demás. Sin
+    `nu_bin_cm` no hace nada."""
     from scripts import ajuste_conjunto as aj
     from scripts import tipo_ir_plantillas as tp
+    if degrada not in DEGRADA:
+        raise ValueError(f"degrada={degrada!r}: debe ser uno de {DEGRADA}")
     p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=True)
     segs = aj.segmentos_cgs(slug, p)
     if r250:
@@ -186,8 +263,12 @@ def _prepara(slug, R, r250=False):
     t0, dt, nt = R["teff"]
     g0, dg, ng = R["logg"]
     p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg))
-    p["bases"] = (_bases_nativas(p["pls"], segs) if R.get("r_nativa", np.inf) < 500
-                  else tp.modelos_base(p["pls"], segs))
+    if R.get("r_nativa", np.inf) < 500:
+        p["bases"] = _bases_nativas(p["pls"], segs)
+    elif R.get("nu_bin_cm") and degrada == "cuadratura":
+        p["bases"] = modelos_base_nativa(p["pls"], segs, R["nu_bin_cm"])
+    else:
+        p["bases"] = tp.modelos_base(p["pls"], segs)
     fac = tp.factores_equilibrio(segs, p["bases"], [p["av_tabla"]])
     return p, aj.Conjunto(segs, p["bases"], 0, fac)
 
@@ -195,7 +276,7 @@ def _prepara(slug, R, r250=False):
 class Modelo:
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
-                 r250=False):
+                 r250=False, degrada="cuadratura"):
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -211,7 +292,9 @@ class Modelo:
         self.G0, self.dG, self.nG = R["logg"]
         self.T0, self.G0 = float(self.T0), float(self.G0)
         self.r_analisis = 250 if _r250(rejilla, r250) else 500
-        p, conj = _prepara(slug, R, r250=self.r_analisis == 250)
+        #: cómo se degradó la rejilla, solo si está muestreada en número de onda (ATMO 2020); None en las demás
+        self.degrada = degrada if R.get("nu_bin_cm") else None
+        p, conj = _prepara(slug, R, r250=self.r_analisis == 250, degrada=degrada)
         self.run = p["run"]
         cfg = load_run_config(self.run, project_root=ROOT).config
         self.cfg = cfg
@@ -419,8 +502,10 @@ class Modelo:
         return out
 
 
-def evo_solo(mod_cfg, slug, tracks, n=20000, semilla=0):
-    """T_eff, R, M y log g de la L_bol publicada y el prior de edad, sin espectro (la referencia)."""
+def evo_solo(mod_cfg, slug, tracks, n=20000, semilla=0, root=None):
+    """T_eff, R, M y log g de la L_bol publicada y el prior de edad, sin espectro (la referencia). `root`: la raíz
+    del proyecto contra la que se resuelve `g3_libraries_root` (por defecto este clon; desde un worktree, la del
+    clon con los datos)."""
     from musepipe.models.tracks import TrackGrid
     from scripts import tipo_ir_indices as tir
     rng = np.random.default_rng(semilla)
@@ -430,7 +515,8 @@ def evo_solo(mod_cfg, slug, tracks, n=20000, semilla=0):
     edad, (elo, ehi) = float(cfg["g3_age_myr"]), cfg["g3_age_err_myr"]
     sig = 0.5 * (math.log((edad + ehi) / edad) + math.log(edad / (edad - elo)))
     rel, cita = TRACKS[tracks]
-    tg = TrackGrid((ROOT / cfg["g3_libraries_root"]).resolve() / rel, family=tracks, citation=cita, version=None)
+    raiz = ROOT if root is None else Path(root)
+    tg = TrackGrid((raiz / cfg["g3_libraries_root"]).resolve() / rel, family=tracks, citation=cita, version=None)
     lbol = 10 ** rng.normal(fis["log_lbol"], fis["log_lbol_err"], n)
     age = np.exp(rng.normal(math.log(edad), sig, n)) / 1e3
     s = tg.sample(lbol, age)
@@ -470,12 +556,15 @@ def ajusta(a):
     from musepipe.config import load_run_config
     from scripts import tipo_ir_indices as tir
     a.salida.mkdir(parents=True, exist_ok=True)
+    degrada = getattr(a, "degrada", "cuadratura")
     et = a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                              f"pl-{a.plantilla}" if a.plantilla else None,
                                              f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
                                              "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
                                              f"solo{a.datos}" if a.datos != "todo" else None,
                                              "r250" if _r250(a.rejilla, a.r250) else None,
+                                             "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
+                                             else None,
                                              f"s{a.semilla}") if x)
     if a.modo == "evo_solo":
         cfg = load_run_config(tir.perfil(a.slug)["paper"]["run"], project_root=ROOT).config
@@ -486,7 +575,7 @@ def ajusta(a):
         np.savez(a.salida / f"{et}.npz", **{k: v for k, v in r.items() if k != "fraccion_en_rejilla"})
     else:
         mod = Modelo(a.slug, a.modo, a.av, a.tracks, a.inyecta_bt, a.plantilla, a.av_inyectada, a.semilla, a.av_fija,
-                     a.rejilla, a.dir_rejilla, a.datos, a.r250)
+                     a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada)
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -494,6 +583,8 @@ def ajusta(a):
             post[f"der_{k}"] = percentiles(der[:, i] / (RJUP_CM if k == "r_cm" else 1.0))
         out = dict(etiqueta=et, slug=a.slug, run=mod.run, modo=a.modo, av=a.av, av_fija=a.av_fija,
                    rejilla=a.rejilla, datos=a.datos, r_analisis=mod.r_analisis, nodos_interpolados=mod.rellenados,
+                   # el degradado, solo en las rejillas muestreadas en número de onda (las demás no cambian)
+                   **({"degrada": mod.degrada} if mod.degrada else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -530,26 +621,30 @@ def margen(teff, av, lbol_lsun, lacc0_lsun, av0, a, ahav):
     return np.log10(lacc / np.asarray(lbol_lsun, float)) - suelo(np.asarray(teff, float))
 
 
-def umbral(slug):
-    """(T*, log L_acc/L_bol, tipo): el umbral cromosférico con la L_acc del paper y la L_bol publicada."""
+def umbral(slug, root=None):
+    """(T*, log L_acc/L_bol, tipo): el umbral cromosférico con la L_acc del paper y la L_bol publicada. `root`: la
+    raíz que contiene `runs/` (por defecto la del repo; desde un worktree, la del clon que los tiene)."""
     from scripts import suelo_cromosferico as sc
     from scripts import tipo_ir_indices as tir
-    perfil = tir.perfil(slug)
-    lacc, tipo = sc.lacc_hal(perfil["paper"]["run"])
+    root = ROOT if root is None else Path(root)
+    perfil = tir.perfil(slug, root=root)
+    lacc, tipo = sc.lacc_hal(perfil["paper"]["run"], root=root)
     ratio = math.log10(lacc) - float(perfil["fisica"]["log_lbol"])
     return teff_umbral(ratio), ratio, tipo
 
 
-def entrada_margen(slug):
-    """L_acc publicada (con la A_V adoptada), A_V adoptada, pendiente de la relación y A_Hα/A_V del run del paper."""
+def entrada_margen(slug, root=None):
+    """L_acc publicada (con la A_V adoptada), A_V adoptada, pendiente de la relación y A_Hα/A_V del run del paper.
+    `root`: la raíz que contiene `runs/` (por defecto la del repo; desde un worktree, la del clon que los tiene)."""
     from musepipe.config import load_run_config
     from musepipe.stages.stage_h03_limits import physical_inputs_from_config
     from scripts import suelo_cromosferico as sc
     from scripts import tipo_ir_indices as tir
-    perfil = tir.perfil(slug)
+    root = ROOT if root is None else Path(root)
+    perfil = tir.perfil(slug, root=root)
     run = perfil["paper"]["run"]
-    lacc, tipo = sc.lacc_hal(run)
-    cfg = load_run_config(run, project_root=ROOT).config
+    lacc, tipo = sc.lacc_hal(run, root=root)
+    cfg = load_run_config(run, project_root=root).config
     phys = physical_inputs_from_config(cfg)
     return dict(lacc0=lacc, tipo=tipo, av0=float(cfg["h03_av"]), a=float(phys["lacc_lha_a"]),
                 ahav=float(phys["a_halpha_over_av"]), lbol_lit=10 ** float(perfil["fisica"]["log_lbol"]))
@@ -759,7 +854,11 @@ REJILLAS_TABLA = {"btsettl": "BT-Settl", "drift": "DRIFT-PHOENIX", "ames_dusty":
                   **{f"diamondback1600_{f}": ("Diamondback, no clouds" if f == "nc"
                                               else rf"Diamondback, \(f_{{\rm sed}} = {f[1:]}\)")
                      for f in ("f1", "f2", "f3", "f4", "f8", "nc")},
-                  "sphinx": "SPHINX"}
+                  "sphinx": "SPHINX",
+                  # la prueba de ATMO 2020 (2026-10-26): el paper la cita en un párrafo y NO en la tabla; sus filas
+                  # solo salen si se pasan sus directorios (la propuesta de tabla con ATMO del agente `atmo`)
+                  "atmo_ceq": "ATMO 2020", "atmo_ceq1500": "ATMO 2020 (1500--3000 K)",
+                  "btsettl_bin": "BT-Settl (ATMO sampling)"}
 
 
 def _de_rejillas(d):
@@ -779,6 +878,52 @@ def en_el_borde(d):
         if q["p2_5"] - x0 < paso / 2 or x0 + paso * (n - 1) - q["p97_5"] < paso / 2:
             fuera.append(p)
     return fuera
+
+
+def pares_que_encierran(plantillas, teff):
+    """Los pares de plantillas consecutivas en tipo cuyas T_eff ajustadas encierran `teff` (la regla de
+    `~/muse_noche_20261017/analiza.py`, `encierran`). `plantillas`: dicts con 'spt', 'codigo' (`spt_code`) y
+    'teff', en el orden de desempate (el de sus etiquetas); se ordenan por 'codigo' de forma estable, así que dos
+    plantillas del mismo tipo quedan en ese orden."""
+    cc = sorted(plantillas, key=lambda c: c["codigo"])
+    return [(a, b) for a, b in zip(cc, cc[1:]) if min(a["teff"], b["teff"]) <= teff <= max(a["teff"], b["teff"])]
+
+
+def tipo_equivalente(plantillas, teff, rejilla=None):
+    """El tipo espectral equivalente de un compañero: su T_eff (con el prior en A_V) entre las de plantillas de
+    tipo conocido ajustadas con la MISMA rejilla y el ruido del compañero (Tabla B.5 y Sects. 4.1–4.2 del paper).
+
+    - Un solo par de plantillas consecutivas la encierra (`pares_que_encierran`): el tipo es el par, `A–B`, o `A`
+      si las dos son del mismo tipo. Si una plantilla del par está saturada contra un borde de la rejilla (a
+      menos de medio paso, con `rejilla`), el par no ordena las T_eff: se lee la plantilla del par más cercana
+      (DRIFT-PHOENIX con el ruido de ROXs 12 b, cuyas M6.5–M8 dan 2960–2990 K; `autor_9b.md` §2 del 2026-10-23).
+    - Ningún par, y más fría que todas: `posterior` al tipo más tardío («≥L1»: tan fría como la plantilla más fría
+      de ese tipo o más). Más caliente que todas: `anterior` al más temprano.
+    - Más de un par: ambiguo (`ValueError`); el tipo no es una lectura única y hay que mirarlo.
+
+    Devuelve dict(clase='par'|'una'|'posterior'|'anterior', tipos=(spt, ...), pares=[...], saturadas=[...])."""
+    pares = pares_que_encierran(plantillas, teff)
+    if len(pares) > 1:
+        raise ValueError("tipo equivalente ambiguo: " + ", ".join(f"{a['spt']}–{b['spt']}" for a, b in pares))
+    satura = []
+    if rejilla is not None:
+        x0, paso, n = REJILLAS[rejilla]["teff"]
+        satura = [p for p in plantillas if p["teff"] - x0 < paso / 2 or x0 + paso * (n - 1) - p["teff"] < paso / 2]
+    nombres = lambda ps: [p.get("plantilla", p["spt"]) for p in ps]  # noqa: E731
+    out = dict(pares=[(a["spt"], b["spt"]) for a, b in pares], saturadas=nombres(satura))
+    if pares:
+        a, b = pares[0]
+        if any(p is a or p is b for p in satura):
+            cerca = min((a, b), key=lambda p: abs(p["teff"] - teff))
+            return dict(out, clase="una", tipos=(cerca["spt"],))
+        if a["spt"] == b["spt"]:
+            return dict(out, clase="una", tipos=(a["spt"],))
+        return dict(out, clase="par", tipos=(a["spt"], b["spt"]))
+    if teff < min(p["teff"] for p in plantillas):
+        ultimo = max(plantillas, key=lambda p: p["codigo"])["spt"]
+        return dict(out, clase="posterior", tipos=(ultimo,))
+    primero = min(plantillas, key=lambda p: p["codigo"])["spt"]
+    return dict(out, clase="anterior", tipos=(primero,))
 
 
 def filas_rejillas(corridas, deltas, nombres):
@@ -834,10 +979,26 @@ def tabla_rejillas(dirs):
     return filas
 
 
+def fija_raiz(raiz):
+    """Lee los runs y las bibliotecas de otro clon (`--project-root`), como `paper_figures.py --project-root`: un
+    worktree no lleva `runs/`, y `g3_libraries_root` es relativo a la raíz. Cambia la raíz de este script y la de
+    los que la usan para leer (`ajuste_conjunto`, `tipo_ir_plantillas`, `tipo_ir_indices`, `suelo_cromosferico`);
+    el código y los `targets/` siguen siendo los de este clon. Devuelve la raíz resuelta."""
+    global ROOT
+    from scripts import ajuste_conjunto, suelo_cromosferico, tipo_ir_indices, tipo_ir_plantillas
+    ROOT = Path(raiz).resolve()
+    for m in (ajuste_conjunto, suelo_cromosferico, tipo_ir_indices, tipo_ir_plantillas):
+        m.ROOT = ROOT
+    return ROOT
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    comun = argparse.ArgumentParser(add_help=False)
+    comun.add_argument("--project-root", type=Path, default=None,
+                       help="clon del que se leen los runs y las bibliotecas (por defecto, este; un worktree no los lleva)")
     sub = ap.add_subparsers(dest="orden", required=True)
-    aa = sub.add_parser("ajusta", help="una corrida de muestreo anidado (o `evo_solo`)")
+    aa = sub.add_parser("ajusta", help="una corrida de muestreo anidado (o `evo_solo`)", parents=[comun])
     aa.add_argument("slug")
     aa.add_argument("--modo", choices=("libre", "evo", "evo_solo"), default="libre")
     aa.add_argument("--datos", choices=DATOS, default="todo", help="todos los espectros, solo MUSE o solo J/H/K")
@@ -853,16 +1014,24 @@ def main(argv=None):
     aa.add_argument("--av-fija", type=float, help="perfil: A_V fija en este valor")
     aa.add_argument("--rejilla", choices=tuple(REJILLAS), default="btsettl")
     aa.add_argument("--dir-rejilla", type=Path, help="directorio de npz de la rejilla (por defecto el de REJILLAS)")
+    aa.add_argument("--degrada", choices=DEGRADA, default="cuadratura",
+                    help="rejillas muestreadas en número de onda (ATMO 2020): resta en cuadratura su resolución "
+                         "(por defecto) o la trata como alta («ingenua»); en las demás no hace nada")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
-    ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`")
+    ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
+                        parents=[comun])
     ar.add_argument("dirs", type=Path, nargs="+")
     ar.add_argument("--json", type=Path)
-    at = sub.add_parser("tabla", help="cuerpo LaTeX de la tabla de las cadenas del apéndice B del paper")
+    at = sub.add_parser("tabla", help="cuerpo LaTeX de la tabla de las cadenas del apéndice B del paper",
+                        parents=[comun])
     at.add_argument("dirs", type=Path, nargs="+")
-    ag = sub.add_parser("rejillas", help="cuerpo LaTeX de la tabla de rejillas del apéndice B del paper")
+    ag = sub.add_parser("rejillas", help="cuerpo LaTeX de la tabla de rejillas del apéndice B del paper",
+                        parents=[comun])
     ag.add_argument("dirs", type=Path, nargs="+")
     a = ap.parse_args(argv)
+    if a.project_root is not None:
+        fija_raiz(a.project_root)
     if a.orden == "ajusta":
         return ajusta(a)
     if a.orden == "tabla":
