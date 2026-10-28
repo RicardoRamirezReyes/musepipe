@@ -9,11 +9,15 @@ Pasa al pipeline el estudio del 2026-10-21 (`~/muse_sesion_20261021/centro/`: `I
 (a) `b3`: **precisión de B3 por inyección.** Compañeros falsos (la PSF de C1, `evaluate_psf_model`, por el continuo
     del compañero de C4) en un anillo al radio del compañero, y el algoritmo de B3 entero (`locate_companion`: banda
     roja y bandas de respaldo, mediana azimutal, `detect_restricted_source`, `centroid_2d`). Medida − verdad da
-    sesgo, σ y rms; los fallos (`AmbiguousDetectionError`, `SourceNotDetectedError`) se cuentan. La predicción que
-    recibe B3 lleva el mismo error que tuvo la del compañero real (predicha − medida en el QC de B3).
+    sesgo, σ y rms; los fallos (`AmbiguousDetectionError`, `SourceNotDetectedError`) se cuentan, y también las
+    medidas a más de media FWHM de la verdad, que no son un error de centroide sino OTRA fuente: si la banda roja
+    es ambigua, B3 prueba las de respaldo y puede devolver otro pico sin avisar (`clasifica_inyecciones`). La
+    predicción que recibe B3 lleva el mismo error que tuvo la del compañero real (predicha − medida en su QC).
 (b) `traza`: **la traza cromática** de la primaria y del compañero con `chromatic_centroids` de B3. Con las bandas
     del run reproduce `tables/stage01c_chromatic_centroids.csv`; con `--bandas-traza` (12 por defecto) da la traza
-    fina, y la σ de cada banda sale de las mismas inyecciones de (a).
+    fina, y la σ de cada banda sale de las mismas inyecciones de (a). Se añade el centroide del canal de Hα que
+    mide E2 (T2) respecto de la posición de B3 (`centroide_ha_e2`), la única medida de la cadena de dónde está la
+    línea.
 (c) `flujo`: **sensibilidad del flujo.** Los métodos de C2–C6 (`--metodos`, los seis por defecto) extraídos con la
     posición declarada del compañero movida 0.1/0.25/0.5/1 px en cuatro direcciones (radial hacia fuera/dentro,
     tangencial a +90°/−90°) y a lo largo de la traza cromática: posición(λ) = B3 + p(λ) − p(λ_B3), con p la traza de
@@ -97,6 +101,8 @@ MARGEN_INYECCION_PX = 16
 EVITA_FUENTES_PX = 10.0
 #: semitamaño del sello de la fuente falsa: por debajo de `norm_radius_px` la PSF se construye en la rejilla pequeña
 SEMI_SELLO_PX = 18
+#: una banda de la traza «mide» el compañero si la σ de su centroide por inyección no pasa de esto (px)
+SIGMA_MEDIDA_PX = 0.15
 SEMILLA = 20261028
 METODOS = ("aperture", "optimal_ls", "optimal_psfsub", "psffit", "sgf", "lpm")
 PARTES = ("verifica", "b3", "traza", "flujo", "e1")
@@ -184,17 +190,19 @@ def anillo_inyeccion(prim_yx, comp_yx, *, n, excluye_deg, shape, margen_px, evit
 
 
 def estadistica_posicion(verdad, medida):
-    """Sesgo (y, x), σ (y, x) y rms 2D de medida − verdad, sobre las filas finitas."""
+    """Sesgo (y, x), σ (y, x), σ robusta (1.4826·MAD) y rms 2D de medida − verdad, sobre las filas finitas."""
     v = np.asarray(verdad, dtype=np.float64).reshape(-1, 2)
     m = np.asarray(medida, dtype=np.float64).reshape(-1, 2)
     d = m - v
     ok = np.all(np.isfinite(d), axis=1)
     d = d[ok]
     if d.shape[0] == 0:
-        return {"n": 0, "sesgo_yx": None, "sigma_yx": None, "rms_px": None}
+        return {"n": 0, "sesgo_yx": None, "sigma_yx": None, "sigma_rob_yx": None, "rms_px": None}
     sig = np.std(d, axis=0, ddof=1) if d.shape[0] > 1 else np.full(2, np.nan)
+    rob = 1.4826 * np.median(np.abs(d - np.median(d, axis=0)), axis=0)
     return {"n": int(d.shape[0]), "sesgo_yx": [float(v) for v in np.mean(d, axis=0)],
-            "sigma_yx": [float(v) for v in sig], "rms_px": float(np.sqrt(np.mean(np.sum(d ** 2, axis=1))))}
+            "sigma_yx": [float(v) for v in sig], "sigma_rob_yx": [float(v) for v in rob],
+            "rms_px": float(np.sqrt(np.mean(np.sum(d ** 2, axis=1))))}
 
 
 def clasifica_inyecciones(filas, fwhm_px, *, fraccion_fwhm=0.5):
@@ -352,6 +360,34 @@ def _inyeccion_b3(k):
     return fila
 
 
+def centroide_ha_e2(cfg, paths, copia, comp_yx):
+    """Dónde pone E2 (T2) la emisión del canal de Hα, respecto de la posición de B3, en px (y, x).
+
+    T2 (`stage_h02_artifacts.t2_spatial_coherence`) da el primer momento de los píxeles positivos de un sello de
+    ±`h02_stamp_half_size_px` centrado en el píxel redondeado de B3 (`_stamp`), en las coordenadas del sello; aquí
+    se pasa a desplazamiento respecto de B3 con la misma cuenta que `_stamp`. Es la única medida de la posición de
+    la línea que hace la cadena (un canal, sobre el residuo de 04b).
+    """
+    from musepipe.io import read_json
+
+    ruta = remapea_si_existe({"paths": paths["paths"], "q": paths["paths"].stage_dir / "stage_h02_qc.json"},
+                             copia)["q"]
+    if not Path(ruta).exists():
+        return None
+    t2 = (read_json(ruta).get("t2") or {})
+    if t2.get("centroid_y") is None:
+        return None
+    from musepipe.stages.stage_h02_artifacts import stage_h02_config_from_run
+
+    cfg2 = stage_h02_config_from_run(cfg["run_id"], project_root=cfg.get("project_root"))
+    semi = int(cfg2.get("h02_stamp_half_size_px", 5))
+    y, x = float(comp_yx[0]), float(comp_yx[1])
+    loc = (y - max(0, int(round(y)) - semi), x - max(0, int(round(x)) - semi))
+    d = (float(t2["centroid_y"]) - loc[0], float(t2["centroid_x"]) - loc[1])
+    return {"qc": str(ruta), "canal": t2.get("signal_channel"), "d_yx": list(d), "d_px": math.hypot(*d),
+            "centroid_offset_px_qc": t2.get("centroid_offset_px"), "psf_amplitude_snr": t2.get("psf_amplitude_snr")}
+
+
 def mide_b3(run_id, project_root, *, copia, n_inyecciones, n_bandas, n_procesos, semilla, partes):
     """(a) y (b): reproducción de B3, traza cromática real y precisión por inyección."""
     import csv
@@ -400,6 +436,7 @@ def mide_b3(run_id, project_root, *, copia, n_inyecciones, n_bandas, n_procesos,
     filas_n, _ = chromatic_centroids(cubo, wave, prim_yx, comp_qc, dict(cfg, stage01c_chromatic_bins=n_bandas), fwhm)
     out["traza"] = {"n_bandas": int(n_bandas), "lam_b3_A": lam_b3, "filas": filas_n,
                     "filas_run": prod.chromatic_rows}
+    out["centroide_ha_e2"] = centroide_ha_e2(cfg, paths, copia, comp_qc)
 
     if "b3" in partes or "traza" in partes:
         psf_path = remapea_si_existe({"paths": paths["paths"], "p": paths["paths"].stage_dir / "psf_model.json"},
@@ -1067,9 +1104,36 @@ def cifras(r):
             s = sig[i] if i < len(sig) else {}
             bandas.append({"lam_A": float(lam[i]), "comp_menos_prim_yx": [float(cdy[i] - pdy[i]), float(cdx[i] - pdx[i])],
                            "prim_yx": [float(pdy[i]), float(pdx[i])],
-                           "sigma_comp_yx": s.get("sigma_yx"), "sesgo_comp_yx": s.get("sesgo_yx")})
+                           "sigma_comp_yx": s.get("sigma_yx"), "sigma_rob_comp_yx": s.get("sigma_rob_yx"),
+                           "sesgo_comp_yx": s.get("sesgo_yx")})
         traza["bandas"] = bandas
+        # ¿sigue el compañero a la primaria donde su centroide está medido?
+        medidas = [b for b in bandas if b["sigma_comp_yx"] and max(b["sigma_comp_yx"]) <= SIGMA_MEDIDA_PX]
+        traza["sigue"] = None if not medidas else {
+            "umbral_sigma_px": SIGMA_MEDIDA_PX, "lam_min_A": min(b["lam_A"] for b in medidas),
+            "bandas_A": [b["lam_A"] for b in medidas],
+            "max_comp_menos_prim_px": max(math.hypot(*b["comp_menos_prim_yx"]) for b in medidas),
+            "max_sigma_px": max(max(b["sigma_comp_yx"]) for b in medidas)}
+        con_ha = [b for b, f in zip(bandas, tr["filas"]) if f["wave_min_A"] <= 6562.8 <= f["wave_max_A"]]
+        traza["banda_ha"] = con_ha[0] if con_ha else None
+        e2 = b3.get("centroide_ha_e2")
+        if e2 and comp and prim:
+            er, et = vectores(comp, prim)
+            e2 = dict(e2, radial_px=float(np.dot(e2["d_yx"], er)), tangencial_px=float(np.dot(e2["d_yx"], et)))
+            e2["menos_traza_px"] = {k: math.hypot(e2["d_yx"][0] - traza[k]["d_ha_yx"][0],
+                                                  e2["d_yx"][1] - traza[k]["d_ha_yx"][1])
+                                    for k in traza if k.startswith("traza")}
+        traza["centroide_ha_e2"] = e2
         out["traza"] = traza
+    ver = ext.get("verificacion")
+    if ver:
+        out["verificacion"] = {
+            "max_rel_productos": max(float(v) for d in ver["productos"].values() for k, v in d.items()
+                                     if k not in ("n_controles",) and isinstance(v, float)),
+            "max_rel_por_metodo": {m: max(float(v) for k, v in d.items() if k != "n_controles" and isinstance(v, float))
+                                   for m, d in ver["productos"].items()},
+            "max_abs_dif_e1": max(abs(float(x["dif"])) for d in ver["e1"].values() for x in d.values()),
+            "veredicto": [ver["veredicto_aqui"].get("verdict"), (ver.get("veredicto_disco") or {}).get("verdict")]}
     res = ext.get("resumen") or {}
     if res:
         metodos = ext["metodos"]
@@ -1111,6 +1175,9 @@ def imprime_cifras(nombre, c):
               f"{b['err_formal_qc_px']:.4f} px (rms/formal {b['rms_sobre_err_formal']:.2f}), S/N {b['snr_qc']:.1f}")
     if "traza" in c:
         for k, d in c["traza"].items():
+            if k in ("centroide_ha_e2", "sigue", "banda_ha"):
+                print(f"   {k}: {json.dumps(d, default=_json_default)}")
+                continue
             if k == "bandas":
                 continue
             print(f"   {k}: d(Hα) = {np.round(d['d_ha_yx'], 3).tolist()} = {d['d_ha_px']:.3f} px "
@@ -1118,6 +1185,8 @@ def imprime_cifras(nombre, c):
         for b in c["traza"]["bandas"]:
             print(f"     {b['lam_A']:7.0f} Å  primaria {np.round(b['prim_yx'], 3).tolist()}  compañero−primaria "
                   f"{np.round(b['comp_menos_prim_yx'], 3).tolist()}  σ {None if b['sigma_comp_yx'] is None else np.round(b['sigma_comp_yx'], 3).tolist()}")
+    if "verificacion" in c:
+        print(f"   verificación δ = 0: {c['verificacion']}")
     if "flujo_e1" in c:
         s = c["flujo_e1"]
         print(f"   δ = 0: {s['cero']}")
