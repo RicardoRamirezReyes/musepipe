@@ -1114,6 +1114,10 @@ def cifras(r):
             "bandas_A": [b["lam_A"] for b in medidas],
             "max_comp_menos_prim_px": max(math.hypot(*b["comp_menos_prim_yx"]) for b in medidas),
             "max_sigma_px": max(max(b["sigma_comp_yx"]) for b in medidas)}
+        mods = [math.hypot(*b["prim_yx"]) for b in bandas]
+        imax = int(np.argmax(mods))
+        traza["primaria_max"] = {"px": mods[imax], "lam_A": bandas[imax]["lam_A"], "px_banda_mas_azul": mods[0],
+                                 "lam_mas_azul_A": bandas[0]["lam_A"]}
         con_ha = [b for b, f in zip(bandas, tr["filas"]) if f["wave_min_A"] <= 6562.8 <= f["wave_max_A"]]
         traza["banda_ha"] = con_ha[0] if con_ha else None
         e2 = b3.get("centroide_ha_e2")
@@ -1175,7 +1179,7 @@ def imprime_cifras(nombre, c):
               f"{b['err_formal_qc_px']:.4f} px (rms/formal {b['rms_sobre_err_formal']:.2f}), S/N {b['snr_qc']:.1f}")
     if "traza" in c:
         for k, d in c["traza"].items():
-            if k in ("centroide_ha_e2", "sigue", "banda_ha"):
+            if k in ("centroide_ha_e2", "sigue", "banda_ha", "primaria_max"):
                 print(f"   {k}: {json.dumps(d, default=_json_default)}")
                 continue
             if k == "bandas":
