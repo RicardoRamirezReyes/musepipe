@@ -1940,7 +1940,7 @@ def _series_corner_datos(cadenas, slug, rejilla="btsettl"):
     for d in tb._carga(cadenas):
         if (d["slug"] != slug or d["modo"] != "libre" or d.get("av") != "primaria" or d.get("verdad")
                 or d.get("av_fija") is not None or d.get("rejilla", "btsettl") != rejilla
-                or d.get("r_analisis", 500) != 500):
+                or d.get("r_analisis", 500) != 500 or tb._es_variante(d)):
             continue
         datos = d.get("datos", "todo")
         if datos in series:

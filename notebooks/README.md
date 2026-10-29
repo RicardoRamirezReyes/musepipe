@@ -105,10 +105,16 @@ reportan como pendientes, no como error. Regenerar es idempotente.
 | 24 | [G4_classify](ROXs12b/G4_classify.ipynb) | Clasificación de fuente | sí | ranking de hipótesis; tests disponibles |
 | 25 | [G5_final_synthesis](ROXs12b/G5_final_synthesis.ipynb) | Síntesis final | sí | tarjeta de síntesis; integridad del paquete |
 
-## Endpoint científico (run realineado)
+## Estado científico
 
-No-detección de Hα (E1) → **Ṁ ≲ 8×10⁻¹³ M☉/yr** (E3, Gumbel 99%) / 1.3×10⁻¹² (G3,
-5σ + R_in) → compañero subestelar **real ligado** pero clasificación **ambigua**
-(G4, falta el tipado espectral diferido en G3). F1 `yellow`, 4 limitaciones
-aceptadas; **provisional hasta cerrar el A-block**. Cada notebook enlaza la nota de
-decisión correspondiente en `docs/`.
+Lo dice la cadena de cada objeto, no este README: `F1_final_report` (la puerta) y
+`G5_final_synthesis` de su set, y el resumen en el traspaso más reciente
+(`docs/*_handoff.md`, §Estado). Hasta el 2026-10-29 aquí había un «endpoint» de
+julio del run realineado de ROXs 12 b (no detección de Hα, F1 `yellow`), que ya no
+vale: el paper detecta Hα en ROXs 12 b sobre `ROXs12b_invvar` y la puerta F1 está
+roja en los dos runs del paper.
+
+**Qué run audita cada set.** `--target` supone el run `<objeto>_realigned`, así que
+`ROXs12b/` audita `ROXs12b_realigned`, que no es el run del paper
+(`targets/ROXs12b.json` → `paper.run` = `ROXs12b_invvar`); `ROXs42Bb/` sí audita el
+suyo. Ver `docs/2026-10-29_auditoria_estructura.md` §2.4.
