@@ -52,6 +52,26 @@ resolución que el muestreo ya trae (`--degrada cuadratura`, por defecto; `ingen
 rejillas). `btsettl_bin` (BT-Settl promediado en las bandas de ATMO) es el control del muestreo. Las cifras del
 párrafo las da `scripts/paper_cifras_atmo.py`.
 
+`--mascara-muse` (pruebas exploratorias del 2026-10-28, pedido del autor: «las bandas telúricas de O2, si están
+corregidas, deberían poder agregarse») elige las máscaras telúricas del espectro MUSE (`MASCARAS_MUSE`): `paper`
+(por defecto, las de las cadenas del paper: las de G3, O2 B y O2 A, más las de H2O de
+`tipo_ir_plantillas.H2O_MUSE_A`), `g3` (sin H2O), `sin_o2` (con H2O, sin O2), `sin_o2b` (con H2O y O2 A, sin O2 B)
+o `sin_telurico` (sin ninguna). Las
+ventanas de las líneas y los canales malos se quedan siempre; el cambio de O2 es en memoria. Esas cadenas llevan
+`mascara-<variante>` en la etiqueta y `mascara_muse` en el json, y no entran en `tabla` ni en `rejillas`. El residuo
+telúrico en O2 lo mide `scripts/g3_residuo_telurico_fino.py`.
+
+`--ventana-lineas KMS` y `--ventana-halpha KMS` (pregunta del autor del 2026-10-28: «¿qué número parecería óptimo
+para extraer la mayor información no sesgada?») cambian, en memoria, la ventana de ±300 km/s que G3 pone alrededor
+de las 24 líneas de G2 (`g3_fit_masks.line_window_kms`): la primera para todas, la segunda solo para Hα
+(`tipo_ir_plantillas.ventanas_de_lineas`). Sin ellas, la de siempre. Con ellas, la etiqueta lleva `ventana-<KMS>` y
+`ventanaha-<KMS>` antes de la semilla, el json `ventana_lineas_kms` / `ventana_halpha_kms`, y la cadena no entra en
+`tabla` ni en `rejillas`. Qué anchura deja fuera el sesgo de las alas de una línea lo mide
+`scripts/ventanas_lineas.py`.
+
+`comprueba` reconstruye el modelo de cada cadena `libre` en su mejor punto y dice si su `loglike` da el `logl_max`
+de la cadena bit a bit (sale con 1 si alguna no).
+
 `--project-root` (todas las órdenes) lee los runs y las bibliotecas de otro clon: un worktree no lleva `runs/`.
 
 `resume` lee los json/npz de uno o varios directorios de `ajusta` y da, por corrida, la T_eff y el margen
@@ -65,6 +85,9 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--tracks ATMO2020] [--av libre|primaria] [--av-fija AV] [--nlive 500]
                                        [--semilla 0] [--inyecta-bt ...] [--plantilla ...] --salida DIR
                                        [--dir-rejilla DIR] [--degrada cuadratura|ingenua] [--project-root RAIZ]
+                                       [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
+                                       [--ventana-lineas KMS] [--ventana-halpha KMS]
+     python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
      python scripts/teff_bayes.py rejillas DIR [DIR ...]   # cuerpo LaTeX de la tabla de rejillas (ap. B)
@@ -199,6 +222,16 @@ MALO = -1e300
 SUELO = (6.17, -24.54)
 #: qué espectros entran en `ajusta` (`--datos`): todos, solo MUSE o solo los J/H/K
 DATOS = ("todo", "muse", "ir")
+#: máscaras de las bandas telúricas en el espectro MUSE (`--mascara-muse`; pruebas exploratorias del 2026-10-28,
+#: `~/muse_sesion_20261028/mascaras_muse/BRIEF.md`): ¿se añaden las bandas de H2O de `tipo_ir_plantillas.H2O_MUSE_A`
+#: (`h2o`)? ¿qué bandas de O2 de G3 (`g3_fit_masks.telluric_bands_A`) se destapan (`quita_o2`)? `paper` es lo de las
+#: cadenas del paper; `g3`, las máscaras de G3 (sin H2O); `sin_o2`, con H2O y sin O2; `sin_o2b`, con H2O y O2 A y sin
+#: O2 B (O2 A lleva el doblete de K I 7665/7699, que la ventana de las líneas no tapa: así se separa una banda de la
+#: otra); `sin_telurico`, sin ninguna. Las ventanas de las líneas y los canales malos de 04b se quedan siempre. El
+#: cambio de O2 se hace en una copia del config en memoria (`tipo_ir_plantillas.sin_o2`), nunca en `runs/`.
+MASCARAS_MUSE = {"paper": dict(h2o=True, quita_o2=()), "g3": dict(h2o=False, quita_o2=()),
+                 "sin_o2": dict(h2o=True, quita_o2=("O₂ B", "O₂ A")), "sin_o2b": dict(h2o=True, quita_o2=("O₂ B",)),
+                 "sin_telurico": dict(h2o=False, quita_o2=("O₂ B", "O₂ A"))}
 
 
 def _entra(seg, datos):
@@ -241,7 +274,8 @@ def _bases_nativas(pls, segs):
     return out
 
 
-def _prepara(slug, R, r250=False, degrada="cuadratura"):
+def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None,
+             ventana_halpha=None):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
     2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes).
 
@@ -251,12 +285,20 @@ def _prepara(slug, R, r250=False, degrada="cuadratura"):
 
     `degrada`: solo para una rejilla muestreada en número de onda (`nu_bin_cm`, ATMO 2020): «cuadratura» degrada
     con `modelos_base_nativa` (resta la resolución del muestreo), «ingenua» por el camino de las demás. Sin
-    `nu_bin_cm` no hace nada."""
+    `nu_bin_cm` no hace nada.
+
+    `mascara_muse`: las máscaras telúricas del espectro MUSE (`MASCARAS_MUSE`; `paper` es lo de siempre).
+    `ventana_lineas` / `ventana_halpha`: las ventanas (km/s) de las líneas de G2 en MUSE, todas / Hα (None = las del
+    run; `tipo_ir_plantillas.ventanas_de_lineas`)."""
     from scripts import ajuste_conjunto as aj
     from scripts import tipo_ir_plantillas as tp
     if degrada not in DEGRADA:
         raise ValueError(f"degrada={degrada!r}: debe ser uno de {DEGRADA}")
-    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=True)
+    if mascara_muse not in MASCARAS_MUSE:
+        raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
+    mm = MASCARAS_MUSE[mascara_muse]
+    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
+                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha)
     segs = aj.segmentos_cgs(slug, p)
     if r250:
         segs = [_empareja(s) for s in segs]
@@ -276,7 +318,7 @@ def _prepara(slug, R, r250=False, degrada="cuadratura"):
 class Modelo:
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
-                 r250=False, degrada="cuadratura"):
+                 r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None):
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -294,7 +336,10 @@ class Modelo:
         self.r_analisis = 250 if _r250(rejilla, r250) else 500
         #: cómo se degradó la rejilla, solo si está muestreada en número de onda (ATMO 2020); None en las demás
         self.degrada = degrada if R.get("nu_bin_cm") else None
-        p, conj = _prepara(slug, R, r250=self.r_analisis == 250, degrada=degrada)
+        self.mascara_muse = mascara_muse
+        self.ventana_lineas, self.ventana_halpha = ventana_lineas, ventana_halpha
+        p, conj = _prepara(slug, R, r250=self.r_analisis == 250, degrada=degrada, mascara_muse=mascara_muse,
+                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha)
         self.run = p["run"]
         cfg = load_run_config(self.run, project_root=ROOT).config
         self.cfg = cfg
@@ -552,20 +597,36 @@ def corre(mod, nlive, semilla, dlogz=0.5):
                 logl_max=float(res.logl[imax]))
 
 
+def etiqueta_de(a):
+    """La etiqueta de una corrida de `ajusta` (nombre de sus json/npz): la de `--etiqueta` o la que se compone de
+    los argumentos. Con `--mascara-muse` distinta de `paper` lleva `mascara-<variante>` antes de la semilla, para
+    que esas cadenas no se confundan con las del paper; con `--ventana-lineas` / `--ventana-halpha`, `ventana-<KMS>`
+    / `ventanaha-<KMS>` después de la máscara."""
+    degrada = getattr(a, "degrada", "cuadratura")
+    mascara = getattr(a, "mascara_muse", "paper")
+    vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
+    return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
+                                              f"pl-{a.plantilla}" if a.plantilla else None,
+                                              f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
+                                              "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
+                                              f"solo{a.datos}" if a.datos != "todo" else None,
+                                              "r250" if _r250(a.rejilla, a.r250) else None,
+                                              "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
+                                              else None,
+                                              f"mascara-{mascara}" if mascara != "paper" else None,
+                                              f"ventana-{vl:g}" if vl is not None else None,
+                                              f"ventanaha-{vh:g}" if vh is not None else None,
+                                              f"s{a.semilla}") if x)
+
+
 def ajusta(a):
     from musepipe.config import load_run_config
     from scripts import tipo_ir_indices as tir
     a.salida.mkdir(parents=True, exist_ok=True)
     degrada = getattr(a, "degrada", "cuadratura")
-    et = a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
-                                             f"pl-{a.plantilla}" if a.plantilla else None,
-                                             f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
-                                             "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
-                                             f"solo{a.datos}" if a.datos != "todo" else None,
-                                             "r250" if _r250(a.rejilla, a.r250) else None,
-                                             "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
-                                             else None,
-                                             f"s{a.semilla}") if x)
+    mascara = getattr(a, "mascara_muse", "paper")
+    vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
+    et = etiqueta_de(a)
     if a.modo == "evo_solo":
         cfg = load_run_config(tir.perfil(a.slug)["paper"]["run"], project_root=ROOT).config
         r = evo_solo(cfg, a.slug, a.tracks, semilla=a.semilla)
@@ -575,7 +636,8 @@ def ajusta(a):
         np.savez(a.salida / f"{et}.npz", **{k: v for k, v in r.items() if k != "fraccion_en_rejilla"})
     else:
         mod = Modelo(a.slug, a.modo, a.av, a.tracks, a.inyecta_bt, a.plantilla, a.av_inyectada, a.semilla, a.av_fija,
-                     a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada)
+                     a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada, mascara_muse=mascara,
+                     ventana_lineas=vl, ventana_halpha=vh)
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -585,6 +647,11 @@ def ajusta(a):
                    rejilla=a.rejilla, datos=a.datos, r_analisis=mod.r_analisis, nodos_interpolados=mod.rellenados,
                    # el degradado, solo en las rejillas muestreadas en número de onda (las demás no cambian)
                    **({"degrada": mod.degrada} if mod.degrada else {}),
+                   # las máscaras telúricas de MUSE, solo si no son las del paper (las cadenas del paper no la llevan)
+                   **({"mascara_muse": mascara} if mascara != "paper" else {}),
+                   # las ventanas de las líneas en MUSE, solo si no son las del run
+                   **({"ventana_lineas_kms": vl} if vl is not None else {}),
+                   **({"ventana_halpha_kms": vh} if vh is not None else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -719,7 +786,10 @@ def resume(dirs, salida=None):
         psobre = float(np.mean(mg > 0))
         modo = d["modo"] + (f" {d['tracks']}" if d.get("tracks") else "") + (
             (f", A_V fija {d['av_fija']:g}" if d.get("av_fija") is not None else f", A_V {d['av']}") if d["modo"] != "evo_solo" else "") + (
-            f", solo {d['datos'].upper()}" if d.get("datos", "todo") != "todo" else "")
+            f", solo {d['datos'].upper()}" if d.get("datos", "todo") != "todo" else "") + (
+            f", máscara MUSE {d['mascara_muse']}" if d.get("mascara_muse", "paper") != "paper" else "") + (
+            f", ventana {d['ventana_lineas_kms']:g} km/s" if d.get("ventana_lineas_kms") is not None else "") + (
+            f", ventana Hα {d['ventana_halpha_kms']:g} km/s" if d.get("ventana_halpha_kms") is not None else "")
         if d["modo"] == "evo_solo":
             fila = dict(slug=d["slug"], modo=modo, teff=d["teff"], p_bajo_umbral=pT, logg=d["logg"], r=d["r_rj"],
                         m=d["masa_mjup"], margen=mgp.tolist(), p_sobre_suelo=psobre)
@@ -800,12 +870,19 @@ def _pm(p, nd=0, f=None, signo=False):
     return f"${tm.format(m)}^{{+{t.format(hi - m)}}}_{{-{t.format(m - lo)}}}$"
 
 
+def _ventanas_propias(d):
+    """¿Corrió la cadena con ventanas de las líneas distintas de las del run (`--ventana-lineas`/`--ventana-halpha`)?"""
+    return d.get("ventana_lineas_kms") is not None or d.get("ventana_halpha_kms") is not None
+
+
 def _de_la_tabla(d):
     """Una corrida sobre los datos (no plantilla ni inyección), `libre`, con la A_V fija o con el prior, con
-    todos los espectros (no `--datos muse|ir`), con una de las rejillas del paper (`NOMBRE_REJILLA`) y a R = 500."""
+    todos los espectros (no `--datos muse|ir`), con una de las rejillas del paper (`NOMBRE_REJILLA`), a R = 500 y
+    con las máscaras de MUSE del paper (no `--mascara-muse` ni `--ventana-lineas` / `--ventana-halpha`)."""
     return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
             and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in NOMBRE_REJILLA
-            and d.get("r_analisis", 500) == 500)
+            and d.get("r_analisis", 500) == 500 and d.get("mascara_muse", "paper") == "paper"
+            and not _ventanas_propias(d))
 
 
 def filas_tabla(corridas, deltas, nombres):
@@ -863,9 +940,10 @@ REJILLAS_TABLA = {"btsettl": "BT-Settl", "drift": "DRIFT-PHOENIX", "ames_dusty":
 
 def _de_rejillas(d):
     """Una corrida de la tabla de rejillas: como `_de_la_tabla`, pero con cualquier rejilla de `REJILLAS_TABLA` y
-    a cualquier resolución."""
+    a cualquier resolución (con las máscaras de MUSE del paper)."""
     return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
-            and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in REJILLAS_TABLA)
+            and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in REJILLAS_TABLA
+            and d.get("mascara_muse", "paper") == "paper" and not _ventanas_propias(d))
 
 
 def en_el_borde(d):
@@ -979,6 +1057,65 @@ def tabla_rejillas(dirs):
     return filas
 
 
+def modelo_de_cadena(d, dir_rejilla=None):
+    """El `Modelo` con el que corrió una cadena `libre` sobre los datos (su json: rejilla, datos, resolución,
+    degradado, A_V y máscaras de MUSE) y su punto de máxima verosimilitud (`mejor`). Como
+    `delta_entre_rejillas.modelo_de`, más las máscaras. `dir_rejilla`: el directorio de npz si no es el de
+    `REJILLAS` (ATMO 2020)."""
+    if d["modo"] != "libre" or d.get("verdad"):
+        raise ValueError(f"{d['etiqueta']}: solo cadenas `libre` sobre los datos (sin plantilla ni inyección)")
+    mod = Modelo(d["slug"], d["modo"], d["av"], "ATMO2020", None, None, None, d["semilla"], d.get("av_fija"),
+                 d.get("rejilla", "btsettl"), dir_rejilla, d.get("datos", "todo"), d.get("r_analisis", 500) == 250,
+                 d.get("degrada") or "cuadratura", mascara_muse=d.get("mascara_muse", "paper"),
+                 ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"))
+    return mod, np.array([d["mejor"][k] for k in mod.nombres])
+
+
+def comprueba(dirs, dirs_rejilla=None):
+    """Para cada cadena `libre` sobre los datos de `dirs`: reconstruye su modelo (`modelo_de_cadena`), evalúa
+    `loglike` en su mejor punto y lo compara BIT A BIT (==) con el `logl_max` que guardó la cadena; compara
+    también los puntos por segmento con `n_puntos`. Prueba que el código de hoy (y la variante de máscaras por
+    defecto, `paper`) construye el mismo modelo que corrió la cadena. `dirs_rejilla`: {rejilla: directorio}."""
+    filas = []
+    for d in _carga(dirs):
+        if d["modo"] != "libre" or d.get("verdad"):
+            continue
+        t0 = time.time()
+        mod, th = modelo_de_cadena(d, (dirs_rejilla or {}).get(d.get("rejilla", "btsettl")))
+        ll = mod.loglike(th)
+        n = {s["nombre"]: int(s["d"].size) for s in mod.segs}
+        filas.append(dict(etiqueta=d["etiqueta"], mascara_muse=d.get("mascara_muse", "paper"), loglike=ll,
+                          logl_max=d["logl_max"], diferencia=ll - d["logl_max"], bit_a_bit=bool(ll == d["logl_max"]),
+                          n_puntos=n, n_puntos_iguales=n == d["n_puntos"], segundos=round(time.time() - t0, 1)))
+        f = filas[-1]
+        print(f"{f['etiqueta']}: logL {ll!r} cadena {d['logl_max']!r} → {'IGUAL bit a bit' if f['bit_a_bit'] else 'DISTINTO'}"
+              f" (Δ = {f['diferencia']:.3e}); puntos {'iguales' if f['n_puntos_iguales'] else 'DISTINTOS'} "
+              f"(MUSE {n.get('MUSE')}); {f['segundos']} s")
+    return filas
+
+
+def bins_muse(slug, ventana_lineas=None, ventana_halpha=None):
+    """{variante: dict(n, w_min, w_max, por_banda)} de los bins de 15 Å del espectro MUSE que entran en el ajuste con
+    cada variante de `MASCARAS_MUSE` (`tipo_ir_plantillas.segmento_muse`, sin leer ninguna rejilla: con las rejillas
+    de las tablas, todos los bins de MUSE caen dentro de los modelos). `por_banda`: los bins cuyo centro cae en cada
+    banda telúrica de `musepipe.telluric_lines.TELLURIC_BANDS` (± medio bin). `ventana_lineas` / `ventana_halpha`:
+    las ventanas de las líneas (km/s; None = las del run)."""
+    from musepipe.telluric_lines import TELLURIC_BANDS
+    from scripts import tipo_ir_indices as tir
+    from scripts import tipo_ir_plantillas as tp
+    run = tir.perfil(slug)["paper"]["run"]
+    out = {}
+    for m, v in MASCARAS_MUSE.items():
+        s = tp.segmento_muse(run, h2o=v["h2o"], quita_o2=v["quita_o2"], ventana_kms=ventana_lineas,
+                             ventana_ha_kms=ventana_halpha)
+        w = s["w"][s["bueno"]]
+        medio = float(np.median(s["hi"] - s["lo"])) / 2
+        out[m] = dict(n=int(w.size), w_min=float(w.min()), w_max=float(w.max()),
+                      por_banda={b["name"]: int(np.sum((w >= b["lo_A"] - medio) & (w <= b["hi_A"] + medio)))
+                                 for b in TELLURIC_BANDS})
+    return out
+
+
 def fija_raiz(raiz):
     """Lee los runs y las bibliotecas de otro clon (`--project-root`), como `paper_figures.py --project-root`: un
     worktree no lleva `runs/`, y `g3_libraries_root` es relativo a la raíz. Cambia la raíz de este script y la de
@@ -1017,6 +1154,17 @@ def main(argv=None):
     aa.add_argument("--degrada", choices=DEGRADA, default="cuadratura",
                     help="rejillas muestreadas en número de onda (ATMO 2020): resta en cuadratura su resolución "
                          "(por defecto) o la trata como alta («ingenua»); en las demás no hace nada")
+    aa.add_argument("--mascara-muse", choices=tuple(MASCARAS_MUSE), default="paper",
+                    help="máscaras telúricas del espectro MUSE: paper (las de las cadenas del paper: G3 + H2O), g3 "
+                         "(sin H2O), sin_o2 (con H2O, sin O2), sin_o2b (con H2O y O2 A, sin O2 B), sin_telurico "
+                         "(sin ninguna); líneas y canales malos "
+                         "siempre. Distinta de paper, la etiqueta lleva `mascara-<variante>`")
+    aa.add_argument("--ventana-lineas", type=float, default=None, metavar="KMS",
+                    help="ventana (±km/s) de TODAS las líneas de G2 en MUSE (por defecto la del run, 300); la "
+                         "etiqueta lleva `ventana-<KMS>`")
+    aa.add_argument("--ventana-halpha", type=float, default=None, metavar="KMS",
+                    help="ventana (±km/s) de Hα en MUSE (por defecto la de las demás líneas); la etiqueta lleva "
+                         "`ventanaha-<KMS>`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
@@ -1029,11 +1177,39 @@ def main(argv=None):
     ag = sub.add_parser("rejillas", help="cuerpo LaTeX de la tabla de rejillas del apéndice B del paper",
                         parents=[comun])
     ag.add_argument("dirs", type=Path, nargs="+")
+    ac = sub.add_parser("comprueba", parents=[comun],
+                        help="reconstruye el modelo de cada cadena en su mejor punto: ¿da su logl_max bit a bit?")
+    ac.add_argument("dirs", type=Path, nargs="+")
+    ac.add_argument("--dir-rejilla", action="append", default=None, metavar="REJILLA=DIR",
+                    help="directorio de npz de una rejilla que no está en la ruta de REJILLAS (repetible)")
+    ac.add_argument("--json", type=Path)
+    ab = sub.add_parser("bins", parents=[comun], help="bins de MUSE que entran en el ajuste con cada --mascara-muse")
+    ab.add_argument("slugs", nargs="*", help="por defecto, los objetos del paper (targets/*.json con `paper`)")
+    ab.add_argument("--ventana-lineas", type=float, default=None, metavar="KMS")
+    ab.add_argument("--ventana-halpha", type=float, default=None, metavar="KMS")
+    ab.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
     if a.project_root is not None:
         fija_raiz(a.project_root)
     if a.orden == "ajusta":
         return ajusta(a)
+    if a.orden == "comprueba":
+        drj = dict(x.split("=", 1) for x in a.dir_rejilla or [])
+        filas = comprueba(a.dirs, {k: Path(v).expanduser() for k, v in drj.items()})
+        if a.json:
+            a.json.write_text(json.dumps(filas, indent=1, ensure_ascii=False, default=float) + "\n")
+        return 0 if filas and all(f["bit_a_bit"] and f["n_puntos_iguales"] for f in filas) else 1
+    if a.orden == "bins":
+        from scripts.halpha_criterios import objetos_del_paper
+        res = {s: bins_muse(s, a.ventana_lineas, a.ventana_halpha)
+               for s in (a.slugs or objetos_del_paper(Path(__file__).resolve().parents[1]))}
+        for s, r in res.items():
+            for m, v in r.items():
+                bandas = ", ".join(f"{k} {n}" for k, n in v["por_banda"].items() if n)
+                print(f"{s} {m}: {v['n']} bins en {v['w_min']:.1f}–{v['w_max']:.1f} Å" + (f" ({bandas})" if bandas else ""))
+        if a.json:
+            a.json.write_text(json.dumps(res, indent=1, ensure_ascii=False) + "\n")
+        return 0
     if a.orden == "tabla":
         tabla(a.dirs)
         return 0
