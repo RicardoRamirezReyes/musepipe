@@ -78,6 +78,19 @@ concentran el χ² de MUSE (D.5; `azul` y `rojo` quitan solo uno de los dos). Si
 lleva `rk<RK>`, `td<TMIN>-<TMAX>`, `quita-extremos` o `polvo-<RK>-<TD>` antes de la semilla, y el json `rk_fijo`,
 `td_rango`, `quita_muse` o `inyecta_polvo`. Las combinaciones sin sentido fallan antes de leer nada (`valida_disco`).
 
+`--muse-nativo` (pedido del autor del 2026-10-30, para comparar con las cadenas de solo MUSE a R = 500) ajusta el
+espectro MUSE a su resolución: canal a canal (1.25 Å), con la σ de cada canal × √(n/n_eff), como el ajuste nativo de
+G3, y el modelo convolucionado con la LSF de MUSE del run (`h01_lsf_fwhm_A`) y promediado en cada canal, como en G3
+(`modelos_base_muse_nativo`). Sin degradar, las máscaras no crecen la FWHM del núcleo de R = 500, así que entran
+algunos canales más cerca de las zonas enmascaradas. El IR sigue a R = 500. Solo vale con una rejilla de paso fino
+en MUSE (`MUESTREO_MAX_NATIVO`: BT-Settl, BT-Dusty, Sonora Diamondback), sin `--r250` y sin `--plantilla`
+(`valida_muse_nativo`). La etiqueta lleva `muse-nativo` y el json `muse_nativo`; no entra en las tablas.
+Con `--ens-vr` (además de `--muse-nativo`; «añade ensanchamiento y velocidad libres», 2026-10-30) el modelo de MUSE
+tiene dos parámetros más, uniformes: una FWHM gaussiana extra `ens_A` (0–`ENS_MAX_A` Å, en cuadratura con la LSF) y
+una velocidad radial `vr_kms` (±`VR_MAX_KMS`). Se rehace en cada llamada desde el espectro fino de 0.2 Å ya a la LSF:
+interpolado en log F, ensanchado por FFT, desplazado por Doppler y promediado en cada canal (`espectro_fino`,
+`ensancha_y_desplaza`). La etiqueta lleva `ens-vr` y el json `ens_vr` (los dos topes).
+
 Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
 (`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
 conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
@@ -110,7 +123,7 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
                                        [--ventana-lineas KMS] [--ventana-halpha KMS]
                                        [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos|azul|rojo]
-                                       [--inyecta-polvo RK TD]
+                                       [--inyecta-polvo RK TD] [--muse-nativo [--ens-vr]]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
@@ -137,7 +150,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from musepipe.constants import LSUN_ERG_S, PC_CM, RJUP_CM, RSUN_CM, SIGMA_SB_CGS, spt_code  # noqa: E402
+from musepipe.constants import C_KMS, LSUN_ERG_S, PC_CM, RJUP_CM, RSUN_CM, SIGMA_SB_CGS, spt_code  # noqa: E402
 from musepipe.models.extinction import CCMExtinction  # noqa: E402
 
 #: rejillas de atmósferas: directorio de npz (formato de `musepipe.models.cache`) y ejes (inicio, paso, n).
@@ -237,6 +250,125 @@ def modelos_base_nativa(pls, segs, nu_bin_cm, c_var=C_VAR_MUESTREO):
 def _r250(rejilla, forzado=False):
     """¿Va el ajuste en el modo R = 250? Si se pide, o si la rejilla no llega a R = 500."""
     return bool(forzado) or REJILLAS[rejilla].get("r_nativa", np.inf) < 500
+
+
+#: `--muse-nativo` (pedido del autor 2026-10-30, «sí, prepárala»: la comparación con las cadenas de solo MUSE a
+#: R = 500): el paso (Å) al que se rebina el brazo visible de los modelos antes de convolucionarlo con la LSF de MUSE
+#: (2.28–2.30 Å, ~11 puntos por FWHM; la caja de 0.2 Å le suma un 0.2 % a la FWHM, en cuadratura)
+PASO_NATIVO_A = 0.2
+#: el paso máximo de los npz en MUSE, en fracción de la LSF, para que una rejilla valga con `--muse-nativo`. Pasan
+#: BT-Settl (0.02 Å), BT-Dusty (0.05) y Sonora Diamondback (0.045); DRIFT-PHOENIX, AMES-Dusty y AMES-Cond (2.0) no:
+#: su muestreo ya es casi tan basto como la LSF, y convolucionarlo no le devuelve lo que no tiene
+MUESTREO_MAX_NATIVO = 0.2
+#: `--ens-vr` (pedido del autor 2026-10-30, «añade ensanchamiento y velocidad libres»): los topes de los priores
+#: uniformes de la FWHM gaussiana extra (Å, en cuadratura con la LSF; 0–`ENS_MAX_A`) y de la velocidad radial (km/s,
+#: ±`VR_MAX_KMS`). Con la LSF fija, el χ² nativo bajaba al ensanchar el modelo hasta 3.0 Å sin llegar a un mínimo, y
+#: ROXs 12 b pedía mover el modelo ≥ 0.5 Å al azul (`~/muse_sesion_20261030/muse_nativo/LEEME.md`).
+ENS_MAX_A = 10.0
+VR_MAX_KMS = 100.0
+#: margen (Å) del espectro fino a cada lado de los canales de MUSE: cubre ±`VR_MAX_KMS` (3.1 Å a 9350 Å) y las colas
+#: de la gaussiana más ancha (4σ = 17 Å con `ENS_MAX_A`), de modo que los bordes de la FFT caen fuera de los canales
+MARGEN_FINO_A = 50.0
+
+
+def valida_muse_nativo(muse_nativo, datos="todo", rejilla="btsettl", r250=False, plantilla=None, ens_vr=None):
+    """Rechaza, antes de leer nada, lo que no tiene sentido con `--muse-nativo`: sin espectro MUSE (`datos='ir'`);
+    el modo R = 250, que agrupa los canales; una rejilla más basta que R = 500 (SPHINX) o muestreada en número de
+    onda (ATMO 2020, 5.6 Å por punto en MUSE); y una plantilla empírica como dato, que `_sinteticos` degrada a
+    R = 500. Las rejillas de 2 Å las rechaza después `comprueba_muestreo_nativo`, con el paso medido en sus npz.
+    `ens_vr` = (tope de la FWHM extra en Å, tope de |v| en km/s) pide `muse_nativo` y dos topes positivos y finitos;
+    la FWHM, no más que lo que cubre `MARGEN_FINO_A`."""
+    if ens_vr is not None:
+        if not muse_nativo:
+            raise ValueError("ens_vr (ensanchamiento y velocidad libres) va sobre el espectro nativo: pide muse_nativo")
+        if len(ens_vr) != 2 or not all(math.isfinite(x) and x > 0 for x in ens_vr):
+            raise ValueError(f"ens_vr={ens_vr!r}: deben ser dos topes > 0 (FWHM extra en Å, |v| en km/s)")
+        if 4.0 * ens_vr[0] / 2.3548200450309493 + 9350.0 * ens_vr[1] / C_KMS > MARGEN_FINO_A:
+            raise ValueError(f"ens_vr={ens_vr!r}: más ancho de lo que cubre el margen del espectro fino "
+                             f"({MARGEN_FINO_A:g} Å)")
+    if not muse_nativo:
+        return
+    if datos == "ir":
+        raise ValueError("con datos='ir' no hay espectro MUSE que ajustar a su resolución (muse_nativo)")
+    if _r250(rejilla, r250):
+        raise ValueError(f"{rejilla}: muse_nativo y el modo R = 250 se excluyen (R = 250 agrupa los canales)")
+    if REJILLAS[rejilla].get("nu_bin_cm"):
+        raise ValueError(f"{rejilla}: muestreada en número de onda, más basta que la LSF de MUSE (muse_nativo)")
+    if plantilla:
+        raise ValueError("una plantilla como dato se degrada a R = 500 (`_sinteticos`): no vale con muse_nativo")
+
+
+def comprueba_muestreo_nativo(muestreo_A, lsf_fwhm_A, rejilla):
+    """Con `--muse-nativo`, el paso de la rejilla en MUSE (`muestreo_A`, el mayor de sus npz) tiene que ser
+    ≤ `MUESTREO_MAX_NATIVO` × la LSF de MUSE; si no, ValueError."""
+    tope = MUESTREO_MAX_NATIVO * float(lsf_fwhm_A)
+    if not muestreo_A <= tope:
+        raise ValueError(f"{rejilla}: paso de {muestreo_A:.3g} Å en MUSE, más que {tope:.3g} Å "
+                         f"({MUESTREO_MAX_NATIVO:g} × la LSF, {float(lsf_fwhm_A):.3f} Å): no vale con muse_nativo")
+
+
+def degrada_lsf(w, f, lsf_fwhm_A):
+    """Como `tipo_ir_plantillas.degrada` (huecos a NaN donde pesan > 20 %), pero con la LSF de MUSE: una gaussiana de
+    FWHM `lsf_fwhm_A` constante en vez de λ/500."""
+    from musepipe.models.prep import degrade_variable
+    ok = np.isfinite(f)
+    g = np.interp(w, w[ok], f[ok])
+    fwhm = np.full(w.shape, float(lsf_fwhm_A))
+    out = degrade_variable(w, g, fwhm)
+    hueco = degrade_variable(w, (~ok).astype(float), fwhm)
+    out[hueco > 0.2] = np.nan
+    return out
+
+
+def modelos_base_muse_nativo(pls, segs, lsf_fwhm_A):
+    """`tipo_ir_plantillas.modelos_base` con el brazo visible convolucionado con la LSF de MUSE (`degrada_lsf`) en vez
+    de degradado a R = 500, y promediado en cada canal, como hace G3 (`prepare_template_base`: degradar y
+    `resample_conserve_flux`). Los segmentos IR, a R = 500 como siempre."""
+    from scripts import tipo_ir_plantillas as tp
+    cache = {}
+    for i, t in enumerate(pls):
+        por_brazo = {}
+        for brazo in ("vis", "nir"):
+            w, f = t[brazo]
+            orden = np.argsort(w)
+            w, f = w[orden], f[orden]
+            por_brazo[brazo] = (w, degrada_lsf(w, f, lsf_fwhm_A) if brazo == "vis" else tp.degrada(w, f))
+        cache[i] = [tp.media_en_intervalos(*por_brazo[s["brazo"]], s["lo"], s["hi"]) for s in segs]
+    return cache
+
+
+def espectro_fino(pls, idx, lsf_fwhm_A, lo_A, hi_A, paso_A=PASO_NATIVO_A):
+    """Para `--ens-vr`: el brazo visible de cada nodo [T, g] de la rejilla convolucionado con la LSF (`degrada_lsf`,
+    sobre todo el brazo, para que los bordes no lo toquen) y llevado a una malla común de `paso_A` en [lo_A, hi_A].
+    Los nodos rellenados (sin `vis`) son la media en log F de sus vecinos en T_eff, como en `Modelo`. Devuelve
+    (malla, log10 F con forma (nT, nG, n))."""
+    w = np.arange(lo_A, hi_A + paso_A / 2, paso_A)
+    lg = np.full(idx.shape + (w.size,), np.nan)
+    for a in range(idx.shape[0]):
+        for b in range(idx.shape[1]):
+            t = pls[idx[a, b]]
+            if "vis" in t:
+                wv, fv = t["vis"]
+                lg[a, b] = np.log10(np.interp(w, wv, degrada_lsf(wv, fv, lsf_fwhm_A)))
+    for a in range(idx.shape[0]):
+        for b in range(idx.shape[1]):
+            if "vis" not in pls[idx[a, b]]:
+                lg[a, b] = 0.5 * (lg[a - 1, b] + lg[a + 1, b])
+    return w, lg
+
+
+def ensancha_y_desplaza(w, F, lo, hi, ens_A, vr_kms, nfft, f2):
+    """El espectro fino `F` (malla uniforme `w`, ya a la LSF) ensanchado por una gaussiana de FWHM `ens_A` (Å; por
+    FFT, `nfft` puntos y `f2` = rfftfreq(nfft)², con ceros detrás de F para que la convolución no dé la vuelta),
+    desplazado por Doppler a `vr_kms` (λ_obs = λ_rep (1 + v/c)) y promediado en los canales [lo, hi] (Å, observados)."""
+    from scripts import tipo_ir_plantillas as tp
+    sig = ens_A / 2.3548200450309493 / (w[1] - w[0])
+    if sig > 0:
+        F = np.fft.irfft(np.fft.rfft(F, nfft) * np.exp(-2.0 * (np.pi * sig) ** 2 * f2), nfft)[:F.size]
+    z = 1.0 + vr_kms / C_KMS
+    return tp.media_en_intervalos(w, F, lo / z, hi / z)
+
+
 TRACKS = {"BHAC15": ("tracks_bhac15/bhac15_tracks.npz", "Baraffe et al. 2015"),
           "ATMO2020": ("tracks_atmo2020/atmo2020_ceq_tracks.npz", "Phillips et al. 2020")}
 T_D = 1500.0
@@ -266,7 +398,8 @@ INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6
 #: las claves del json de `ajusta` que hacen de una corrida una VARIANTE de las del paper, con el valor que tienen (o
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
-                  "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None}
+                  "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None, "muse_nativo": False,
+                  "ens_vr": None}
 #: las demás claves que lleva el json de `ajusta` (de configuración, que `_de_la_tabla` y `_de_rejillas` filtran por
 #: su valor; de resultado; y de procedencia), y las de `evo_solo`. Son las 36 de las 1187 cadenas que había el
 #: 2026-10-29, más `procedencia`. Una clave que no esté ni aquí ni en `VARIANTES_JSON` hace de la corrida una
@@ -346,7 +479,7 @@ def _bases_nativas(pls, segs):
 
 
 def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None,
-             ventana_halpha=None, quita_muse=None):
+             ventana_halpha=None, quita_muse=None, muse_nativo=False):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
     2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes).
 
@@ -362,7 +495,10 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
     `ventana_lineas` / `ventana_halpha`: las ventanas (km/s) de las líneas de G2 en MUSE, todas / Hα (None = las del
     run; `tipo_ir_plantillas.ventanas_de_lineas`).
     `quita_muse`: una clave de `INTERVALOS_MUSE` (None = ninguno): esos bins del espectro MUSE salen del ajuste
-    (`quita_intervalos`), antes de agrupar a R = 250."""
+    (`quita_intervalos`), antes de agrupar a R = 250.
+    `muse_nativo`: el espectro MUSE canal a canal (`tipo_ir_plantillas.segmento_muse(..., nativo=True)`) y su modelo
+    convolucionado con la LSF de MUSE del run (`h01_lsf_fwhm_A`, la de G3; `modelos_base_muse_nativo`); el IR, a
+    R = 500. Las combinaciones sin sentido las rechaza antes `valida_muse_nativo`."""
     from scripts import ajuste_conjunto as aj
     from scripts import tipo_ir_plantillas as tp
     if degrada not in DEGRADA:
@@ -373,7 +509,8 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
         raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
     mm = MASCARAS_MUSE[mascara_muse]
     p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
-                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha)
+                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha,
+                    muse_nativo=muse_nativo)
     segs = aj.segmentos_cgs(slug, p)
     if quita_muse is not None:
         segs = [quita_intervalos(s, INTERVALOS_MUSE[quita_muse]) if s["brazo"] == "vis" else s for s in segs]
@@ -381,8 +518,14 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
         segs = [_empareja(s) for s in segs]
     t0, dt, nt = R["teff"]
     g0, dg, ng = R["logg"]
-    p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg))
-    if R.get("r_nativa", np.inf) < 500:
+    p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg),
+                                  paso_vis_A=PASO_NATIVO_A if muse_nativo else None)
+    if muse_nativo:
+        from musepipe.config import load_run_config
+        lsf = float(load_run_config(p["run"], project_root=ROOT).config["h01_lsf_fwhm_A"])
+        comprueba_muestreo_nativo(max(t["muestreo_vis_A"] for t in p["pls"]), lsf, R["nombre"])
+        p["bases"] = modelos_base_muse_nativo(p["pls"], segs, lsf)
+    elif R.get("r_nativa", np.inf) < 500:
         p["bases"] = _bases_nativas(p["pls"], segs)
     elif R.get("nu_bin_cm") and degrada == "cuadratura":
         p["bases"] = modelos_base_nativa(p["pls"], segs, R["nu_bin_cm"])
@@ -422,15 +565,21 @@ class Modelo:
     #: un `Modelo` hecho con `__new__` (los tests sintéticos) tenga los valores de siempre.
     rk_fijo = None
     td_rango = None
+    muse_nativo = False
+    ens_vr = None
 
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
                  r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
-                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None):
-        """Las cuatro últimas (pruebas del disco y del D.5, 2026-10-29) no cambian nada si se dejan en None:
-        `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max) deja libre la T del polvo
-        (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de `INTERVALOS_MUSE[quita_muse]`;
-        `inyecta_polvo` = (r_K, T_d) suma un exceso de polvo al modelo de `inyecta_bt`."""
+                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None):
+        """`rk_fijo`, `td_rango`, `quita_muse` e `inyecta_polvo` (pruebas del disco y del D.5, 2026-10-29) no cambian
+        nada si se dejan en None: `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max)
+        deja libre la T del polvo (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de
+        `INTERVALOS_MUSE[quita_muse]`; `inyecta_polvo` = (r_K, T_d) suma un exceso de polvo al modelo de
+        `inyecta_bt`. `muse_nativo` (2026-10-30; False = lo de siempre): el espectro MUSE a su resolución, canal a
+        canal, en vez de a R = 500 (`_prepara`). `ens_vr` (2026-10-30; None = lo de siempre, pide `muse_nativo`) =
+        (tope de la FWHM extra en Å, tope de |v| en km/s): dos parámetros más, `ens_A` y `vr_kms`, con los que el
+        modelo de MUSE se rehace en cada llamada desde el espectro fino (`espectro_fino`, `ensancha_y_desplaza`)."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -438,6 +587,9 @@ class Modelo:
         if datos not in DATOS:
             raise ValueError(f"datos={datos!r}: debe ser uno de {DATOS}")
         valida_disco(datos, rk_fijo, td_rango, quita_muse, inyecta_bt, inyecta_polvo)
+        valida_muse_nativo(muse_nativo, datos, rejilla, r250, plantilla, ens_vr)
+        self.muse_nativo = bool(muse_nativo)
+        self.ens_vr = None if ens_vr is None else (float(ens_vr[0]), float(ens_vr[1]))
         self.slug, self.modo, self.av_modo, self.av_fija, self.datos = slug, modo, av, av_fija, datos
         self.rk_fijo = None if rk_fijo is None else float(rk_fijo)
         self.td_rango = None if td_rango is None else (float(td_rango[0]), float(td_rango[1]))
@@ -456,7 +608,8 @@ class Modelo:
         self.mascara_muse = mascara_muse
         self.ventana_lineas, self.ventana_halpha = ventana_lineas, ventana_halpha
         p, conj = _prepara(slug, R, r250=self.r_analisis == 250, degrada=degrada, mascara_muse=mascara_muse,
-                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha, quita_muse=quita_muse)
+                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha, quita_muse=quita_muse,
+                           muse_nativo=self.muse_nativo)
         self.run = p["run"]
         cfg = load_run_config(self.run, project_root=ROOT).config
         self.cfg = cfg
@@ -521,6 +674,14 @@ class Modelo:
                 a=np.asarray(CCMExtinction(3.1, citation="CCM89").a_lambda_over_av(w), float),
                 bb=(_planck(w, T_D) / _planck(LAM_K, T_D)) if s["brazo"] == "nir" else np.zeros(w.size),
                 sigma=s["sigma_escala"]))
+            if self.ens_vr is not None and s["brazo"] == "vis":
+                # el espectro fino del que se rehace el modelo de MUSE en cada llamada (`_muse_fino`)
+                lo, hi = s["lo"][c], s["hi"][c]
+                wf, lgf = espectro_fino(p["pls"], idx, float(cfg["h01_lsf_fwhm_A"]), float(lo.min()) - MARGEN_FINO_A,
+                                        float(hi.max()) + MARGEN_FINO_A)
+                nfft = 1 << int(math.ceil(math.log2(wf.size + 4.0 * self.ens_vr[0] / 2.3548200450309493
+                                                    / PASO_NATIVO_A + 64)))
+                self.segs[-1]["fino"] = dict(w=wf, lg=lgf, lo=lo, hi=hi, nfft=nfft, f2=np.fft.rfftfreq(nfft) ** 2)
         self.bandas = sorted({s["banda"] for s in self.segs})
         self.track = None
         if modo == "evo":
@@ -617,6 +778,10 @@ class Modelo:
             if self.td_rango is not None:   # la T del polvo libre (uniforme), justo detrás de r_K
                 t0, t1 = self.td_rango
                 add("td", lambda u: t0 + u * (t1 - t0))
+        if self.ens_vr is not None:         # el ensanchamiento extra y la velocidad del modelo de MUSE (uniformes)
+            e_max, v_max = self.ens_vr
+            add("ens_A", lambda u: e_max * u)
+            add("vr_kms", lambda u: v_max * (2.0 * u - 1.0))
         for s in self.segs:
             if s["sigma"] is None:
                 add(f"s_{s['nombre']}", lambda u: 10 ** (math.log10(0.2) + u * 2 * math.log10(5.0)))
@@ -683,12 +848,23 @@ class Modelo:
         td = th[P["td"]] if "td" in P else None
         out = []
         for s in self.segs:
-            L = s["lg"]
-            F = 10 ** (c00 * L[i, j] + c10 * L[i + 1, j] + c01 * L[i, j + 1] + c11 * L[i + 1, j + 1])
+            if "fino" in s:
+                F = self._muse_fino(s["fino"], th, i, j, (c00, c10, c01, c11))
+            else:
+                L = s["lg"]
+                F = 10 ** (c00 * L[i, j] + c10 * L[i + 1, j] + c01 * L[i, j + 1] + c11 * L[i + 1, j + 1])
             # el cuerpo negro del polvo: precalculado a `T_D` (el camino de las cadenas del paper) o a la T libre
             bb = s["bb"] if td is None or s["banda"] == "vis" else _planck(s["w"], td) / _planck(LAM_K, td)
             out.append(th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * bb) * 10 ** (-0.4 * s["a"] * av))
         return out
+
+    def _muse_fino(self, fi, th, i, j, c):
+        """Con `ens_vr`: el modelo de MUSE en los canales, desde el espectro fino interpolado en log F en el nodo (i, j)
+        con los pesos bilineales `c`, ensanchado y desplazado con `ens_A` y `vr_kms` (`ensancha_y_desplaza`)."""
+        L = fi["lg"]
+        F = 10 ** (c[0] * L[i, j] + c[1] * L[i + 1, j] + c[2] * L[i, j + 1] + c[3] * L[i + 1, j + 1])
+        return ensancha_y_desplaza(fi["w"], F, fi["lo"], fi["hi"], th[self.pos["ens_A"]], th[self.pos["vr_kms"]],
+                                   fi["nfft"], fi["f2"])
 
     def loglike(self, th):
         M = self.modelos(th)
@@ -767,12 +943,14 @@ def etiqueta_de(a):
     que esas cadenas no se confundan con las del paper; con `--ventana-lineas` / `--ventana-halpha`, `ventana-<KMS>`
     / `ventanaha-<KMS>` después de la máscara; y después, las de las pruebas del disco y del D.5: `rk<RK>`
     (`--rk-fijo`), `td<TMIN>-<TMAX>` (`--td-libre`), `quita-<INTERVALOS>` (`--quita-muse`) y `polvo-<RK>-<TD>`
-    (`--inyecta-polvo`). Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
+    (`--inyecta-polvo`). `muse-nativo` (`--muse-nativo`) va justo detrás de `r250` / `ingenua`, y `ens-vr` (`--ens-vr`)
+    detrás de él. Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
     rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
+    nativo, ens_vr = getattr(a, "muse_nativo", False), getattr(a, "ens_vr", False)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
@@ -781,6 +959,8 @@ def etiqueta_de(a):
                                               "r250" if _r250(a.rejilla, a.r250) else None,
                                               "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
                                               else None,
+                                              "muse-nativo" if nativo else None,
+                                              "ens-vr" if ens_vr else None,
                                               f"mascara-{mascara}" if mascara != "paper" else None,
                                               f"ventana-{vl:g}" if vl is not None else None,
                                               f"ventanaha-{vh:g}" if vh is not None else None,
@@ -837,6 +1017,8 @@ def ajusta(a):
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
     rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
+    nativo = getattr(a, "muse_nativo", False)
+    ens_vr = (ENS_MAX_A, VR_MAX_KMS) if getattr(a, "ens_vr", False) else None
     et = etiqueta_de(a)
     # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
     # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
@@ -856,7 +1038,8 @@ def ajusta(a):
         mod = Modelo(a.slug, a.modo, a.av, a.tracks, a.inyecta_bt, a.plantilla, a.av_inyectada, a.semilla, a.av_fija,
                      a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada, mascara_muse=mascara,
                      ventana_lineas=vl, ventana_halpha=vh, rk_fijo=rkf, td_rango=td, quita_muse=quita,
-                     inyecta_polvo=polvo)
+                     inyecta_polvo=polvo, **({"muse_nativo": True} if nativo else {}),
+                     **({"ens_vr": ens_vr} if ens_vr is not None else {}))
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -876,6 +1059,10 @@ def ajusta(a):
                    **({"td_rango": list(mod.td_rango)} if mod.td_rango is not None else {}),
                    **({"quita_muse": quita} if quita is not None else {}),
                    **({"inyecta_polvo": [float(v) for v in polvo]} if polvo is not None else {}),
+                   # MUSE a su resolución, solo si se pide (en `VARIANTES_JSON`)
+                   **({"muse_nativo": True} if nativo else {}),
+                   # el ensanchamiento y la velocidad libres: los topes de sus priores (en `VARIANTES_JSON`)
+                   **({"ens_vr": list(ens_vr)} if ens_vr is not None else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -1292,7 +1479,7 @@ def tabla_rejillas(dirs):
 
 def modelo_de_cadena(d, dir_rejilla=None):
     """El `Modelo` con el que corrió una cadena `libre` sobre los datos (su json: rejilla, datos, resolución,
-    degradado, A_V, máscaras y ventanas de MUSE, y las opciones del disco y del D.5) y su punto de máxima
+    degradado, A_V, máscaras y ventanas de MUSE, las opciones del disco y del D.5, y MUSE nativo con o sin ensanchamiento y velocidad) y su punto de máxima
     verosimilitud (`mejor`). Es el único reconstructor: `delta_entre_rejillas.modelo_de` lo llama. `dir_rejilla`: el
     directorio de npz si no es el de `REJILLAS` (ATMO 2020)."""
     if d["modo"] != "libre" or d.get("verdad"):
@@ -1302,7 +1489,8 @@ def modelo_de_cadena(d, dir_rejilla=None):
                  d.get("degrada") or "cuadratura", mascara_muse=d.get("mascara_muse", "paper"),
                  ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"),
                  rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
-                 quita_muse=d.get("quita_muse"))
+                 quita_muse=d.get("quita_muse"), muse_nativo=bool(d.get("muse_nativo", False)),
+                 ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None)
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1412,6 +1600,14 @@ def main(argv=None):
     aa.add_argument("--inyecta-polvo", type=float, nargs=2, default=None, metavar=("RK", "TD"),
                     help="con --inyecta-bt: suma al modelo inyectado un exceso de polvo r_K a T_d (Ec. B.1); la "
                          "etiqueta lleva `polvo-<RK>-<TD>`")
+    aa.add_argument("--muse-nativo", action="store_true",
+                    help="el espectro MUSE canal a canal (1.25 Å) contra los modelos convolucionados con la LSF de "
+                         "MUSE, en vez de los dos a R = 500 (el IR sigue a R = 500); solo con rejillas de paso fino "
+                         "(BT-Settl, BT-Dusty, Diamondback); la etiqueta lleva `muse-nativo`")
+    aa.add_argument("--ens-vr", action="store_true",
+                    help=f"con --muse-nativo: ensanchamiento gaussiano extra del modelo de MUSE (FWHM 0–{ENS_MAX_A:g} Å, "
+                         f"en cuadratura con la LSF) y velocidad radial (±{VR_MAX_KMS:g} km/s) libres; la etiqueta "
+                         "lleva `ens-vr`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
