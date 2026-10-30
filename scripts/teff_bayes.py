@@ -74,7 +74,7 @@ disco, cuya ln Z se compara con la de r_K libre); `--td-libre TMIN TMAX` deja li
 `td` detrás de `rk`, uniforme) en vez de 1500 K, como el retrieval de Grasser et al. 2026; `--inyecta-polvo RK TD`
 suma un exceso de polvo conocido al modelo de `--inyecta-bt` (¿separa el ajuste el velo de la A_V?); y `--quita-muse
 extremos` quita del espectro MUSE los bins de 6300–6900 y 9000–9350 Å (`INTERVALOS_MUSE`), los dos intervalos que
-concentran el χ² de MUSE (D.5). Sin ellas, el modelo, la etiqueta y el json son los de siempre; con ellas, la etiqueta
+concentran el χ² de MUSE (D.5; `azul` y `rojo` quitan solo uno de los dos). Sin ellas, el modelo, la etiqueta y el json son los de siempre; con ellas, la etiqueta
 lleva `rk<RK>`, `td<TMIN>-<TMAX>`, `quita-extremos` o `polvo-<RK>-<TD>` antes de la semilla, y el json `rk_fijo`,
 `td_rango`, `quita_muse` o `inyecta_polvo`. Las combinaciones sin sentido fallan antes de leer nada (`valida_disco`).
 
@@ -109,7 +109,7 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--dir-rejilla DIR] [--degrada cuadratura|ingenua] [--project-root RAIZ]
                                        [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
                                        [--ventana-lineas KMS] [--ventana-halpha KMS]
-                                       [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos]
+                                       [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos|azul|rojo]
                                        [--inyecta-polvo RK TD]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
@@ -259,8 +259,10 @@ MASCARAS_MUSE = {"paper": dict(h2o=True, quita_o2=()), "g3": dict(h2o=False, qui
 #: intervalos del espectro MUSE (Å, [lo, hi)) que `--quita-muse` saca del ajuste, en BINS (después de agruparlos; las
 #: máscaras de `MASCARAS_MUSE` actúan antes, en canales). `extremos` (apéndice D.5 del paper, «Where the models fail in
 #: the MUSE spectrum»): la primera y la última banda de los residuos (`delta_entre_rejillas.BANDAS_A`), con 25 y 6 de
-#: los 84 bins del paper (centros 6324–6844 y 9128–9199 Å), las dos que concentran el χ² de MUSE.
-INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0))}
+#: los 84 bins del paper (centros 6324–6844 y 9128–9199 Å), las dos que concentran el χ² de MUSE. `azul` y `rojo`
+#: (2026-10-30): cada una de las dos por separado, para saber cuál mueve el ajuste.
+INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6300.0, 6900.0),),
+                   "rojo": ((9000.0, 9350.0),)}
 #: las claves del json de `ajusta` que hacen de una corrida una VARIANTE de las del paper, con el valor que tienen (o
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
@@ -1405,7 +1407,8 @@ def main(argv=None):
                          "`td<TMIN>-<TMAX>`")
     aa.add_argument("--quita-muse", choices=tuple(INTERVALOS_MUSE), default=None,
                     help="quita del espectro MUSE los bins de esos intervalos (`INTERVALOS_MUSE`; extremos = "
-                         "6300–6900 y 9000–9350 Å, el D.5 del paper); la etiqueta lleva `quita-<INTERVALOS>`")
+                         "6300–6900 y 9000–9350 Å, el D.5 del paper; azul y rojo, solo uno de los dos); la etiqueta "
+                         "lleva `quita-<INTERVALOS>`")
     aa.add_argument("--inyecta-polvo", type=float, nargs=2, default=None, metavar=("RK", "TD"),
                     help="con --inyecta-bt: suma al modelo inyectado un exceso de polvo r_K a T_d (Ec. B.1); la "
                          "etiqueta lleva `polvo-<RK>-<TD>`")

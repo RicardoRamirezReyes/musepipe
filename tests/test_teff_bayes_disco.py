@@ -179,6 +179,16 @@ class QuitaTests(unittest.TestCase):
         b = dr.BANDAS_A
         self.assertEqual(self.tb.INTERVALOS_MUSE["extremos"], ((b[0], b[1]), (b[-2], b[-1])))
 
+    def test_azul_y_rojo_son_cada_extremo(self):
+        """`azul` y `rojo` (2026-10-30) son los dos intervalos de `extremos` por separado: juntos quitan lo mismo."""
+        I = self.tb.INTERVALOS_MUSE
+        self.assertEqual(I["azul"] + I["rojo"], I["extremos"])
+        s = dict(w=np.arange(6200.0, 9400.0, 15.0), bueno=np.ones(214, bool))
+        az, ro, ex = (self.tb.quita_intervalos(s, I[k])["bueno"] for k in ("azul", "rojo", "extremos"))
+        np.testing.assert_array_equal(az & ro, ex)
+        self.assertEqual(((~az) & (~ro)).sum(), 0)          # no se solapan
+        self.assertEqual(((~az).sum(), (~ro).sum()), (40, 23))   # [6300, 6900) y [9000, 9350) cada 15 Å
+
 
 class EtiquetaTests(unittest.TestCase):
     @classmethod
