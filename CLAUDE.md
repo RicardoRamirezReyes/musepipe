@@ -16,8 +16,8 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (2101 tests, ~1.5 h)
-python -m pytest tests/ -q -m "not slow"         # same minus the slow ones (2077 tests + 1403 subtests, ~5 min)
+python -m pytest tests/ -q                       # full suite (2156 tests, ~1.5 h)
+python -m pytest tests/ -q -m "not slow"         # same minus the slow ones (2127 tests + 1403 subtests, ~6 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
@@ -250,6 +250,25 @@ relations, tracks, template fitting; `report.py` (F1), `characterization.py` (G5
 lines: MUSE does not resolve them) + the transmission curve A3 actually measured for the
 run; `paper_spectrum.py` the publication figure (unbinned spectrum, both error estimates,
 telluric bands and accretion lines) and its ECSV export.
+
+### Where things go
+
+So that a new test does not scatter (structure audit, `docs/2026-10-29_auditoria_estructura.md`; the table in
+`README.md` → "Dónde va cada cosa" has the same rules):
+
+- **Stage logic** in `musepipe/stages/`, shared science in a `musepipe/` module, the stage in `stage_registry.py`.
+- **Analyses outside the chain** (paper numbers, checks) are `scripts/<x>.py`, with a docstring that says which
+  numbers they give and a `uso:` line; they read runs and chains by path and take `--project-root`.
+- **A new `teff_bayes.py` option** is a `Modelo` argument whose default reproduces today's model; it adds a label
+  piece and a json key **only when requested**, its key goes into `VARIANTES_JSON` (so those chains never enter the
+  paper tables: `_de_la_tabla`/`_de_rejillas` keep only chains whose json keys are all known and paper-valued), and
+  `modelo_de_cadena` reads it back. Comparing a batch of chains is a new script (like `mascaras_muse_compara.py`),
+  not another `teff_bayes` subcommand. `ajusta` refuses to overwrite a label and records its provenance in the json.
+- **Chains, batches and analysis outputs** live outside the repo, in a session folder; test chains get their own
+  folder, never inside the paper chains (`halpha_criterios` draws from one RNG in file order).
+- **A new test** is a new file `tests/test_<script>_<check>.py` that finds data and loads scripts through
+  `tests/_datos.py` (one root precedence, `MUSE_TEFF_CADENAS` as a list, `carga_script`, `requiere(...)`); real-data
+  classes carry `external_data` (+ `slow` if ≥ 5 s); prefer invariants over numbers of the live run.
 
 ## Scientific invariants
 

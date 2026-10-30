@@ -1323,11 +1323,14 @@ def fraccion_poblacion(delta, media, sd, sigma_coeficientes=0.0):
 
 def carga_cadenas(directorio, slug):
     """Las corridas de `teff_bayes.py ajusta` de `slug` sobre los datos (no plantillas ni inyecciones), `libre` o
-    `evo`, con su npz; en orden de fichero, con su grupo (el directorio de dos niveles arriba)."""
+    `evo`, con su npz; en orden de fichero, con su grupo (el directorio de dos niveles arriba). Sin las variantes
+    (`teff_bayes._es_variante`: máscaras, ventanas, pruebas del disco y del D.5): no son del paper, y como el
+    generador aleatorio se reparte en este orden, una que se colara movería las cifras de las que vienen detrás."""
+    from scripts import teff_bayes as tb
     out = []
     for f in sorted(glob.glob(str(Path(directorio) / "*" / "*" / f"{slug}_*.json"))):
         d = json.loads(Path(f).read_text())
-        if d.get("verdad") or d.get("plantilla") or d["modo"] not in ("libre", "evo"):
+        if d.get("verdad") or d.get("plantilla") or d["modo"] not in ("libre", "evo") or tb._es_variante(d):
             continue
         z = Path(f).with_suffix(".npz")
         if not z.exists():

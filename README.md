@@ -165,7 +165,7 @@ reprodujera la cadena.
 
 | notebook | qué rehace |
 |---|---|
-| `C1_chromatic_psf_debug` | el **modelo de PSF** que consumen todas las demás etapas. **Las dos formas viajan**: C1 ajusta Moffat y Psfao y se queda con la del menor residuo de anillo, y el ganador depende del objeto (ROXs 12 b → `psfao`, ROXs 42B b → `moffat`). El binado (y por qué las dos formas dan 43 y 44 bins), el ajuste por bin —submuestreado, con perilla— y, en psfao, los 12 bins que no convergen, todos por el mismo motivo: un único vector de arranque para los 43. La sección larga es **de dónde salen los saltos escalonados**: `_evaluate_psfao` redondea λ a 50 Å, interpola linealmente `param_table` (no la parábola que anuncia el QC, que nunca se evalúa), recorta los extremos y recorta los parámetros a los límites físicos de Psfao. La §9 lo traduce a curva de crecimiento y lo contrasta con la apertura real sobre el cubo que ajustó C4; la §10 mide que el término híbrido **no viaja con el modelo** aunque el QC publique su número |
+| `C1_chromatic_psf_debug` | el **modelo de PSF** que consumen todas las demás etapas. **Las dos formas viajan**: C1 ajusta Moffat y Psfao, y desde el 2026-08-14 los dos objetos entregan `psfao`, impuesto por config (`e01_psf_form`) y no elegido: en ROXs 42B b el residuo de anillo prefiere Moffat (6.88 % frente a 10.05 %), pero su energía encerrada se aleja un +356 % de los datos. El notebook trae las dos, así que no se rompe si ese knob vuelve atrás. El binado (y por qué las dos formas dan 43 y 44 bins), el ajuste por bin —submuestreado, con perilla— y, en psfao, los 12 bins que no convergen, todos por el mismo motivo: un único vector de arranque para los 43. La sección larga es **de dónde salen los saltos escalonados**: `_evaluate_psfao` redondea λ a 50 Å, interpola linealmente `param_table` (no la parábola que anuncia el QC, que nunca se evalúa), recorta los extremos y recorta los parámetros a los límites físicos de Psfao. La §9 lo traduce a curva de crecimiento y lo contrasta con la apertura real sobre el cubo que ajustó C4; la §10 mide que el término híbrido **no viaja con el modelo** aunque el QC publique su número |
 | `A3_telluric_debug` | la decisión telúrica entera —continuo local, profundidad por banda, umbral— sobre las reducciones que tenga el objeto, con el espectro **antes y después** de corregir y cuatro hipótesis sobre por qué una banda mide lo que mide. La cuarta mide **cuánta profundidad fabrica el propio estimador**, corriéndolo sobre ventanas de control sin telúrico de la misma geometría, con control positivo al lado; y cuantifica el condicionamiento del ajuste polinómico sobre los laterales. Resultados en [`docs/2026-08-02_a3_continuo_sesgo.md`](docs/2026-08-02_a3_continuo_sesgo.md) |
 | `C2_aperture_debug` | apertura box3, fondo de anillo, controles, error empírico y por STAT, apcorr. Además, dos estudios: el **anillo** (8 aperturas repartidas sobre él, con el mismo proceso que el compañero, y el sesgo de su mediana medido contra los sectores a ±90°) y el **tamaño óptimo** por S/N empírica |
 | `C3_optimal_debug` | el estimador de Horne y **las dos variantes**: `optimal_ls` y `optimal_psfsub`, incluyendo el ajuste de la PSF de la primaria que las separa. Y el estudio del anillo **sobre los datos con el halo restado** (modelo de PSF frente a perfil radial medido): si restarlo aplana el gradiente azimutal y su sesgo |
@@ -290,6 +290,24 @@ runs/             datos y productos locales, ignorados por Git
 legacy/           notebooks + arnes de la version antigua, locales e ignorados por Git
 ```
 
+### Dónde va cada cosa
+
+Para que una prueba nueva no desordene el repo (auditoría del 2026-10-29,
+`docs/2026-10-29_auditoria_estructura.md`):
+
+| qué | dónde |
+|---|---|
+| lógica de una etapa de la cadena | `musepipe/stages/stage_<x>.py`; lo que comparten varias etapas, en un módulo de `musepipe/`; la etapa nueva o renombrada, en `musepipe/stage_registry.py` |
+| un análisis fuera de la cadena (cifras del paper, comprobaciones) | un script `scripts/<análisis>.py` cuyo docstring dice qué cifras da y cómo se llama (`uso:`); lee runs y cadenas por ruta y acepta `--project-root` |
+| una opción nueva de `scripts/teff_bayes.py` | un argumento de `Modelo` con valor por defecto igual a lo de hoy; pieza de la etiqueta y clave del json **solo si se pide**; la clave en `VARIANTES_JSON`, para que esas cadenas no entren en las tablas del paper; y `modelo_de_cadena` que la lea |
+| la comparación de un lote de cadenas | un script nuevo que lea las cadenas (como `mascaras_muse_compara.py`), no más subcomandos en `teff_bayes.py` |
+| un test | un fichero nuevo `tests/test_<script>_<prueba>.py`, con los datos y los scripts vía `tests/_datos.py` (su cabecera tiene la convención) |
+| un documento | regla o contrato vigente: sin fecha (`spec_*`, `noise_model.md`…); estado, plan, procedimiento o auditoría: `docs/AAAA-MM-DD_<tema>.md` |
+| productos de una etapa | `runs/<RUN>/…` (fuera de Git); nunca en un run `legacy` |
+| cadenas, lotes y salidas de análisis | fuera del repo, en `~/muse_sesion_<fecha>/<tema>/` o `~/muse_noche_<fecha>/`; las cadenas de prueba, en una carpeta propia y nunca dentro de las del paper (`halpha_criterios` sortea con un solo generador en el orden de los ficheros) |
+| datos publicados que usa un script | `scripts/data/<carpeta>/`, con su README y su DOI |
+| figuras y texto del paper | `paper/`, solo cuando el autor lo pide; los scripts escriben donde diga `--outdir`/`--salida` |
+
 ## Entorno
 
 El entorno reproducible está declarado en `environment.yml`. Para crearlo:
@@ -315,8 +333,8 @@ por pico.
 Desde la raiz del proyecto:
 
 ```bash
-python -m pytest tests/ -q                         # suite completa (2101 pruebas, ~1.5 h)
-python -m pytest tests/ -q -m "not slow"           # sin las lentas (2077 pruebas + 1403 subtests, ~5 min)
+python -m pytest tests/ -q                         # suite completa (2156 pruebas, ~1.5 h)
+python -m pytest tests/ -q -m "not slow"           # sin las lentas (2127 pruebas + 1403 subtests, ~6 min)
 python -m pytest tests/test_h03_chain.py -q        # un solo archivo
 python -m pytest tests/ -q -m "not external_data"  # sin las que piden bibliotecas externas
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py

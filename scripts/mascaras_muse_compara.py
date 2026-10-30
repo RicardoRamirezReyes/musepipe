@@ -110,10 +110,12 @@ def resumen_cadena(d, e):
 
 
 def calcula(referencias, variantes, entradas):
-    """`referencias`, `variantes`: {etiqueta: json} (de `carga`); `entradas`: {slug: teff_bayes.entrada_margen}."""
+    """`referencias`, `variantes`: {etiqueta: json} (de `carga`); `entradas`: {slug: teff_bayes.entrada_margen}.
+    Una referencia no es ninguna variante (`teff_bayes._es_variante`): una cadena de otra prueba (r_K fija, T_d
+    libre, sin los extremos de MUSE) da ("paper", None) en `variante_de` y, por su etiqueta, podía ir primero."""
     ref = {}
     for d in referencias.values():
-        if variante_de(d) == ("paper", None):
+        if variante_de(d) == ("paper", None) and not tb._es_variante(d):
             ref.setdefault(clave(d), d)
     parejas, sin_pareja = [], []
     for d in variantes.values():
