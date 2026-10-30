@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 """El Δ del D.5 sin los intervalos extremos del espectro MUSE: cuánto mueven el Δ combinado entre rejillas y la T_eff.
 
-Solo lectura y fuera de la cadena (apéndice D del paper, «Δ between grids», `app:checks:grids`; 2026-10-30). Lee las
+Solo lectura y fuera de la cadena (apéndice D del paper, 2026-10-30): contesta la pregunta que el D.5, «Where the
+models fail in the MUSE spectrum» (`app:checks:residuals`), deja abierta, con el Δ combinado del D.4, «The dispersion
+between grids in Δ» (`app:checks:grids`). Lee las
 cadenas de `teff_bayes.py ajusta` (json + npz) y no lanza ninguna. Las variantes son las de `teff_bayes.py
 --quita-muse` (`extremos`, `azul`, `rojo`: `teff_bayes.INTERVALOS_MUSE`); el json de cada una lo declara
 (`quita_muse`). El D.5 dice que no sabemos cuánto mueven T_eff y Δ los dos intervalos donde peor ajustan los modelos;
 este script da esas cifras (todavía no están en el paper).
 
 Por compañero y caso de A_V (1.8, 3.0 y con el prior de la primaria), con las funciones de `delta_entre_rejillas`, las
-que dan el D.5: las cadenas de la Tabla B.7 a R = 500 (`cadenas_b7`; Sonora Diamondback es una rejilla, `familia`), su
+que dan el D.4: las cadenas de la Tabla B.7 a R = 500 (`cadenas_b7`; Sonora Diamondback es una rejilla, `familia`), su
 Δ por muestra (`teff_bayes.margen_de_corrida`) y su mezcla a pesos iguales (`estadisticas`). Cada cadena de una
 variante se empareja con la del paper por su json (`CONFIG`: objeto, rejilla, modo, A_V, A_V fija, resolución, datos,
 nlive y semilla), y no puede llevar ninguna otra variante (`teff_bayes.VARIANTES_JSON`). Por variante: el Δ combinado
@@ -16,7 +18,7 @@ nlive y semilla), y no puede llevar ninguna otra variante (`teff_bayes.VARIANTES
 rejilla el cambio de la mediana de Δ y el de la media de las medianas de T_eff (en Diamondback, de sus seis modelos) y
 de A_V. Una variante se combina solo si están todas sus cadenas; si faltan algunas, se dice cuántas.
 
-Con `--tex`, comprueba que las cadenas del paper dan el Δ combinado y la fracción sobre el nivel que imprime el D.5,
+Con `--tex`, comprueba que las cadenas del paper dan el Δ combinado y la fracción sobre el nivel que imprime el D.4,
 al redondeo impreso, y sale con 1 si no.
 
 Uso (las cadenas del paper y las de las variantes, en las carpetas de la máquina del autor):
@@ -81,7 +83,8 @@ def indice_variantes(V):
 
 
 def d5_del_paper(tex, slugs):
-    """{slug: {av: (mediana, fracción)}} del Δ combinado que imprime el D.5 (`app:checks:grids`): la frase «The
+    """{slug: {av: (mediana, fracción)}} del Δ combinado que imprime el D.4 (`app:checks:grids`; el nombre de la
+    función es del D.5, cuya pregunta contesta el script): la frase «The
     combined \\(\\Delta\\) is ...» (el primer compañero) y «The combined value is ...» (el segundo), cada una con tres
     medianas (A_V 1.8, 3.0 y con el prior) seguidas de tres fracciones «above the noise level is/in ...». `slugs`, en
     el orden del paper (`teff_cifras_texto.SLUGS`)."""
@@ -90,7 +93,7 @@ def d5_del_paper(tex, slugs):
     sec = re.sub(r"\s+", " ", tex[i:i + fin.start()] if fin else tex[i:])
     frases = list(re.finditer(r"combined (?:\\\(\\Delta\\\)|value) is \\\(", sec))
     if len(frases) != len(slugs):
-        raise ValueError(f"el D.5 tiene {len(frases)} frases del Δ combinado y hay {len(slugs)} compañeros")
+        raise ValueError(f"el D.4 tiene {len(frases)} frases del Δ combinado y hay {len(slugs)} compañeros")
     out = {}
     cortes = [f.start() for f in frases] + [len(sec)]
     for k, s in enumerate(slugs):
@@ -98,7 +101,7 @@ def d5_del_paper(tex, slugs):
         medianas = re.findall(r"\\\(([+-]\d+\.\d+)\^", resto)[:3]
         fr = re.search(r"above the noise level (?:is|in) ((?:\\\(\d\.\d+\\\)(?:,| and)? ?){3})", resto)
         if len(medianas) != 3 or fr is None:
-            raise ValueError(f"no leo las tres medianas y las tres fracciones del D.5 de {s}")
+            raise ValueError(f"no leo las tres medianas y las tres fracciones del D.4 de {s}")
         fracs = re.findall(r"\\\((\d\.\d+)\\\)", fr.group(1))
         out[s] = {av: (m, x) for av, m, x in zip(tc.AVS, medianas, fracs)}
     return out
@@ -177,11 +180,11 @@ def informe(res):
             L.append(f"   sin {q:9} faltan {f['faltan']} de {f['de']} cadenas: no se combina")
     t = res["tex"]
     if t is None:
-        L.append("\nD.5 del paper: no comparado (sin `--tex`)")
+        L.append("\nD.4 del paper: no comparado (sin `--tex`)")
     elif t["iguales"]:
-        L.append("\nD.5 del paper: las cadenas del paper dan el Δ combinado y la fracción impresos (IGUAL)")
+        L.append("\nD.4 del paper: las cadenas del paper dan el Δ combinado y la fracción impresos (IGUAL)")
     else:
-        L.append("\nD.5 del paper: DISTINTO en " + "; ".join(
+        L.append("\nD.4 del paper: DISTINTO en " + "; ".join(
             f"{x['slug']} {x['av']}: impreso {x['impreso']}, calculado {x['calculado']}" for x in t["distintos"]))
     return "\n".join(L)
 
@@ -195,7 +198,7 @@ def main(argv=None):
                     help="directorio de cadenas con `--quita-muse` (repetible; se recorre entero y se ignora lo demás)")
     ap.add_argument("--project-root", type=Path, default=ROOT,
                     help="raíz que contiene runs/ (por defecto la del repo; necesaria desde un worktree)")
-    ap.add_argument("--tex", type=Path, help="main.tex del paper: compara el Δ combinado del D.5")
+    ap.add_argument("--tex", type=Path, help="main.tex del paper: compara el Δ combinado del D.4")
     ap.add_argument("--json", type=Path, help="escribe todo en json")
     a = ap.parse_args(argv)
     warnings.simplefilter("ignore")
