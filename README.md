@@ -333,8 +333,8 @@ por pico.
 Desde la raiz del proyecto:
 
 ```bash
-python -m pytest tests/ -q                         # suite completa (2149 pruebas, ~1.5 h)
-python -m pytest tests/ -q -m "not slow"           # sin las lentas (2120 pruebas + 1403 subtests, ~6 min)
+python -m pytest tests/ -q                         # suite completa (2156 pruebas, ~1.5 h)
+python -m pytest tests/ -q -m "not slow"           # sin las lentas (2127 pruebas + 1403 subtests, ~6 min)
 python -m pytest tests/test_h03_chain.py -q        # un solo archivo
 python -m pytest tests/ -q -m "not external_data"  # sin las que piden bibliotecas externas
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
