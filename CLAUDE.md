@@ -16,8 +16,8 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (1798 tests + 1378 subtests, ~83 min)
-python -m pytest tests/ -q -m "not slow"         # same minus the notebook end-to-end (~3.5 min)
+python -m pytest tests/ -q                       # full suite (2167 tests, ~1.5 h)
+python -m pytest tests/ -q -m "not slow"         # same minus the slow ones (2138 tests + 1538 subtests, ~6 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
@@ -52,7 +52,8 @@ historical run only.
 ### Canonical chain A→G
 
 Stages are lettered blocks, each with a frozen spec in `docs/spec_<ID>_codex_*.md` (read
-the highest version — today `spec_D1_v4_*`, `spec_A3_v3_*`, `spec_E4_v3_*`, `spec_G2_v4_*`)
+the highest version — today `spec_A3_v3_*`, `spec_C1_v2_*`, `spec_C4_v2_*`, `spec_D1_v4_*`,
+`spec_E1_v2_*`, `spec_E2_v2_*`, `spec_E3_v2_*`, `spec_E4_v5_*` (which amends v4), `spec_G2_v4_*`)
 and a JSON QC product under `runs/<RUN>/stages/`:
 
 - **A1–A4** reduction: esorex raw reduction → ZAP sky decision → telluric → cube QC (M1–M5).
@@ -152,7 +153,12 @@ Reusable logic lives in `musepipe/`; notebooks and shell scripts are thin wrappe
    and prints the path of the QC it wrote.
 2. **Shell scripts** — `scripts/stage_*.sh` just pick a python with astropy, `cd` to the
    project root, and `python -m musepipe.stages.<module> "$@"`. Long/heavy jobs
-   (reduction, per-exposure work, streaming combine) are `scripts/*.py`.
+   (reduction, per-exposure work, streaming combine) are `scripts/*.py`. So are the analyses
+   of the paper outside the chain (`teff_bayes.py`, the effective-temperature fits by nested
+   sampling, and the scripts of its appendices): each docstring says which numbers of the paper
+   it gives, several check them against `paper/main.tex` with `--tex`, and they read the
+   chains by path (the chains are not in the repo). The paper cites a released version that
+   must contain them; the release procedure is in the newest `docs/*_handoff.md`.
 3. **Review notebooks** — `notebooks/<Object>/A1_…ipynb … G5_…ipynb`, one set per object,
    structurally identical (no object is "the canonical one"). They audit by default and can
    launch the executable stages.
@@ -244,6 +250,25 @@ relations, tracks, template fitting; `report.py` (F1), `characterization.py` (G5
 lines: MUSE does not resolve them) + the transmission curve A3 actually measured for the
 run; `paper_spectrum.py` the publication figure (unbinned spectrum, both error estimates,
 telluric bands and accretion lines) and its ECSV export.
+
+### Where things go
+
+So that a new test does not scatter (structure audit, `docs/2026-10-29_auditoria_estructura.md`; the table in
+`README.md` → "Dónde va cada cosa" has the same rules):
+
+- **Stage logic** in `musepipe/stages/`, shared science in a `musepipe/` module, the stage in `stage_registry.py`.
+- **Analyses outside the chain** (paper numbers, checks) are `scripts/<x>.py`, with a docstring that says which
+  numbers they give and a `uso:` line; they read runs and chains by path and take `--project-root`.
+- **A new `teff_bayes.py` option** is a `Modelo` argument whose default reproduces today's model; it adds a label
+  piece and a json key **only when requested**, its key goes into `VARIANTES_JSON` (so those chains never enter the
+  paper tables: `_de_la_tabla`/`_de_rejillas` keep only chains whose json keys are all known and paper-valued), and
+  `modelo_de_cadena` reads it back. Comparing a batch of chains is a new script (like `mascaras_muse_compara.py`),
+  not another `teff_bayes` subcommand. `ajusta` refuses to overwrite a label and records its provenance in the json.
+- **Chains, batches and analysis outputs** live outside the repo, in a session folder; test chains get their own
+  folder, never inside the paper chains (`halpha_criterios` draws from one RNG in file order).
+- **A new test** is a new file `tests/test_<script>_<check>.py` that finds data and loads scripts through
+  `tests/_datos.py` (one root precedence, `MUSE_TEFF_CADENAS` as a list, `carga_script`, `requiere(...)`); real-data
+  classes carry `external_data` (+ `slow` if ≥ 5 s); prefer invariants over numbers of the live run.
 
 ## Scientific invariants
 

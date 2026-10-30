@@ -69,6 +69,28 @@ de las 24 líneas de G2 (`g3_fit_masks.line_window_kms`): la primera para todas,
 `tabla` ni en `rejillas`. Qué anchura deja fuera el sesgo de las alas de una línea lo mide
 `scripts/ventanas_lineas.py`.
 
+Las pruebas del disco (apéndice D.11 del paper) y del D.5 (2026-10-29): `--rk-fijo RK` fija r_K (0 es el modelo sin
+disco, cuya ln Z se compara con la de r_K libre); `--td-libre TMIN TMAX` deja libre la T del polvo (un parámetro
+`td` detrás de `rk`, uniforme) en vez de 1500 K, como el retrieval de Grasser et al. 2026; `--inyecta-polvo RK TD`
+suma un exceso de polvo conocido al modelo de `--inyecta-bt` (¿separa el ajuste el velo de la A_V?); y `--quita-muse
+extremos` quita del espectro MUSE los bins de 6300–6900 y 9000–9350 Å (`INTERVALOS_MUSE`), los dos intervalos que
+concentran el χ² de MUSE (D.5; `azul` y `rojo` quitan solo uno de los dos). Sin ellas, el modelo, la etiqueta y el json son los de siempre; con ellas, la etiqueta
+lleva `rk<RK>`, `td<TMIN>-<TMAX>`, `quita-extremos` o `polvo-<RK>-<TD>` antes de la semilla, y el json `rk_fijo`,
+`td_rango`, `quita_muse` o `inyecta_polvo`. Las combinaciones sin sentido fallan antes de leer nada (`valida_disco`).
+
+Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
+(`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
+conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
+corner. `ajusta` se niega a sobrescribir una etiqueta que ya existe y guarda en el json su `procedencia` (versiones,
+commit, muestreador, rejilla resuelta, argumentos). Las cadenas de prueba van en su propia carpeta, nunca dentro de
+las del paper (`halpha_criterios` sortea con un solo generador en el orden de los ficheros).
+
+El prior usa `ndtri` y `truncnorm._ppf` en vez de `norm.ppf` y `truncnorm.ppf` (`_ppf_normal_rapido`,
+`_ppf_trunc_normal_rapido`), con todas las normales truncadas en una sola llamada (`prior_transform`): los mismos
+números bit a bit. El prior costaba 550–1180 µs por llamada, 4–9 veces la verosimilitud; ahora, 91 µs. Una corrida
+corta de dynesty con la misma semilla da las mismas muestras en un 69 % (12 b) y un 83 % (42B b) menos de tiempo
+(2026-10-29, `~/muse_sesion_20261029/fase0/mide_prior.json`).
+
 `comprueba` reconstruye el modelo de cada cadena `libre` en su mejor punto y dice si su `loglike` da el `logl_max`
 de la cadena bit a bit (sale con 1 si alguna no).
 
@@ -87,6 +109,8 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--dir-rejilla DIR] [--degrada cuadratura|ingenua] [--project-root RAIZ]
                                        [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
                                        [--ventana-lineas KMS] [--ventana-halpha KMS]
+                                       [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos|azul|rojo]
+                                       [--inyecta-polvo RK TD]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
@@ -232,6 +256,28 @@ DATOS = ("todo", "muse", "ir")
 MASCARAS_MUSE = {"paper": dict(h2o=True, quita_o2=()), "g3": dict(h2o=False, quita_o2=()),
                  "sin_o2": dict(h2o=True, quita_o2=("O₂ B", "O₂ A")), "sin_o2b": dict(h2o=True, quita_o2=("O₂ B",)),
                  "sin_telurico": dict(h2o=False, quita_o2=("O₂ B", "O₂ A"))}
+#: intervalos del espectro MUSE (Å, [lo, hi)) que `--quita-muse` saca del ajuste, en BINS (después de agruparlos; las
+#: máscaras de `MASCARAS_MUSE` actúan antes, en canales). `extremos` (apéndice D.5 del paper, «Where the models fail in
+#: the MUSE spectrum»): la primera y la última banda de los residuos (`delta_entre_rejillas.BANDAS_A`), con 25 y 6 de
+#: los 84 bins del paper (centros 6324–6844 y 9128–9199 Å), las dos que concentran el χ² de MUSE. `azul` y `rojo`
+#: (2026-10-30): cada una de las dos por separado, para saber cuál mueve el ajuste.
+INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6300.0, 6900.0),),
+                   "rojo": ((9000.0, 9350.0),)}
+#: las claves del json de `ajusta` que hacen de una corrida una VARIANTE de las del paper, con el valor que tienen (o
+#: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
+VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
+                  "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None}
+#: las demás claves que lleva el json de `ajusta` (de configuración, que `_de_la_tabla` y `_de_rejillas` filtran por
+#: su valor; de resultado; y de procedencia), y las de `evo_solo`. Son las 36 de las 1187 cadenas que había el
+#: 2026-10-29, más `procedencia`. Una clave que no esté ni aquí ni en `VARIANTES_JSON` hace de la corrida una
+#: variante (`_es_variante`): una opción nueva no entra en las tablas del paper por olvido.
+CLAVES_JSON = frozenset({
+    "etiqueta", "slug", "run", "modo", "av", "av_fija", "rejilla", "datos", "r_analisis", "degrada", "tracks",
+    "nlive", "semilla", "ejes", "nodos_interpolados", "ndim", "nombres", "segundos", "ncall", "logz", "logz_err",
+    "logl_max", "chi2nu_mejor", "chi2nu_mejor_inflado", "mejor", "verdad", "posterior", "n_puntos", "procedencia",
+    "fraccion_en_rejilla", "teff", "logg", "r_rj", "masa_mjup"})
+#: el muestreador de `corre` (la procedencia de cada corrida los guarda)
+MUESTREO = dict(sample="rslice", bound="multi", dlogz=0.5)
 
 
 def _entra(seg, datos):
@@ -246,6 +292,31 @@ def _planck(w, T):
 def _ppf_trunc_normal(u, mu, sig, lo=0.0, hi=np.inf):
     a, b = (lo - mu) / sig, (hi - mu) / sig
     return float(stats.truncnorm.ppf(u, a, b, loc=mu, scale=sig))
+
+
+def _ppf_normal_rapido(mu, sig):
+    """`u -> stats.norm.ppf(u, mu, sig)`, el mismo número BIT A BIT (scipy calcula `ndtri(u) * sig + mu`), sin
+    las comprobaciones de argumentos de `rv_continuous.ppf`, que costaban ~10 veces la verosimilitud. Para u en
+    (0, 1), que es lo que da dynesty; `tests/test_teff_bayes_prior_rapido.py` lo vigila."""
+    from scipy.special import ndtri
+    return lambda u: float(ndtri(u) * sig + mu)
+
+
+def _ppf_trunc_normal_rapido(mu, sig, lo=0.0, hi=np.inf):
+    """`u -> _ppf_trunc_normal(u, mu, sig, lo, hi)` bit a bit, con `a` y `b` calculados una vez y llamando a
+    `truncnorm._ppf`, la función que `truncnorm.ppf` usa por dentro (API privada de scipy: si cambia,
+    `tests/test_teff_bayes_prior_rapido.py` lo detecta)."""
+    a, b = np.array([(lo - mu) / sig]), np.array([(hi - mu) / sig])
+    ppf = stats.truncnorm._ppf
+    return lambda u: float(ppf(np.array([u]), a, b)[0] * sig + mu)
+
+
+def quita_intervalos(s, intervalos):
+    """El segmento `s` (dict con `w` y `bueno`) sin los bins cuyo centro cae en algún intervalo [lo, hi) (Å)."""
+    fuera = np.zeros(s["w"].size, bool)
+    for lo, hi in intervalos:
+        fuera |= (s["w"] >= lo) & (s["w"] < hi)
+    return {**s, "bueno": s["bueno"] & ~fuera}
 
 
 def _empareja(s):
@@ -275,7 +346,7 @@ def _bases_nativas(pls, segs):
 
 
 def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None,
-             ventana_halpha=None):
+             ventana_halpha=None, quita_muse=None):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
     2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes).
 
@@ -289,17 +360,23 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
 
     `mascara_muse`: las máscaras telúricas del espectro MUSE (`MASCARAS_MUSE`; `paper` es lo de siempre).
     `ventana_lineas` / `ventana_halpha`: las ventanas (km/s) de las líneas de G2 en MUSE, todas / Hα (None = las del
-    run; `tipo_ir_plantillas.ventanas_de_lineas`)."""
+    run; `tipo_ir_plantillas.ventanas_de_lineas`).
+    `quita_muse`: una clave de `INTERVALOS_MUSE` (None = ninguno): esos bins del espectro MUSE salen del ajuste
+    (`quita_intervalos`), antes de agrupar a R = 250."""
     from scripts import ajuste_conjunto as aj
     from scripts import tipo_ir_plantillas as tp
     if degrada not in DEGRADA:
         raise ValueError(f"degrada={degrada!r}: debe ser uno de {DEGRADA}")
     if mascara_muse not in MASCARAS_MUSE:
         raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
+    if quita_muse is not None and quita_muse not in INTERVALOS_MUSE:
+        raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
     mm = MASCARAS_MUSE[mascara_muse]
     p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
                     quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha)
     segs = aj.segmentos_cgs(slug, p)
+    if quita_muse is not None:
+        segs = [quita_intervalos(s, INTERVALOS_MUSE[quita_muse]) if s["brazo"] == "vis" else s for s in segs]
     if r250:
         segs = [_empareja(s) for s in segs]
     t0, dt, nt = R["teff"]
@@ -315,20 +392,60 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
     return p, aj.Conjunto(segs, p["bases"], 0, fac)
 
 
+def valida_disco(datos="todo", rk_fijo=None, td_rango=None, quita_muse=None, inyecta_bt=None, inyecta_polvo=None):
+    """Rechaza, antes de leer nada, las combinaciones de las opciones del disco y de `--quita-muse` que no tienen
+    sentido: sin r_K libre, T_d no tiene datos; sin IR no hay r_K; sin MUSE no hay nada que quitar; el polvo se
+    inyecta sobre un modelo de la rejilla."""
+    if rk_fijo is not None and not (math.isfinite(rk_fijo) and rk_fijo >= 0):
+        raise ValueError(f"rk_fijo={rk_fijo!r}: debe ser un número ≥ 0")
+    if td_rango is not None:
+        if len(td_rango) != 2 or not 0 < td_rango[0] < td_rango[1]:
+            raise ValueError(f"td_rango={td_rango!r}: deben ser dos temperaturas 0 < T_min < T_max")
+        if rk_fijo is not None:
+            raise ValueError("con r_K fija (rk_fijo), la T del polvo no tiene datos: td_rango pide r_K libre")
+    if datos == "muse" and (rk_fijo is not None or td_rango is not None):
+        raise ValueError("con datos='muse' no hay segmentos IR ni r_K: rk_fijo y td_rango no se aplican")
+    if quita_muse is not None:
+        if quita_muse not in INTERVALOS_MUSE:
+            raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
+        if datos == "ir":
+            raise ValueError("con datos='ir' no hay espectro MUSE del que quitar intervalos")
+    if inyecta_polvo is not None:
+        if inyecta_bt is None:
+            raise ValueError("inyecta_polvo va sobre un modelo de la rejilla: pide también inyecta_bt")
+        if len(inyecta_polvo) != 2 or inyecta_polvo[0] < 0 or inyecta_polvo[1] <= 0:
+            raise ValueError(f"inyecta_polvo={inyecta_polvo!r}: debe ser (r_K ≥ 0, T_d > 0)")
+
+
 class Modelo:
+    #: r_K fija (None = libre o, sin IR, 0) y rango de la T del polvo libre (None = `T_D`). A nivel de clase para que
+    #: un `Modelo` hecho con `__new__` (los tests sintéticos) tenga los valores de siempre.
+    rk_fijo = None
+    td_rango = None
+
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
-                 r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None):
+                 r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
+                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None):
+        """Las cuatro últimas (pruebas del disco y del D.5, 2026-10-29) no cambian nada si se dejan en None:
+        `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max) deja libre la T del polvo
+        (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de `INTERVALOS_MUSE[quita_muse]`;
+        `inyecta_polvo` = (r_K, T_d) suma un exceso de polvo al modelo de `inyecta_bt`."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
         warnings.simplefilter("ignore", RuntimeWarning)
         if datos not in DATOS:
             raise ValueError(f"datos={datos!r}: debe ser uno de {DATOS}")
+        valida_disco(datos, rk_fijo, td_rango, quita_muse, inyecta_bt, inyecta_polvo)
         self.slug, self.modo, self.av_modo, self.av_fija, self.datos = slug, modo, av, av_fija, datos
+        self.rk_fijo = None if rk_fijo is None else float(rk_fijo)
+        self.td_rango = None if td_rango is None else (float(td_rango[0]), float(td_rango[1]))
+        self.quita_muse = quita_muse
         R = dict(REJILLAS[rejilla])
         if dir_rejilla is not None:
             R["dir"] = Path(dir_rejilla)
+        self.dir_rejilla = Path(R["dir"]).expanduser().resolve()
         self.rejilla, self.rejilla_nombre = rejilla, R["nombre"]
         self.T0, self.dT, self.nT = R["teff"]
         self.G0, self.dG, self.nG = R["logg"]
@@ -339,7 +456,7 @@ class Modelo:
         self.mascara_muse = mascara_muse
         self.ventana_lineas, self.ventana_halpha = ventana_lineas, ventana_halpha
         p, conj = _prepara(slug, R, r250=self.r_analisis == 250, degrada=degrada, mascara_muse=mascara_muse,
-                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha)
+                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha, quita_muse=quita_muse)
         self.run = p["run"]
         cfg = load_run_config(self.run, project_root=ROOT).config
         self.cfg = cfg
@@ -370,11 +487,8 @@ class Modelo:
                 idx[a, b] = nuevo
                 self.rellenados.append((self.T0 + a * self.dT, self.G0 + b * self.dG))
 
-        datos_sint = None
-        if plantilla or inyecta_bt:
-            datos_sint = self._sinteticos(p, conj, plantilla, inyecta_bt, av_inyectada, idx, semilla)
-
-        self.segs = []
+        # log F(2.2 µm) en cada nodo: la referencia del exceso de polvo (antes de los datos de prueba, que la usan
+        # para inyectar polvo; no depende de ellos)
         k_ref = next(k for k, s in enumerate(conj.segs) if s["brazo"] == "nir" and s["w"][0] <= LAM_K <= s["w"][-1])
         self.lref = np.empty((self.nT, self.nG))
         for a in range(self.nT):
@@ -382,6 +496,12 @@ class Modelo:
                 s, m = conj.segs[k_ref], p["bases"][idx[a, b]][k_ref]
                 ok = np.isfinite(m)
                 self.lref[a, b] = math.log10(float(np.interp(LAM_K, s["w"][ok], m[ok])))
+
+        datos_sint = None
+        if plantilla or inyecta_bt:
+            datos_sint = self._sinteticos(p, conj, plantilla, inyecta_bt, av_inyectada, idx, semilla, inyecta_polvo)
+
+        self.segs = []
         for k, s in enumerate(conj.segs):
             if not _entra(s, datos):
                 continue
@@ -411,8 +531,10 @@ class Modelo:
         self._prepara_priores()
 
     # -------------------------------------------------------------- datos de prueba
-    def _sinteticos(self, p, conj, plantilla, inyecta_bt, av_inj, idx, semilla):
-        """[(f, e)] por segmento: una plantilla o un modelo de la rejilla, con la S/N por píxel del dato real y ruido."""
+    def _sinteticos(self, p, conj, plantilla, inyecta_bt, av_inj, idx, semilla, inyecta_polvo=None):
+        """[(f, e)] por segmento: una plantilla o un modelo de la rejilla, con la S/N por píxel del dato real y ruido.
+        `inyecta_polvo` = (r_K, T_d): al modelo de la rejilla se le suma el exceso de la Ec. B.1 en el IR,
+        r_K · F(2.2 µm) · B_λ(T_d)/B_2.2(T_d), antes de la extinción (como en `modelos`)."""
         from scripts import ajuste_conjunto as aj
         from scripts import tipo_ir_plantillas as tp
         rng = np.random.default_rng(semilla)
@@ -436,13 +558,24 @@ class Modelo:
             i0, j0 = min(int(x), self.nT - 2), min(int(y), self.nG - 2)
             t, u = x - i0, y - j0
             om = (r_rj * RJUP_CM / (self.d_pc * PC_CM)) ** 2
+            if inyecta_polvo is not None:
+                lr = self.lref
+                fref = 10 ** ((1 - t) * (1 - u) * lr[i0, j0] + t * (1 - u) * lr[i0 + 1, j0]
+                              + (1 - t) * u * lr[i0, j0 + 1] + t * u * lr[i0 + 1, j0 + 1])
+                rk_i, td_i = map(float, inyecta_polvo)
             sin = []
             for k, s in enumerate(conj.segs):
                 L = [np.log10(p["bases"][idx[a, b]][k]) for a, b in ((i0, j0), (i0 + 1, j0), (i0, j0 + 1), (i0 + 1, j0 + 1))]
                 lf = (1 - t) * (1 - u) * L[0] + t * (1 - u) * L[1] + (1 - t) * u * L[2] + t * u * L[3]
                 ext = 10 ** (-0.4 * np.asarray(CCMExtinction(3.1, citation="CCM89").a_lambda_over_av(s["w"]), float) * av)
-                sin.append(om * 10 ** lf * ext)
+                if inyecta_polvo is not None and s["brazo"] == "nir":
+                    bb = _planck(s["w"], td_i) / _planck(LAM_K, td_i)
+                    sin.append(om * (10 ** lf + rk_i * fref * bb) * ext)
+                else:
+                    sin.append(om * 10 ** lf * ext)
             self.verdad = dict(teff=T, logg=G, av=av, r_rj=r_rj)
+            if inyecta_polvo is not None:
+                self.verdad.update(rk=rk_i, td=td_i)
         out = []
         for k, s in enumerate(conj.segs):
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -453,41 +586,68 @@ class Modelo:
 
     # -------------------------------------------------------------- parámetros
     def _prepara_priores(self):
-        n, t = [], []
+        n, t, tn = [], [], []   # tn: (índice, mu, sigma, lo) de las normales truncadas
 
-        def add(nombre, f):
+        def add(nombre, f, truncada=None):
+            if truncada is not None:
+                tn.append((len(n), *truncada))
             n.append(nombre)
             t.append(f)
+        # los ppf de la normal y de la normal truncada van por el camino rápido (`_ppf_*_rapido` y, en
+        # `prior_transform`, las truncadas juntas), bit a bit iguales a los de scipy: así se hicieron las cadenas del
+        # paper, con `stats.*.ppf`, y así se reproducen
         if self.modo == "libre":
             add("teff", lambda u: self.T0 + u * (self.nT - 1) * self.dT)
             add("logg", lambda u: self.G0 + u * (self.nG - 1) * self.dG)
             add("r_rj", lambda u: 10 ** (math.log10(0.5) + u * (math.log10(6.0) - math.log10(0.5))))
         else:
             mu, sg = math.log10(self.edad0), self.edad_sig_ln / math.log(10)
-            add("log_edad_myr", lambda u: float(stats.norm.ppf(u, mu, sg)))
+            add("log_edad_myr", _ppf_normal_rapido(mu, sg))
             add("log_lbol", lambda u: -4.5 + 3.0 * u)
-        add("d_pc", lambda u: float(stats.norm.ppf(u, self.d_pc, self.d_err)))
+        add("d_pc", _ppf_normal_rapido(self.d_pc, self.d_err))
         if self.av_fija is not None:
             add("av", lambda u: self.av_fija + 0.02 * (u - 0.5))   # perfil: A_V fija (±0.01)
         elif self.av_modo == "libre":
             add("av", lambda u: 8.0 * u)
         else:
-            add("av", lambda u: _ppf_trunc_normal(u, self.av0, self.av_err))
-        if any(s["banda"] != "vis" for s in self.segs):   # sin IR, r_K no tiene datos
+            add("av", _ppf_trunc_normal_rapido(self.av0, self.av_err), truncada=(self.av0, self.av_err, 0.0))
+        # sin IR, r_K no tiene datos; con `rk_fijo`, r_K no es un parámetro
+        if any(s["banda"] != "vis" for s in self.segs) and self.rk_fijo is None:
             add("rk", lambda u: 1.5 * u)
+            if self.td_rango is not None:   # la T del polvo libre (uniforme), justo detrás de r_K
+                t0, t1 = self.td_rango
+                add("td", lambda u: t0 + u * (t1 - t0))
         for s in self.segs:
             if s["sigma"] is None:
                 add(f"s_{s['nombre']}", lambda u: 10 ** (math.log10(0.2) + u * 2 * math.log10(5.0)))
             else:
-                add(f"s_{s['nombre']}", (lambda sg: (lambda u: _ppf_trunc_normal(u, 1.0, sg, lo=0.05)))(s["sigma"]))
+                add(f"s_{s['nombre']}", _ppf_trunc_normal_rapido(1.0, s["sigma"], lo=0.05),
+                    truncada=(1.0, s["sigma"], 0.05))
         for b in self.bandas:
             add(f"lnf_{b}", lambda u: math.log(1e-3) + u * (math.log(1.0) - math.log(1e-3)))
         self.nombres, self._t = n, t
         self.ndim = len(n)
         self.pos = {k: i for i, k in enumerate(n)}
+        # para `prior_transform`: las truncadas, en una sola llamada a `truncnorm._ppf` con a = (lo − mu)/σ y
+        # b = +∞ calculados aquí; el resto, una a una
+        juntas = {i for i, *_ in tn}
+        self._otros = [(i, f) for i, f in enumerate(t) if i not in juntas]
+        self._truncadas = None
+        if tn:
+            i, mu, sg, lo = (np.array(x) for x in zip(*tn))
+            self._truncadas = (i.astype(int), (lo - mu) / sg, np.full(i.size, np.inf), sg, mu)
 
     def prior_transform(self, u):
-        return np.array([f(x) for f, x in zip(self._t, u)])
+        """El cubo unidad -> parámetros. Las normales truncadas (A_V y las escalas) van juntas: `truncnorm._ppf`
+        calcula elemento a elemento, así que da los mismos números que una a una (`_t`), y casi todo su coste es
+        fijo por llamada (`tests/test_teff_bayes_prior_rapido.py` compara con los `ppf` públicos)."""
+        x = np.empty(len(self._t))
+        for i, f in self._otros:
+            x[i] = f(u[i])
+        if self._truncadas is not None:
+            i, a, b, sg, mu = self._truncadas
+            x[i] = stats.truncnorm._ppf(np.asarray(u)[i], a, b) * sg + mu
+        return x
 
     # -------------------------------------------------------------- física
     def fisica_de(self, th):
@@ -518,12 +678,16 @@ class Modelo:
         lr = self.lref
         fref = 10 ** (c00 * lr[i, j] + c10 * lr[i + 1, j] + c01 * lr[i, j + 1] + c11 * lr[i + 1, j + 1])
         om = (r_cm / (th[P["d_pc"]] * PC_CM)) ** 2
-        av, rk = th[P["av"]], (th[P["rk"]] if "rk" in P else 0.0)
+        av = th[P["av"]]
+        rk = th[P["rk"]] if "rk" in P else (0.0 if self.rk_fijo is None else self.rk_fijo)
+        td = th[P["td"]] if "td" in P else None
         out = []
         for s in self.segs:
             L = s["lg"]
             F = 10 ** (c00 * L[i, j] + c10 * L[i + 1, j] + c01 * L[i, j + 1] + c11 * L[i + 1, j + 1])
-            out.append(th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * s["bb"]) * 10 ** (-0.4 * s["a"] * av))
+            # el cuerpo negro del polvo: precalculado a `T_D` (el camino de las cadenas del paper) o a la T libre
+            bb = s["bb"] if td is None or s["banda"] == "vis" else _planck(s["w"], td) / _planck(LAM_K, td)
+            out.append(th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * bb) * 10 ** (-0.4 * s["a"] * av))
         return out
 
     def loglike(self, th):
@@ -579,13 +743,13 @@ def percentiles(x):
     return dict(p2_5=float(q[0]), p16=float(q[1]), p50=float(q[2]), p84=float(q[3]), p97_5=float(q[4]))
 
 
-def corre(mod, nlive, semilla, dlogz=0.5):
+def corre(mod, nlive, semilla, dlogz=MUESTREO["dlogz"]):
     import dynesty
     from dynesty.utils import resample_equal
     t0 = time.time()
     rng = np.random.default_rng(semilla)
-    sampler = dynesty.NestedSampler(mod.loglike, mod.prior_transform, mod.ndim, nlive=nlive, sample="rslice",
-                                    bound="multi", rstate=rng)
+    sampler = dynesty.NestedSampler(mod.loglike, mod.prior_transform, mod.ndim, nlive=nlive,
+                                    sample=MUESTREO["sample"], bound=MUESTREO["bound"], rstate=rng)
     sampler.run_nested(dlogz=dlogz, print_progress=False)
     res = sampler.results
     w = np.exp(res.logwt - res.logz[-1])
@@ -601,10 +765,14 @@ def etiqueta_de(a):
     """La etiqueta de una corrida de `ajusta` (nombre de sus json/npz): la de `--etiqueta` o la que se compone de
     los argumentos. Con `--mascara-muse` distinta de `paper` lleva `mascara-<variante>` antes de la semilla, para
     que esas cadenas no se confundan con las del paper; con `--ventana-lineas` / `--ventana-halpha`, `ventana-<KMS>`
-    / `ventanaha-<KMS>` después de la máscara."""
+    / `ventanaha-<KMS>` después de la máscara; y después, las de las pruebas del disco y del D.5: `rk<RK>`
+    (`--rk-fijo`), `td<TMIN>-<TMAX>` (`--td-libre`), `quita-<INTERVALOS>` (`--quita-muse`) y `polvo-<RK>-<TD>`
+    (`--inyecta-polvo`). Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
+    rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
+    quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
@@ -616,28 +784,79 @@ def etiqueta_de(a):
                                               f"mascara-{mascara}" if mascara != "paper" else None,
                                               f"ventana-{vl:g}" if vl is not None else None,
                                               f"ventanaha-{vh:g}" if vh is not None else None,
+                                              f"rk{rkf:g}" if rkf is not None else None,
+                                              f"td{td[0]:g}-{td[1]:g}" if td else None,
+                                              f"quita-{quita}" if quita else None,
+                                              "polvo-" + "-".join(f"{v:g}" for v in polvo) if polvo else None,
                                               f"s{a.semilla}") if x)
+
+
+def procedencia(mod=None, a=None):
+    """Con qué se hizo una corrida, para su json: versiones de musepipe, python, numpy, scipy y dynesty; el commit
+    del clon del código y si tenía cambios sin commit; el muestreador (`MUESTREO`); el directorio de la rejilla,
+    resuelto; la raíz de la que se leyeron los runs; los argumentos de `ajusta`; y la fecha (UTC)."""
+    import datetime
+    import platform
+    import subprocess
+
+    import scipy
+
+    import musepipe
+    codigo = Path(__file__).resolve().parents[1]
+    out = dict(musepipe=musepipe.__version__, python=platform.python_version(), numpy=np.__version__,
+               scipy=scipy.__version__)
+    try:
+        import dynesty
+        out["dynesty"] = dynesty.__version__
+    except ImportError:
+        out["dynesty"] = None
+    def git(*x):
+        try:
+            r = subprocess.run(["git", "-C", str(codigo), *x], capture_output=True, text=True, timeout=60)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    out["commit"] = git("rev-parse", "HEAD") or None
+    estado = git("status", "--porcelain", "--untracked-files=no") if out["commit"] else None
+    out["cambios_sin_commit"] = None if estado is None else bool(estado)
+    out["muestreo"] = dict(MUESTREO)
+    if mod is not None:
+        out["dir_rejilla"] = str(mod.dir_rejilla)
+    out["raiz_datos"] = str(ROOT)
+    if a is not None:
+        out["argumentos"] = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(a).items()}
+    out["fecha_utc"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return out
 
 
 def ajusta(a):
     from musepipe.config import load_run_config
     from scripts import tipo_ir_indices as tir
-    a.salida.mkdir(parents=True, exist_ok=True)
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
+    rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
+    quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
     et = etiqueta_de(a)
+    # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
+    # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
+    ya = [p.name for p in (a.salida / f"{et}.json", a.salida / f"{et}.npz") if p.exists()]
+    if ya:
+        raise SystemExit(f"{et}: ya existe en {a.salida} ({', '.join(ya)}); no se sobrescribe")
+    a.salida.mkdir(parents=True, exist_ok=True)
     if a.modo == "evo_solo":
         cfg = load_run_config(tir.perfil(a.slug)["paper"]["run"], project_root=ROOT).config
         r = evo_solo(cfg, a.slug, a.tracks, semilla=a.semilla)
         out = dict(etiqueta=et, slug=a.slug, modo=a.modo, tracks=a.tracks,
                    fraccion_en_rejilla=r["fraccion_en_rejilla"],
-                   **{k: percentiles(v) for k, v in r.items() if k != "fraccion_en_rejilla"})
+                   **{k: percentiles(v) for k, v in r.items() if k != "fraccion_en_rejilla"},
+                   procedencia=procedencia(a=a))
         np.savez(a.salida / f"{et}.npz", **{k: v for k, v in r.items() if k != "fraccion_en_rejilla"})
     else:
         mod = Modelo(a.slug, a.modo, a.av, a.tracks, a.inyecta_bt, a.plantilla, a.av_inyectada, a.semilla, a.av_fija,
                      a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada, mascara_muse=mascara,
-                     ventana_lineas=vl, ventana_halpha=vh)
+                     ventana_lineas=vl, ventana_halpha=vh, rk_fijo=rkf, td_rango=td, quita_muse=quita,
+                     inyecta_polvo=polvo)
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -652,6 +871,11 @@ def ajusta(a):
                    # las ventanas de las líneas en MUSE, solo si no son las del run
                    **({"ventana_lineas_kms": vl} if vl is not None else {}),
                    **({"ventana_halpha_kms": vh} if vh is not None else {}),
+                   # las pruebas del disco y del D.5, solo si se piden (todas en `VARIANTES_JSON`)
+                   **({"rk_fijo": mod.rk_fijo} if mod.rk_fijo is not None else {}),
+                   **({"td_rango": list(mod.td_rango)} if mod.td_rango is not None else {}),
+                   **({"quita_muse": quita} if quita is not None else {}),
+                   **({"inyecta_polvo": [float(v) for v in polvo]} if polvo is not None else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -660,7 +884,8 @@ def ajusta(a):
                    chi2nu_mejor=mod.chi2(r["mejor"]), chi2nu_mejor_inflado=mod.chi2(r["mejor"], inflado=True),
                    mejor=dict(zip(mod.nombres, map(float, r["mejor"]))),
                    verdad=getattr(mod, "verdad", None), posterior=post,
-                   n_puntos={s["nombre"]: int(s["d"].size) for s in mod.segs})
+                   n_puntos={s["nombre"]: int(s["d"].size) for s in mod.segs},
+                   procedencia=procedencia(mod, a))
         np.savez(a.salida / f"{et}.npz", muestras=eq, derivadas=der, nombres=np.array(mod.nombres))
     (a.salida / f"{et}.json").write_text(json.dumps(out, indent=1, ensure_ascii=False, default=float))
     t = out.get("posterior", {}).get("der_teff") or out.get("teff")
@@ -789,7 +1014,10 @@ def resume(dirs, salida=None):
             f", solo {d['datos'].upper()}" if d.get("datos", "todo") != "todo" else "") + (
             f", máscara MUSE {d['mascara_muse']}" if d.get("mascara_muse", "paper") != "paper" else "") + (
             f", ventana {d['ventana_lineas_kms']:g} km/s" if d.get("ventana_lineas_kms") is not None else "") + (
-            f", ventana Hα {d['ventana_halpha_kms']:g} km/s" if d.get("ventana_halpha_kms") is not None else "")
+            f", ventana Hα {d['ventana_halpha_kms']:g} km/s" if d.get("ventana_halpha_kms") is not None else "") + (
+            f", r_K fija {d['rk_fijo']:g}" if d.get("rk_fijo") is not None else "") + (
+            f", T_d libre {d['td_rango'][0]:g}–{d['td_rango'][1]:g} K" if d.get("td_rango") else "") + (
+            f", MUSE sin {d['quita_muse']}" if d.get("quita_muse") else "")
         if d["modo"] == "evo_solo":
             fila = dict(slug=d["slug"], modo=modo, teff=d["teff"], p_bajo_umbral=pT, logg=d["logg"], r=d["r_rj"],
                         m=d["masa_mjup"], margen=mgp.tolist(), p_sobre_suelo=psobre)
@@ -870,19 +1098,24 @@ def _pm(p, nd=0, f=None, signo=False):
     return f"${tm.format(m)}^{{+{t.format(hi - m)}}}_{{-{t.format(m - lo)}}}$"
 
 
-def _ventanas_propias(d):
-    """¿Corrió la cadena con ventanas de las líneas distintas de las del run (`--ventana-lineas`/`--ventana-halpha`)?"""
-    return d.get("ventana_lineas_kms") is not None or d.get("ventana_halpha_kms") is not None
+def _es_variante(d):
+    """¿Es la corrida (su json) una variante de las del paper? Lo es si alguna clave de `VARIANTES_JSON` no tiene el
+    valor del paper, o si lleva una clave que este código no conoce (ni en `CLAVES_JSON` ni en `VARIANTES_JSON`; las
+    que empiezan por `_` las añaden los cargadores). Es una lista BLANCA: una opción nueva, aunque nadie la añada
+    aquí, deja su cadena fuera de las tablas del paper."""
+    if any(d.get(k, v) != v for k, v in VARIANTES_JSON.items()):
+        return True
+    return any(not k.startswith("_") and k not in CLAVES_JSON and k not in VARIANTES_JSON for k in d)
 
 
 def _de_la_tabla(d):
     """Una corrida sobre los datos (no plantilla ni inyección), `libre`, con la A_V fija o con el prior, con
     todos los espectros (no `--datos muse|ir`), con una de las rejillas del paper (`NOMBRE_REJILLA`), a R = 500 y
-    con las máscaras de MUSE del paper (no `--mascara-muse` ni `--ventana-lineas` / `--ventana-halpha`)."""
+    sin ninguna variante (`_es_variante`: ni `--mascara-muse`, ni `--ventana-lineas` / `--ventana-halpha`, ni las
+    pruebas del disco o del D.5, ni una opción que este código no conozca)."""
     return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
             and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in NOMBRE_REJILLA
-            and d.get("r_analisis", 500) == 500 and d.get("mascara_muse", "paper") == "paper"
-            and not _ventanas_propias(d))
+            and d.get("r_analisis", 500) == 500 and not _es_variante(d))
 
 
 def filas_tabla(corridas, deltas, nombres):
@@ -940,10 +1173,10 @@ REJILLAS_TABLA = {"btsettl": "BT-Settl", "drift": "DRIFT-PHOENIX", "ames_dusty":
 
 def _de_rejillas(d):
     """Una corrida de la tabla de rejillas: como `_de_la_tabla`, pero con cualquier rejilla de `REJILLAS_TABLA` y
-    a cualquier resolución (con las máscaras de MUSE del paper)."""
+    a cualquier resolución (y sin ninguna variante, `_es_variante`)."""
     return (d["modo"] == "libre" and d.get("av") == "primaria" and not d.get("verdad")
             and d.get("datos", "todo") == "todo" and d.get("rejilla", "btsettl") in REJILLAS_TABLA
-            and d.get("mascara_muse", "paper") == "paper" and not _ventanas_propias(d))
+            and not _es_variante(d))
 
 
 def en_el_borde(d):
@@ -1059,15 +1292,17 @@ def tabla_rejillas(dirs):
 
 def modelo_de_cadena(d, dir_rejilla=None):
     """El `Modelo` con el que corrió una cadena `libre` sobre los datos (su json: rejilla, datos, resolución,
-    degradado, A_V y máscaras de MUSE) y su punto de máxima verosimilitud (`mejor`). Como
-    `delta_entre_rejillas.modelo_de`, más las máscaras. `dir_rejilla`: el directorio de npz si no es el de
-    `REJILLAS` (ATMO 2020)."""
+    degradado, A_V, máscaras y ventanas de MUSE, y las opciones del disco y del D.5) y su punto de máxima
+    verosimilitud (`mejor`). Es el único reconstructor: `delta_entre_rejillas.modelo_de` lo llama. `dir_rejilla`: el
+    directorio de npz si no es el de `REJILLAS` (ATMO 2020)."""
     if d["modo"] != "libre" or d.get("verdad"):
         raise ValueError(f"{d['etiqueta']}: solo cadenas `libre` sobre los datos (sin plantilla ni inyección)")
     mod = Modelo(d["slug"], d["modo"], d["av"], "ATMO2020", None, None, None, d["semilla"], d.get("av_fija"),
                  d.get("rejilla", "btsettl"), dir_rejilla, d.get("datos", "todo"), d.get("r_analisis", 500) == 250,
                  d.get("degrada") or "cuadratura", mascara_muse=d.get("mascara_muse", "paper"),
-                 ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"))
+                 ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"),
+                 rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
+                 quita_muse=d.get("quita_muse"))
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1165,6 +1400,18 @@ def main(argv=None):
     aa.add_argument("--ventana-halpha", type=float, default=None, metavar="KMS",
                     help="ventana (±km/s) de Hα en MUSE (por defecto la de las demás líneas); la etiqueta lleva "
                          "`ventanaha-<KMS>`")
+    aa.add_argument("--rk-fijo", type=float, default=None, metavar="RK",
+                    help="r_K fija en este valor (0 = el modelo sin disco) en vez de libre; la etiqueta lleva `rk<RK>`")
+    aa.add_argument("--td-libre", type=float, nargs=2, default=None, metavar=("TMIN", "TMAX"),
+                    help=f"la T del polvo libre (uniforme en TMIN–TMAX K) en vez de {T_D:g} K; la etiqueta lleva "
+                         "`td<TMIN>-<TMAX>`")
+    aa.add_argument("--quita-muse", choices=tuple(INTERVALOS_MUSE), default=None,
+                    help="quita del espectro MUSE los bins de esos intervalos (`INTERVALOS_MUSE`; extremos = "
+                         "6300–6900 y 9000–9350 Å, el D.5 del paper; azul y rojo, solo uno de los dos); la etiqueta "
+                         "lleva `quita-<INTERVALOS>`")
+    aa.add_argument("--inyecta-polvo", type=float, nargs=2, default=None, metavar=("RK", "TD"),
+                    help="con --inyecta-bt: suma al modelo inyectado un exceso de polvo r_K a T_d (Ec. B.1); la "
+                         "etiqueta lleva `polvo-<RK>-<TD>`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",

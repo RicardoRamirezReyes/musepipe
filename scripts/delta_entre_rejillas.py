@@ -391,13 +391,10 @@ def residuos_por_banda(mod, th, bandas=BANDAS_A, brazo="vis"):
 
 def modelo_de(d, dir_rejilla=None):
     """`teff_bayes.Modelo` de una cadena (`libre`, los datos, la rejilla, la resolución y la A_V con las que corrió)
-    y su punto de máxima verosimilitud. `dir_rejilla`: el directorio de npz de la rejilla, si no es el de
-    `teff_bayes.REJILLAS` (ATMO 2020 se convierte a la ruta que se quiera)."""
-    mod = tb.Modelo(d["slug"], d["modo"], d["av"], "ATMO2020", None, None, None, d["semilla"], d.get("av_fija"),
-                    d.get("rejilla", "btsettl"), dir_rejilla, d.get("datos", "todo"), d.get("r_analisis", 500) == 250,
-                    d.get("degrada") or "cuadratura", mascara_muse=d.get("mascara_muse", "paper"))
-    th = np.array([d["mejor"][k] for k in mod.nombres])
-    return mod, th
+    y su punto de máxima verosimilitud: `teff_bayes.modelo_de_cadena`, el único reconstructor (hasta el 2026-10-29
+    había aquí una copia que no pasaba las ventanas de las líneas). `dir_rejilla`: el directorio de npz de la
+    rejilla, si no es el de `teff_bayes.REJILLAS` (ATMO 2020 se convierte a la ruta que se quiera)."""
+    return tb.modelo_de_cadena(d, dir_rejilla)
 
 
 def residuos_cadena(d, bandas=BANDAS_A, dir_rejilla=None):
