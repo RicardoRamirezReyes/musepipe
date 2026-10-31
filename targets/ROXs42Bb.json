@@ -29,10 +29,10 @@
   "paper": {
     "run": "ROXs42Bb_realigned",
     "order": 2,
-    "note": "Cubo combinado; sus limites de la etapa de cotas superiores se reverificaron validos.",
+    "note": "cubo combinado; sus limites de E3 del 08-31 se verificaron validos el 09-03 (verifica_e3.json)",
     "display": "ROXs 42B b",
     "spt_source_dir": ".",
-    "spt_source_note": "El G3 de este objeto no esta archivado en un subdirectorio: vive en la raiz de stages/, con la LSF que declara el config. Se declara el punto para que la figura no dependa del orden alfabetico ni imprima un aviso."
+    "spt_source_note": "El G3 de este objeto no esta archivado en un subdirectorio: vive en la raiz de stages/ (corrida del 2026-09-03 sobre el espectro calibrado del 08-31, con la LSF 2.297 del config, que es la que mide A4/M2: 2.2969). Se declara el punto para que la figura no dependa del orden alfabetico ni imprima un aviso."
   },
   "fisica": {
     "log_lbol": -3.0,
@@ -113,47 +113,19 @@
     "hydrogen_lines": {
       "note": "Paβ y Brγ en estos espectros (scripts/pab_brg.py). Lo midió por primera vez la sesión del 2026-10-21 (~/muse_sesion_20261021/pab_brg/INFORME.md); los valores de este bloque son los que declaró ella. 'spectra': la R nativa y la fecha de cada espectro que cubre una de las dos líneas, de los artículos (Bowler+2014, arXiv:1401.7668: NIFS «R∼5000», J del 2012-07-04, la de más S/N de sus dos fechas; OSIRIS Kbb del 2011-08-20 a 35 mas, para el que el artículo no escribe la R: el R∼3800 que da es el de FW Tau b a 50 mas, y el resumen dice «R∼4000–5000», así que 3800 es una inferencia; Currie+2014a, arXiv:1310.4825: SINFONI K del 2012-08-11, «R ≈ 1500», con la Brγ de su estándar telúrica «replaced by a straight line»; verificado el 2026-10-28); la columna «Resolution» del catálogo no es fiable. Los tres espectros están escalados a la fotometría del compañero: sin 'flux_rescale_mag'. 'btsettl_reference': el modelo con el que se mide el eje λ del catálogo y que divide los estimadores *_cociente (el de la sesión; la Tabla B.5 da 2225–2335 K con A_V 1.8–3.0). 'btsettl_photosphere': los modelos en los que se mide la absorción fotosférica con el mismo estimador. 'photospheric_absorption_A': la absorción que una emisión tiene que rellenar antes de verse, sumada al límite; valor intermedio conservador entre BT-Settl (Paβ 0.0..+0.3 Å a 2200–2400 K) y las Clase III M6.5–M9.5 de Manara (−0.4..+0.1 Å). 'also_checked': espectros del catálogo que no están en 'spectra' (el ERIS va con el continuo restado y no sirve para la SED) y solo se miran para decir qué cubren.",
       "spectra": {
-        "NIFS_J": {
-          "r_native": 5000,
-          "date": "2012-07-04"
-        },
-        "OSIRIS_K": {
-          "r_native": 3800,
-          "date": "2011-08-20"
-        },
-        "SINFONI_K": {
-          "r_native": 1500,
-          "date": "2012-08-11"
-        }
+        "NIFS_J": {"r_native": 5000, "date": "2012-07-04"},
+        "OSIRIS_K": {"r_native": 3800, "date": "2011-08-20"},
+        "SINFONI_K": {"r_native": 1500, "date": "2012-08-11"}
       },
-      "btsettl_reference": {
-        "teff_k": 2300,
-        "logg": 3.5
-      },
+      "btsettl_reference": {"teff_k": 2300, "logg": 3.5},
       "btsettl_photosphere": [
-        {
-          "teff_k": 2200,
-          "logg": 3.5
-        },
-        {
-          "teff_k": 2300,
-          "logg": 3.5
-        },
-        {
-          "teff_k": 2400,
-          "logg": 4.0
-        }
+        {"teff_k": 2200, "logg": 3.5},
+        {"teff_k": 2300, "logg": 3.5},
+        {"teff_k": 2400, "logg": 4.0}
       ],
-      "photospheric_absorption_A": {
-        "PaB": 0.2,
-        "BrG": 0.0
-      },
+      "photospheric_absorption_A": {"PaB": 0.2, "BrG": 0.0},
       "also_checked": {
-        "ERIS_K": {
-          "file": "roxs42bb_spectrum_Hayoz2025_ERIS_K-long_contrem.dat",
-          "instrument": "VLT/ERIS K_long",
-          "ref": "Hayoz+2026"
-        }
+        "ERIS_K": {"file": "roxs42bb_spectrum_Hayoz2025_ERIS_K-long_contrem.dat", "instrument": "VLT/ERIS K_long", "ref": "Hayoz+2026"}
       }
     }
   }
