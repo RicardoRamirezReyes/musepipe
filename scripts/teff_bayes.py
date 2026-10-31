@@ -13,7 +13,7 @@ H2O), pero en vez de una rejilla con polinomios usa un modelo FÍSICO con flujo 
   rango completo, 0.97–1.00 σT⁴), interpolado bilineal en log F sobre la rejilla (`REJILLAS`). El nodo de
   DRIFT-PHOENIX que SVO no tiene (2500 K, log g 3.0) se rellena con la media en log F de sus vecinos en T_eff.
 - s_k: escala por segmento con el prior de `ajuste_conjunto` (N(1, 0.05) en las bandas ancladas a la
-  fotometría, N(1, 0.20) en MUSE, log-uniforme 0.2–5 en las no ancladas).
+  fotometría, N(1, 0.20) en MUSE, log-uniforme 0.2–5 en las no ancladas; `--anclas-ir` cambia cuáles van ancladas).
 - Error: σ² = e² + (f_b · F)², con un f_b libre por banda (vis, J, H, K): el desajuste del modelo, que con
   S/N 50–170 en el IR domina sobre el ruido.
 
@@ -97,6 +97,15 @@ llevan la cobertura de este objeto (sus segmentos y píxeles, sus escalas con pr
 por píxel del otro (`snr_cruzada`: la del mismo instrumento y banda o, si el otro no lo tiene, la mediana de los
 suyos en esa banda). La etiqueta lleva `ruido-<SLUG>` y el json `ruido_de`; no entra en las tablas.
 
+`--anclas-ir ninguna|K|JHK` (pedido del autor del 2026-10-30, «prepara la opción de soltar anclas y el lote») elige en
+qué bandas del IR la escala del segmento va anclada a la fotometría, N(1, `SIGMA_IR`); en las demás, libre. Sin ella,
+las que declara `targets/<slug>.json` (`ir_spectra.colour_excess.bands`: en ROXs 12 b solo K, porque su J y su H van
+escaladas a la fotometría de la terciaria; en ROXs 42B b, J, H y K). Separa, en la misma prueba, qué segmentos lleva
+cada compañero de qué escalas lleva ancladas. Solo cambia el prior de las escalas: los datos (también los de prueba,
+que se escalan con el segmento anclado de siempre) son los mismos. Sobre los datos reales solo se puede soltar un
+ancla; anclar una banda que el objeto no declara pide datos de prueba, cuyas escalas valen 1 por construcción
+(`anclas_de`). La etiqueta lleva `anclas-<BANDAS>` y el json `anclas_ir`; no entra en las tablas.
+
 Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
 (`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
 conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
@@ -130,6 +139,7 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--ventana-lineas KMS] [--ventana-halpha KMS]
                                        [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos|azul|rojo]
                                        [--inyecta-polvo RK TD] [--muse-nativo [--ens-vr]] [--ruido-de SLUG]
+                                       [--anclas-ir ninguna|K|JHK]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
@@ -405,7 +415,10 @@ INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
                   "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None, "muse_nativo": False,
-                  "ens_vr": None, "ruido_de": None}
+                  "ens_vr": None, "ruido_de": None, "anclas_ir": None}
+#: `--anclas-ir` (2026-10-30): las bandas del IR cuya escala va anclada a la fotometría, N(1, `SIGMA_IR`); las demás,
+#: libres. Sin la opción, las que declara el objeto (`ir_spectra.colour_excess.bands`).
+ANCLAS_IR = {"ninguna": (), "K": ("K",), "JHK": ("J", "H", "K")}
 #: las demás claves que lleva el json de `ajusta` (de configuración, que `_de_la_tabla` y `_de_rejillas` filtran por
 #: su valor; de resultado; y de procedencia), y las de `evo_solo`. Son las 36 de las 1187 cadenas que había el
 #: 2026-10-29, más `procedencia`. Una clave que no esté ni aquí ni en `VARIANTES_JSON` hace de la corrida una
@@ -588,6 +601,37 @@ def valida_ruido_de(ruido_de, slug, plantilla=None, inyecta_bt=None):
         raise ValueError(f"ruido_de={ruido_de!r} es el mismo objeto: sin la opción es la corrida de siempre")
 
 
+def valida_anclas_ir(anclas_ir, datos="todo"):
+    """Rechaza, antes de leer nada, un `anclas_ir` sin sentido: una clave que no está en `ANCLAS_IR`, o sin IR."""
+    if anclas_ir is None:
+        return
+    if anclas_ir not in ANCLAS_IR:
+        raise ValueError(f"anclas_ir={anclas_ir!r}: debe ser una de {tuple(ANCLAS_IR)}")
+    if datos == "muse":
+        raise ValueError("con datos='muse' no hay segmentos IR que anclar o soltar")
+
+
+def anclas_de(segs, bandas, anclas_ir, prueba=False):
+    """La σ del prior de la escala de cada segmento con `--anclas-ir` (2026-10-30): `SIGMA_IR` en los segmentos IR de
+    las bandas de `ANCLAS_IR[anclas_ir]`, None (libre) en los demás del IR; MUSE, la suya (`sigma_escala`). None = las
+    de siempre. Sobre los datos reales (`prueba` False) solo se puede soltar un ancla: anclar una banda que el objeto
+    no declara pide datos de prueba, cuyas escalas valen 1 por construcción (`_sinteticos` escala con un solo factor).
+    Si no cambia ninguna, es la corrida de siempre y falla. `bandas`: la banda de cada segmento ('vis', 'J', 'H', 'K')."""
+    from scripts import ajuste_conjunto as aj
+    antes = [s["sigma_escala"] for s in segs]
+    if anclas_ir is None:
+        return antes
+    quiere = set(ANCLAS_IR[anclas_ir])
+    out = [x if b == "vis" else (aj.SIGMA_IR if b in quiere else None) for x, b in zip(antes, bandas)]
+    nuevas = [s["nombre"] for s, x0, x in zip(segs, antes, out) if x0 is None and x is not None]
+    if nuevas and not prueba:
+        raise ValueError(f"anclas_ir={anclas_ir!r} ancla {', '.join(nuevas)}, que el objeto no ancla: sobre los datos "
+                         "reales solo se sueltan anclas (pide una plantilla o inyecta_bt)")
+    if out == antes:
+        raise ValueError(f"anclas_ir={anclas_ir!r}: son las anclas de siempre (sin la opción es la misma corrida)")
+    return out
+
+
 def snr_cruzada(segs, bandas, segs_otro, bandas_otro):
     """La S/N por píxel de otro compañero en los píxeles de este (`--ruido-de`, 2026-10-30): la cobertura (qué
     segmentos y qué píxeles) es la de este; el ruido, el del otro.
@@ -632,12 +676,13 @@ class Modelo:
     muse_nativo = False
     ens_vr = None
     ruido_de = None
+    anclas_ir = None
 
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
                  r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
                  rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None,
-                 ruido_de=None):
+                 ruido_de=None, anclas_ir=None):
         """`rk_fijo`, `td_rango`, `quita_muse` e `inyecta_polvo` (pruebas del disco y del D.5, 2026-10-29) no cambian
         nada si se dejan en None: `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max)
         deja libre la T del polvo (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de
@@ -647,7 +692,9 @@ class Modelo:
         (tope de la FWHM extra en Å, tope de |v| en km/s): dos parámetros más, `ens_A` y `vr_kms`, con los que el
         modelo de MUSE se rehace en cada llamada desde el espectro fino (`espectro_fino`, `ensancha_y_desplaza`).
         `ruido_de` (2026-10-30; None = lo de siempre, pide datos de prueba) = el slug de otro compañero: los datos de
-        prueba llevan la cobertura de este y la S/N por píxel de aquel (`snr_cruzada`)."""
+        prueba llevan la cobertura de este y la S/N por píxel de aquel (`snr_cruzada`). `anclas_ir` (2026-10-30; None =
+        las anclas que declara el objeto) = una clave de `ANCLAS_IR`: las bandas del IR con la escala anclada a la
+        fotometría (`anclas_de`); solo cambia el prior de las escalas, no los datos."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -657,7 +704,9 @@ class Modelo:
         valida_disco(datos, rk_fijo, td_rango, quita_muse, inyecta_bt, inyecta_polvo)
         valida_muse_nativo(muse_nativo, datos, rejilla, r250, plantilla, ens_vr)
         valida_ruido_de(ruido_de, slug, plantilla, inyecta_bt)
+        valida_anclas_ir(anclas_ir, datos)
         self.ruido_de = ruido_de
+        self.anclas_ir = anclas_ir
         self.muse_nativo = bool(muse_nativo)
         self.ens_vr = None if ens_vr is None else (float(ens_vr[0]), float(ens_vr[1]))
         self.slug, self.modo, self.av_modo, self.av_fija, self.datos = slug, modo, av, av_fija, datos
@@ -691,6 +740,10 @@ class Modelo:
         perfil = tir.perfil(slug)
         self.fisica = perfil.get("fisica", {})
         ir = perfil["ir_spectra"]["spectra"]
+        # la σ del prior de cada escala: la de `segmentos_cgs` o, con `anclas_ir`, la de `anclas_de` (los datos de
+        # prueba se escalan antes, en `_sinteticos`, con el segmento anclado de siempre)
+        sigmas = anclas_de(conj.segs, ["vis" if s["brazo"] == "vis" else ir[s["nombre"]]["band"] for s in conj.segs],
+                           anclas_ir, prueba=bool(plantilla or inyecta_bt))
 
         # rejilla [T, g] -> índice del modelo
         idx = np.full((self.nT, self.nG), -1)
@@ -743,7 +796,7 @@ class Modelo:
                 nombre=s["nombre"], banda=banda, w=w, d=f[c], e2=e[c] ** 2, lg=lg,
                 a=np.asarray(CCMExtinction(3.1, citation="CCM89").a_lambda_over_av(w), float),
                 bb=(_planck(w, T_D) / _planck(LAM_K, T_D)) if s["brazo"] == "nir" else np.zeros(w.size),
-                sigma=s["sigma_escala"]))
+                sigma=sigmas[k]))
             if self.ens_vr is not None and s["brazo"] == "vis":
                 # el espectro fino del que se rehace el modelo de MUSE en cada llamada (`_muse_fino`)
                 lo, hi = s["lo"][c], s["hi"][c]
@@ -1027,8 +1080,8 @@ def etiqueta_de(a):
     / `ventanaha-<KMS>` después de la máscara; y después, las de las pruebas del disco y del D.5: `rk<RK>`
     (`--rk-fijo`), `td<TMIN>-<TMAX>` (`--td-libre`), `quita-<INTERVALOS>` (`--quita-muse`) y `polvo-<RK>-<TD>`
     (`--inyecta-polvo`). `muse-nativo` (`--muse-nativo`) va justo detrás de `r250` / `ingenua`, y `ens-vr` (`--ens-vr`)
-    detrás de él. `ruido-<SLUG>` (`--ruido-de`) va detrás de los datos de prueba (`pl-…` / `bt-…`). Las opciones se
-    leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
+    detrás de él. `ruido-<SLUG>` (`--ruido-de`) va detrás de los datos de prueba (`pl-…` / `bt-…`), y `anclas-<BANDAS>`
+    (`--anclas-ir`) detrás de él. Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
@@ -1036,11 +1089,13 @@ def etiqueta_de(a):
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
     nativo, ens_vr = getattr(a, "muse_nativo", False), getattr(a, "ens_vr", False)
     ruido = getattr(a, "ruido_de", None)
+    anclas = getattr(a, "anclas_ir", None)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
                                               "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
                                               f"ruido-{ruido}" if ruido else None,
+                                              f"anclas-{anclas}" if anclas else None,
                                               f"solo{a.datos}" if a.datos != "todo" else None,
                                               "r250" if _r250(a.rejilla, a.r250) else None,
                                               "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
@@ -1106,6 +1161,7 @@ def ajusta(a):
     nativo = getattr(a, "muse_nativo", False)
     ens_vr = (ENS_MAX_A, VR_MAX_KMS) if getattr(a, "ens_vr", False) else None
     ruido = getattr(a, "ruido_de", None)
+    anclas = getattr(a, "anclas_ir", None)
     et = etiqueta_de(a)
     # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
     # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
@@ -1127,7 +1183,8 @@ def ajusta(a):
                      ventana_lineas=vl, ventana_halpha=vh, rk_fijo=rkf, td_rango=td, quita_muse=quita,
                      inyecta_polvo=polvo, **({"muse_nativo": True} if nativo else {}),
                      **({"ens_vr": ens_vr} if ens_vr is not None else {}),
-                     **({"ruido_de": ruido} if ruido else {}))
+                     **({"ruido_de": ruido} if ruido else {}),
+                     **({"anclas_ir": anclas} if anclas else {}))
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -1153,6 +1210,8 @@ def ajusta(a):
                    **({"ens_vr": list(ens_vr)} if ens_vr is not None else {}),
                    # de qué compañero es el ruido de los datos de prueba, si no del mismo (en `VARIANTES_JSON`)
                    **({"ruido_de": ruido} if ruido else {}),
+                   # en qué bandas del IR va anclada la escala, si no en las que declara el objeto (en `VARIANTES_JSON`)
+                   **({"anclas_ir": anclas} if anclas else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -1569,7 +1628,7 @@ def tabla_rejillas(dirs):
 
 def modelo_de_cadena(d, dir_rejilla=None):
     """El `Modelo` con el que corrió una cadena `libre` sobre los datos (su json: rejilla, datos, resolución,
-    degradado, A_V, máscaras y ventanas de MUSE, las opciones del disco y del D.5, y MUSE nativo con o sin ensanchamiento y velocidad) y su punto de máxima
+    degradado, A_V, máscaras y ventanas de MUSE, las opciones del disco y del D.5, MUSE nativo con o sin ensanchamiento y velocidad, y las anclas del IR) y su punto de máxima
     verosimilitud (`mejor`). Es el único reconstructor: `delta_entre_rejillas.modelo_de` lo llama. `dir_rejilla`: el
     directorio de npz si no es el de `REJILLAS` (ATMO 2020)."""
     if d["modo"] != "libre" or d.get("verdad"):
@@ -1580,7 +1639,8 @@ def modelo_de_cadena(d, dir_rejilla=None):
                  ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"),
                  rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
                  quita_muse=d.get("quita_muse"), muse_nativo=bool(d.get("muse_nativo", False)),
-                 ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None, ruido_de=d.get("ruido_de"))
+                 ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None, ruido_de=d.get("ruido_de"),
+                 anclas_ir=d.get("anclas_ir"))
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1701,6 +1761,10 @@ def main(argv=None):
     aa.add_argument("--ruido-de", default=None, metavar="SLUG",
                     help="con --plantilla o --inyecta-bt: los datos de prueba con la cobertura de este objeto y la "
                          "S/N por píxel de otro compañero (`snr_cruzada`); la etiqueta lleva `ruido-<SLUG>`")
+    aa.add_argument("--anclas-ir", choices=tuple(ANCLAS_IR), default=None,
+                    help="en qué bandas del IR va la escala anclada a la fotometría (las demás, libres), en vez de las "
+                         "que declara el objeto; anclar una que no declara pide --plantilla o --inyecta-bt; la "
+                         "etiqueta lleva `anclas-<BANDAS>`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
