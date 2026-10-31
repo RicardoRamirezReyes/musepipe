@@ -91,6 +91,12 @@ una velocidad radial `vr_kms` (±`VR_MAX_KMS`). Se rehace en cada llamada desde 
 interpolado en log F, ensanchado por FFT, desplazado por Doppler y promediado en cada canal (`espectro_fino`,
 `ensancha_y_desplaza`). La etiqueta lleva `ens-vr` y el json `ens_vr` (los dos topes).
 
+`--ruido-de SLUG` (con `--plantilla` o `--inyecta-bt`; pedido del autor del 2026-10-30, «prepara el lote de plantillas
+ATMO») separa, en la prueba de estabilidad de la calibración con plantillas, la cobertura del ruido: los datos de prueba
+llevan la cobertura de este objeto (sus segmentos y píxeles, sus escalas con prior y la A_V de su primaria) y la S/N
+por píxel del otro (`snr_cruzada`: la del mismo instrumento y banda o, si el otro no lo tiene, la mediana de los
+suyos en esa banda). La etiqueta lleva `ruido-<SLUG>` y el json `ruido_de`; no entra en las tablas.
+
 Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
 (`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
 conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
@@ -123,7 +129,7 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
                                        [--ventana-lineas KMS] [--ventana-halpha KMS]
                                        [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos|azul|rojo]
-                                       [--inyecta-polvo RK TD] [--muse-nativo [--ens-vr]]
+                                       [--inyecta-polvo RK TD] [--muse-nativo [--ens-vr]] [--ruido-de SLUG]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
@@ -399,7 +405,7 @@ INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
                   "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None, "muse_nativo": False,
-                  "ens_vr": None}
+                  "ens_vr": None, "ruido_de": None}
 #: las demás claves que lleva el json de `ajusta` (de configuración, que `_de_la_tabla` y `_de_rejillas` filtran por
 #: su valor; de resultado; y de procedencia), y las de `evo_solo`. Son las 36 de las 1187 cadenas que había el
 #: 2026-10-29, más `procedencia`. Una clave que no esté ni aquí ni en `VARIANTES_JSON` hace de la corrida una
@@ -478,6 +484,29 @@ def _bases_nativas(pls, segs):
     return out
 
 
+def _segmentos(slug, r250=False, mascara_muse="paper", ventana_lineas=None, ventana_halpha=None, quita_muse=None,
+               muse_nativo=False):
+    """Los datos de `_prepara`, sin los modelos: `tipo_ir_plantillas.preparar` y los segmentos en cgs, con
+    `quita_muse` y `r250` ya aplicados (los argumentos, los de `_prepara`). `--ruido-de` lee así la S/N de otro
+    compañero sin cargar la rejilla."""
+    from scripts import ajuste_conjunto as aj
+    from scripts import tipo_ir_plantillas as tp
+    if mascara_muse not in MASCARAS_MUSE:
+        raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
+    if quita_muse is not None and quita_muse not in INTERVALOS_MUSE:
+        raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
+    mm = MASCARAS_MUSE[mascara_muse]
+    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
+                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha,
+                    muse_nativo=muse_nativo)
+    segs = aj.segmentos_cgs(slug, p)
+    if quita_muse is not None:
+        segs = [quita_intervalos(s, INTERVALOS_MUSE[quita_muse]) if s["brazo"] == "vis" else s for s in segs]
+    if r250:
+        segs = [_empareja(s) for s in segs]
+    return p, segs
+
+
 def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None,
              ventana_halpha=None, quita_muse=None, muse_nativo=False):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
@@ -503,19 +532,7 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
     from scripts import tipo_ir_plantillas as tp
     if degrada not in DEGRADA:
         raise ValueError(f"degrada={degrada!r}: debe ser uno de {DEGRADA}")
-    if mascara_muse not in MASCARAS_MUSE:
-        raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
-    if quita_muse is not None and quita_muse not in INTERVALOS_MUSE:
-        raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
-    mm = MASCARAS_MUSE[mascara_muse]
-    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
-                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha,
-                    muse_nativo=muse_nativo)
-    segs = aj.segmentos_cgs(slug, p)
-    if quita_muse is not None:
-        segs = [quita_intervalos(s, INTERVALOS_MUSE[quita_muse]) if s["brazo"] == "vis" else s for s in segs]
-    if r250:
-        segs = [_empareja(s) for s in segs]
+    p, segs = _segmentos(slug, r250, mascara_muse, ventana_lineas, ventana_halpha, quita_muse, muse_nativo)
     t0, dt, nt = R["teff"]
     g0, dg, ng = R["logg"]
     p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg),
@@ -560,6 +577,53 @@ def valida_disco(datos="todo", rk_fijo=None, td_rango=None, quita_muse=None, iny
             raise ValueError(f"inyecta_polvo={inyecta_polvo!r}: debe ser (r_K ≥ 0, T_d > 0)")
 
 
+def valida_ruido_de(ruido_de, slug, plantilla=None, inyecta_bt=None):
+    """Rechaza, antes de leer nada, un `ruido_de` sin sentido: va sobre datos de prueba (una plantilla o un modelo
+    inyectado), y el ruido del mismo objeto es la corrida de siempre."""
+    if ruido_de is None:
+        return
+    if not (plantilla or inyecta_bt):
+        raise ValueError("ruido_de cambia el ruido de los datos de prueba: pide una plantilla o inyecta_bt")
+    if ruido_de == slug:
+        raise ValueError(f"ruido_de={ruido_de!r} es el mismo objeto: sin la opción es la corrida de siempre")
+
+
+def snr_cruzada(segs, bandas, segs_otro, bandas_otro):
+    """La S/N por píxel de otro compañero en los píxeles de este (`--ruido-de`, 2026-10-30): la cobertura (qué
+    segmentos y qué píxeles) es la de este; el ruido, el del otro.
+
+    Cada segmento toma la S/N del segmento del otro con el mismo nombre (instrumento y banda) y, si el otro no lo
+    tiene, la mediana, en cada λ, de los segmentos del otro en esa banda que la cubren (el más cercano si ninguno la
+    cubre). La del otro se interpola linealmente en λ sobre sus píxeles buenos con S/N finita y > 0 (constante más
+    allá de sus extremos). Los píxeles que este no usa (S/N no finita o ≤ 0) siguen fuera, como en `_sinteticos`.
+    `bandas`: la banda de cada segmento ('vis', 'J', 'H', 'K'). Devuelve una S/N por segmento de `segs`."""
+    perfiles = []
+    for o, b in zip(segs_otro, bandas_otro):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            sn = np.abs(o["f"]) / o["e"]
+        ok = np.isfinite(sn) & (sn > 0) & o.get("bueno", np.ones(sn.size, bool))
+        if ok.any():
+            perfiles.append((o["nombre"], b, o["w"][ok], sn[ok]))
+    out = []
+    for s, b in zip(segs, bandas):
+        cand = ([q for q in perfiles if q[0] == s["nombre"]] or [q for q in perfiles if q[1] == b])
+        if not cand:
+            raise ValueError(f"{s['nombre']}: el otro compañero no tiene datos en la banda {b}")
+        w = s["w"]
+        vals = np.array([np.interp(w, wq, sq) for _, _, wq, sq in cand])
+        cubre = np.array([(w >= wq[0]) & (w <= wq[-1]) for _, _, wq, _ in cand])
+        dist = np.array([np.maximum(np.maximum(wq[0] - w, w - wq[-1]), 0.0) for _, _, wq, _ in cand])
+        cerca = vals[np.argmin(dist, axis=0), np.arange(w.size)]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)   # columnas sin ningún segmento que cubra
+            med = np.nanmedian(np.where(cubre, vals, np.nan), axis=0)
+        sn = np.where(cubre.any(axis=0), med, cerca)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            propia = np.abs(s["f"]) / s["e"]
+        out.append(np.where(np.isfinite(propia) & (propia > 0), sn, np.nan))
+    return out
+
+
 class Modelo:
     #: r_K fija (None = libre o, sin IR, 0) y rango de la T del polvo libre (None = `T_D`). A nivel de clase para que
     #: un `Modelo` hecho con `__new__` (los tests sintéticos) tenga los valores de siempre.
@@ -567,11 +631,13 @@ class Modelo:
     td_rango = None
     muse_nativo = False
     ens_vr = None
+    ruido_de = None
 
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
                  r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
-                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None):
+                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None,
+                 ruido_de=None):
         """`rk_fijo`, `td_rango`, `quita_muse` e `inyecta_polvo` (pruebas del disco y del D.5, 2026-10-29) no cambian
         nada si se dejan en None: `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max)
         deja libre la T del polvo (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de
@@ -579,7 +645,9 @@ class Modelo:
         `inyecta_bt`. `muse_nativo` (2026-10-30; False = lo de siempre): el espectro MUSE a su resolución, canal a
         canal, en vez de a R = 500 (`_prepara`). `ens_vr` (2026-10-30; None = lo de siempre, pide `muse_nativo`) =
         (tope de la FWHM extra en Å, tope de |v| en km/s): dos parámetros más, `ens_A` y `vr_kms`, con los que el
-        modelo de MUSE se rehace en cada llamada desde el espectro fino (`espectro_fino`, `ensancha_y_desplaza`)."""
+        modelo de MUSE se rehace en cada llamada desde el espectro fino (`espectro_fino`, `ensancha_y_desplaza`).
+        `ruido_de` (2026-10-30; None = lo de siempre, pide datos de prueba) = el slug de otro compañero: los datos de
+        prueba llevan la cobertura de este y la S/N por píxel de aquel (`snr_cruzada`)."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -588,6 +656,8 @@ class Modelo:
             raise ValueError(f"datos={datos!r}: debe ser uno de {DATOS}")
         valida_disco(datos, rk_fijo, td_rango, quita_muse, inyecta_bt, inyecta_polvo)
         valida_muse_nativo(muse_nativo, datos, rejilla, r250, plantilla, ens_vr)
+        valida_ruido_de(ruido_de, slug, plantilla, inyecta_bt)
+        self.ruido_de = ruido_de
         self.muse_nativo = bool(muse_nativo)
         self.ens_vr = None if ens_vr is None else (float(ens_vr[0]), float(ens_vr[1]))
         self.slug, self.modo, self.av_modo, self.av_fija, self.datos = slug, modo, av, av_fija, datos
@@ -737,13 +807,26 @@ class Modelo:
             self.verdad = dict(teff=T, logg=G, av=av, r_rj=r_rj)
             if inyecta_polvo is not None:
                 self.verdad.update(rk=rk_i, td=td_i)
+        # con `ruido_de`, la S/N por píxel es la del otro compañero en los píxeles de este (`snr_cruzada`)
+        snr_otro = None if self.ruido_de is None else self._snr_de_otro(conj.segs)
         out = []
         for k, s in enumerate(conj.segs):
             with np.errstate(invalid="ignore", divide="ignore"):
-                snr = np.abs(s["f"]) / s["e"]
+                snr = np.abs(s["f"]) / s["e"] if snr_otro is None else snr_otro[k]
                 e = np.abs(sin[k]) / np.where(snr > 0, snr, np.nan)
             out.append((sin[k] + rng.normal(0.0, np.nan_to_num(e)), e))
         return out
+
+    def _snr_de_otro(self, segs):
+        """`snr_cruzada` de los segmentos de este objeto con los de `ruido_de`, leídos con las mismas opciones."""
+        from scripts import tipo_ir_indices as tir
+        _, otros = _segmentos(self.ruido_de, self.r_analisis == 250, self.mascara_muse, self.ventana_lineas,
+                              self.ventana_halpha, self.quita_muse, self.muse_nativo)
+
+        def bandas(slug, ss):
+            ir = tir.perfil(slug)["ir_spectra"]["spectra"]
+            return ["vis" if s["brazo"] == "vis" else ir[s["nombre"]]["band"] for s in ss]
+        return snr_cruzada(segs, bandas(self.slug, segs), otros, bandas(self.ruido_de, otros))
 
     # -------------------------------------------------------------- parámetros
     def _prepara_priores(self):
@@ -944,17 +1027,20 @@ def etiqueta_de(a):
     / `ventanaha-<KMS>` después de la máscara; y después, las de las pruebas del disco y del D.5: `rk<RK>`
     (`--rk-fijo`), `td<TMIN>-<TMAX>` (`--td-libre`), `quita-<INTERVALOS>` (`--quita-muse`) y `polvo-<RK>-<TD>`
     (`--inyecta-polvo`). `muse-nativo` (`--muse-nativo`) va justo detrás de `r250` / `ingenua`, y `ens-vr` (`--ens-vr`)
-    detrás de él. Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
+    detrás de él. `ruido-<SLUG>` (`--ruido-de`) va detrás de los datos de prueba (`pl-…` / `bt-…`). Las opciones se
+    leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
     rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
     nativo, ens_vr = getattr(a, "muse_nativo", False), getattr(a, "ens_vr", False)
+    ruido = getattr(a, "ruido_de", None)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
                                               "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
+                                              f"ruido-{ruido}" if ruido else None,
                                               f"solo{a.datos}" if a.datos != "todo" else None,
                                               "r250" if _r250(a.rejilla, a.r250) else None,
                                               "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
@@ -1019,6 +1105,7 @@ def ajusta(a):
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
     nativo = getattr(a, "muse_nativo", False)
     ens_vr = (ENS_MAX_A, VR_MAX_KMS) if getattr(a, "ens_vr", False) else None
+    ruido = getattr(a, "ruido_de", None)
     et = etiqueta_de(a)
     # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
     # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
@@ -1039,7 +1126,8 @@ def ajusta(a):
                      a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada, mascara_muse=mascara,
                      ventana_lineas=vl, ventana_halpha=vh, rk_fijo=rkf, td_rango=td, quita_muse=quita,
                      inyecta_polvo=polvo, **({"muse_nativo": True} if nativo else {}),
-                     **({"ens_vr": ens_vr} if ens_vr is not None else {}))
+                     **({"ens_vr": ens_vr} if ens_vr is not None else {}),
+                     **({"ruido_de": ruido} if ruido else {}))
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -1063,6 +1151,8 @@ def ajusta(a):
                    **({"muse_nativo": True} if nativo else {}),
                    # el ensanchamiento y la velocidad libres: los topes de sus priores (en `VARIANTES_JSON`)
                    **({"ens_vr": list(ens_vr)} if ens_vr is not None else {}),
+                   # de qué compañero es el ruido de los datos de prueba, si no del mismo (en `VARIANTES_JSON`)
+                   **({"ruido_de": ruido} if ruido else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -1490,7 +1580,7 @@ def modelo_de_cadena(d, dir_rejilla=None):
                  ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"),
                  rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
                  quita_muse=d.get("quita_muse"), muse_nativo=bool(d.get("muse_nativo", False)),
-                 ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None)
+                 ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None, ruido_de=d.get("ruido_de"))
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1608,6 +1698,9 @@ def main(argv=None):
                     help=f"con --muse-nativo: ensanchamiento gaussiano extra del modelo de MUSE (FWHM 0–{ENS_MAX_A:g} Å, "
                          f"en cuadratura con la LSF) y velocidad radial (±{VR_MAX_KMS:g} km/s) libres; la etiqueta "
                          "lleva `ens-vr`")
+    aa.add_argument("--ruido-de", default=None, metavar="SLUG",
+                    help="con --plantilla o --inyecta-bt: los datos de prueba con la cobertura de este objeto y la "
+                         "S/N por píxel de otro compañero (`snr_cruzada`); la etiqueta lleva `ruido-<SLUG>`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
