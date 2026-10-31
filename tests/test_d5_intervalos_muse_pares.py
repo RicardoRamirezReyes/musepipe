@@ -1,8 +1,8 @@
-"""El Δ del D.5 sin intervalos del espectro MUSE (`scripts/d5_intervalos_muse.py`, 2026-10-30).
+"""El D.4 sin los intervalos del espectro MUSE (`scripts/d5_intervalos_muse.py`, 2026-10-30).
 
 Las clases sintéticas no leen disco: qué cadena es una variante de `--quita-muse` sola, cómo se empareja con la del
-paper (por su json, no por la etiqueta) y la lectura del Δ combinado que imprime el D.5. `DatosRealesTests` (marca
-`external_data`): las cadenas del paper, sin ninguna variante, dan el D.5 de `paper/main.tex`, y una cifra cambiada
+paper (por su json, no por la etiqueta) y la lectura del Δ combinado que imprime el D.4. `DatosRealesTests` (marca
+`external_data`): las cadenas del paper, sin ninguna variante, dan el D.4 de `paper/main.tex`, y una cifra cambiada
 en el `.tex` se detecta.
 """
 import re
@@ -12,7 +12,7 @@ import pytest
 
 from tests._datos import cadenas_teff, carga_script, raiz_proyecto, raiz_temporal, requiere
 
-#: el D.5 con la forma del paper (dos compañeros; el segundo, «The combined value is»)
+#: el D.4 con la forma del paper (dos compañeros; el segundo, «The combined value is»)
 TEX = r"""
 \subsection{Δ between grids}
 \label{app:checks:grids}
@@ -71,21 +71,21 @@ class TexTests(unittest.TestCase):
         self.m = carga_script("d5_intervalos_muse")
 
     def test_lee_las_dos_frases_de_su_seccion(self):
-        d = self.m.d5_del_paper(TEX, ("ROXs12b", "ROXs42Bb"))
+        d = self.m.d4_del_paper(TEX, ("ROXs12b", "ROXs42Bb"))
         self.assertEqual(d["ROXs12b"], {"1.8": ("-0.08", "0.06"), "3": ("+0.16", "1.00"), "prior": ("+0.28", "1.00")})
         self.assertEqual(d["ROXs42Bb"], {"1.8": ("+0.03", "0.60"), "3": ("+0.16", "0.80"), "prior": ("+0.10", "0.79")})
 
     def test_falla_si_no_estan_las_frases(self):
         with self.assertRaises(ValueError):
-            self.m.d5_del_paper(TEX, ("ROXs12b",))
+            self.m.d4_del_paper(TEX, ("ROXs12b",))
         with self.assertRaises(ValueError):
-            self.m.d5_del_paper(TEX.replace("above the noise level is", "above it is"), ("ROXs12b", "ROXs42Bb"))
+            self.m.d4_del_paper(TEX.replace("above the noise level is", "above it is"), ("ROXs12b", "ROXs42Bb"))
 
 
 @pytest.mark.external_data
 @requiere("runs", "cadenas")
 class DatosRealesTests(unittest.TestCase):
-    """Las cadenas del paper contra el D.5 de `paper/main.tex` del clon con los runs."""
+    """Las cadenas del paper contra el D.4 de `paper/main.tex` del clon con los runs."""
 
     @classmethod
     def setUpClass(cls):
@@ -99,7 +99,7 @@ class DatosRealesTests(unittest.TestCase):
         with raiz_temporal() as raiz:
             return self.m.calcula(self.tc.Cadenas(cadenas_teff()), self.tc.Cadenas([]), raiz, tex=tex)
 
-    def test_las_cadenas_del_paper_dan_el_d5(self):
+    def test_las_cadenas_del_paper_dan_el_d4(self):
         res = self._calcula(self.tex.read_text())
         self.assertTrue(res["tex"]["iguales"], res["tex"]["distintos"])
         self.assertEqual(len(res["casos"]), 6)

@@ -1,13 +1,13 @@
 #!/usr/bin/env python
-"""El Δ del D.5 sin los intervalos extremos del espectro MUSE: cuánto mueven el Δ combinado entre rejillas y la T_eff.
+"""El D.4 sin los intervalos extremos del espectro MUSE: cuánto mueven el Δ combinado entre rejillas y la T_eff.
 
-Solo lectura y fuera de la cadena (apéndice D del paper, 2026-10-30): contesta la pregunta que el D.5, «Where the
-models fail in the MUSE spectrum» (`app:checks:residuals`), deja abierta, con el Δ combinado del D.4, «The dispersion
+Solo lectura y fuera de la cadena (apéndice D del paper, 2026-10-30): contesta la pregunta del D.5, «Where the
+models fail in the MUSE spectrum» (`app:checks:residuals`), con el Δ combinado del D.4, «The dispersion
 between grids in Δ» (`app:checks:grids`). Lee las
 cadenas de `teff_bayes.py ajusta` (json + npz) y no lanza ninguna. Las variantes son las de `teff_bayes.py
 --quita-muse` (`extremos`, `azul`, `rojo`: `teff_bayes.INTERVALOS_MUSE`); el json de cada una lo declara
-(`quita_muse`). El D.5 dice que no sabemos cuánto mueven T_eff y Δ los dos intervalos donde peor ajustan los modelos;
-este script da esas cifras (todavía no están en el paper).
+(`quita_muse`). La pregunta es cuánto mueven T_eff y Δ los dos intervalos donde peor ajustan los modelos; este script
+da esas cifras, que el D.5 imprime desde el 2026-10-30 (PR #45 del paper).
 
 Por compañero y caso de A_V (1.8, 3.0 y con el prior de la primaria), con las funciones de `delta_entre_rejillas`, las
 que dan el D.4: las cadenas de la Tabla B.7 a R = 500 (`cadenas_b7`; Sonora Diamondback es una rejilla, `familia`), su
@@ -82,9 +82,8 @@ def indice_variantes(V):
     return out
 
 
-def d5_del_paper(tex, slugs):
-    """{slug: {av: (mediana, fracción)}} del Δ combinado que imprime el D.4 (`app:checks:grids`; el nombre de la
-    función es del D.5, cuya pregunta contesta el script): la frase «The
+def d4_del_paper(tex, slugs):
+    """{slug: {av: (mediana, fracción)}} del Δ combinado que imprime el D.4 (`app:checks:grids`): la frase «The
     combined \\(\\Delta\\) is ...» (el primer compañero) y «The combined value is ...» (el segundo), cada una con tres
     medianas (A_V 1.8, 3.0 y con el prior) seguidas de tres fracciones «above the noise level is/in ...». `slugs`, en
     el orden del paper (`teff_cifras_texto.SLUGS`)."""
@@ -119,7 +118,7 @@ def calcula(K, V, root, E=None, tex=None):
     if E is None:
         E = {s: tb.entrada_margen(s, root=root) for s in tc.SLUGS}
     var = indice_variantes(V)
-    impreso = d5_del_paper(tex, tc.SLUGS) if tex is not None else None
+    impreso = d4_del_paper(tex, tc.SLUGS) if tex is not None else None
     res = dict(casos=[], tex=None if impreso is None else dict(iguales=True, distintos=[]))
     for s in tc.SLUGS:
         r500 = {k: v for k, v in dr.cadenas_b7(K, s).items() if not k[1]}
