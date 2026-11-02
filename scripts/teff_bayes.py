@@ -115,6 +115,15 @@ mismos datos que sin la opción (`quitados_de`). MUSE no se quita así (para eso
 (`--datos muse`). La etiqueta lleva `quitair-<SEGS>` (en orden alfabético) y el json `quita_ir`; no entra en las
 tablas.
 
+`--pendiente-ir ANCHO` (pedido del autor del 2026-11-01, «prepara la opción (b) de pendiente libre y el lote») le da a
+cada segmento del IR una inclinación libre: su modelo se multiplica por 1 + p·(λ − λ_c)/(0.1 µm), con λ_c el centro
+de los píxeles del segmento y p uniforme en ±ANCHO (un parámetro `p_<SEG>` por segmento, detrás de las escalas).
+Los espectros del IR están escalados a la fotometría solo en el nivel de cada banda, y dos de la misma banda difieren
+en inclinación un 7–11 % (en 42B b, OSIRIS H frente a NIFS H, −3.6 %/0.1 µm, sin cambio de forma): con la opción, el
+ajuste usa la forma de cada segmento y no su inclinación. MUSE no lleva pendiente. `ANCHO` tiene que dejar el factor
+positivo en todo el segmento (`valida_pendiente_ir` y el `Modelo`). La etiqueta lleva `pendir<ANCHO>` y el json
+`pendiente_ir`; no entra en las tablas.
+
 Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
 (`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
 conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
@@ -424,7 +433,7 @@ INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
                   "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None, "muse_nativo": False,
-                  "ens_vr": None, "ruido_de": None, "anclas_ir": None, "quita_ir": None}
+                  "ens_vr": None, "ruido_de": None, "anclas_ir": None, "quita_ir": None, "pendiente_ir": None}
 #: `--anclas-ir` (2026-10-30): las bandas del IR cuya escala va anclada a la fotometría, N(1, `SIGMA_IR`); las demás,
 #: libres. Sin la opción, las que declara el objeto (`ir_spectra.colour_excess.bands`).
 ANCLAS_IR = {"ninguna": (), "K": ("K",), "JHK": ("J", "H", "K")}
@@ -630,6 +639,17 @@ def valida_quita_ir(quita_ir, datos="todo"):
         raise ValueError("con datos='muse' no hay segmentos IR que quitar")
 
 
+def valida_pendiente_ir(pendiente_ir, datos="todo"):
+    """Rechaza, antes de leer nada, un `pendiente_ir` sin sentido: un ancho que no es un número finito y positivo, o
+    sin IR. Que el factor quede positivo en cada segmento se comprueba en el `Modelo`, que conoce los píxeles."""
+    if pendiente_ir is None:
+        return
+    if not (math.isfinite(pendiente_ir) and pendiente_ir > 0):
+        raise ValueError(f"pendiente_ir={pendiente_ir!r}: el ancho del prior tiene que ser finito y positivo")
+    if datos == "muse":
+        raise ValueError("con datos='muse' no hay segmentos IR que inclinar")
+
+
 def quitados_de(segs, quita_ir):
     """Los nombres de los segmentos del IR que `--quita-ir` (2026-10-31) saca de la verosimilitud: un conjunto vacío
     sin la opción. Falla si alguno no es un segmento del IR del objeto (MUSE sale con `--datos ir`) o si no queda
@@ -712,12 +732,13 @@ class Modelo:
     ruido_de = None
     anclas_ir = None
     quita_ir = None
+    pendiente_ir = None
 
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
                  r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
                  rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None,
-                 ruido_de=None, anclas_ir=None, quita_ir=None):
+                 ruido_de=None, anclas_ir=None, quita_ir=None, pendiente_ir=None):
         """`rk_fijo`, `td_rango`, `quita_muse` e `inyecta_polvo` (pruebas del disco y del D.5, 2026-10-29) no cambian
         nada si se dejan en None: `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max)
         deja libre la T del polvo (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de
@@ -731,7 +752,9 @@ class Modelo:
         las anclas que declara el objeto) = una clave de `ANCLAS_IR`: las bandas del IR con la escala anclada a la
         fotometría (`anclas_de`); solo cambia el prior de las escalas, no los datos. `quita_ir` (2026-10-31; None =
         todos) = los nombres de los segmentos del IR que salen de la verosimilitud (`quitados_de`); los datos de los
-        demás no cambian."""
+        demás no cambian. `pendiente_ir` (2026-11-01; None = sin inclinación) = el ancho del prior uniforme de la
+        inclinación de cada segmento del IR, en fracción por 0.1 µm: un parámetro `p_<SEG>` por segmento, y su modelo
+        multiplicado por 1 + p·`xp` (`xp` = (λ − λ_c)/0.1 µm, con λ_c el centro de sus píxeles)."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -743,6 +766,8 @@ class Modelo:
         valida_ruido_de(ruido_de, slug, plantilla, inyecta_bt)
         valida_anclas_ir(anclas_ir, datos)
         valida_quita_ir(quita_ir, datos)
+        valida_pendiente_ir(pendiente_ir, datos)
+        self.pendiente_ir = None if pendiente_ir is None else float(pendiente_ir)
         self.ruido_de = ruido_de
         self.anclas_ir = anclas_ir
         self.quita_ir = None if quita_ir is None else tuple(sorted(set(quita_ir)))
@@ -838,6 +863,9 @@ class Modelo:
                 a=np.asarray(CCMExtinction(3.1, citation="CCM89").a_lambda_over_av(w), float),
                 bb=(_planck(w, T_D) / _planck(LAM_K, T_D)) if s["brazo"] == "nir" else np.zeros(w.size),
                 sigma=sigmas[k]))
+            if self.pendiente_ir is not None and s["brazo"] == "nir":
+                # la abscisa de la inclinación: en 0.1 µm desde el centro de los píxeles del segmento
+                self.segs[-1]["xp"] = (w - 0.5 * (w.min() + w.max())) / 1000.0
             if self.ens_vr is not None and s["brazo"] == "vis":
                 # el espectro fino del que se rehace el modelo de MUSE en cada llamada (`_muse_fino`)
                 lo, hi = s["lo"][c], s["hi"][c]
@@ -847,6 +875,12 @@ class Modelo:
                                                     / PASO_NATIVO_A + 64)))
                 self.segs[-1]["fino"] = dict(w=wf, lg=lgf, lo=lo, hi=hi, nfft=nfft, f2=np.fft.rfftfreq(nfft) ** 2)
         self.bandas = sorted({s["banda"] for s in self.segs})
+        if self.pendiente_ir is not None:
+            # el factor 1 + p·xp tiene que quedar positivo en todo segmento con |p| ≤ ancho
+            mitad = max(float(np.abs(s["xp"]).max()) for s in self.segs if "xp" in s)
+            if self.pendiente_ir * mitad >= 1.0:
+                raise ValueError(f"pendiente_ir={self.pendiente_ir:g}: con un segmento de ±{mitad:.2f} × 0.1 µm el "
+                                 f"factor de la inclinación llega a cero; el ancho tiene que ser < {1.0 / mitad:.3f}")
         self.track = None
         if modo == "evo":
             rel, cita = TRACKS[tracks]
@@ -965,6 +999,11 @@ class Modelo:
             else:
                 add(f"s_{s['nombre']}", _ppf_trunc_normal_rapido(1.0, s["sigma"], lo=0.05),
                     truncada=(1.0, s["sigma"], 0.05))
+        if self.pendiente_ir is not None:   # la inclinación de cada segmento del IR (uniforme), detrás de las escalas
+            ancho = self.pendiente_ir
+            for s in self.segs:
+                if "xp" in s:
+                    add(f"p_{s['nombre']}", lambda u: ancho * (2.0 * u - 1.0))
         for b in self.bandas:
             add(f"lnf_{b}", lambda u: math.log(1e-3) + u * (math.log(1.0) - math.log(1e-3)))
         self.nombres, self._t = n, t
@@ -1032,7 +1071,10 @@ class Modelo:
                 F = 10 ** (c00 * L[i, j] + c10 * L[i + 1, j] + c01 * L[i, j + 1] + c11 * L[i + 1, j + 1])
             # el cuerpo negro del polvo: precalculado a `T_D` (el camino de las cadenas del paper) o a la T libre
             bb = s["bb"] if td is None or s["banda"] == "vis" else _planck(s["w"], td) / _planck(LAM_K, td)
-            out.append(th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * bb) * 10 ** (-0.4 * s["a"] * av))
+            m = th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * bb) * 10 ** (-0.4 * s["a"] * av)
+            if "xp" in s:   # `pendiente_ir`: la inclinación del segmento
+                m = m * (1.0 + th[P[f"p_{s['nombre']}"]] * s["xp"])
+            out.append(m)
         return out
 
     def _muse_fino(self, fi, th, i, j, c):
@@ -1122,8 +1164,8 @@ def etiqueta_de(a):
     (`--rk-fijo`), `td<TMIN>-<TMAX>` (`--td-libre`), `quita-<INTERVALOS>` (`--quita-muse`) y `polvo-<RK>-<TD>`
     (`--inyecta-polvo`). `muse-nativo` (`--muse-nativo`) va justo detrás de `r250` / `ingenua`, y `ens-vr` (`--ens-vr`)
     detrás de él. `ruido-<SLUG>` (`--ruido-de`) va detrás de los datos de prueba (`pl-…` / `bt-…`), y `anclas-<BANDAS>`
-    (`--anclas-ir`) detrás de él, y `quitair-<SEGS>` (`--quita-ir`, en orden alfabético) detrás. Las opciones se leen
-    con `getattr`, así que vale un `Namespace` sin las nuevas."""
+    (`--anclas-ir`) detrás de él, y `quitair-<SEGS>` (`--quita-ir`, en orden alfabético) detrás, y `pendir<ANCHO>`
+    (`--pendiente-ir`) detrás. Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
@@ -1133,6 +1175,7 @@ def etiqueta_de(a):
     ruido = getattr(a, "ruido_de", None)
     anclas = getattr(a, "anclas_ir", None)
     quita_ir = getattr(a, "quita_ir", None)
+    pend = getattr(a, "pendiente_ir", None)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
@@ -1140,6 +1183,7 @@ def etiqueta_de(a):
                                               f"ruido-{ruido}" if ruido else None,
                                               f"anclas-{anclas}" if anclas else None,
                                               "quitair-" + "-".join(sorted(set(quita_ir))) if quita_ir else None,
+                                              f"pendir{pend:g}" if pend is not None else None,
                                               f"solo{a.datos}" if a.datos != "todo" else None,
                                               "r250" if _r250(a.rejilla, a.r250) else None,
                                               "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
@@ -1207,6 +1251,7 @@ def ajusta(a):
     ruido = getattr(a, "ruido_de", None)
     anclas = getattr(a, "anclas_ir", None)
     quita_ir = getattr(a, "quita_ir", None)
+    pend = getattr(a, "pendiente_ir", None)
     et = etiqueta_de(a)
     # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
     # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
@@ -1230,7 +1275,8 @@ def ajusta(a):
                      **({"ens_vr": ens_vr} if ens_vr is not None else {}),
                      **({"ruido_de": ruido} if ruido else {}),
                      **({"anclas_ir": anclas} if anclas else {}),
-                     **({"quita_ir": quita_ir} if quita_ir else {}))
+                     **({"quita_ir": quita_ir} if quita_ir else {}),
+                     **({"pendiente_ir": pend} if pend is not None else {}))
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -1260,6 +1306,8 @@ def ajusta(a):
                    **({"anclas_ir": anclas} if anclas else {}),
                    # los segmentos del IR que salen de la verosimilitud, en orden alfabético (en `VARIANTES_JSON`)
                    **({"quita_ir": sorted(set(quita_ir))} if quita_ir else {}),
+                   # el ancho del prior de la inclinación de cada segmento del IR (en `VARIANTES_JSON`)
+                   **({"pendiente_ir": float(pend)} if pend is not None else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -1689,7 +1737,7 @@ def modelo_de_cadena(d, dir_rejilla=None):
                  rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
                  quita_muse=d.get("quita_muse"), muse_nativo=bool(d.get("muse_nativo", False)),
                  ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None, ruido_de=d.get("ruido_de"),
-                 anclas_ir=d.get("anclas_ir"), quita_ir=d.get("quita_ir"))
+                 anclas_ir=d.get("anclas_ir"), quita_ir=d.get("quita_ir"), pendiente_ir=d.get("pendiente_ir"))
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1817,6 +1865,9 @@ def main(argv=None):
     aa.add_argument("--quita-ir", nargs="+", default=None, metavar="SEG",
                     help="saca de la verosimilitud esos segmentos del IR, por su nombre (NIFS_H, SINFONI_K…); los "
                          "datos de los demás no cambian; la etiqueta lleva `quitair-<SEGS>`")
+    aa.add_argument("--pendiente-ir", type=float, default=None, metavar="ANCHO",
+                    help="una inclinación libre por segmento del IR: su modelo × (1 + p·(λ − λ_c)/0.1 µm), con p "
+                         "uniforme en ±ANCHO (p. ej. 0.1 = ±10 %% por 0.1 µm); la etiqueta lleva `pendir<ANCHO>`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",

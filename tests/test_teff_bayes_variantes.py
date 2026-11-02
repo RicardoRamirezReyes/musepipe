@@ -61,7 +61,7 @@ class ListaBlancaTests(unittest.TestCase):
         valores = {"mascara_muse": "sin_o2b", "ventana_lineas_kms": 50.0, "ventana_halpha_kms": 100.0,
                    "rk_fijo": 0.0, "td_rango": [300.0, 1500.0], "quita_muse": "extremos",
                    "inyecta_polvo": [0.2, 900.0], "muse_nativo": True, "ens_vr": [10.0, 100.0],
-                   "ruido_de": "ROXs42Bb", "anclas_ir": "K", "quita_ir": ["NIFS_H"]}
+                   "ruido_de": "ROXs42Bb", "anclas_ir": "K", "quita_ir": ["NIFS_H"], "pendiente_ir": 0.1}
         self.assertEqual(set(valores), set(self.tb.VARIANTES_JSON))
         for k, v in valores.items():
             d = {**PAPER, k: v}
