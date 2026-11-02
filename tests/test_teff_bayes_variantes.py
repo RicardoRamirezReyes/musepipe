@@ -62,7 +62,7 @@ class ListaBlancaTests(unittest.TestCase):
                    "rk_fijo": 0.0, "td_rango": [300.0, 1500.0], "quita_muse": "extremos",
                    "inyecta_polvo": [0.2, 900.0], "muse_nativo": True, "ens_vr": [10.0, 100.0],
                    "ruido_de": "ROXs42Bb", "anclas_ir": "K", "quita_ir": ["NIFS_H"], "pendiente_ir": 0.1,
-                   "banda_una_vez": True}
+                   "banda_una_vez": True, "cov_banda": True}
         self.assertEqual(set(valores), set(self.tb.VARIANTES_JSON))
         for k, v in valores.items():
             d = {**PAPER, k: v}
