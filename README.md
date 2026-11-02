@@ -10,9 +10,10 @@
 > FAP de E1 (< 0.01) sigue siendo inalcanzable con 33 controles (1/34 = 0.029);
 > es una decision congelada.
 >
-> La version publica vigente es la **v0.2.13** (DOI 10.5281/zenodo.23768157), la
+> La version publica vigente es la **v0.2.14** (DOI 10.5281/zenodo.23817148), la
 > que cita el paper. Estado detallado y pendiente vigente:
-> `docs/2026-10-29_handoff.md`.
+> `docs/2026-10-30_handoff.md` (lo del 30 de octubre) y `docs/2026-10-29_handoff.md`
+> (todo lo anterior).
 
 Pipeline por etapas para reduccion, diagnostico y extraccion espectral de
 cubos MUSE. Los productos de cada ejecucion viven en
@@ -333,8 +334,8 @@ por pico.
 Desde la raiz del proyecto:
 
 ```bash
-python -m pytest tests/ -q                         # suite completa (2156 pruebas, ~1.5 h)
-python -m pytest tests/ -q -m "not slow"           # sin las lentas (2127 pruebas + 1403 subtests, ~6 min)
+python -m pytest tests/ -q                         # suite completa (2167 pruebas, ~1.5 h)
+python -m pytest tests/ -q -m "not slow"           # sin las lentas (2138 pruebas + 1538 subtests, ~6 min)
 python -m pytest tests/test_h03_chain.py -q        # un solo archivo
 python -m pytest tests/ -q -m "not external_data"  # sin las que piden bibliotecas externas
 python -m compileall musepipe tests stage08_full_spectrum_for_modeling.py
@@ -368,9 +369,11 @@ trabajo delante, de modo que `ls docs/` los ordena cronologicamente. Son
 instantaneas: describen lo que se sabia ese dia, y los mas nuevos ganan a los
 viejos. Los mas utiles hoy:
 
-- `docs/2026-10-29_handoff.md`: **empieza por aqui.** Estado al 29 de octubre,
-  pendiente vigente y como se publica una version. Los traspasos anteriores
-  (`docs/*_handoff.md`) cuentan cada etapa del trabajo.
+- `docs/2026-10-30_handoff.md`: **empieza por aqui.** Lo del 30 de octubre (las
+  pruebas del disco, el D.5, la v0.2.14) y el pendiente vigente.
+- `docs/2026-10-29_handoff.md`: estado al 29 de octubre y como se publica una
+  version. Los traspasos anteriores (`docs/*_handoff.md`) cuentan cada etapa del
+  trabajo.
 - `docs/2026-10-29_mascaras_muse_teff.md`, `docs/2026-10-24_c4_planos_desacoplados_decision.md`,
   `docs/2026-10-21_psf_evaluador_centrado.md`, `docs/2026-10-14_teff_muestreo_anidado.md`:
   las decisiones de octubre.
