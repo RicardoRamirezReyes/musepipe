@@ -332,15 +332,18 @@ def entradas_muse(run, h2o=True, quita_o2=(), ventana_kms=None, ventana_ha_kms=N
     return inputs, cfg, (lambda w: np.sqrt(np.clip((w / R_OBJ) ** 2 - lsf ** 2, 0, None)))
 
 
-def segmento_muse(run, h2o=True, quita_o2=(), ventana_kms=None, ventana_ha_kms=None):
+def segmento_muse(run, h2o=True, quita_o2=(), ventana_kms=None, ventana_ha_kms=None, nativo=False):
     """El segmento de MUSE: el espectro de G3 con sus máscaras, más las de H2O (`h2o`). `quita_o2`: las bandas de O2
     (`O2_MUSE`) que se quitan de la máscara de G3, en una copia del config (`sin_o2`). `ventana_kms` /
-    `ventana_ha_kms`: las ventanas de las líneas (`ventanas_de_lineas`; None = las del run)."""
+    `ventana_ha_kms`: las ventanas de las líneas (`ventanas_de_lineas`; None = las del run). `nativo`: canal a
+    canal (1.25 Å) y sin degradar, cada canal con su σ × √(n/n_eff), como el ajuste nativo de G3
+    (`fit_spectrum_from_inputs(n_channels=1)`); sin degradar, las máscaras no crecen."""
     inputs, cfg, kernel = entradas_muse(run, h2o, quita_o2, ventana_kms, ventana_ha_kms)
-    fs = fit_spectrum_from_inputs(inputs, n_channels=12, wave_range=cfg["g3_fit_wave_range_A"],
-                                  data_kernel_fwhm_A=kernel)
+    n = 1 if nativo else 12
+    fs = fit_spectrum_from_inputs(inputs, n_channels=n, wave_range=cfg["g3_fit_wave_range_A"],
+                                  data_kernel_fwhm_A=None if nativo else kernel)
     w = np.asarray(fs.wave_bin, float)
-    medio = 12 * float(np.median(np.diff(inputs["wave"]))) / 2
+    medio = n * float(np.median(np.diff(inputs["wave"]))) / 2
     return dict(nombre="MUSE", brazo="vis", w=w, lo=w - medio, hi=w + medio, f=np.asarray(fs.flux_bin, float),
                 e=np.asarray(fs.err_bin, float), bueno=np.isfinite(fs.flux_bin) & (np.asarray(fs.err_bin) > 0))
 
@@ -506,10 +509,13 @@ def curvas_por_biblioteca(pls, res, escala):
 
 
 def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo_binado=False,
-             bibliotecas=("manara", "lateM", "xshyne"), quita_o2_muse=(), ventana_kms=None, ventana_ha_kms=None):
+             bibliotecas=("manara", "lateM", "xshyne"), quita_o2_muse=(), ventana_kms=None, ventana_ha_kms=None,
+             muse_nativo=False):
     """Plantillas, segmentos, modelos base, rejilla de A_V y A_V de la Tabla 1 de un objeto. `quita_o2_muse`: las
     bandas de O2 de G3 que no se enmascaran en MUSE (`segmento_muse(..., quita_o2=...)`); `ventana_kms` /
-    `ventana_ha_kms`, las ventanas de las líneas en MUSE (None = las del run)."""
+    `ventana_ha_kms`, las ventanas de las líneas en MUSE (None = las del run). `muse_nativo`: el segmento de MUSE
+    canal a canal (`segmento_muse(..., nativo=True)`); los modelos base siguen a R = 500, así que quien lo pide
+    los rehace (`teff_bayes.modelos_base_muse_nativo`)."""
     run = tir.perfil(slug)["paper"]["run"]
     cfg = load_run_config(run, project_root=ROOT).config
     lo, hi, paso = cfg["g3_atmo_av_axis"]
@@ -522,7 +528,7 @@ def preparar(slug, modo, *, av_fija=False, telurico_ir=True, h2o_muse=True, solo
         segs += segmentos_ir(slug, telurico=telurico_ir)
     if modo in ("muse", "combinado"):
         segs.append(segmento_muse(run, h2o=h2o_muse, quita_o2=quita_o2_muse, ventana_kms=ventana_kms,
-                                  ventana_ha_kms=ventana_ha_kms))
+                                  ventana_ha_kms=ventana_ha_kms, nativo=muse_nativo))
     return dict(run=run, pls=pls, segs=segs, bases=modelos_base(pls, segs, solo_binado_ir=solo_binado),
                 av_axis=av_axis, av_tabla=av_tabla)
 

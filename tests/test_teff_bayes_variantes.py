@@ -60,7 +60,7 @@ class ListaBlancaTests(unittest.TestCase):
     def test_cada_variante_queda_fuera(self):
         valores = {"mascara_muse": "sin_o2b", "ventana_lineas_kms": 50.0, "ventana_halpha_kms": 100.0,
                    "rk_fijo": 0.0, "td_rango": [300.0, 1500.0], "quita_muse": "extremos",
-                   "inyecta_polvo": [0.2, 900.0]}
+                   "inyecta_polvo": [0.2, 900.0], "muse_nativo": True, "ens_vr": [10.0, 100.0]}
         self.assertEqual(set(valores), set(self.tb.VARIANTES_JSON))
         for k, v in valores.items():
             d = {**PAPER, k: v}
