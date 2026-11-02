@@ -16,8 +16,8 @@ repo root.
 conda env create --file environment.yml && conda activate MUSE   # first time
 conda env update --name MUSE --file environment.yml --prune      # refresh
 
-python -m pytest tests/ -q                       # full suite (2248 tests, ~1.5 h)
-python -m pytest tests/ -q -m "not slow"         # same minus the slow ones (2206 tests + 1403 subtests, ~6 min)
+python -m pytest tests/ -q                       # full suite (2259 tests, ~1.5 h)
+python -m pytest tests/ -q -m "not slow"         # same minus the slow ones (2217 tests + 1538 subtests, ~6 min)
 python -m pytest tests/test_h03_chain.py -q      # one file
 python -m pytest tests/ -q -k "aperture and not injection"
 python -m pytest tests/ -q -m "not external_data"  # skip tests needing g3_libraries_root
