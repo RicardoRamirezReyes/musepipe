@@ -124,6 +124,13 @@ ajuste usa la forma de cada segmento y no su inclinación. MUSE no lleva pendien
 positivo en todo el segmento (`valida_pendiente_ir` y el `Modelo`). La etiqueta lleva `pendir<ANCHO>` y el json
 `pendiente_ir`; no entra en las tablas.
 
+`--banda-una-vez` (pedido del autor del 2026-11-02, «prepara el lote pesando cada banda una vez») cuenta cada banda del
+IR una vez: el término de la verosimilitud de cada segmento del IR se multiplica por 1/N, con N el número de segmentos
+de su banda que entran en el ajuste. 12 b lleva dos J (NIFS y OSIRIS) y 42B b dos H y dos K, así que sin la opción esas
+bandas pesan el doble; con ella, dos espectros de la misma banda pesan lo que uno, sin elegir cuál (`--quita-ir`
+elige). MUSE pesa 1. Es una verosimilitud templada: su ln Z no se compara con el de una cadena sin la opción. La
+etiqueta lleva `bandaunavez` y el json `banda_una_vez`; no entra en las tablas.
+
 Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
 (`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
 conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
@@ -433,7 +440,8 @@ INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
                   "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None, "muse_nativo": False,
-                  "ens_vr": None, "ruido_de": None, "anclas_ir": None, "quita_ir": None, "pendiente_ir": None}
+                  "ens_vr": None, "ruido_de": None, "anclas_ir": None, "quita_ir": None, "pendiente_ir": None,
+                  "banda_una_vez": False}
 #: `--anclas-ir` (2026-10-30): las bandas del IR cuya escala va anclada a la fotometría, N(1, `SIGMA_IR`); las demás,
 #: libres. Sin la opción, las que declara el objeto (`ir_spectra.colour_excess.bands`).
 ANCLAS_IR = {"ninguna": (), "K": ("K",), "JHK": ("J", "H", "K")}
@@ -650,6 +658,12 @@ def valida_pendiente_ir(pendiente_ir, datos="todo"):
         raise ValueError("con datos='muse' no hay segmentos IR que inclinar")
 
 
+def valida_banda_una_vez(banda_una_vez, datos="todo"):
+    """Rechaza, antes de leer nada, `banda_una_vez` sin IR (con datos='muse' no hay bandas del IR que pesar)."""
+    if banda_una_vez and datos == "muse":
+        raise ValueError("con datos='muse' no hay bandas del IR que pesar una vez")
+
+
 def quitados_de(segs, quita_ir):
     """Los nombres de los segmentos del IR que `--quita-ir` (2026-10-31) saca de la verosimilitud: un conjunto vacío
     sin la opción. Falla si alguno no es un segmento del IR del objeto (MUSE sale con `--datos ir`) o si no queda
@@ -733,12 +747,13 @@ class Modelo:
     anclas_ir = None
     quita_ir = None
     pendiente_ir = None
+    banda_una_vez = False
 
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
                  r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
                  rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None,
-                 ruido_de=None, anclas_ir=None, quita_ir=None, pendiente_ir=None):
+                 ruido_de=None, anclas_ir=None, quita_ir=None, pendiente_ir=None, banda_una_vez=False):
         """`rk_fijo`, `td_rango`, `quita_muse` e `inyecta_polvo` (pruebas del disco y del D.5, 2026-10-29) no cambian
         nada si se dejan en None: `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max)
         deja libre la T del polvo (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de
@@ -754,7 +769,9 @@ class Modelo:
         todos) = los nombres de los segmentos del IR que salen de la verosimilitud (`quitados_de`); los datos de los
         demás no cambian. `pendiente_ir` (2026-11-01; None = sin inclinación) = el ancho del prior uniforme de la
         inclinación de cada segmento del IR, en fracción por 0.1 µm: un parámetro `p_<SEG>` por segmento, y su modelo
-        multiplicado por 1 + p·`xp` (`xp` = (λ − λ_c)/0.1 µm, con λ_c el centro de sus píxeles)."""
+        multiplicado por 1 + p·`xp` (`xp` = (λ − λ_c)/0.1 µm, con λ_c el centro de sus píxeles). `banda_una_vez`
+        (2026-11-02; False = lo de siempre): el término de cada segmento del IR en `loglike`, por su `peso` = 1/N, con
+        N los segmentos de su banda que entran (después de `quita_ir`); MUSE no lleva peso."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -767,7 +784,9 @@ class Modelo:
         valida_anclas_ir(anclas_ir, datos)
         valida_quita_ir(quita_ir, datos)
         valida_pendiente_ir(pendiente_ir, datos)
+        valida_banda_una_vez(banda_una_vez, datos)
         self.pendiente_ir = None if pendiente_ir is None else float(pendiente_ir)
+        self.banda_una_vez = bool(banda_una_vez)
         self.ruido_de = ruido_de
         self.anclas_ir = anclas_ir
         self.quita_ir = None if quita_ir is None else tuple(sorted(set(quita_ir)))
@@ -875,6 +894,12 @@ class Modelo:
                                                     / PASO_NATIVO_A + 64)))
                 self.segs[-1]["fino"] = dict(w=wf, lg=lgf, lo=lo, hi=hi, nfft=nfft, f2=np.fft.rfftfreq(nfft) ** 2)
         self.bandas = sorted({s["banda"] for s in self.segs})
+        if self.banda_una_vez:
+            # cada banda del IR una vez: el término de cada segmento, por 1/N (N = los segmentos de su banda que entran)
+            n_banda = {b: sum(s["banda"] == b for s in self.segs) for b in self.bandas if b != "vis"}
+            for s in self.segs:
+                if s["banda"] != "vis":
+                    s["peso"] = 1.0 / n_banda[s["banda"]]
         if self.pendiente_ir is not None:
             # el factor 1 + p·xp tiene que quedar positivo en todo segmento con |p| ≤ ancho
             mitad = max(float(np.abs(s["xp"]).max()) for s in self.segs if "xp" in s)
@@ -1094,7 +1119,8 @@ class Modelo:
             fb = math.exp(th[self.pos[f"lnf_{s['banda']}"]])
             var = s["e2"] + (fb * m) ** 2
             r = s["d"] - m
-            tot += -0.5 * float(np.sum(r * r / var + np.log(var)))
+            t = -0.5 * float(np.sum(r * r / var + np.log(var)))
+            tot += t * s["peso"] if "peso" in s else t   # `banda_una_vez`: el peso del segmento
         return tot
 
     def chi2(self, th, inflado=False):
@@ -1165,7 +1191,8 @@ def etiqueta_de(a):
     (`--inyecta-polvo`). `muse-nativo` (`--muse-nativo`) va justo detrás de `r250` / `ingenua`, y `ens-vr` (`--ens-vr`)
     detrás de él. `ruido-<SLUG>` (`--ruido-de`) va detrás de los datos de prueba (`pl-…` / `bt-…`), y `anclas-<BANDAS>`
     (`--anclas-ir`) detrás de él, y `quitair-<SEGS>` (`--quita-ir`, en orden alfabético) detrás, y `pendir<ANCHO>`
-    (`--pendiente-ir`) detrás. Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
+    (`--pendiente-ir`) detrás, y `bandaunavez` (`--banda-una-vez`) detrás. Las opciones se leen con `getattr`, así
+    que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
@@ -1176,6 +1203,7 @@ def etiqueta_de(a):
     anclas = getattr(a, "anclas_ir", None)
     quita_ir = getattr(a, "quita_ir", None)
     pend = getattr(a, "pendiente_ir", None)
+    una = getattr(a, "banda_una_vez", False)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
@@ -1184,6 +1212,7 @@ def etiqueta_de(a):
                                               f"anclas-{anclas}" if anclas else None,
                                               "quitair-" + "-".join(sorted(set(quita_ir))) if quita_ir else None,
                                               f"pendir{pend:g}" if pend is not None else None,
+                                              "bandaunavez" if una else None,
                                               f"solo{a.datos}" if a.datos != "todo" else None,
                                               "r250" if _r250(a.rejilla, a.r250) else None,
                                               "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
@@ -1252,6 +1281,7 @@ def ajusta(a):
     anclas = getattr(a, "anclas_ir", None)
     quita_ir = getattr(a, "quita_ir", None)
     pend = getattr(a, "pendiente_ir", None)
+    una = bool(getattr(a, "banda_una_vez", False))
     et = etiqueta_de(a)
     # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
     # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
@@ -1276,7 +1306,8 @@ def ajusta(a):
                      **({"ruido_de": ruido} if ruido else {}),
                      **({"anclas_ir": anclas} if anclas else {}),
                      **({"quita_ir": quita_ir} if quita_ir else {}),
-                     **({"pendiente_ir": pend} if pend is not None else {}))
+                     **({"pendiente_ir": pend} if pend is not None else {}),
+                     **({"banda_una_vez": True} if una else {}))
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -1308,6 +1339,8 @@ def ajusta(a):
                    **({"quita_ir": sorted(set(quita_ir))} if quita_ir else {}),
                    # el ancho del prior de la inclinación de cada segmento del IR (en `VARIANTES_JSON`)
                    **({"pendiente_ir": float(pend)} if pend is not None else {}),
+                   # cada banda del IR una vez: el término de cada segmento por 1/N (en `VARIANTES_JSON`)
+                   **({"banda_una_vez": True} if una else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -1725,7 +1758,8 @@ def tabla_rejillas(dirs):
 def modelo_de_cadena(d, dir_rejilla=None):
     """El `Modelo` con el que corrió una cadena `libre` sobre los datos (su json: rejilla, datos, resolución,
     degradado, A_V, máscaras y ventanas de MUSE, las opciones del disco y del D.5, MUSE nativo con o sin
-    ensanchamiento y velocidad, las anclas del IR y los segmentos del IR quitados) y su punto de máxima verosimilitud
+    ensanchamiento y velocidad, las anclas del IR, los segmentos del IR quitados, su inclinación y el peso de cada
+    banda) y su punto de máxima verosimilitud
     (`mejor`). Es el único reconstructor: `delta_entre_rejillas.modelo_de` lo llama. `dir_rejilla`: el directorio de
     npz si no es el de `REJILLAS` (ATMO 2020)."""
     if d["modo"] != "libre" or d.get("verdad"):
@@ -1737,7 +1771,8 @@ def modelo_de_cadena(d, dir_rejilla=None):
                  rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
                  quita_muse=d.get("quita_muse"), muse_nativo=bool(d.get("muse_nativo", False)),
                  ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None, ruido_de=d.get("ruido_de"),
-                 anclas_ir=d.get("anclas_ir"), quita_ir=d.get("quita_ir"), pendiente_ir=d.get("pendiente_ir"))
+                 anclas_ir=d.get("anclas_ir"), quita_ir=d.get("quita_ir"), pendiente_ir=d.get("pendiente_ir"),
+                 banda_una_vez=bool(d.get("banda_una_vez", False)))
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1868,6 +1903,9 @@ def main(argv=None):
     aa.add_argument("--pendiente-ir", type=float, default=None, metavar="ANCHO",
                     help="una inclinación libre por segmento del IR: su modelo × (1 + p·(λ − λ_c)/0.1 µm), con p "
                          "uniforme en ±ANCHO (p. ej. 0.1 = ±10 %% por 0.1 µm); la etiqueta lleva `pendir<ANCHO>`")
+    aa.add_argument("--banda-una-vez", action="store_true",
+                    help="cada banda del IR cuenta una vez: el término de cada segmento del IR × 1/N, con N los "
+                         "segmentos de su banda (MUSE pesa 1); la etiqueta lleva `bandaunavez`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
