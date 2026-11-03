@@ -12,6 +12,7 @@
 >
 > La version publica vigente es la **v0.2.14** (DOI 10.5281/zenodo.23817148), la
 > que cita el paper. Estado detallado y pendiente vigente:
+> `docs/2026-11-02_handoff.md` (del 31 de octubre al 2 de noviembre),
 > `docs/2026-10-30_handoff.md` (lo del 30 de octubre) y `docs/2026-10-29_handoff.md`
 > (todo lo anterior).
 
@@ -369,8 +370,11 @@ trabajo delante, de modo que `ls docs/` los ordena cronologicamente. Son
 instantaneas: describen lo que se sabia ese dia, y los mas nuevos ganan a los
 viejos. Los mas utiles hoy:
 
-- `docs/2026-10-30_handoff.md`: **empieza por aqui.** Lo del 30 de octubre (las
-  pruebas del disco, el D.5, la v0.2.14) y el pendiente vigente.
+- `docs/2026-11-02_handoff.md`: **empieza por aqui.** Del 31 de octubre al 2 de
+  noviembre (las bandas del IR en los ajustes de la T_eff, las opciones nuevas de
+  `teff_bayes.py` y la propuesta del D.12) y el pendiente vigente.
+- `docs/2026-10-30_handoff.md`: lo del 30 de octubre (las pruebas del disco, el
+  D.5, la v0.2.14).
 - `docs/2026-10-29_handoff.md`: estado al 29 de octubre y como se publica una
   version. Los traspasos anteriores (`docs/*_handoff.md`) cuentan cada etapa del
   trabajo.
