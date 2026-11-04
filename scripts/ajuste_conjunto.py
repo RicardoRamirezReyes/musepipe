@@ -206,9 +206,11 @@ def resumen(pls, cubos, ndof, rejilla=REJILLA):
                 chi2nu_min=chi_min / ndof, ndof=ndof, curva_tipo=curva_tipo, perfiles=perfiles)
 
 
-def modelos_btsettl(dir_npz, teff=(2000.0, 3200.0), logg=(2.5, 4.5), paso_A=1.0):
+def modelos_btsettl(dir_npz, teff=(2000.0, 3200.0), logg=(2.5, 4.5), paso_A=1.0, paso_vis_A=None):
     """Los modelos BT-Settl como «plantillas» (`vis`/`nir` como tipo_ir_plantillas), rebinados a `paso_A` antes de
-    degradar (a R = 500 la FWHM es ≥ 13 Å, así que 1 Å no pierde nada y abarata la convolución)."""
+    degradar (a R = 500 la FWHM es ≥ 13 Å, así que 1 Å no pierde nada y abarata la convolución). `paso_vis_A`: otro
+    paso para el brazo visible (None = `paso_A`), para `teff_bayes --muse-nativo`, que lo lleva a la LSF de MUSE
+    (2.3 Å); con él, cada modelo lleva también `muestreo_vis_A`, la mediana del paso del npz en 6000–9500 Å."""
     out = []
     for f in sorted(Path(dir_npz).glob("teff*_logg*.npz")):
         w, fl, meta = tp._npz(f)
@@ -216,9 +218,14 @@ def modelos_btsettl(dir_npz, teff=(2000.0, 3200.0), logg=(2.5, 4.5), paso_A=1.0)
             continue
         g = np.arange(w[0] + paso_A, w[-1] - paso_A, paso_A)
         fg = tp.media_en_intervalos(w, fl, g - paso_A / 2, g + paso_A / 2)
+        vis, extra = (g[g < 10500], fg[g < 10500]), {}
+        if paso_vis_A is not None:
+            gv = np.arange(w[0] + paso_vis_A, 10500.0, paso_vis_A)
+            vis = (gv, tp.media_en_intervalos(w, fl, gv - paso_vis_A / 2, gv + paso_vis_A / 2))
+            extra = dict(muestreo_vis_A=float(np.median(np.diff(w[(w >= 6000.0) & (w <= 9500.0)]))))
         out.append(dict(lib="btsettl", objeto=f"T{int(meta['teff_k'])}_g{meta['logg']:.1f}", spt="M9",
                         teff=float(meta["teff_k"]), logg=float(meta["logg"]),
-                        vis=(g[g < 10500], fg[g < 10500]), nir=(g[g > 9500], fg[g > 9500])))
+                        vis=vis, nir=(g[g > 9500], fg[g > 9500]), **extra))
     if not out:
         raise SystemExit(f"no hay modelos BT-Settl en {dir_npz}")
     return out

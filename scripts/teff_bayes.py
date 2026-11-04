@@ -13,7 +13,7 @@ H2O), pero en vez de una rejilla con polinomios usa un modelo FÍSICO con flujo 
   rango completo, 0.97–1.00 σT⁴), interpolado bilineal en log F sobre la rejilla (`REJILLAS`). El nodo de
   DRIFT-PHOENIX que SVO no tiene (2500 K, log g 3.0) se rellena con la media en log F de sus vecinos en T_eff.
 - s_k: escala por segmento con el prior de `ajuste_conjunto` (N(1, 0.05) en las bandas ancladas a la
-  fotometría, N(1, 0.20) en MUSE, log-uniforme 0.2–5 en las no ancladas).
+  fotometría, N(1, 0.20) en MUSE, log-uniforme 0.2–5 en las no ancladas; `--anclas-ir` cambia cuáles van ancladas).
 - Error: σ² = e² + (f_b · F)², con un f_b libre por banda (vis, J, H, K): el desajuste del modelo, que con
   S/N 50–170 en el IR domina sobre el ruido.
 
@@ -78,6 +78,77 @@ concentran el χ² de MUSE (D.5; `azul` y `rojo` quitan solo uno de los dos). Si
 lleva `rk<RK>`, `td<TMIN>-<TMAX>`, `quita-extremos` o `polvo-<RK>-<TD>` antes de la semilla, y el json `rk_fijo`,
 `td_rango`, `quita_muse` o `inyecta_polvo`. Las combinaciones sin sentido fallan antes de leer nada (`valida_disco`).
 
+`--muse-nativo` (pedido del autor del 2026-10-30, para comparar con las cadenas de solo MUSE a R = 500) ajusta el
+espectro MUSE a su resolución: canal a canal (1.25 Å), con la σ de cada canal × √(n/n_eff), como el ajuste nativo de
+G3, y el modelo convolucionado con la LSF de MUSE del run (`h01_lsf_fwhm_A`) y promediado en cada canal, como en G3
+(`modelos_base_muse_nativo`). Sin degradar, las máscaras no crecen la FWHM del núcleo de R = 500, así que entran
+algunos canales más cerca de las zonas enmascaradas. El IR sigue a R = 500. Solo vale con una rejilla de paso fino
+en MUSE (`MUESTREO_MAX_NATIVO`: BT-Settl, BT-Dusty, Sonora Diamondback), sin `--r250` y sin `--plantilla`
+(`valida_muse_nativo`). La etiqueta lleva `muse-nativo` y el json `muse_nativo`; no entra en las tablas.
+Con `--ens-vr` (además de `--muse-nativo`; «añade ensanchamiento y velocidad libres», 2026-10-30) el modelo de MUSE
+tiene dos parámetros más, uniformes: una FWHM gaussiana extra `ens_A` (0–`ENS_MAX_A` Å, en cuadratura con la LSF) y
+una velocidad radial `vr_kms` (±`VR_MAX_KMS`). Se rehace en cada llamada desde el espectro fino de 0.2 Å ya a la LSF:
+interpolado en log F, ensanchado por FFT, desplazado por Doppler y promediado en cada canal (`espectro_fino`,
+`ensancha_y_desplaza`). La etiqueta lleva `ens-vr` y el json `ens_vr` (los dos topes).
+
+`--ruido-de SLUG` (con `--plantilla` o `--inyecta-bt`; pedido del autor del 2026-10-30, «prepara el lote de plantillas
+ATMO») separa, en la prueba de estabilidad de la calibración con plantillas, la cobertura del ruido: los datos de prueba
+llevan la cobertura de este objeto (sus segmentos y píxeles, sus escalas con prior y la A_V de su primaria) y la S/N
+por píxel del otro (`snr_cruzada`: la del mismo instrumento y banda o, si el otro no lo tiene, la mediana de los
+suyos en esa banda). La etiqueta lleva `ruido-<SLUG>` y el json `ruido_de`; no entra en las tablas.
+
+`--anclas-ir ninguna|K|JHK` (pedido del autor del 2026-10-30, «prepara la opción de soltar anclas y el lote») elige en
+qué bandas del IR la escala del segmento va anclada a la fotometría, N(1, `SIGMA_IR`); en las demás, libre. Sin ella,
+las que declara `targets/<slug>.json` (`ir_spectra.colour_excess.bands`: en ROXs 12 b solo K, porque su J y su H van
+escaladas a la fotometría de la terciaria; en ROXs 42B b, J, H y K). Separa, en la misma prueba, qué segmentos lleva
+cada compañero de qué escalas lleva ancladas. Solo cambia el prior de las escalas: los datos (también los de prueba,
+que se escalan con el segmento anclado de siempre) son los mismos. Sobre los datos reales solo se puede soltar un
+ancla; anclar una banda que el objeto no declara pide datos de prueba, cuyas escalas valen 1 por construcción
+(`anclas_de`). La etiqueta lleva `anclas-<BANDAS>` y el json `anclas_ir`; no entra en las tablas.
+
+`--quita-ir SEG [SEG ...]` (pedido del autor del 2026-10-31, «prepara el lote quitando NIFS H y SINFONI K») saca de la
+verosimilitud esos segmentos del IR, por su nombre (`NIFS_H`, `SINFONI_K`…): sus píxeles, su escala y, si era el
+único de su banda, el f_b de esa banda. En la misma prueba, visto que no son las anclas, dice cuál de los segmentos
+que lleva un compañero y no el otro mueve la T_eff. Todo lo demás se arma con todos los segmentos (los datos de
+prueba, con su escalado y su ruido, las anclas y la referencia del polvo a 2.2 µm), así que los que quedan llevan los
+mismos datos que sin la opción (`quitados_de`). MUSE no se quita así (para eso, `--datos ir`), ni todo el IR
+(`--datos muse`). La etiqueta lleva `quitair-<SEGS>` (en orden alfabético) y el json `quita_ir`; no entra en las
+tablas.
+
+`--pendiente-ir ANCHO` (pedido del autor del 2026-11-01, «prepara la opción (b) de pendiente libre y el lote») le da a
+cada segmento del IR una inclinación libre: su modelo se multiplica por 1 + p·(λ − λ_c)/(0.1 µm), con λ_c el centro
+de los píxeles del segmento y p uniforme en ±ANCHO (un parámetro `p_<SEG>` por segmento, detrás de las escalas).
+Los espectros del IR están escalados a la fotometría solo en el nivel de cada banda, y dos de la misma banda difieren
+en inclinación un 7–11 % (en 42B b, OSIRIS H frente a NIFS H, −3.6 %/0.1 µm, sin cambio de forma): con la opción, el
+ajuste usa la forma de cada segmento y no su inclinación. MUSE no lleva pendiente. `ANCHO` tiene que dejar el factor
+positivo en todo el segmento (`valida_pendiente_ir` y el `Modelo`). La etiqueta lleva `pendir<ANCHO>` y el json
+`pendiente_ir`; no entra en las tablas.
+
+`--banda-una-vez` (pedido del autor del 2026-11-02, «prepara el lote pesando cada banda una vez») cuenta cada banda del
+IR una vez: el término de la verosimilitud de cada segmento del IR se multiplica por 1/N, con N el número de segmentos
+de su banda que entran en el ajuste. 12 b lleva dos J (NIFS y OSIRIS) y 42B b dos H y dos K, así que sin la opción esas
+bandas pesan el doble; con ella, dos espectros de la misma banda pesan lo que uno, sin elegir cuál (`--quita-ir`
+elige). MUSE pesa 1. Es una verosimilitud templada: su ln Z no se compara con el de una cadena sin la opción. La
+etiqueta lleva `bandaunavez` y el json `banda_una_vez`; no entra en las tablas.
+
+`--cov-banda` (pedido del autor del 2026-11-02, «prepara la opción y la prueba con plantillas») cambia la verosimilitud
+diagonal por una gaussiana con covarianza, banda a banda (MUSE, J, H, K). Sin la opción, el error del modelo, f_b·m,
+es independiente píxel a píxel; pero la diferencia entre el modelo y el espectro varía suave con λ, y es la misma en
+dos espectros de la misma banda. Con la opción, ese error es un proceso gaussiano por banda, como el núcleo global de
+Czekala et al. (2015, «Starfish»): C_ij = ruido_ij + f_b² m_i m_j k(|λ_i − λ_j|; ℓ_b), con k de Matérn 3/2
+(`matern32`), la misma f_b de siempre como amplitud y una longitud de correlación ℓ_b libre por banda (un parámetro
+`lnl_<banda>` = ln(ℓ/Å), uniforme en `LCORR_A`, detrás de los `lnf_`). El proceso de una banda cubre todos sus
+espectros a la vez, así que la parte común de su diferencia con el modelo cuenta una vez. El ruido es diagonal salvo el
+de MUSE con los datos reales: degradado a R = 500 y en bins de 15 Å, dos bins vecinos comparten ruido, y su
+correlación sale del mismo modelo del ruido con el que se degrada (`ruido_muse_entre_bins`, `correlacion_bins`); la
+decisión D8 la desprecia porque la pensó para bins de 25 Å sin degradar. Con datos de prueba (plantillas, modelos
+inyectados), el ruido sorteado es independiente bin a bin, y el ruido va diagonal también en MUSE. No se combina con
+`--banda-una-vez` (lo que aquel parchea, esto lo modela), con MUSE nativo ni con R = 250 (`valida_cov_banda`). La
+etiqueta lleva `covbanda` y el json `cov_banda`; no entra en las tablas. En la prueba con plantillas (2026-11-02,
+~/muse_noche_20261102_cov_banda) calibra los intervalos, pero no es una forma de referencia: con MUSE + IR quita peor
+que `--banda-una-vez` el cambio entre disfraces de ATMO, porque en una banda con un solo espectro ℓ_b sube a ~600 Å y
+el proceso se come la forma de la banda, que lleva información de la T.
+
 Qué cadenas entran en las tablas del paper (`_de_la_tabla`, `_de_rejillas`) lo decide una lista BLANCA
 (`_es_variante`): ni las variantes de `VARIANTES_JSON` ni una cadena con una clave del json que este código no
 conozca (`CLAVES_JSON`). Así una opción nueva no entra por olvido en la Tabla B.6, la B.7, `disco_cotas` o el
@@ -110,7 +181,8 @@ uso: python scripts/teff_bayes.py ajusta SLUG [--rejilla btsettl|drift|ames_dust
                                        [--mascara-muse paper|g3|sin_o2|sin_o2b|sin_telurico]
                                        [--ventana-lineas KMS] [--ventana-halpha KMS]
                                        [--rk-fijo RK] [--td-libre TMIN TMAX] [--quita-muse extremos|azul|rojo]
-                                       [--inyecta-polvo RK TD]
+                                       [--inyecta-polvo RK TD] [--muse-nativo [--ens-vr]] [--ruido-de SLUG]
+                                       [--anclas-ir ninguna|K|JHK] [--quita-ir SEG [SEG ...]]
      python scripts/teff_bayes.py comprueba DIR [DIR ...] [--dir-rejilla REJILLA=DIR] [--json SALIDA]
      python scripts/teff_bayes.py resume DIR [DIR ...] [--json SALIDA]
      python scripts/teff_bayes.py tabla DIR [DIR ...]      # cuerpo LaTeX de la tabla de las cadenas (ap. B)
@@ -132,12 +204,13 @@ from pathlib import Path
 
 import numpy as np
 from scipy import stats
+from scipy.linalg import solve_triangular
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from musepipe.constants import LSUN_ERG_S, PC_CM, RJUP_CM, RSUN_CM, SIGMA_SB_CGS, spt_code  # noqa: E402
+from musepipe.constants import C_KMS, LSUN_ERG_S, PC_CM, RJUP_CM, RSUN_CM, SIGMA_SB_CGS, spt_code  # noqa: E402
 from musepipe.models.extinction import CCMExtinction  # noqa: E402
 
 #: rejillas de atmósferas: directorio de npz (formato de `musepipe.models.cache`) y ejes (inicio, paso, n).
@@ -237,6 +310,125 @@ def modelos_base_nativa(pls, segs, nu_bin_cm, c_var=C_VAR_MUESTREO):
 def _r250(rejilla, forzado=False):
     """¿Va el ajuste en el modo R = 250? Si se pide, o si la rejilla no llega a R = 500."""
     return bool(forzado) or REJILLAS[rejilla].get("r_nativa", np.inf) < 500
+
+
+#: `--muse-nativo` (pedido del autor 2026-10-30, «sí, prepárala»: la comparación con las cadenas de solo MUSE a
+#: R = 500): el paso (Å) al que se rebina el brazo visible de los modelos antes de convolucionarlo con la LSF de MUSE
+#: (2.28–2.30 Å, ~11 puntos por FWHM; la caja de 0.2 Å le suma un 0.2 % a la FWHM, en cuadratura)
+PASO_NATIVO_A = 0.2
+#: el paso máximo de los npz en MUSE, en fracción de la LSF, para que una rejilla valga con `--muse-nativo`. Pasan
+#: BT-Settl (0.02 Å), BT-Dusty (0.05) y Sonora Diamondback (0.045); DRIFT-PHOENIX, AMES-Dusty y AMES-Cond (2.0) no:
+#: su muestreo ya es casi tan basto como la LSF, y convolucionarlo no le devuelve lo que no tiene
+MUESTREO_MAX_NATIVO = 0.2
+#: `--ens-vr` (pedido del autor 2026-10-30, «añade ensanchamiento y velocidad libres»): los topes de los priores
+#: uniformes de la FWHM gaussiana extra (Å, en cuadratura con la LSF; 0–`ENS_MAX_A`) y de la velocidad radial (km/s,
+#: ±`VR_MAX_KMS`). Con la LSF fija, el χ² nativo bajaba al ensanchar el modelo hasta 3.0 Å sin llegar a un mínimo, y
+#: ROXs 12 b pedía mover el modelo ≥ 0.5 Å al azul (`~/muse_sesion_20261030/muse_nativo/LEEME.md`).
+ENS_MAX_A = 10.0
+VR_MAX_KMS = 100.0
+#: margen (Å) del espectro fino a cada lado de los canales de MUSE: cubre ±`VR_MAX_KMS` (3.1 Å a 9350 Å) y las colas
+#: de la gaussiana más ancha (4σ = 17 Å con `ENS_MAX_A`), de modo que los bordes de la FFT caen fuera de los canales
+MARGEN_FINO_A = 50.0
+
+
+def valida_muse_nativo(muse_nativo, datos="todo", rejilla="btsettl", r250=False, plantilla=None, ens_vr=None):
+    """Rechaza, antes de leer nada, lo que no tiene sentido con `--muse-nativo`: sin espectro MUSE (`datos='ir'`);
+    el modo R = 250, que agrupa los canales; una rejilla más basta que R = 500 (SPHINX) o muestreada en número de
+    onda (ATMO 2020, 5.6 Å por punto en MUSE); y una plantilla empírica como dato, que `_sinteticos` degrada a
+    R = 500. Las rejillas de 2 Å las rechaza después `comprueba_muestreo_nativo`, con el paso medido en sus npz.
+    `ens_vr` = (tope de la FWHM extra en Å, tope de |v| en km/s) pide `muse_nativo` y dos topes positivos y finitos;
+    la FWHM, no más que lo que cubre `MARGEN_FINO_A`."""
+    if ens_vr is not None:
+        if not muse_nativo:
+            raise ValueError("ens_vr (ensanchamiento y velocidad libres) va sobre el espectro nativo: pide muse_nativo")
+        if len(ens_vr) != 2 or not all(math.isfinite(x) and x > 0 for x in ens_vr):
+            raise ValueError(f"ens_vr={ens_vr!r}: deben ser dos topes > 0 (FWHM extra en Å, |v| en km/s)")
+        if 4.0 * ens_vr[0] / 2.3548200450309493 + 9350.0 * ens_vr[1] / C_KMS > MARGEN_FINO_A:
+            raise ValueError(f"ens_vr={ens_vr!r}: más ancho de lo que cubre el margen del espectro fino "
+                             f"({MARGEN_FINO_A:g} Å)")
+    if not muse_nativo:
+        return
+    if datos == "ir":
+        raise ValueError("con datos='ir' no hay espectro MUSE que ajustar a su resolución (muse_nativo)")
+    if _r250(rejilla, r250):
+        raise ValueError(f"{rejilla}: muse_nativo y el modo R = 250 se excluyen (R = 250 agrupa los canales)")
+    if REJILLAS[rejilla].get("nu_bin_cm"):
+        raise ValueError(f"{rejilla}: muestreada en número de onda, más basta que la LSF de MUSE (muse_nativo)")
+    if plantilla:
+        raise ValueError("una plantilla como dato se degrada a R = 500 (`_sinteticos`): no vale con muse_nativo")
+
+
+def comprueba_muestreo_nativo(muestreo_A, lsf_fwhm_A, rejilla):
+    """Con `--muse-nativo`, el paso de la rejilla en MUSE (`muestreo_A`, el mayor de sus npz) tiene que ser
+    ≤ `MUESTREO_MAX_NATIVO` × la LSF de MUSE; si no, ValueError."""
+    tope = MUESTREO_MAX_NATIVO * float(lsf_fwhm_A)
+    if not muestreo_A <= tope:
+        raise ValueError(f"{rejilla}: paso de {muestreo_A:.3g} Å en MUSE, más que {tope:.3g} Å "
+                         f"({MUESTREO_MAX_NATIVO:g} × la LSF, {float(lsf_fwhm_A):.3f} Å): no vale con muse_nativo")
+
+
+def degrada_lsf(w, f, lsf_fwhm_A):
+    """Como `tipo_ir_plantillas.degrada` (huecos a NaN donde pesan > 20 %), pero con la LSF de MUSE: una gaussiana de
+    FWHM `lsf_fwhm_A` constante en vez de λ/500."""
+    from musepipe.models.prep import degrade_variable
+    ok = np.isfinite(f)
+    g = np.interp(w, w[ok], f[ok])
+    fwhm = np.full(w.shape, float(lsf_fwhm_A))
+    out = degrade_variable(w, g, fwhm)
+    hueco = degrade_variable(w, (~ok).astype(float), fwhm)
+    out[hueco > 0.2] = np.nan
+    return out
+
+
+def modelos_base_muse_nativo(pls, segs, lsf_fwhm_A):
+    """`tipo_ir_plantillas.modelos_base` con el brazo visible convolucionado con la LSF de MUSE (`degrada_lsf`) en vez
+    de degradado a R = 500, y promediado en cada canal, como hace G3 (`prepare_template_base`: degradar y
+    `resample_conserve_flux`). Los segmentos IR, a R = 500 como siempre."""
+    from scripts import tipo_ir_plantillas as tp
+    cache = {}
+    for i, t in enumerate(pls):
+        por_brazo = {}
+        for brazo in ("vis", "nir"):
+            w, f = t[brazo]
+            orden = np.argsort(w)
+            w, f = w[orden], f[orden]
+            por_brazo[brazo] = (w, degrada_lsf(w, f, lsf_fwhm_A) if brazo == "vis" else tp.degrada(w, f))
+        cache[i] = [tp.media_en_intervalos(*por_brazo[s["brazo"]], s["lo"], s["hi"]) for s in segs]
+    return cache
+
+
+def espectro_fino(pls, idx, lsf_fwhm_A, lo_A, hi_A, paso_A=PASO_NATIVO_A):
+    """Para `--ens-vr`: el brazo visible de cada nodo [T, g] de la rejilla convolucionado con la LSF (`degrada_lsf`,
+    sobre todo el brazo, para que los bordes no lo toquen) y llevado a una malla común de `paso_A` en [lo_A, hi_A].
+    Los nodos rellenados (sin `vis`) son la media en log F de sus vecinos en T_eff, como en `Modelo`. Devuelve
+    (malla, log10 F con forma (nT, nG, n))."""
+    w = np.arange(lo_A, hi_A + paso_A / 2, paso_A)
+    lg = np.full(idx.shape + (w.size,), np.nan)
+    for a in range(idx.shape[0]):
+        for b in range(idx.shape[1]):
+            t = pls[idx[a, b]]
+            if "vis" in t:
+                wv, fv = t["vis"]
+                lg[a, b] = np.log10(np.interp(w, wv, degrada_lsf(wv, fv, lsf_fwhm_A)))
+    for a in range(idx.shape[0]):
+        for b in range(idx.shape[1]):
+            if "vis" not in pls[idx[a, b]]:
+                lg[a, b] = 0.5 * (lg[a - 1, b] + lg[a + 1, b])
+    return w, lg
+
+
+def ensancha_y_desplaza(w, F, lo, hi, ens_A, vr_kms, nfft, f2):
+    """El espectro fino `F` (malla uniforme `w`, ya a la LSF) ensanchado por una gaussiana de FWHM `ens_A` (Å; por
+    FFT, `nfft` puntos y `f2` = rfftfreq(nfft)², con ceros detrás de F para que la convolución no dé la vuelta),
+    desplazado por Doppler a `vr_kms` (λ_obs = λ_rep (1 + v/c)) y promediado en los canales [lo, hi] (Å, observados)."""
+    from scripts import tipo_ir_plantillas as tp
+    sig = ens_A / 2.3548200450309493 / (w[1] - w[0])
+    if sig > 0:
+        F = np.fft.irfft(np.fft.rfft(F, nfft) * np.exp(-2.0 * (np.pi * sig) ** 2 * f2), nfft)[:F.size]
+    z = 1.0 + vr_kms / C_KMS
+    return tp.media_en_intervalos(w, F, lo / z, hi / z)
+
+
 TRACKS = {"BHAC15": ("tracks_bhac15/bhac15_tracks.npz", "Baraffe et al. 2015"),
           "ATMO2020": ("tracks_atmo2020/atmo2020_ceq_tracks.npz", "Phillips et al. 2020")}
 T_D = 1500.0
@@ -266,7 +458,17 @@ INTERVALOS_MUSE = {"extremos": ((6300.0, 6900.0), (9000.0, 9350.0)), "azul": ((6
 #: las claves del json de `ajusta` que hacen de una corrida una VARIANTE de las del paper, con el valor que tienen (o
 #: el que se supone si faltan) en las cadenas del paper. Una opción nueva que cambie el modelo pone aquí su clave.
 VARIANTES_JSON = {"mascara_muse": "paper", "ventana_lineas_kms": None, "ventana_halpha_kms": None,
-                  "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None}
+                  "rk_fijo": None, "td_rango": None, "quita_muse": None, "inyecta_polvo": None, "muse_nativo": False,
+                  "ens_vr": None, "ruido_de": None, "anclas_ir": None, "quita_ir": None, "pendiente_ir": None,
+                  "banda_una_vez": False, "cov_banda": False}
+#: `--cov-banda` (2026-11-02): el rango (Å) del prior log-uniforme de la longitud de correlación ℓ_b del error del
+#: modelo. Abajo, 1 Å deja la covarianza casi diagonal (los píxeles están a ≥ 15 Å); arriba, 1000 Å es menos que la
+#: anchura de cada banda, para que el proceso no sea solo un factor de escala más (que se comería el anclaje a la
+#: fotometría).
+LCORR_A = (1.0, 1000.0)
+#: `--anclas-ir` (2026-10-30): las bandas del IR cuya escala va anclada a la fotometría, N(1, `SIGMA_IR`); las demás,
+#: libres. Sin la opción, las que declara el objeto (`ir_spectra.colour_excess.bands`).
+ANCLAS_IR = {"ninguna": (), "K": ("K",), "JHK": ("J", "H", "K")}
 #: las demás claves que lleva el json de `ajusta` (de configuración, que `_de_la_tabla` y `_de_rejillas` filtran por
 #: su valor; de resultado; y de procedencia), y las de `evo_solo`. Son las 36 de las 1187 cadenas que había el
 #: 2026-10-29, más `procedencia`. Una clave que no esté ni aquí ni en `VARIANTES_JSON` hace de la corrida una
@@ -345,8 +547,31 @@ def _bases_nativas(pls, segs):
     return out
 
 
+def _segmentos(slug, r250=False, mascara_muse="paper", ventana_lineas=None, ventana_halpha=None, quita_muse=None,
+               muse_nativo=False):
+    """Los datos de `_prepara`, sin los modelos: `tipo_ir_plantillas.preparar` y los segmentos en cgs, con
+    `quita_muse` y `r250` ya aplicados (los argumentos, los de `_prepara`). `--ruido-de` lee así la S/N de otro
+    compañero sin cargar la rejilla."""
+    from scripts import ajuste_conjunto as aj
+    from scripts import tipo_ir_plantillas as tp
+    if mascara_muse not in MASCARAS_MUSE:
+        raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
+    if quita_muse is not None and quita_muse not in INTERVALOS_MUSE:
+        raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
+    mm = MASCARAS_MUSE[mascara_muse]
+    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
+                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha,
+                    muse_nativo=muse_nativo)
+    segs = aj.segmentos_cgs(slug, p)
+    if quita_muse is not None:
+        segs = [quita_intervalos(s, INTERVALOS_MUSE[quita_muse]) if s["brazo"] == "vis" else s for s in segs]
+    if r250:
+        segs = [_empareja(s) for s in segs]
+    return p, segs
+
+
 def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None,
-             ventana_halpha=None, quita_muse=None):
+             ventana_halpha=None, quita_muse=None, muse_nativo=False):
     """Como `ajuste_conjunto.preparar(..., btsettl=DIR)` pero con los rangos de la rejilla elegida (aquel fija
     2000–3200 K y log g 2.5–4.5): segmentos en cgs, modelos base por segmento y `Conjunto` (píxeles comunes).
 
@@ -362,27 +587,25 @@ def _prepara(slug, R, r250=False, degrada="cuadratura", mascara_muse="paper", ve
     `ventana_lineas` / `ventana_halpha`: las ventanas (km/s) de las líneas de G2 en MUSE, todas / Hα (None = las del
     run; `tipo_ir_plantillas.ventanas_de_lineas`).
     `quita_muse`: una clave de `INTERVALOS_MUSE` (None = ninguno): esos bins del espectro MUSE salen del ajuste
-    (`quita_intervalos`), antes de agrupar a R = 250."""
+    (`quita_intervalos`), antes de agrupar a R = 250.
+    `muse_nativo`: el espectro MUSE canal a canal (`tipo_ir_plantillas.segmento_muse(..., nativo=True)`) y su modelo
+    convolucionado con la LSF de MUSE del run (`h01_lsf_fwhm_A`, la de G3; `modelos_base_muse_nativo`); el IR, a
+    R = 500. Las combinaciones sin sentido las rechaza antes `valida_muse_nativo`."""
     from scripts import ajuste_conjunto as aj
     from scripts import tipo_ir_plantillas as tp
     if degrada not in DEGRADA:
         raise ValueError(f"degrada={degrada!r}: debe ser uno de {DEGRADA}")
-    if mascara_muse not in MASCARAS_MUSE:
-        raise ValueError(f"mascara_muse={mascara_muse!r}: debe ser una de {tuple(MASCARAS_MUSE)}")
-    if quita_muse is not None and quita_muse not in INTERVALOS_MUSE:
-        raise ValueError(f"quita_muse={quita_muse!r}: debe ser uno de {tuple(INTERVALOS_MUSE)}")
-    mm = MASCARAS_MUSE[mascara_muse]
-    p = tp.preparar(slug, "combinado", av_fija=True, bibliotecas=("manara",), h2o_muse=mm["h2o"],
-                    quita_o2_muse=mm["quita_o2"], ventana_kms=ventana_lineas, ventana_ha_kms=ventana_halpha)
-    segs = aj.segmentos_cgs(slug, p)
-    if quita_muse is not None:
-        segs = [quita_intervalos(s, INTERVALOS_MUSE[quita_muse]) if s["brazo"] == "vis" else s for s in segs]
-    if r250:
-        segs = [_empareja(s) for s in segs]
+    p, segs = _segmentos(slug, r250, mascara_muse, ventana_lineas, ventana_halpha, quita_muse, muse_nativo)
     t0, dt, nt = R["teff"]
     g0, dg, ng = R["logg"]
-    p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg))
-    if R.get("r_nativa", np.inf) < 500:
+    p["pls"] = aj.modelos_btsettl(R["dir"], teff=(t0, t0 + (nt - 1) * dt), logg=(g0, g0 + (ng - 1) * dg),
+                                  paso_vis_A=PASO_NATIVO_A if muse_nativo else None)
+    if muse_nativo:
+        from musepipe.config import load_run_config
+        lsf = float(load_run_config(p["run"], project_root=ROOT).config["h01_lsf_fwhm_A"])
+        comprueba_muestreo_nativo(max(t["muestreo_vis_A"] for t in p["pls"]), lsf, R["nombre"])
+        p["bases"] = modelos_base_muse_nativo(p["pls"], segs, lsf)
+    elif R.get("r_nativa", np.inf) < 500:
         p["bases"] = _bases_nativas(p["pls"], segs)
     elif R.get("nu_bin_cm") and degrada == "cuadratura":
         p["bases"] = modelos_base_nativa(p["pls"], segs, R["nu_bin_cm"])
@@ -417,20 +640,250 @@ def valida_disco(datos="todo", rk_fijo=None, td_rango=None, quita_muse=None, iny
             raise ValueError(f"inyecta_polvo={inyecta_polvo!r}: debe ser (r_K ≥ 0, T_d > 0)")
 
 
+def valida_ruido_de(ruido_de, slug, plantilla=None, inyecta_bt=None):
+    """Rechaza, antes de leer nada, un `ruido_de` sin sentido: va sobre datos de prueba (una plantilla o un modelo
+    inyectado), y el ruido del mismo objeto es la corrida de siempre."""
+    if ruido_de is None:
+        return
+    if not (plantilla or inyecta_bt):
+        raise ValueError("ruido_de cambia el ruido de los datos de prueba: pide una plantilla o inyecta_bt")
+    if ruido_de == slug:
+        raise ValueError(f"ruido_de={ruido_de!r} es el mismo objeto: sin la opción es la corrida de siempre")
+
+
+def valida_anclas_ir(anclas_ir, datos="todo"):
+    """Rechaza, antes de leer nada, un `anclas_ir` sin sentido: una clave que no está en `ANCLAS_IR`, o sin IR."""
+    if anclas_ir is None:
+        return
+    if anclas_ir not in ANCLAS_IR:
+        raise ValueError(f"anclas_ir={anclas_ir!r}: debe ser una de {tuple(ANCLAS_IR)}")
+    if datos == "muse":
+        raise ValueError("con datos='muse' no hay segmentos IR que anclar o soltar")
+
+
+def valida_quita_ir(quita_ir, datos="todo"):
+    """Rechaza, antes de leer nada, un `quita_ir` sin sentido: sin ningún segmento, o sin IR."""
+    if quita_ir is None:
+        return
+    if not quita_ir:
+        raise ValueError("quita_ir vacío: nombra al menos un segmento del IR (sin la opción es la corrida de siempre)")
+    if datos == "muse":
+        raise ValueError("con datos='muse' no hay segmentos IR que quitar")
+
+
+def valida_pendiente_ir(pendiente_ir, datos="todo"):
+    """Rechaza, antes de leer nada, un `pendiente_ir` sin sentido: un ancho que no es un número finito y positivo, o
+    sin IR. Que el factor quede positivo en cada segmento se comprueba en el `Modelo`, que conoce los píxeles."""
+    if pendiente_ir is None:
+        return
+    if not (math.isfinite(pendiente_ir) and pendiente_ir > 0):
+        raise ValueError(f"pendiente_ir={pendiente_ir!r}: el ancho del prior tiene que ser finito y positivo")
+    if datos == "muse":
+        raise ValueError("con datos='muse' no hay segmentos IR que inclinar")
+
+
+def valida_banda_una_vez(banda_una_vez, datos="todo"):
+    """Rechaza, antes de leer nada, `banda_una_vez` sin IR (con datos='muse' no hay bandas del IR que pesar)."""
+    if banda_una_vez and datos == "muse":
+        raise ValueError("con datos='muse' no hay bandas del IR que pesar una vez")
+
+
+def valida_cov_banda(cov_banda, muse_nativo=False, r250=False, banda_una_vez=False):
+    """Rechaza, antes de leer nada, `cov_banda` con `banda_una_vez` (el peso parchea lo que la covarianza modela), con
+    MUSE nativo (casi mil canales: la matriz no cabe en cada llamada) o a R = 250 (la correlación del ruido de MUSE
+    está hecha para los bins de 15 Å)."""
+    if not cov_banda:
+        return
+    if banda_una_vez:
+        raise ValueError("cov_banda no se combina con banda_una_vez: la covarianza ya cuenta una vez lo común de una banda")
+    if muse_nativo:
+        raise ValueError("cov_banda no se combina con muse_nativo")
+    if r250:
+        raise ValueError("cov_banda no se combina con R = 250 (r250 o una rejilla de r_nativa < 500)")
+
+
+def matern32(d3, ell):
+    """El núcleo de Matérn 3/2, (1 + x) e^(−x) con x = √3·|Δλ|/ℓ; `d3` = √3·|Δλ| (precalculado). k(0) = 1."""
+    x = d3 / ell
+    return (1.0 + x) * np.exp(-x)
+
+
+def loglike_gauss(r, C):
+    """−½ (rᵀC⁻¹r + ln det C), sin el término de 2π (como la verosimilitud diagonal de `Modelo.loglike`). None si C
+    no es definida positiva."""
+    try:
+        L = np.linalg.cholesky(C)
+    except np.linalg.LinAlgError:
+        return None
+    z = solve_triangular(L, r, lower=True, check_finite=False)
+    return -0.5 * (float(z @ z) + 2.0 * float(np.sum(np.log(np.diag(L)))))
+
+
+def correlacion_bins(e, L, grupos):
+    """La correlación del ruido entre bins (medias de canales), con el modelo del ruido de `degrade_observed`: el de
+    cada canal es ruido blanco suavizado por una gaussiana de σ_s = L/(2√π) canales (así Σρ = L, con L = n/n_eff del
+    canal) y de σ `e`. `grupos`: los índices de canal de cada bin. Construida como V Vᵀ, así que es semidefinida
+    positiva; diagonal 1."""
+    e, L = np.asarray(e, float), np.asarray(L, float)
+    n = e.size
+    k = np.arange(n)
+    V = np.zeros((len(grupos), n))
+    for a, g in enumerate(grupos):
+        for i in g:
+            s = L[i] / (2.0 * math.sqrt(math.pi))
+            lo, hi = max(0, int(i - 8 * s) - 1), min(n, int(i + 8 * s) + 2)
+            gk = np.exp(-0.5 * ((k[lo:hi] - i) / s) ** 2)
+            V[a, lo:hi] += e[i] * gk / math.sqrt(float(gk @ gk))
+        V[a] /= len(g)
+    C = V @ V.T
+    d = np.sqrt(np.diag(C))
+    return C / np.outer(d, d)
+
+
+def ruido_muse_entre_bins(run, w_bins, h2o=True, quita_o2=(), ventana_kms=None, ventana_ha_kms=None):
+    """La correlación del ruido entre los bins de MUSE de `w_bins` (sus centros, los de `segmento_muse`): rehace el
+    degradado a R = 500 y la agrupación en bins de 12 canales de `fit_spectrum_from_inputs` y `rebin_for_fit` con las
+    mismas máscaras, para saber qué canales entran en cada bin, y llama a `correlacion_bins` con la σ y la L = n/n_eff
+    de cada canal degradado. Falla si un centro de `w_bins` no es el de un bin rehecho."""
+    from musepipe.models.observed import degrade_observed, neff_over_n_per_channel
+    from scripts import tipo_ir_plantillas as tp
+    inputs, cfg, kernel = tp.entradas_muse(run, h2o, quita_o2, ventana_kms, ventana_ha_kms)
+    wave = np.asarray(inputs["wave"], float)
+    ratio = neff_over_n_per_channel(wave, inputs["cov"], inputs["bad_mask"])
+    f, e, mask, neff = degrade_observed(wave, inputs["flux"], inputs["err"], inputs["mask"], kernel(wave), ratio)
+    lo, hi = map(float, cfg["g3_fit_wave_range_A"])
+    dentro = np.nonzero((wave >= lo) & (wave <= hi))[0]
+    centros, grupos = [], []
+    for k0 in range(0, dentro.size, 12):   # la agrupación de `rebin_for_fit` (n_channels = 12, max_masked_frac = 0.5)
+        ch = dentro[k0:k0 + 12]
+        keep = (~mask[ch]) & np.isfinite(f[ch]) & np.isfinite(e[ch]) & (e[ch] > 0)
+        if keep.sum() == 0 or (ch.size - keep.sum()) / ch.size > 0.5:
+            continue
+        centros.append(float(wave[ch][keep].mean()))
+        grupos.append(ch[keep])
+    centros = np.asarray(centros)
+    cual = []
+    for w in np.asarray(w_bins, float):
+        j = np.nonzero(centros == w)[0]
+        if j.size != 1:
+            raise ValueError(f"el bin de MUSE en {w} Å no está entre los rehechos: el degradado no es el del ajuste")
+        cual.append(int(j[0]))
+    return correlacion_bins(e, 1.0 / neff, [grupos[j] for j in cual])
+
+
+def quitados_de(segs, quita_ir):
+    """Los nombres de los segmentos del IR que `--quita-ir` (2026-10-31) saca de la verosimilitud: un conjunto vacío
+    sin la opción. Falla si alguno no es un segmento del IR del objeto (MUSE sale con `--datos ir`) o si no queda
+    ninguno del IR (`--datos muse`). `segs`: los de `segmentos_cgs` (con `nombre` y `brazo`)."""
+    if quita_ir is None:
+        return frozenset()
+    ir = [s["nombre"] for s in segs if s["brazo"] == "nir"]
+    raros = sorted(set(quita_ir) - set(ir))
+    if raros:
+        raise ValueError(f"quita_ir: {', '.join(raros)} no es un segmento del IR del objeto (tiene {', '.join(ir)})")
+    if set(ir) <= set(quita_ir):
+        raise ValueError("quita_ir quita todos los segmentos del IR: para eso, datos='muse'")
+    return frozenset(quita_ir)
+
+
+def anclas_de(segs, bandas, anclas_ir, prueba=False):
+    """La σ del prior de la escala de cada segmento con `--anclas-ir` (2026-10-30): `SIGMA_IR` en los segmentos IR de
+    las bandas de `ANCLAS_IR[anclas_ir]`, None (libre) en los demás del IR; MUSE, la suya (`sigma_escala`). None = las
+    de siempre. Sobre los datos reales (`prueba` False) solo se puede soltar un ancla: anclar una banda que el objeto
+    no declara pide datos de prueba, cuyas escalas valen 1 por construcción (`_sinteticos` escala con un solo factor).
+    Si no cambia ninguna, es la corrida de siempre y falla. `bandas`: la banda de cada segmento ('vis', 'J', 'H', 'K')."""
+    from scripts import ajuste_conjunto as aj
+    antes = [s["sigma_escala"] for s in segs]
+    if anclas_ir is None:
+        return antes
+    quiere = set(ANCLAS_IR[anclas_ir])
+    out = [x if b == "vis" else (aj.SIGMA_IR if b in quiere else None) for x, b in zip(antes, bandas)]
+    nuevas = [s["nombre"] for s, x0, x in zip(segs, antes, out) if x0 is None and x is not None]
+    if nuevas and not prueba:
+        raise ValueError(f"anclas_ir={anclas_ir!r} ancla {', '.join(nuevas)}, que el objeto no ancla: sobre los datos "
+                         "reales solo se sueltan anclas (pide una plantilla o inyecta_bt)")
+    if out == antes:
+        raise ValueError(f"anclas_ir={anclas_ir!r}: son las anclas de siempre (sin la opción es la misma corrida)")
+    return out
+
+
+def snr_cruzada(segs, bandas, segs_otro, bandas_otro):
+    """La S/N por píxel de otro compañero en los píxeles de este (`--ruido-de`, 2026-10-30): la cobertura (qué
+    segmentos y qué píxeles) es la de este; el ruido, el del otro.
+
+    Cada segmento toma la S/N del segmento del otro con el mismo nombre (instrumento y banda) y, si el otro no lo
+    tiene, la mediana, en cada λ, de los segmentos del otro en esa banda que la cubren (el más cercano si ninguno la
+    cubre). La del otro se interpola linealmente en λ sobre sus píxeles buenos con S/N finita y > 0 (constante más
+    allá de sus extremos). Los píxeles que este no usa (S/N no finita o ≤ 0) siguen fuera, como en `_sinteticos`.
+    `bandas`: la banda de cada segmento ('vis', 'J', 'H', 'K'). Devuelve una S/N por segmento de `segs`."""
+    perfiles = []
+    for o, b in zip(segs_otro, bandas_otro):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            sn = np.abs(o["f"]) / o["e"]
+        ok = np.isfinite(sn) & (sn > 0) & o.get("bueno", np.ones(sn.size, bool))
+        if ok.any():
+            perfiles.append((o["nombre"], b, o["w"][ok], sn[ok]))
+    out = []
+    for s, b in zip(segs, bandas):
+        cand = ([q for q in perfiles if q[0] == s["nombre"]] or [q for q in perfiles if q[1] == b])
+        if not cand:
+            raise ValueError(f"{s['nombre']}: el otro compañero no tiene datos en la banda {b}")
+        w = s["w"]
+        vals = np.array([np.interp(w, wq, sq) for _, _, wq, sq in cand])
+        cubre = np.array([(w >= wq[0]) & (w <= wq[-1]) for _, _, wq, _ in cand])
+        dist = np.array([np.maximum(np.maximum(wq[0] - w, w - wq[-1]), 0.0) for _, _, wq, _ in cand])
+        cerca = vals[np.argmin(dist, axis=0), np.arange(w.size)]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)   # columnas sin ningún segmento que cubra
+            med = np.nanmedian(np.where(cubre, vals, np.nan), axis=0)
+        sn = np.where(cubre.any(axis=0), med, cerca)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            propia = np.abs(s["f"]) / s["e"]
+        out.append(np.where(np.isfinite(propia) & (propia > 0), sn, np.nan))
+    return out
+
+
 class Modelo:
     #: r_K fija (None = libre o, sin IR, 0) y rango de la T del polvo libre (None = `T_D`). A nivel de clase para que
     #: un `Modelo` hecho con `__new__` (los tests sintéticos) tenga los valores de siempre.
     rk_fijo = None
     td_rango = None
+    muse_nativo = False
+    ens_vr = None
+    ruido_de = None
+    anclas_ir = None
+    quita_ir = None
+    pendiente_ir = None
+    banda_una_vez = False
+    cov_banda = False
 
     def __init__(self, slug, modo="libre", av="primaria", tracks="ATMO2020", inyecta_bt=None, plantilla=None,
                  av_inyectada=None, semilla=0, av_fija=None, rejilla="btsettl", dir_rejilla=None, datos="todo",
                  r250=False, degrada="cuadratura", mascara_muse="paper", ventana_lineas=None, ventana_halpha=None,
-                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None):
-        """Las cuatro últimas (pruebas del disco y del D.5, 2026-10-29) no cambian nada si se dejan en None:
-        `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max) deja libre la T del polvo
-        (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de `INTERVALOS_MUSE[quita_muse]`;
-        `inyecta_polvo` = (r_K, T_d) suma un exceso de polvo al modelo de `inyecta_bt`."""
+                 rk_fijo=None, td_rango=None, quita_muse=None, inyecta_polvo=None, muse_nativo=False, ens_vr=None,
+                 ruido_de=None, anclas_ir=None, quita_ir=None, pendiente_ir=None, banda_una_vez=False,
+                 cov_banda=False):
+        """`rk_fijo`, `td_rango`, `quita_muse` e `inyecta_polvo` (pruebas del disco y del D.5, 2026-10-29) no cambian
+        nada si se dejan en None: `rk_fijo` fija r_K (r_K = 0 es el modelo sin disco); `td_rango` = (T_min, T_max)
+        deja libre la T del polvo (uniforme) en vez de `T_D`; `quita_muse` quita del espectro MUSE los bins de
+        `INTERVALOS_MUSE[quita_muse]`; `inyecta_polvo` = (r_K, T_d) suma un exceso de polvo al modelo de
+        `inyecta_bt`. `muse_nativo` (2026-10-30; False = lo de siempre): el espectro MUSE a su resolución, canal a
+        canal, en vez de a R = 500 (`_prepara`). `ens_vr` (2026-10-30; None = lo de siempre, pide `muse_nativo`) =
+        (tope de la FWHM extra en Å, tope de |v| en km/s): dos parámetros más, `ens_A` y `vr_kms`, con los que el
+        modelo de MUSE se rehace en cada llamada desde el espectro fino (`espectro_fino`, `ensancha_y_desplaza`).
+        `ruido_de` (2026-10-30; None = lo de siempre, pide datos de prueba) = el slug de otro compañero: los datos de
+        prueba llevan la cobertura de este y la S/N por píxel de aquel (`snr_cruzada`). `anclas_ir` (2026-10-30; None =
+        las anclas que declara el objeto) = una clave de `ANCLAS_IR`: las bandas del IR con la escala anclada a la
+        fotometría (`anclas_de`); solo cambia el prior de las escalas, no los datos. `quita_ir` (2026-10-31; None =
+        todos) = los nombres de los segmentos del IR que salen de la verosimilitud (`quitados_de`); los datos de los
+        demás no cambian. `pendiente_ir` (2026-11-01; None = sin inclinación) = el ancho del prior uniforme de la
+        inclinación de cada segmento del IR, en fracción por 0.1 µm: un parámetro `p_<SEG>` por segmento, y su modelo
+        multiplicado por 1 + p·`xp` (`xp` = (λ − λ_c)/0.1 µm, con λ_c el centro de sus píxeles). `banda_una_vez`
+        (2026-11-02; False = lo de siempre): el término de cada segmento del IR en `loglike`, por su `peso` = 1/N, con
+        N los segmentos de su banda que entran (después de `quita_ir`); MUSE no lleva peso. `cov_banda` (2026-11-02;
+        False = lo de siempre): la verosimilitud de cada banda es una gaussiana con covarianza, ruido + f_b² m mᵀ ∘
+        k(ℓ_b) (Matérn 3/2 sobre todos los espectros de la banda), con un parámetro `lnl_<banda>` más por banda; el
+        ruido de MUSE lleva su correlación entre bins solo con los datos reales (`_prepara_cov`)."""
         from musepipe.config import load_run_config
         from musepipe.models.tracks import TrackGrid
         from scripts import tipo_ir_indices as tir
@@ -438,6 +891,21 @@ class Modelo:
         if datos not in DATOS:
             raise ValueError(f"datos={datos!r}: debe ser uno de {DATOS}")
         valida_disco(datos, rk_fijo, td_rango, quita_muse, inyecta_bt, inyecta_polvo)
+        valida_muse_nativo(muse_nativo, datos, rejilla, r250, plantilla, ens_vr)
+        valida_ruido_de(ruido_de, slug, plantilla, inyecta_bt)
+        valida_anclas_ir(anclas_ir, datos)
+        valida_quita_ir(quita_ir, datos)
+        valida_pendiente_ir(pendiente_ir, datos)
+        valida_banda_una_vez(banda_una_vez, datos)
+        valida_cov_banda(cov_banda, muse_nativo, _r250(rejilla, r250), banda_una_vez)
+        self.pendiente_ir = None if pendiente_ir is None else float(pendiente_ir)
+        self.banda_una_vez = bool(banda_una_vez)
+        self.cov_banda = bool(cov_banda)
+        self.ruido_de = ruido_de
+        self.anclas_ir = anclas_ir
+        self.quita_ir = None if quita_ir is None else tuple(sorted(set(quita_ir)))
+        self.muse_nativo = bool(muse_nativo)
+        self.ens_vr = None if ens_vr is None else (float(ens_vr[0]), float(ens_vr[1]))
         self.slug, self.modo, self.av_modo, self.av_fija, self.datos = slug, modo, av, av_fija, datos
         self.rk_fijo = None if rk_fijo is None else float(rk_fijo)
         self.td_rango = None if td_rango is None else (float(td_rango[0]), float(td_rango[1]))
@@ -456,7 +924,8 @@ class Modelo:
         self.mascara_muse = mascara_muse
         self.ventana_lineas, self.ventana_halpha = ventana_lineas, ventana_halpha
         p, conj = _prepara(slug, R, r250=self.r_analisis == 250, degrada=degrada, mascara_muse=mascara_muse,
-                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha, quita_muse=quita_muse)
+                           ventana_lineas=ventana_lineas, ventana_halpha=ventana_halpha, quita_muse=quita_muse,
+                           muse_nativo=self.muse_nativo)
         self.run = p["run"]
         cfg = load_run_config(self.run, project_root=ROOT).config
         self.cfg = cfg
@@ -468,6 +937,12 @@ class Modelo:
         perfil = tir.perfil(slug)
         self.fisica = perfil.get("fisica", {})
         ir = perfil["ir_spectra"]["spectra"]
+        # la σ del prior de cada escala: la de `segmentos_cgs` o, con `anclas_ir`, la de `anclas_de` (los datos de
+        # prueba se escalan antes, en `_sinteticos`, con el segmento anclado de siempre)
+        sigmas = anclas_de(conj.segs, ["vis" if s["brazo"] == "vis" else ir[s["nombre"]]["band"] for s in conj.segs],
+                           anclas_ir, prueba=bool(plantilla or inyecta_bt))
+        # los segmentos del IR que `quita_ir` saca: solo de `self.segs`; todo lo demás se arma con todos
+        quitados = quitados_de(conj.segs, quita_ir)
 
         # rejilla [T, g] -> índice del modelo
         idx = np.full((self.nT, self.nG), -1)
@@ -503,7 +978,7 @@ class Modelo:
 
         self.segs = []
         for k, s in enumerate(conj.segs):
-            if not _entra(s, datos):
+            if not _entra(s, datos) or s["nombre"] in quitados:
                 continue
             c = conj.comun[k].copy()
             f, e = s["f"], s["e"]
@@ -520,8 +995,33 @@ class Modelo:
                 nombre=s["nombre"], banda=banda, w=w, d=f[c], e2=e[c] ** 2, lg=lg,
                 a=np.asarray(CCMExtinction(3.1, citation="CCM89").a_lambda_over_av(w), float),
                 bb=(_planck(w, T_D) / _planck(LAM_K, T_D)) if s["brazo"] == "nir" else np.zeros(w.size),
-                sigma=s["sigma_escala"]))
+                sigma=sigmas[k]))
+            if self.pendiente_ir is not None and s["brazo"] == "nir":
+                # la abscisa de la inclinación: en 0.1 µm desde el centro de los píxeles del segmento
+                self.segs[-1]["xp"] = (w - 0.5 * (w.min() + w.max())) / 1000.0
+            if self.ens_vr is not None and s["brazo"] == "vis":
+                # el espectro fino del que se rehace el modelo de MUSE en cada llamada (`_muse_fino`)
+                lo, hi = s["lo"][c], s["hi"][c]
+                wf, lgf = espectro_fino(p["pls"], idx, float(cfg["h01_lsf_fwhm_A"]), float(lo.min()) - MARGEN_FINO_A,
+                                        float(hi.max()) + MARGEN_FINO_A)
+                nfft = 1 << int(math.ceil(math.log2(wf.size + 4.0 * self.ens_vr[0] / 2.3548200450309493
+                                                    / PASO_NATIVO_A + 64)))
+                self.segs[-1]["fino"] = dict(w=wf, lg=lgf, lo=lo, hi=hi, nfft=nfft, f2=np.fft.rfftfreq(nfft) ** 2)
         self.bandas = sorted({s["banda"] for s in self.segs})
+        if self.banda_una_vez:
+            # cada banda del IR una vez: el término de cada segmento, por 1/N (N = los segmentos de su banda que entran)
+            n_banda = {b: sum(s["banda"] == b for s in self.segs) for b in self.bandas if b != "vis"}
+            for s in self.segs:
+                if s["banda"] != "vis":
+                    s["peso"] = 1.0 / n_banda[s["banda"]]
+        if self.pendiente_ir is not None:
+            # el factor 1 + p·xp tiene que quedar positivo en todo segmento con |p| ≤ ancho
+            mitad = max(float(np.abs(s["xp"]).max()) for s in self.segs if "xp" in s)
+            if self.pendiente_ir * mitad >= 1.0:
+                raise ValueError(f"pendiente_ir={self.pendiente_ir:g}: con un segmento de ±{mitad:.2f} × 0.1 µm el "
+                                 f"factor de la inclinación llega a cero; el ancho tiene que ser < {1.0 / mitad:.3f}")
+        if self.cov_banda:
+            self._prepara_cov(sintetico=bool(plantilla or inyecta_bt))
         self.track = None
         if modo == "evo":
             rel, cita = TRACKS[tracks]
@@ -576,13 +1076,50 @@ class Modelo:
             self.verdad = dict(teff=T, logg=G, av=av, r_rj=r_rj)
             if inyecta_polvo is not None:
                 self.verdad.update(rk=rk_i, td=td_i)
+        # con `ruido_de`, la S/N por píxel es la del otro compañero en los píxeles de este (`snr_cruzada`)
+        snr_otro = None if self.ruido_de is None else self._snr_de_otro(conj.segs)
         out = []
         for k, s in enumerate(conj.segs):
             with np.errstate(invalid="ignore", divide="ignore"):
-                snr = np.abs(s["f"]) / s["e"]
+                snr = np.abs(s["f"]) / s["e"] if snr_otro is None else snr_otro[k]
                 e = np.abs(sin[k]) / np.where(snr > 0, snr, np.nan)
             out.append((sin[k] + rng.normal(0.0, np.nan_to_num(e)), e))
         return out
+
+    def _prepara_cov(self, sintetico):
+        """`cov_banda`: por banda, los segmentos que entran (en el orden de `self.segs`), sus datos juntos, √3·|Δλ| entre
+        todos sus píxeles (también entre dos espectros de la misma banda) y la covarianza del ruido. El ruido es
+        diagonal salvo el de MUSE con los datos reales, que lleva la correlación entre bins del degradado
+        (`ruido_muse_entre_bins`); con datos de prueba, el ruido sorteado es independiente bin a bin."""
+        self._cov = []
+        for b in self.bandas:
+            ks = [k for k, s in enumerate(self.segs) if s["banda"] == b]
+            w = np.concatenate([self.segs[k]["w"] for k in ks])
+            e2 = np.concatenate([self.segs[k]["e2"] for k in ks])
+            correlado = b == "vis" and not sintetico
+            if correlado:
+                mm = MASCARAS_MUSE[self.mascara_muse]
+                rho = ruido_muse_entre_bins(self.run, w, mm["h2o"], mm["quita_o2"], self.ventana_lineas,
+                                            self.ventana_halpha)
+                e = np.sqrt(e2)
+                ruido = rho * np.outer(e, e)
+                np.fill_diagonal(ruido, e2)   # la varianza de cada bin, la del segmento exacta (no √e2·√e2)
+            else:
+                ruido = np.diag(e2)
+            self._cov.append(dict(banda=b, ks=ks, d=np.concatenate([self.segs[k]["d"] for k in ks]),
+                                  d3=math.sqrt(3.0) * np.abs(w[:, None] - w[None, :]), ruido=ruido,
+                                  ruido_correlado=correlado))
+
+    def _snr_de_otro(self, segs):
+        """`snr_cruzada` de los segmentos de este objeto con los de `ruido_de`, leídos con las mismas opciones."""
+        from scripts import tipo_ir_indices as tir
+        _, otros = _segmentos(self.ruido_de, self.r_analisis == 250, self.mascara_muse, self.ventana_lineas,
+                              self.ventana_halpha, self.quita_muse, self.muse_nativo)
+
+        def bandas(slug, ss):
+            ir = tir.perfil(slug)["ir_spectra"]["spectra"]
+            return ["vis" if s["brazo"] == "vis" else ir[s["nombre"]]["band"] for s in ss]
+        return snr_cruzada(segs, bandas(self.slug, segs), otros, bandas(self.ruido_de, otros))
 
     # -------------------------------------------------------------- parámetros
     def _prepara_priores(self):
@@ -617,14 +1154,27 @@ class Modelo:
             if self.td_rango is not None:   # la T del polvo libre (uniforme), justo detrás de r_K
                 t0, t1 = self.td_rango
                 add("td", lambda u: t0 + u * (t1 - t0))
+        if self.ens_vr is not None:         # el ensanchamiento extra y la velocidad del modelo de MUSE (uniformes)
+            e_max, v_max = self.ens_vr
+            add("ens_A", lambda u: e_max * u)
+            add("vr_kms", lambda u: v_max * (2.0 * u - 1.0))
         for s in self.segs:
             if s["sigma"] is None:
                 add(f"s_{s['nombre']}", lambda u: 10 ** (math.log10(0.2) + u * 2 * math.log10(5.0)))
             else:
                 add(f"s_{s['nombre']}", _ppf_trunc_normal_rapido(1.0, s["sigma"], lo=0.05),
                     truncada=(1.0, s["sigma"], 0.05))
+        if self.pendiente_ir is not None:   # la inclinación de cada segmento del IR (uniforme), detrás de las escalas
+            ancho = self.pendiente_ir
+            for s in self.segs:
+                if "xp" in s:
+                    add(f"p_{s['nombre']}", lambda u: ancho * (2.0 * u - 1.0))
         for b in self.bandas:
             add(f"lnf_{b}", lambda u: math.log(1e-3) + u * (math.log(1.0) - math.log(1e-3)))
+        if self.cov_banda:   # la longitud de correlación del error del modelo de cada banda (log-uniforme), al final
+            l0, l1 = math.log(LCORR_A[0]), math.log(LCORR_A[1])
+            for b in self.bandas:
+                add(f"lnl_{b}", lambda u: l0 + u * (l1 - l0))
         self.nombres, self._t = n, t
         self.ndim = len(n)
         self.pos = {k: i for i, k in enumerate(n)}
@@ -683,26 +1233,57 @@ class Modelo:
         td = th[P["td"]] if "td" in P else None
         out = []
         for s in self.segs:
-            L = s["lg"]
-            F = 10 ** (c00 * L[i, j] + c10 * L[i + 1, j] + c01 * L[i, j + 1] + c11 * L[i + 1, j + 1])
+            if "fino" in s:
+                F = self._muse_fino(s["fino"], th, i, j, (c00, c10, c01, c11))
+            else:
+                L = s["lg"]
+                F = 10 ** (c00 * L[i, j] + c10 * L[i + 1, j] + c01 * L[i, j + 1] + c11 * L[i + 1, j + 1])
             # el cuerpo negro del polvo: precalculado a `T_D` (el camino de las cadenas del paper) o a la T libre
             bb = s["bb"] if td is None or s["banda"] == "vis" else _planck(s["w"], td) / _planck(LAM_K, td)
-            out.append(th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * bb) * 10 ** (-0.4 * s["a"] * av))
+            m = th[P[f"s_{s['nombre']}"]] * om * (F + rk * fref * bb) * 10 ** (-0.4 * s["a"] * av)
+            if "xp" in s:   # `pendiente_ir`: la inclinación del segmento
+                m = m * (1.0 + th[P[f"p_{s['nombre']}"]] * s["xp"])
+            out.append(m)
         return out
+
+    def _muse_fino(self, fi, th, i, j, c):
+        """Con `ens_vr`: el modelo de MUSE en los canales, desde el espectro fino interpolado en log F en el nodo (i, j)
+        con los pesos bilineales `c`, ensanchado y desplazado con `ens_A` y `vr_kms` (`ensancha_y_desplaza`)."""
+        L = fi["lg"]
+        F = 10 ** (c[0] * L[i, j] + c[1] * L[i + 1, j] + c[2] * L[i, j + 1] + c[3] * L[i + 1, j + 1])
+        return ensancha_y_desplaza(fi["w"], F, fi["lo"], fi["hi"], th[self.pos["ens_A"]], th[self.pos["vr_kms"]],
+                                   fi["nfft"], fi["f2"])
 
     def loglike(self, th):
         M = self.modelos(th)
         if M is None:
             return MALO
+        if self.cov_banda:
+            return self._loglike_cov(th, M)
         tot = 0.0
         for s, m in zip(self.segs, M):
             fb = math.exp(th[self.pos[f"lnf_{s['banda']}"]])
             var = s["e2"] + (fb * m) ** 2
             r = s["d"] - m
-            tot += -0.5 * float(np.sum(r * r / var + np.log(var)))
+            t = -0.5 * float(np.sum(r * r / var + np.log(var)))
+            tot += t * s["peso"] if "peso" in s else t   # `banda_una_vez`: el peso del segmento
+        return tot
+
+    def _loglike_cov(self, th, M):
+        """`cov_banda`: la suma por banda de `loglike_gauss` con C = ruido + f_b² m mᵀ ∘ k(ℓ_b) (Matérn 3/2)."""
+        tot = 0.0
+        for c in self._cov:
+            m = np.concatenate([M[k] for k in c["ks"]])
+            fb = math.exp(th[self.pos[f"lnf_{c['banda']}"]])
+            ell = math.exp(th[self.pos[f"lnl_{c['banda']}"]])
+            ll = loglike_gauss(c["d"] - m, c["ruido"] + (fb * fb) * np.outer(m, m) * matern32(c["d3"], ell))
+            if ll is None:
+                return MALO
+            tot += ll
         return tot
 
     def chi2(self, th, inflado=False):
+        """χ²/n de cada segmento, con la varianza diagonal (también con `cov_banda`: es un diagnóstico)."""
         M = self.modelos(th)
         out = {}
         for s, m in zip(self.segs, M):
@@ -767,20 +1348,39 @@ def etiqueta_de(a):
     que esas cadenas no se confundan con las del paper; con `--ventana-lineas` / `--ventana-halpha`, `ventana-<KMS>`
     / `ventanaha-<KMS>` después de la máscara; y después, las de las pruebas del disco y del D.5: `rk<RK>`
     (`--rk-fijo`), `td<TMIN>-<TMAX>` (`--td-libre`), `quita-<INTERVALOS>` (`--quita-muse`) y `polvo-<RK>-<TD>`
-    (`--inyecta-polvo`). Las opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
+    (`--inyecta-polvo`). `muse-nativo` (`--muse-nativo`) va justo detrás de `r250` / `ingenua`, y `ens-vr` (`--ens-vr`)
+    detrás de él. `ruido-<SLUG>` (`--ruido-de`) va detrás de los datos de prueba (`pl-…` / `bt-…`), y `anclas-<BANDAS>`
+    (`--anclas-ir`) detrás de él, y `quitair-<SEGS>` (`--quita-ir`, en orden alfabético) detrás, y `pendir<ANCHO>`
+    (`--pendiente-ir`) detrás, y `bandaunavez` (`--banda-una-vez`) detrás, y `covbanda` (`--cov-banda`) detrás. Las
+    opciones se leen con `getattr`, así que vale un `Namespace` sin las nuevas."""
     degrada = getattr(a, "degrada", "cuadratura")
     mascara = getattr(a, "mascara_muse", "paper")
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
     rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
+    nativo, ens_vr = getattr(a, "muse_nativo", False), getattr(a, "ens_vr", False)
+    ruido = getattr(a, "ruido_de", None)
+    anclas = getattr(a, "anclas_ir", None)
+    quita_ir = getattr(a, "quita_ir", None)
+    pend = getattr(a, "pendiente_ir", None)
+    una = getattr(a, "banda_una_vez", False)
+    cov = getattr(a, "cov_banda", False)
     return a.etiqueta or "_".join(x for x in (a.slug, a.rejilla if a.rejilla != "btsettl" else None, a.modo, a.tracks if a.modo != "libre" else None, f"av{a.av}",
                                               f"pl-{a.plantilla}" if a.plantilla else None,
                                               f"avfija{a.av_fija:g}" if a.av_fija is not None else None,
                                               "bt-" + "-".join(f"{v:g}" for v in a.inyecta_bt) if a.inyecta_bt else None,
+                                              f"ruido-{ruido}" if ruido else None,
+                                              f"anclas-{anclas}" if anclas else None,
+                                              "quitair-" + "-".join(sorted(set(quita_ir))) if quita_ir else None,
+                                              f"pendir{pend:g}" if pend is not None else None,
+                                              "bandaunavez" if una else None,
+                                              "covbanda" if cov else None,
                                               f"solo{a.datos}" if a.datos != "todo" else None,
                                               "r250" if _r250(a.rejilla, a.r250) else None,
                                               "ingenua" if (degrada == "ingenua" and REJILLAS[a.rejilla].get("nu_bin_cm"))
                                               else None,
+                                              "muse-nativo" if nativo else None,
+                                              "ens-vr" if ens_vr else None,
                                               f"mascara-{mascara}" if mascara != "paper" else None,
                                               f"ventana-{vl:g}" if vl is not None else None,
                                               f"ventanaha-{vh:g}" if vh is not None else None,
@@ -837,6 +1437,14 @@ def ajusta(a):
     vl, vh = getattr(a, "ventana_lineas", None), getattr(a, "ventana_halpha", None)
     rkf, td = getattr(a, "rk_fijo", None), getattr(a, "td_libre", None)
     quita, polvo = getattr(a, "quita_muse", None), getattr(a, "inyecta_polvo", None)
+    nativo = getattr(a, "muse_nativo", False)
+    ens_vr = (ENS_MAX_A, VR_MAX_KMS) if getattr(a, "ens_vr", False) else None
+    ruido = getattr(a, "ruido_de", None)
+    anclas = getattr(a, "anclas_ir", None)
+    quita_ir = getattr(a, "quita_ir", None)
+    pend = getattr(a, "pendiente_ir", None)
+    una = bool(getattr(a, "banda_una_vez", False))
+    cov = bool(getattr(a, "cov_banda", False))
     et = etiqueta_de(a)
     # nunca sobre una corrida que ya está (una cadena tarda horas y otra con la misma etiqueta la taparía): se
     # comprueba antes de correr; para repetirla, se mueve o se borra aparte, o se usa otra --salida
@@ -856,7 +1464,14 @@ def ajusta(a):
         mod = Modelo(a.slug, a.modo, a.av, a.tracks, a.inyecta_bt, a.plantilla, a.av_inyectada, a.semilla, a.av_fija,
                      a.rejilla, a.dir_rejilla, a.datos, a.r250, degrada, mascara_muse=mascara,
                      ventana_lineas=vl, ventana_halpha=vh, rk_fijo=rkf, td_rango=td, quita_muse=quita,
-                     inyecta_polvo=polvo)
+                     inyecta_polvo=polvo, **({"muse_nativo": True} if nativo else {}),
+                     **({"ens_vr": ens_vr} if ens_vr is not None else {}),
+                     **({"ruido_de": ruido} if ruido else {}),
+                     **({"anclas_ir": anclas} if anclas else {}),
+                     **({"quita_ir": quita_ir} if quita_ir else {}),
+                     **({"pendiente_ir": pend} if pend is not None else {}),
+                     **({"banda_una_vez": True} if una else {}),
+                     **({"cov_banda": True} if cov else {}))
         r = corre(mod, a.nlive, a.semilla)
         eq, der = r["muestras"], r["derivadas"]
         post = {k: percentiles(eq[:, i]) for i, k in enumerate(mod.nombres)}
@@ -876,6 +1491,22 @@ def ajusta(a):
                    **({"td_rango": list(mod.td_rango)} if mod.td_rango is not None else {}),
                    **({"quita_muse": quita} if quita is not None else {}),
                    **({"inyecta_polvo": [float(v) for v in polvo]} if polvo is not None else {}),
+                   # MUSE a su resolución, solo si se pide (en `VARIANTES_JSON`)
+                   **({"muse_nativo": True} if nativo else {}),
+                   # el ensanchamiento y la velocidad libres: los topes de sus priores (en `VARIANTES_JSON`)
+                   **({"ens_vr": list(ens_vr)} if ens_vr is not None else {}),
+                   # de qué compañero es el ruido de los datos de prueba, si no del mismo (en `VARIANTES_JSON`)
+                   **({"ruido_de": ruido} if ruido else {}),
+                   # en qué bandas del IR va anclada la escala, si no en las que declara el objeto (en `VARIANTES_JSON`)
+                   **({"anclas_ir": anclas} if anclas else {}),
+                   # los segmentos del IR que salen de la verosimilitud, en orden alfabético (en `VARIANTES_JSON`)
+                   **({"quita_ir": sorted(set(quita_ir))} if quita_ir else {}),
+                   # el ancho del prior de la inclinación de cada segmento del IR (en `VARIANTES_JSON`)
+                   **({"pendiente_ir": float(pend)} if pend is not None else {}),
+                   # cada banda del IR una vez: el término de cada segmento por 1/N (en `VARIANTES_JSON`)
+                   **({"banda_una_vez": True} if una else {}),
+                   # el error del modelo como proceso gaussiano por banda, con ℓ_b libre (en `VARIANTES_JSON`)
+                   **({"cov_banda": True} if cov else {}),
                    # los ejes con los que corrió (inicio, paso, n): una rejilla puede ampliarse después
                    ejes=dict(teff=[mod.T0, mod.dT, mod.nT], logg=[mod.G0, mod.dG, mod.nG]),
                    tracks=a.tracks if a.modo == "evo" else None, nlive=a.nlive, semilla=a.semilla,
@@ -1292,9 +1923,11 @@ def tabla_rejillas(dirs):
 
 def modelo_de_cadena(d, dir_rejilla=None):
     """El `Modelo` con el que corrió una cadena `libre` sobre los datos (su json: rejilla, datos, resolución,
-    degradado, A_V, máscaras y ventanas de MUSE, y las opciones del disco y del D.5) y su punto de máxima
-    verosimilitud (`mejor`). Es el único reconstructor: `delta_entre_rejillas.modelo_de` lo llama. `dir_rejilla`: el
-    directorio de npz si no es el de `REJILLAS` (ATMO 2020)."""
+    degradado, A_V, máscaras y ventanas de MUSE, las opciones del disco y del D.5, MUSE nativo con o sin
+    ensanchamiento y velocidad, las anclas del IR, los segmentos del IR quitados, su inclinación, el peso de cada
+    banda y la covarianza por banda) y su punto de máxima verosimilitud
+    (`mejor`). Es el único reconstructor: `delta_entre_rejillas.modelo_de` lo llama. `dir_rejilla`: el directorio de
+    npz si no es el de `REJILLAS` (ATMO 2020)."""
     if d["modo"] != "libre" or d.get("verdad"):
         raise ValueError(f"{d['etiqueta']}: solo cadenas `libre` sobre los datos (sin plantilla ni inyección)")
     mod = Modelo(d["slug"], d["modo"], d["av"], "ATMO2020", None, None, None, d["semilla"], d.get("av_fija"),
@@ -1302,7 +1935,10 @@ def modelo_de_cadena(d, dir_rejilla=None):
                  d.get("degrada") or "cuadratura", mascara_muse=d.get("mascara_muse", "paper"),
                  ventana_lineas=d.get("ventana_lineas_kms"), ventana_halpha=d.get("ventana_halpha_kms"),
                  rk_fijo=d.get("rk_fijo"), td_rango=tuple(d["td_rango"]) if d.get("td_rango") else None,
-                 quita_muse=d.get("quita_muse"))
+                 quita_muse=d.get("quita_muse"), muse_nativo=bool(d.get("muse_nativo", False)),
+                 ens_vr=tuple(d["ens_vr"]) if d.get("ens_vr") else None, ruido_de=d.get("ruido_de"),
+                 anclas_ir=d.get("anclas_ir"), quita_ir=d.get("quita_ir"), pendiente_ir=d.get("pendiente_ir"),
+                 banda_una_vez=bool(d.get("banda_una_vez", False)), cov_banda=bool(d.get("cov_banda", False)))
     return mod, np.array([d["mejor"][k] for k in mod.nombres])
 
 
@@ -1412,6 +2048,34 @@ def main(argv=None):
     aa.add_argument("--inyecta-polvo", type=float, nargs=2, default=None, metavar=("RK", "TD"),
                     help="con --inyecta-bt: suma al modelo inyectado un exceso de polvo r_K a T_d (Ec. B.1); la "
                          "etiqueta lleva `polvo-<RK>-<TD>`")
+    aa.add_argument("--muse-nativo", action="store_true",
+                    help="el espectro MUSE canal a canal (1.25 Å) contra los modelos convolucionados con la LSF de "
+                         "MUSE, en vez de los dos a R = 500 (el IR sigue a R = 500); solo con rejillas de paso fino "
+                         "(BT-Settl, BT-Dusty, Diamondback); la etiqueta lleva `muse-nativo`")
+    aa.add_argument("--ens-vr", action="store_true",
+                    help=f"con --muse-nativo: ensanchamiento gaussiano extra del modelo de MUSE (FWHM 0–{ENS_MAX_A:g} Å, "
+                         f"en cuadratura con la LSF) y velocidad radial (±{VR_MAX_KMS:g} km/s) libres; la etiqueta "
+                         "lleva `ens-vr`")
+    aa.add_argument("--ruido-de", default=None, metavar="SLUG",
+                    help="con --plantilla o --inyecta-bt: los datos de prueba con la cobertura de este objeto y la "
+                         "S/N por píxel de otro compañero (`snr_cruzada`); la etiqueta lleva `ruido-<SLUG>`")
+    aa.add_argument("--anclas-ir", choices=tuple(ANCLAS_IR), default=None,
+                    help="en qué bandas del IR va la escala anclada a la fotometría (las demás, libres), en vez de las "
+                         "que declara el objeto; anclar una que no declara pide --plantilla o --inyecta-bt; la "
+                         "etiqueta lleva `anclas-<BANDAS>`")
+    aa.add_argument("--quita-ir", nargs="+", default=None, metavar="SEG",
+                    help="saca de la verosimilitud esos segmentos del IR, por su nombre (NIFS_H, SINFONI_K…); los "
+                         "datos de los demás no cambian; la etiqueta lleva `quitair-<SEGS>`")
+    aa.add_argument("--pendiente-ir", type=float, default=None, metavar="ANCHO",
+                    help="una inclinación libre por segmento del IR: su modelo × (1 + p·(λ − λ_c)/0.1 µm), con p "
+                         "uniforme en ±ANCHO (p. ej. 0.1 = ±10 %% por 0.1 µm); la etiqueta lleva `pendir<ANCHO>`")
+    aa.add_argument("--banda-una-vez", action="store_true",
+                    help="cada banda del IR cuenta una vez: el término de cada segmento del IR × 1/N, con N los "
+                         "segmentos de su banda (MUSE pesa 1); la etiqueta lleva `bandaunavez`")
+    aa.add_argument("--cov-banda", action="store_true",
+                    help="el error del modelo como proceso gaussiano por banda (Matérn 3/2, amplitud f_b, longitud "
+                         "de correlación ℓ_b libre en LCORR_A), sobre todos los espectros de la banda; el ruido de "
+                         "MUSE con su correlación entre bins con los datos reales; la etiqueta lleva `covbanda`")
     aa.add_argument("--etiqueta", default=None)
     aa.add_argument("--salida", type=Path, required=True)
     ar = sub.add_parser("resume", help="tablas y margen cromosférico de uno o varios directorios de `ajusta`",
